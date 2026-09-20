@@ -444,7 +444,8 @@ def cmd_dump(a):
     overrides, bad = {}, []
     for spec in (a.config or []):
         if "=" not in spec:
-            bad.append(spec); continue
+            bad.append(spec)
+            continue
         d_id, val = spec.split("=", 1)
         d_id, val = d_id.strip(), val.strip()
         cand = by_dec.get(d_id, [])
@@ -527,28 +528,39 @@ def main(argv=None):
     s.set_defaults(fn=cmd_init)
 
     s = sub.add_parser("start", help="register a project + store/embed its seed")
-    s.add_argument("--name"); s.add_argument("--id"); s.add_argument("--seed"); s.add_argument("--seed-file")
+    s.add_argument("--name")
+    s.add_argument("--id")
+    s.add_argument("--seed")
+    s.add_argument("--seed-file")
     s.set_defaults(fn=cmd_start)
 
     s = sub.add_parser("ask", help="surface the next questions (JEV) + low-confidence decisions")
     s.set_defaults(fn=cmd_ask)
 
     s = sub.add_parser("answer", help="record a decision with its rejected alternatives")
-    s.add_argument("--id"); s.add_argument("--chosen", required=True); s.add_argument("--option", action="append")
-    s.add_argument("--why-not"); s.add_argument("--domain"); s.add_argument("--question-id")
-    s.add_argument("--reversal-cost"); s.add_argument("--confidence", type=float); s.add_argument("--status")
+    s.add_argument("--id")
+    s.add_argument("--chosen", required=True)
+    s.add_argument("--option", action="append")
+    s.add_argument("--why-not")
+    s.add_argument("--domain")
+    s.add_argument("--question-id")
+    s.add_argument("--reversal-cost")
+    s.add_argument("--confidence", type=float)
+    s.add_argument("--status")
     s.set_defaults(fn=cmd_answer)
 
     s = sub.add_parser("check", help="is this question already answered by stored evidence?")
-    s.add_argument("question"); s.add_argument("--limit", type=int, default=5)
+    s.add_argument("question")
+    s.add_argument("--limit", type=int, default=5)
     s.set_defaults(fn=cmd_check)
 
     s = sub.add_parser("status", help="confidence map and coverage")
     s.set_defaults(fn=cmd_status)
 
     s = sub.add_parser("toggle", help="turn options on/off (the what-if switch)")
-    s.add_argument("--on", action="append"); s.add_argument("--off", action="append")
-    s.add_argument("--set", action="append", type=lambda v: (v.split("=")[0], v.split("=")[1].lower() in ("on","true","1")))
+    s.add_argument("--on", action="append")
+    s.add_argument("--off", action="append")
+    s.add_argument("--set", action="append", type=lambda v: (v.split("=")[0], v.split("=")[1].lower() in ("on", "true", "1")))
     s.set_defaults(fn=cmd_toggle)
 
     s = sub.add_parser("dump", help="render a configuration: current, or a --config hypothesis")
@@ -558,7 +570,9 @@ def main(argv=None):
     s.set_defaults(fn=cmd_dump)
 
     s = sub.add_parser("recall", help="semantic search over the namespace")
-    s.add_argument("query"); s.add_argument("--limit", type=int, default=5); s.set_defaults(fn=cmd_recall)
+    s.add_argument("query")
+    s.add_argument("--limit", type=int, default=5)
+    s.set_defaults(fn=cmd_recall)
 
     a = ap.parse_args(argv)
     return a.fn(a)
