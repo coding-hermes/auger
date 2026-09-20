@@ -77,8 +77,37 @@ COLS = {
     "domain":      [("id","varchar"),("project_id","varchar"),("num","varchar"),("name","varchar"),
                     ("triage","integer"),("ring_floor","integer"),("terminating_ring","integer"),
                     ("status","varchar"),("owner","varchar"),("trigger","varchar"),("containment","varchar")],
+    # --- the graph: the relationships the engine reasons over, not the nodes it stores (SPEC-001 2/3)
+    "edge":        [("id","varchar"),("project_id","varchar"),("kind","varchar"),
+                    ("src_kind","varchar"),("src_id","varchar"),("dst_kind","varchar"),("dst_id","varchar"),
+                    ("confidence","double"),("source","varchar"),("note","varchar"),
+                    ("created_at","timestamp")],
+    "facet":       [("id","varchar"),("project_id","varchar"),("question_id","varchar"),("facet","varchar"),
+                    ("status","varchar"),("closed_by","varchar"),("note","varchar")],
 }
 PRIMARY = {t: "id" for t in COLS}
+
+# ---------------------------------------------------------------- the graph's closed sets
+# Edge kinds and sources are sets the ENGINE switches on, so they live in code. The facet set is
+# the deliberate exception — SPEC-001 section 3 makes it DATA so a project can extend it.
+EDGE_KINDS = ("opens", "closes", "satisfies", "affects", "breaks",
+              "derives_from", "references", "blocks")
+EDGE_SOURCES = ("gate", "impact", "human", "rule")
+# src_kind/dst_kind -> the table that must ALREADY hold that id (this is the referential check).
+NODE_TABLES = {"decision": "decision", "question": "question",
+               "unknown": "unknown", "assumption": "assumption"}
+# The DEFAULT facet set, not the only one: a project may extend it (SPEC-001 section 3, "the facet
+# set is data, not code, so a project can extend it"). This is the INITIAL set; read it through
+# facet_set() so an extension mechanism has exactly one place to land rather than a code path
+# that hardcodes six strings no project can add to.
+DEFAULT_FACETS = ("data", "failure", "ownership", "cost", "test", "who_else")
+FACET_STATUSES = ("open", "closed")
+ID_WIDTH = 6           # E-000001, F-000001 — fixed width, per the project's own id law
+
+
+def facet_set() -> tuple:
+    """The facets every new question gets one row per (SPEC-001 section 3)."""
+    return DEFAULT_FACETS
 
 
 def ns_dir(ns: str) -> str:
@@ -161,6 +190,72 @@ def remember(ns: str, key: str, content: str, domain: str = "concept") -> dict:
     if st not in (200, 201):
         raise SystemExit(f"remember {key} failed ({st}): {body}")
     return body
+
+
+# ---------------------------------------------------------------- the graph write path
+# DuckBrain stores what it is sent — it enforces nothing — so referential integrity is OURS.
+# An edge is a claim about two nodes; an edge whose endpoint does not exist is not a claim about
+# anything, and a silently stored orphan is worse than a refusal because it reads as evidence.
+def next_id(ns: str, table: str, prefix: str) -> str:
+    """The next fixed-width id for a table, derived from the HIGHEST existing id.
+
+    Not from a row count: a count collides the moment a row is deleted (the classic bug this
+    deliberately does not have). An empty table yields the first id, PREFIX-000001.
+    """
+    rows = select(ns, table, "select=id&order=id.desc&limit=1")
+    if not rows or not rows[0].get("id"):
+        return f"{prefix}-{'0' * (ID_WIDTH - 1)}1"
+    m = re.search(r"(\d+)\s*$", str(rows[0]["id"]))
+    return f"{prefix}-{int(m.group(1)) + 1:0{ID_WIDTH}d}" if m else f"{prefix}-{'0' * (ID_WIDTH - 1)}1"
+
+
+def node_exists(ns: str, kind: str, node_id: str) -> bool:
+    """Does a node of this kind actually exist? Unknown kinds are a hard error, not a pass."""
+    table = NODE_TABLES.get(kind)
+    if table is None:
+        raise SystemExit(f"unknown node kind {kind!r}: expected one of {', '.join(sorted(NODE_TABLES))}")
+    if not node_id:
+        return False
+    return bool(select(ns, table, f"id=eq.{node_id}&select=id&limit=1"))
+
+
+def edge(ns: str, project_id: str, kind: str, src_kind: str, src_id: str,
+         dst_kind: str, dst_id: str, *, confidence: float | None = None,
+         source: str = "human", note: str = "") -> dict:
+    """Write one edge, refusing any edge whose endpoints are not already stored.
+
+    `source` has no default-by-omission: an edge is born of a model gate, an impact pass, a
+    person, or a rule, and an empty string would let a reader mistake an unknown origin for a
+    recorded one. `confidence` is -1 — the spec'd "asserted directly, not scored by a model"
+    value — whenever no model confidence is supplied.
+    """
+    if kind not in EDGE_KINDS:
+        raise SystemExit(f"unknown edge kind {kind!r}: expected one of {', '.join(EDGE_KINDS)}")
+    if source not in EDGE_SOURCES:
+        raise SystemExit(f"unknown edge source {source!r}: expected one of {', '.join(EDGE_SOURCES)}")
+    for role, k, i in (("src", src_kind, src_id), ("dst", dst_kind, dst_id)):
+        if not node_exists(ns, k, i):
+            raise SystemExit(f"refused: {role} {k} {i!r} does not exist in table "
+                             f"{NODE_TABLES.get(k, '?')} — an edge to a missing node is not stored")
+    row = {"id": next_id(ns, "edge", "E"), "project_id": project_id, "kind": kind,
+           "src_kind": src_kind, "src_id": src_id, "dst_kind": dst_kind, "dst_id": dst_id,
+           "confidence": float(confidence) if confidence is not None else -1.0,
+           "source": source, "note": note, "created_at": datetime.now(timezone.utc).isoformat()}
+    insert(ns, "edge", row)
+    return row
+
+
+def facet(ns: str, project_id: str, question_id: str, name: str, *, status: str = "open",
+          closed_by: str = "", note: str = "") -> dict:
+    """Write one facet row. The facet name is a label, not a gate — the set is extensible data."""
+    if status not in FACET_STATUSES:
+        raise SystemExit(f"unknown facet status {status!r}: expected one of {', '.join(FACET_STATUSES)}")
+    if not node_exists(ns, "question", question_id):
+        raise SystemExit(f"refused: question {question_id!r} does not exist — facet not stored")
+    row = {"id": next_id(ns, "facet", "F"), "project_id": project_id, "question_id": question_id,
+           "facet": name, "status": status, "closed_by": closed_by, "note": note}
+    insert(ns, "facet", row)
+    return row
 
 
 def recall(ns: str, q: str, limit: int = 5) -> list:

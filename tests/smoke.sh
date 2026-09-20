@@ -19,7 +19,7 @@ echo "namespace: $NS"
 
 echo "== init =="
 OUT=$($AUGER init 2>&1)
-has "$OUT" "declared: 9/9" "all nine tables declared and visible"
+has "$OUT" "declared: 11/11" "all eleven tables declared and visible"
 if grep -q "WARNING" <<<"$OUT"; then no "init reported a visibility warning"; else ok "no API-visibility warnings"; fi
 
 echo "== start =="
