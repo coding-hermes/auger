@@ -17,6 +17,11 @@ else
   echo "ruff not on PATH — lint arm SKIPPED (not passed)"
 fi
 
+echo "== pytest =="
+# The suite runs against a live DuckBrain namespace it creates and tears down itself, so this
+# arm needs no venv beyond the system python3 the other arms already use.
+python3 -m pytest tests/test_auger.py -q || exit 1
+
 echo "== end-to-end smoke =="
 bash tests/smoke.sh || exit 1
 
