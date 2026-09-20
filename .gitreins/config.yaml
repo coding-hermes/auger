@@ -1,6 +1,11 @@
 guards:
   secrets: true
   lint: true
+  # NOTE: this key is NOT read by the installed gitreins (proven by marker
+  # experiment 2026-09-20 — setting it to an echo produced no output and the arm
+  # still passed). The lint arm that actually runs is gitreins' BUILT-IN one: it
+  # selects staged python files itself and skips when the set is empty. This value
+  # is kept as the closest true description for any version that does read it.
   lint_command: ruff check auger.py
   tests: true
   test_mode: full
@@ -9,7 +14,18 @@ guards:
   # Naming the wrapper rather than smoke.sh alone keeps the arms together.
   test_command: bash tests/gate.sh
   test_timeout: 600
-  allow_skips: false
+  # allow_skips: true — REQUIRED, and the reason is a real defect.
+  # The built-in lint arm SKIPS whenever no python file is staged (a docs, board
+  # or tests-only commit). With allow_skips:false that skip is DEGRADED PASS =
+  # exit 1, so those commits were BLOCKED outright: documentation could not be
+  # committed to this repo at all. A gate that fails correct work trains its users
+  # to bypass it, and the bypass outlives the bug.
+  #
+  # This does NOT weaken real coverage. A FAILED arm is still fatal — only skips
+  # are accepted — and the tests arm is `bash tests/gate.sh`, which always runs
+  # (no skip path) and itself performs py_compile + ruff + the 15-assertion
+  # end-to-end smoke loop. Lint coverage therefore still runs on every commit.
+  allow_skips: true
   # static_analysis off: mypy/pyright are not provisioned for this repo, and an
   # arm that cannot run reports a green that verified nothing.
   static_analysis: false
