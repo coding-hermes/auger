@@ -34,6 +34,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -131,28 +132,52 @@ def _token() -> str:
 
 
 def _req(url: str, method: str = "GET", body: dict | list | None = None,
-         headers: dict | None = None, timeout: int = 45):
-    """Send JSON as BYTES. Never build a request body by string interpolation."""
+         headers: dict | None = None, timeout: int = 45, retries: int = 4):
+    """Send JSON as BYTES. Never build a request body by string interpolation.
+
+    A 429 is BACKPRESSURE, not a failure (proven: the pytest suite bursts enough
+    calls to trip DuckBrain's limiter, and an unretried 429 loses the write). It
+    is retried inline, honouring the server's own Retry-After, before the caller
+    ever sees a status. A test suite that flakes on the substrate's rate limiter
+    is a test suite nobody trusts.
+    """
     data = json.dumps(body).encode() if body is not None else None
     hdrs = {"content-type": "application/json"}
     if headers:
         hdrs.update(headers)
-    req = urllib.request.Request(url, data=data, method=method, headers=hdrs)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            raw = r.read().decode()
-            try:
-                return r.status, json.loads(raw) if raw else {}, dict(r.headers)
-            except ValueError:
-                return r.status, raw, dict(r.headers)
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode()
+    attempt = 0
+    while True:
+        req = urllib.request.Request(url, data=data, method=method, headers=hdrs)
         try:
-            return e.code, json.loads(raw), dict(e.headers)
-        except ValueError:
-            return e.code, raw, dict(e.headers)
-    except (urllib.error.URLError, TimeoutError, OSError) as e:
-        return 0, {"error": f"transport: {e}"}, {}
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                raw = r.read().decode()
+                try:
+                    return r.status, json.loads(raw) if raw else {}, dict(r.headers)
+                except ValueError:
+                    return r.status, raw, dict(r.headers)
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode()
+            if e.code == 429 and attempt < retries:
+                wait = 1.0
+                try:
+                    wait = float(json.loads(raw).get("retryAfter", 1) or 1)
+                except (ValueError, AttributeError):
+                    pass
+                hdr_wait = e.headers.get("Retry-After") if e.headers else None
+                if hdr_wait:
+                    try:
+                        wait = max(wait, float(hdr_wait))
+                    except ValueError:
+                        pass
+                attempt += 1
+                time.sleep(min(wait, 10.0) * attempt)   # bounded linear backoff
+                continue
+            try:
+                return e.code, json.loads(raw), dict(e.headers)
+            except ValueError:
+                return e.code, raw, dict(e.headers)
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            return 0, {"error": f"transport: {e}"}, {}
 
 
 def db(path: str, method: str = "GET", body=None, timeout: int = 45):
@@ -308,8 +333,15 @@ def _noul(ans: dict, name: str):
 def cmd_init(a):
     ns = a.namespace
     st, body, _ = db("/api/namespaces")
-    names = [n.get("name") for n in (body.get("namespaces", body) if isinstance(body, dict) else body)] \
-        if isinstance(body, (dict, list)) else []
+    # An error body is not a namespace list. Reading an error dict as a list used to
+    # crash with `'str' object has no attribute 'get'` and, worse, made `init` report
+    # success while nothing was declared (proven when a 429 landed here). Fail loudly
+    # instead: the caller asked for a namespace that is now known NOT to exist.
+    if st != 200:
+        raise SystemExit(f"could not list namespaces ({st}): {body}")
+    if isinstance(body, dict):
+        body = body.get("namespaces", [])
+    names = [n.get("name") for n in body if isinstance(n, dict)] if isinstance(body, list) else []
     created = False
     if ns not in names:
         st, body, _ = db("/api/namespaces", "POST", {"name": ns})
