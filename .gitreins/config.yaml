@@ -14,6 +14,18 @@ guards:
   # Naming the wrapper rather than smoke.sh alone keeps the arms together.
   test_command: bash tests/gate.sh
   test_timeout: 600
+  # hook_timeout: the OVERALL guard budget (default 300s, engine/guard_manager.py
+  # _coerce_timeout(guards_cfg.get("hook_timeout", 300))). It must exceed the
+  # tests arm or the run is cut short: this repo's tests arm is `bash
+  # tests/gate.sh`, which runs py_compile + ruff + pytest + a live 15-assertion
+  # smoke loop against DuckBrain — measured 250-420s. At the 300s default the
+  # hook killed the run mid-smoke on every commit, printed "commit allowed to
+  # proceed (fail-open)" and then STILL exited 2 (the timeout early-return in
+  # guard_manager.run_all builds Tier1Result WITHOUT the `extra` map, so
+  # allow_skips never reaches the CLI's exit-code policy) — board and docs
+  # commits were blocked outright by a gate that had not actually failed.
+  # 900s > test_timeout 600s, so no arm is ever cut short by the outer budget.
+  hook_timeout: 900
   # allow_skips: true — REQUIRED, and the reason is a real defect.
   # The built-in lint arm SKIPS whenever no python file is staged (a docs, board
   # or tests-only commit). With allow_skips:false that skip is DEGRADED PASS =
