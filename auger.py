@@ -51,6 +51,16 @@ JEV_MODEL = "typesafe/jev-1.13"
 T_ANSWERED = 0.55      # noul >= this  -> the question is already answered by stored evidence
 T_CONFIDENT = 0.60     # decision confidence below this is surfaced as "needs drilling"
 T_SUBJECT = 0.45       # choice confidence below this -> we do not trust the "next subject" pick
+T_PRIORITY = 0.30      # decision confidence below this -> a PRIORITY JUDGMENT, which the skill
+                       # reserves for the human. The engine records an escalation with a default
+                       # and CONTINUES ON THE DEFAULT: it never blocks waiting for a person
+                       # (SPEC-001 section 7, Q5; docs/ENGINE.md open question 5).
+
+# The budget governor. The ceiling is a NUMBER OF QUESTIONS ASKED BY ONE RUN, and it is enforced
+# by the program rather than trusted to an agent — that refusal is the whole reason this is
+# software (docs/ENGINE.md E4: "the budget is enforced by the program, not the agent").
+FEEDBACK_BUDGET = 3
+BUDGET_ENV = "AUGER_QUESTION_BUDGET"
 
 TOKEN_PATHS = [
     os.path.expanduser("~/.duckbrain/foreman-status.token"),
@@ -713,6 +723,95 @@ def _noul(ans: dict, name: str):
     return float(v) if isinstance(v, (int, float)) else None
 
 
+# ---------------------------------------------------------------- the question PROPOSER (Q2)
+# SPEC-001 BEAT 1 leaves exactly one thing open that the feedback engine needs: who PROPOSES the
+# candidate questions. The recorded leaning — "large model proposes, JEV gates and ranks"
+# (SPEC-001 section 7 Q2, docs/ENGINE.md open question 2) — is taken here as the working default.
+#
+# Why this is a SECOND model transport rather than another JEV question, which would be cheaper:
+# JEV is a DECISIONS model. Its whole value is a calibrated noul/choice/score over a state it is
+# given, and it does not write prose. Generation and judgement are different skills, and the
+# split is the point: the large model generates ONE question, and JEV then GATES and RANKS it
+# (see gate_question and feedback). The key set is the same one `jev` uses — one place to rotate.
+#
+# FAIL-CLOSED, like every other model call in this module: an unreachable proposer returns an
+# error and NO question. A fabricated or half-parsed question is worse than a missing one,
+# because the engine would ask it, answer it, and record it as a real branch.
+PROPOSER_URL = "https://openrouter.ai/api/v1/chat/completions"
+PROPOSER_MODEL = "deepseek/deepseek-v3.2"
+PROPOSER_ENV = "AUGER_PROPOSER_MODEL"
+PROPOSER_SYSTEM = (
+    "You propose the next question in a spec-drilling session. Reply with ONE question and "
+    "nothing else: a single sentence ending in a question mark, no preamble, no numbering, no "
+    "quotes, no explanation. It must be answerable for THIS project and must attack the specific "
+    "decision whose confidence is too low to build on — not a general question about the subject. "
+    "Never repeat a question that is already open.")
+QUESTION_MAX = 400     # a proposed question longer than this is a document, not a question
+#: A chat reply arrives with list markers, numbering or a "Question:" label often enough that
+#: stripping them is part of parsing rather than a courtesy. The group REPEATS, because the shapes
+#: stack: `1. "What drains the table?"` is numbering AND a quote before the question.
+REPLY_PREFIX = re.compile(r"^(?:[-*•]|\d+\s*[.)]|q\d*\s*[:.)]|[\s\"'])+", re.I)
+
+
+def proposer_model() -> str:
+    """The model that proposes questions — env-overridable, resolved at CALL time.
+
+    Read per call and not at import: a module constant captured at import cannot be changed by a
+    caller (or a test) without re-importing, and the model is exactly the knob a run wants to set.
+    """
+    return (os.environ.get(PROPOSER_ENV) or "").strip() or PROPOSER_MODEL
+
+
+def question_from_reply(resp) -> str:
+    """The one question inside a chat completion — "" when the reply does not contain one.
+
+    Every shape that is NOT a question reads as "": a missing/blank message, a reply with no
+    question mark in it (an answer, a refusal, a preamble), and anything past the first non-empty
+    line (a model that ignored "ONE question" has not proposed one).
+    """
+    if not isinstance(resp, dict):
+        return ""
+    choices = resp.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    first = choices[0] if isinstance(choices[0], dict) else {}
+    text = ((first.get("message") or {}).get("content") or "")
+    if not isinstance(text, str):
+        return ""
+    for raw in text.splitlines():
+        line = REPLY_PREFIX.sub("", raw.strip()).strip().rstrip('"').strip()
+        if not line:
+            continue
+        return line[:QUESTION_MAX] if "?" in line else ""
+    return ""
+
+
+def propose_question(state: str) -> tuple[str, str]:
+    """Ask the large model for ONE follow-up question. Returns (text, err) — never both.
+
+    Failover across the whole key set, in order, exactly as `jev` does (the set contains expired
+    keys). The first key that answers 200 with a usable question wins; anything else is remembered
+    as the reason and reported, so a run says WHY no question was proposed.
+    """
+    keys = _jev_keys()
+    if not keys:
+        return "", "no OpenRouter key found for the question proposer"
+    body = {"model": proposer_model(), "max_tokens": 220,
+            "messages": [{"role": "system", "content": PROPOSER_SYSTEM},
+                         {"role": "user", "content": state}]}
+    last = "no attempt"
+    for k in keys:
+        st, resp, _ = _req(PROPOSER_URL, "POST", body, {"Authorization": f"Bearer {k}"}, timeout=90)
+        if st == 200 and isinstance(resp, dict):
+            text = question_from_reply(resp)
+            if text:
+                return text, ""
+            last = f"HTTP {st}: the reply was not a question ({str(resp)[:160]})"
+            continue
+        last = f"HTTP {st}: {str(resp)[:180]}"
+    return "", f"all {len(keys)} proposer keys failed; last: {last}"
+
+
 # ---------------------------------------------------------------- PROPAGATE (SPEC-001 BEAT 4)
 # Closure and moot cascades — docs/SPEC-001-graph.md section 4, BEAT 4. The engineering calls in
 # that spec are settled and are implemented here, not re-litigated: Q4 — a closed branch reopens
@@ -1059,6 +1158,402 @@ def cmd_propagate(a):
     if rep["gate_error"]:
         print(f"WARNING gate unavailable — {rep['gate_error']}")
         print(f"        {len(rep['ungated'])} question(s) left open and NOT linked (fail-closed).")
+        return 1
+    return 0
+
+
+# ---------------------------------------------------------------- the FEEDBACK ENGINE (R12 / AUG-001)
+# docs/DESIGN.md R12 and open decision 4, built over the graph AUG-007..AUG-011 landed. The engine
+# proper: a low-confidence decision stops being a status line and becomes the NEXT QUESTION BATCH,
+# bounded by a governor the program enforces.
+#
+# The design decisions this file records, all of them the recorded leanings of SPEC-001 section 7
+# rather than new ones:
+#
+#   Q1 — gate everything (CONCLUDED). Every proposed question is put to JEV's already_answered
+#        before it is asked. A gate costs ~$0.00003 and one retrieval; a duplicate question costs
+#        the gate AND a full answer AND an impact pass AND a graph a reader has to untangle.
+#   Q2 — a large model PROPOSES, JEV GATES AND RANKS (leaning). propose_question() is the
+#        generation half; the ranking below is (confidence asc, gate noul asc), so the thinnest
+#        decision is drilled first and, within it, the question the gate judged LEAST answered.
+#   Q5 — runs unattended; it stops at a priority judgment, records an escalation with a default,
+#        and CONTINUES ON THE DEFAULT (leaning). See T_PRIORITY and the escalation below.
+#
+# WHAT THE GOVERNOR IS AND IS NOT. The ceiling is the number of questions ONE RUN MAY ASK. It is
+# not a cap on thinking: every candidate is still proposed and still GATED (that is what makes the
+# next run cheap — the verdict is stored on the row), and a question that the ceiling stopped is
+# recorded in state `budget_thin` with its text and its reason instead of being dropped. An honest
+# shallow branch beats a silent one, so the run also writes ONE escalation row carrying the
+# machine-checkable marker `budget-thin: true`.
+#
+# WHAT A RUN DOES, IN ORDER:
+#   1. pick the thinnest decisions (lowest confidence first among RECORDED ones) that do not
+#      already have an OPEN follow-up — a live branch is not drilled twice;
+#   2. escalate any decision thin enough to be a priority judgment, with a default, and go on;
+#   3. propose ONE question per decision (the large model), write the row, its facets and the
+#      `opens` edge;
+#   4. gate each: noul >= T_ANSWERED  -> REFUSED: the row is recorded `linked` to the decision that
+#      already answers it, with a `satisfies` edge, and it is NEVER asked. Below the threshold ->
+#      it is a genuine question;
+#   5. ask in rank order while the ceiling lasts; the rest are recorded `budget_thin`;
+#   6. return a report that is both what the verb prints and the tests' handle on the run.
+#
+# FAIL-CLOSED. An unreachable proposer produces NO question; an unreachable gate produces no ASK
+# either — a question whose verdict is unknown is not asked, because asking it is exactly the
+# duplicate the gate exists to prevent. Both cases are named in the report, the unproposed /
+# ungated questions are printed with their text, and the verb exits non-zero.
+FOLLOWUP_CLASS = "follow_up"     # the `qclass` a question opened by this engine carries
+
+
+def feedback_budget() -> int:
+    """The run ceiling, from the environment when it names one. A bad value is refused loudly.
+
+    An empty/absent variable falls back to FEEDBACK_BUDGET; a value that is not a non-negative
+    integer is a REFUSAL rather than a silent default, because a governor that quietly ignores the
+    number it was given is not a governor.
+    """
+    raw = (os.environ.get(BUDGET_ENV) or "").strip()
+    if not raw:
+        return FEEDBACK_BUDGET
+    try:
+        n = int(raw)
+    except ValueError:
+        raise SystemExit(f"refused: {BUDGET_ENV}={raw!r} is not an integer")
+    if n < 0:
+        raise SystemExit(f"refused: {BUDGET_ENV}={raw!r} is negative — a ceiling cannot be")
+    return n
+
+
+def thin_decisions(ns: str, project_id: str) -> list:
+    """The decisions that need drilling, THINNEST FIRST — criterion (a) of this row.
+
+    RECORDED confidence only: `confidence` is -1 on a row whose confidence nobody stated, and
+    "unknown" is not "low" — the same distinction `status` makes. Ordered by confidence and then
+    by id, so two runs over an unchanged project drill it in the same order.
+    """
+    rows = select(ns, "decision", f"project_id=eq.{project_id}&order=confidence.asc,id.asc")
+    return [d for d in rows
+            if isinstance(d.get("confidence"), (int, float)) and 0 <= d["confidence"] < T_CONFIDENT]
+
+
+def drilled_decisions(ns: str, project_id: str, qs: dict | None = None) -> dict:
+    """decision id -> the OPEN follow-up an `opens` edge already gave it — the live branches.
+
+    A decision with a live follow-up is not drilled again: the question is already on the board
+    and awaiting an answer. A question in `budget_thin` deliberately does NOT count — it was never
+    asked, so its decision is still owed a question, which is what makes the next run pick it up.
+    """
+    qs = q_states(ns, project_id) if qs is None else qs
+    out: dict = {}
+    for e in select(ns, "edge", f"project_id=eq.{project_id}&kind=eq.opens"):
+        if e.get("src_kind") != "decision" or e.get("dst_kind") != "question":
+            continue
+        if (qs.get(e.get("dst_id")) or {}).get("status") == "open":
+            out.setdefault(e["src_id"], e["dst_id"])
+    return out
+
+
+def decision_parent_question(ns: str, project_id: str, dec_row: dict) -> str:
+    """The question this decision is the ANSWER to — "" when the record names none.
+
+    TWO sources, the same pair `questions_closed_by` merges: `decision.question_id` (the field
+    BEAT 2 populates) and a `closes` edge. Either may be the only one present. The id is returned
+    only when that question actually exists: it becomes the `derives_from` endpoint, and an edge to
+    a node nobody can read is refused by `edge()` — a refusal that would abort a whole run over a
+    dangling field.
+    """
+    qid = (dec_row.get("question_id") or "").strip()
+    if qid and node_exists(ns, "question", qid):
+        return qid
+    for e in select(ns, "edge", f"project_id=eq.{project_id}&kind=eq.closes&src_id=eq.{dec_row['id']}"):
+        if e.get("src_kind") == "decision" and e.get("dst_kind") == "question" \
+                and node_exists(ns, "question", e["dst_id"]):
+            return e["dst_id"]
+    return ""
+
+
+def feedback_state(proj: dict, dec_row: dict, parent_text: str, open_questions: list) -> str:
+    """Everything the proposer needs to write ONE specific question, and nothing else.
+
+    Deliberately narrow. The proposer is told about the SEED (what the project is), the DECISION
+    whose confidence is too low (what is thin), the question that decision answered (where the
+    branch came from) and the questions already open (so it does not write a duplicate). It is not
+    shown the stored evidence: the gate reads that, and a proposer fed the answer tends to restate
+    it as a question.
+    """
+    lines = [f"PROJECT SEED:\n{(proj.get('seed') or '')[:800]}", "",
+             "THE DECISION WHOSE CONFIDENCE IS TOO LOW TO BUILD ON:",
+             f"{dec_row['id']} ({dec_row.get('domain') or 'no domain'}): {dec_row.get('chosen')}",
+             f"confidence: {dec_row.get('confidence')}",
+             f"reversal cost: {dec_row.get('reversal_cost') or 'not recorded'}",
+             f"why the rejected alternatives lost: {dec_row.get('why_not') or 'not recorded'}"]
+    if parent_text:
+        lines += ["", f"THE QUESTION THIS DECISION ANSWERED: {parent_text}"]
+    if open_questions:
+        lines += ["", "QUESTIONS ALREADY OPEN IN THIS PROJECT (never repeat one):"]
+        lines += [f"- {q['id']}: {(q.get('text') or '')[:140]}" for q in open_questions[:8]]
+    return "\n".join(lines)
+
+
+def record_followup(ns: str, project_id: str, dec_row: dict, text: str, status: str, *,
+                    parent_qid: str = "", noul: float | None = None, checked_at: str = "",
+                    reason: str = "", closed_by: str = "", warnings: list | None = None) -> dict:
+    """Write ONE follow-up question row and its edges. Returns {"row":..., "edges":[...]}.
+
+    The row travels with the gate's own verdict (`jev_already_answered` / `jev_checked_at` — the
+    two columns that exist for exactly this, and the reason `propagate` will not re-gate it), the
+    domain of the decision it drills, and `qclass=follow_up`, so a reader can tell an engine-raised
+    question from one a person wrote. Its `ring` is the parent's ring + 1, or 1 at the top: the
+    depth the branch is at, recorded rather than inferred from edge order.
+
+    The edges are the branch's trackability, and they are the kinds SPEC-001 section 2 directs:
+      * `opens`        — the ANSWER (the thin decision) raised this question;
+      * `derives_from` — the question exists only because the parent question was asked, when the
+                         decision answers one. This is what makes the new branch reachable by
+                         PROPAGATE's walk instead of an orphan hanging off a decision.
+    A non-`open` status is written THROUGH set_state, so the reason is on the question's facet rows
+    (the only place this data model stores a question's reason — see the block comment above
+    QUESTION_STATES) and the state change cannot happen without it.
+    """
+    qid = next_id(ns, "question", "Q")
+    ring = 1
+    if parent_qid:
+        prows = select_or_empty(ns, "question", f"id=eq.{parent_qid}&select=ring&limit=1")
+        ring = int(prows[0].get("ring") or 0) + 1 if prows else 1
+    row = {"id": qid, "project_id": project_id, "domain": dec_row.get("domain") or "", "text": text,
+           "ring": ring, "qclass": FOLLOWUP_CLASS, "status": "open",
+           "jev_already_answered": -1.0 if noul is None else float(noul),
+           "jev_checked_at": checked_at}
+    insert(ns, "question", row)
+    for name in facet_set():
+        facet(ns, project_id, qid, name)
+    edges = [edge(ns, project_id, "opens", "decision", dec_row["id"], "question", qid,
+                  source="rule", warnings=warnings,
+                  note=f"the confidence in {dec_row['id']} is {dec_row.get('confidence')} "
+                       f"(< {T_CONFIDENT}), so the engine proposed a follow-up "
+                       f"({proposer_model()})")["id"]]
+    if parent_qid:
+        edges.append(edge(ns, project_id, "derives_from", "question", qid, "question", parent_qid,
+                          source="rule", warnings=warnings,
+                          note=f"{qid} drills {dec_row['id']}, which answers {parent_qid}")["id"])
+    if status != "open":
+        set_state(ns, project_id, qid, status, reason, closed_by=closed_by)
+    row["status"] = status
+    return {"row": row, "edges": edges}
+
+
+def feedback(ns: str, project_id: str, *, budget: int | None = None) -> dict:
+    """One run of the feedback engine — the whole verb, and the tests' handle on it.
+
+    The report:
+      ceiling      int                                 the governor's ceiling for this run
+      thin         [(decision, confidence)]            the decisions picked, thinnest first
+      drilled      [(decision, question)]              left alone: an OPEN follow-up already exists
+      proposed     [(decision, text)]                  what the large model wrote
+      asked        [(question, decision, noul, text)]  opened and awaiting an answer
+      refused      [(question, decision, noul, project)] the gate says ALREADY ANSWERED: linked,
+                                                        never asked; `project` is the SIBLING whose
+                                                        namespace held the answer, "" for our own
+      budget_thin  [(question, decision, reason)]      recorded, NOT asked: the ceiling
+      unattributed [(decision, text, noul)]            the gate says answered, the evidence names
+                                                        no decision — not asked, not linked
+      unproposed   [decision]                          no question was proposed for these
+      ungated      [(decision, text)]                  the gate was unreachable: not asked
+      escalations  [escalation id]                     priority judgments + the budget marker
+      edges        [edge id]                           everything the run wrote
+      askable      [question id]                       open and unblocked after the run
+      warnings     [str]                               a degraded write, reported not swallowed
+      proposer_error / gate_error  str | None
+    """
+    ceiling = feedback_budget() if budget is None else int(budget)
+    if ceiling < 0:
+        raise SystemExit(f"refused: a question ceiling of {ceiling} is negative — a ceiling cannot be")
+    proj = _project(ns, project_id)
+    pid = proj["id"]
+    rep = {"ceiling": ceiling, "thin": [], "drilled": [], "proposed": [], "asked": [], "refused": [],
+           "budget_thin": [], "unattributed": [], "unproposed": [], "ungated": [], "escalations": [],
+           "edges": [], "askable": [], "warnings": [], "proposer_error": None, "gate_error": None}
+
+    # ---- 1. the thinnest decisions, minus the ones already being drilled
+    qs = q_states(ns, pid)
+    live = drilled_decisions(ns, pid, qs)
+    cand = []
+    for d in thin_decisions(ns, pid):
+        if d["id"] in live:
+            rep["drilled"].append((d["id"], live[d["id"]]))
+            continue
+        cand.append(d)
+        rep["thin"].append((d["id"], d.get("confidence")))
+    if not cand:
+        rep["askable"] = [q["id"] for q in askable_questions(ns, pid)]
+        return rep
+
+    # ---- 2. Q5: a decision this thin is a PRIORITY JUDGMENT, not a drilling problem. Escalate it
+    # with a default and CONTINUE on the default — the run is unattended and never blocks.
+    for d in cand:
+        if isinstance(d.get("confidence"), (int, float)) and d["confidence"] < T_PRIORITY:
+            esc = escalate(ns, pid,
+                           question=f"priority judgment: {d['id']} has confidence "
+                                    f"{d['confidence']:.2f}, below the {T_PRIORITY} floor — "
+                                    f"{d.get('chosen')} rests on a weighing only you can make",
+                           options=d["id"],
+                           default_action=f"continue ON THE DEFAULT: the run drills {d['id']} "
+                                          f"first and does not wait for an answer",
+                           risk=f"every decision resting on {d['id']} inherits a confidence of "
+                                f"{d['confidence']:.2f}")
+            rep["escalations"].append(esc["id"])
+
+    # ---- 3. propose ONE question per decision (the large model's half of Q2)
+    open_qs = [q for q in qs.values() if q.get("status") == "open"]
+    proposed = []
+    for i, d in enumerate(cand):
+        parent = decision_parent_question(ns, pid, d)
+        parent_text = (qs.get(parent) or {}).get("text") or ""
+        text, err = propose_question(feedback_state(proj, d, parent_text, open_qs))
+        if err:
+            rep["proposer_error"] = err
+            rep["unproposed"] = [x["id"] for x in cand[i:]]
+            break
+        proposed.append((d, text, parent))
+        rep["proposed"].append((d["id"], text))
+    if not proposed:
+        rep["askable"] = [q["id"] for q in askable_questions(ns, pid)]
+        return rep
+
+    # ---- 4. gate everything (Q1, concluded). An unknown verdict asks NOTHING.
+    gated = []
+    for i, (d, text, parent) in enumerate(proposed):
+        verdict, dec_id, src_project, err = gate_question(ns, pid, text)
+        if err:
+            rep["gate_error"] = err
+            rep["ungated"] = [(x["id"], t) for x, t, _ in proposed[i:]]
+            break
+        gated.append({"dec": d, "text": text, "parent": parent, "noul": verdict,
+                      "dec_id": dec_id, "src_project": src_project,
+                      "checked_at": datetime.now(timezone.utc).isoformat()})
+    if not gated:
+        rep["askable"] = [q["id"] for q in askable_questions(ns, pid)]
+        return rep
+
+    # ---- 5. rank (thinnest decision first, then the question the gate judged LEAST answered — a
+    # noul of None means no stored evidence could answer it at all, which is the most unanswered
+    # there is) and ask while the ceiling lasts; the rest are RECORDED, not dropped.
+    ranked = sorted(gated, key=lambda g: (_conf(g["dec"]), -1.0 if g["noul"] is None else g["noul"],
+                                          g["dec"]["id"]))
+    left = ceiling
+    for g in ranked:
+        d, text, noul = g["dec"], g["text"], g["noul"]
+        shared = {"parent_qid": g["parent"], "noul": noul, "checked_at": g["checked_at"],
+                  "warnings": rep["warnings"]}
+        if noul is not None and noul >= T_ANSWERED:
+            if not g["dec_id"]:
+                # Answered by evidence that names no decision: linking it would be an invented
+                # link, and asking it would be the duplicate the gate exists to prevent. Left
+                # unasked and unfiled, and SAID OUT LOUD (the text is printed) rather than stored
+                # as a question the project would have to answer again.
+                rep["unattributed"].append((d["id"], text, noul))
+                rep["warnings"].append(
+                    f"WARNING: the gate scores the proposed question for {d['id']} as already "
+                    f"answered (noul {noul:.2f}) but the evidence names no decision — not asked, "
+                    f"not linked, not stored.")
+                continue
+            where = f" in {g['src_project']}" if g["src_project"] else ""
+            rec = record_followup(ns, pid, d, text, "linked",
+                                  reason=f"refused: the gate found this already answered by "
+                                         f"{g['dec_id']} (noul {noul:.2f}){where}", **shared,
+                                  closed_by=g["dec_id"])
+            sat = edge(ns, pid, "satisfies", "decision", g["dec_id"], "question", rec["row"]["id"],
+                       confidence=noul, source="gate", src_project=g["src_project"],
+                       warnings=rep["warnings"],
+                       note=f"the gate found this question already answered by {g['dec_id']}"
+                            f" (noul {noul:.2f}){where}")
+            rec["edges"].append(sat["id"])
+            rep["refused"].append((rec["row"]["id"], g["dec_id"], noul, g["src_project"]))
+        elif left > 0:
+            rec = record_followup(ns, pid, d, text, "open", **shared)
+            left -= 1
+            rep["asked"].append((rec["row"]["id"], d["id"], noul, text))
+        else:
+            rec = record_followup(
+                ns, pid, d, text, "budget_thin",
+                reason=f"budget-thin: the run's ceiling of {ceiling} question(s) was reached — "
+                       f"recorded, NOT asked", **shared)
+            rep["budget_thin"].append(
+                (rec["row"]["id"], d["id"],
+                 f"budget-thin: the run's ceiling of {ceiling} question(s) was reached — "
+                 f"recorded, NOT asked"))
+        rep["edges"] += rec["edges"]
+
+    # ---- 6. the run-level marker: the ceiling WAS hit, and that is on the record too.
+    if rep["budget_thin"]:
+        esc = escalate(ns, pid,
+                       question=f"budget-thin: true — the run hit its ceiling of {ceiling} "
+                                f"question(s) with {len(rep['budget_thin'])} proposed question(s) "
+                                f"recorded but NOT asked",
+                       options=", ".join(q for q, _, _ in rep["budget_thin"]),
+                       default_action="the questions keep their rows in state budget_thin and are "
+                                      "asked on a later run",
+                       risk="those branches stay thin until then: an honest shallow branch, never "
+                            "a silent one")
+        rep["escalations"].append(esc["id"])
+    rep["askable"] = [q["id"] for q in askable_questions(ns, pid)]
+    return rep
+
+
+def _conf(dec_row: dict) -> float:
+    """A decision's confidence as a SORT KEY: an unrecorded one sorts last, not first."""
+    c = dec_row.get("confidence")
+    return float(c) if isinstance(c, (int, float)) and c >= 0 else 2.0
+
+
+def cmd_feedback(a):
+    """Turn the thin decisions into the next question batch, bounded by the governor."""
+    ns = a.namespace
+    rep = feedback(ns, a.project_id, budget=a.budget)
+    print(f"thin decisions (<{T_CONFIDENT}), needing a question of their own:")
+    if not rep["thin"] and not rep["drilled"]:
+        print("  (none — every recorded decision is at or above the threshold)")
+    for did, conf in rep["thin"]:
+        print(f"  {did}  {conf}  <- thinnest first")
+    for did, qid in rep["drilled"]:
+        print(f"  {did}  already drilled: {qid} is open and awaiting an answer")
+    print(f"ceiling: {rep['ceiling']} question(s) this run   "
+          f"proposed: {len(rep['proposed'])}   asked: {len(rep['asked'])}   "
+          f"refused: {len(rep['refused'])}   budget-thin: {len(rep['budget_thin'])}")
+    for qid, did, noul, text in rep["asked"]:
+        print(f"  ASKED       {qid}  <- {did}  {text}")
+    for qid, did, _reason in rep["budget_thin"]:
+        print(f"  BUDGET-THIN {qid}  <- {did}  recorded, NOT asked (ceiling {rep['ceiling']})")
+    for qid, did, noul, src in rep["refused"]:
+        print(f"  REFUSED     {qid}  already answered by {did} (noul {noul:.2f})"
+              + (f" in {src}" if src else "") + " — NOT asked")
+    for did, text, noul in rep["unattributed"]:
+        print(f"  UNLINKED    <- {did}  the gate says answered (noul {noul:.2f}) but the evidence "
+              f"names no decision — not asked: {text}")
+    for line in rep["warnings"]:
+        print(line)
+    if rep["escalations"]:
+        print(f"escalations: {', '.join(rep['escalations'])}  "
+              f"(questions only a person can weight, each with a default — the run continued on it)")
+    for qid in rep["askable"]:
+        print(f"  askable     {qid}")
+    if rep["edges"]:
+        print(f"edges written: {', '.join(rep['edges'])}")
+    if rep["budget_thin"]:
+        print(f"budget-thin: true — {len(rep['budget_thin'])} question(s) recorded but NOT asked "
+              f"(ceiling {rep['ceiling']})")
+    if rep["proposer_error"]:
+        print(f"WARNING proposer unavailable — {rep['proposer_error']}")
+        print(f"        {len(rep['unproposed'])} decision(s) left unproposed: "
+              f"{', '.join(rep['unproposed'])}")
+        print("        (fail-closed: no question is invented without the model.)")
+        return 1
+    if rep["gate_error"]:
+        print(f"WARNING gate unavailable — {rep['gate_error']}")
+        print(f"        {len(rep['ungated'])} proposed question(s) were NOT asked and NOT stored "
+              f"(fail-closed):")
+        for did, text in rep["ungated"]:
+            print(f"          {did}  {text}")
         return 1
     return 0
 
@@ -1675,6 +2170,13 @@ def main(argv=None):
     s.add_argument("--recheck", action="store_true",
                    help="re-gate questions the gate has already examined (it records its verdict)")
     s.set_defaults(fn=cmd_propagate)
+
+    s = sub.add_parser("feedback",
+                       help="turn low-confidence decisions into the next question batch (AUG-001)")
+    s.add_argument("--budget", type=int, default=None,
+                   help=f"how many questions ONE run may ask (default {FEEDBACK_BUDGET}, "
+                        f"env {BUDGET_ENV}); a question the ceiling stops is RECORDED, not dropped")
+    s.set_defaults(fn=cmd_feedback)
 
     s = sub.add_parser("recall", help="semantic search over the namespace")
     s.add_argument("query")
