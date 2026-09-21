@@ -395,6 +395,198 @@ def test_check_maps_the_model_answer_to_the_threshold_verdict(ns: str, monkeypat
     assert "NOT YET ANSWERED" in out, out
 
 
+# ================================================================= propagate (SPEC-001 BEAT 4)
+# Closure and moot cascades. The walk is driven by stored rows and stored edges, so each case
+# builds its graph over the module's own helpers (`auger.insert` for question nodes — the CLI has
+# no verb that writes one yet, that is BEAT 1 — and `auger.edge` for the relationships).
+Q_WATCH = "What does the watcher record about the files it has seen?"
+Q_STORE = "Should the watcher's record be a single SQLite file or a Postgres database?"
+Q_CRASH = "What happens to the digest if the watcher crashes halfway through a run?"
+
+
+def store_questions(ns: str, pid: str, *specs) -> None:
+    """Store question rows: (id, text, status). The node the walks move."""
+    for qid, text, status in specs:
+        auger.insert(ns, "question", {
+            "id": qid, "project_id": pid, "domain": "4.05", "text": text, "ring": 1,
+            "qclass": "", "status": status, "jev_already_answered": -1.0, "jev_checked_at": ""})
+
+
+def gate_stub(noul: float, calls: list):
+    """A JEV stub that answers the one question the gate asks, and counts its calls."""
+    def _stub(state, questions, *a, **k):
+        calls.append(state)
+        return ({"answers": {"already_answered": {"type": "noul", "noul": noul}},
+                 "usage": {"cost": 1e-05}, "model": "stub"}, None)
+    return _stub
+
+
+def answer_cli(ns: str, did: str, domain: str, chosen: str, qid: str = "") -> tuple[int, str]:
+    argv = ["-n", ns, "answer", "--id", did, "--domain", domain, "--chosen", chosen,
+            "--option", chosen, "--option", "something else", "--why-not", "the seed forbids it",
+            "--confidence", "0.8"]
+    if qid:
+        argv += ["--question-id", qid]
+    return run_cli(argv)
+
+
+def test_propagate_moots_the_question_a_breaks_edge_invalidates(project: dict):
+    """Criterion (a): the question the invalidated decision answered is MOOT, and the reason
+    naming the breaking edge is on the record — on the question's own rows, with its row intact."""
+    ns, pid = project["ns"], project["pid"]
+    store_questions(ns, pid, ("Q-000001", Q_WATCH, "answered"))
+    assert answer_cli(ns, "D-001", "4.05", "single SQLite file", qid="Q-000001")[0] == 0
+    assert answer_cli(ns, "D-002", "4.09", "an embedded index")[0] == 0
+    inv = auger.edge(ns, pid, "breaks", "decision", "D-002", "decision", "D-001", source="human",
+                     note="the embedded index makes the SQLite file the wrong store")
+    assert inv["id"] == "E-000001", inv
+
+    rc, out = run_cli(["-n", ns, "propagate"])
+    assert rc == 0, out
+    assert "moot: 1   reopened: 0   linked: 0" in out, out
+
+    q = row(ns, "question", "id=eq.Q-000001")
+    assert q["status"] == "moot"
+    assert q["text"] == Q_WATCH, "a moot question keeps its row — it is never deleted"
+
+    reason = "D-001 was invalidated by E-000001"
+    assert auger.q_reason(ns, "Q-000001") == reason
+    facets = rows(ns, "facet", "question_id=eq.Q-000001&order=id.asc")
+    assert [f["facet"] for f in facets] == list(auger.facet_set()), facets
+    assert all(f["status"] == "closed" and f["closed_by"] == "D-001" and f["note"] == reason
+               for f in facets), facets
+    assert reason in out, out
+
+    # Nothing was asked again and nothing else moved.
+    assert auger.askable_questions(ns, pid) == []
+    assert len(rows(ns, "decision", f"project_id=eq.{pid}")) == 2
+    assert len(rows(ns, "question", f"project_id=eq.{pid}")) == 1
+    assert row(ns, "decision", "id=eq.D-002")["chosen"] == "an embedded index"
+
+
+def test_propagate_reopens_the_stale_branch_and_reaches_the_grandchild(project: dict, monkeypatch):
+    """Criterion (b): the change runs down the derives_from tree. The question the dead decision
+    answered goes moot, the settled questions below it REOPEN with the reason recorded (Q4), and
+    the walk is not one hop deep — the grandchild is reached. A second pass changes nothing."""
+    ns, pid = project["ns"], project["pid"]
+    calls: list = []
+    monkeypatch.setattr(auger, "jev", gate_stub(0.05, calls))
+    store_questions(ns, pid, ("Q-000001", Q_WATCH, "answered"),
+                    ("Q-000002", Q_STORE, "linked"), ("Q-000003", Q_CRASH, "linked"))
+    assert answer_cli(ns, "D-001", "4.05", "single SQLite file", qid="Q-000001")[0] == 0
+    assert answer_cli(ns, "D-002", "4.09", "an embedded index")[0] == 0
+    auger.edge(ns, pid, "breaks", "decision", "D-002", "decision", "D-001", source="human",
+               note="the embedded index makes the SQLite file the wrong store")
+    auger.edge(ns, pid, "derives_from", "question", "Q-000002", "question", "Q-000001",
+               source="rule", note="the storage question only exists once the record question is asked")
+    auger.edge(ns, pid, "derives_from", "question", "Q-000003", "question", "Q-000002",
+               source="rule", note="the crash question descends from the storage question")
+
+    rc, out = run_cli(["-n", ns, "propagate"])
+    assert rc == 0, out
+    assert "moot: 1   reopened: 2   linked: 0" in out, out
+
+    assert row(ns, "question", "id=eq.Q-000001")["status"] == "moot"
+    assert row(ns, "question", "id=eq.Q-000002")["status"] == "open", "the stale branch did not reopen"
+    assert row(ns, "question", "id=eq.Q-000003")["status"] == "open", "the cascade stopped one hop short"
+
+    cause = "D-001 was invalidated by E-000001"
+    child, grandchild = auger.q_reason(ns, "Q-000002"), auger.q_reason(ns, "Q-000003")
+    assert "reopened" in child and "Q-000001" in child and cause in child, child
+    assert "reopened" in grandchild and "Q-000002" in grandchild and cause in grandchild, grandchild
+    assert child in out and grandchild in out, out
+
+    # Both are settled questions that went stale, so both are askable again — and neither was
+    # asked: the gate re-examined the reopened child once and left it open.
+    assert [q["id"] for q in auger.askable_questions(ns, pid)] == ["Q-000002", "Q-000003"]
+    assert len(calls) == 1, calls
+
+    rc, out2 = run_cli(["-n", ns, "propagate"])
+    assert rc == 0, out2
+    assert "moot: 0   reopened: 0   linked: 0" in out2, out2
+    assert len(calls) == 1, "a second pass re-gated a question the gate had already examined"
+    assert auger.q_reason(ns, "Q-000001") == cause, "a moot question keeps the reason it was given"
+
+
+def test_ask_never_surfaces_a_question_with_an_unresolved_blocker(project: dict, monkeypatch):
+    """Criterion (c): the askable surface honours the blocks edge, and the control proves the
+    block — not a bug — is what held the question back."""
+    ns, pid = project["ns"], project["pid"]
+    monkeypatch.setattr(auger, "jev", gate_stub(0.10, []))
+    store_questions(ns, pid, ("Q-000001", Q_WATCH, "open"),
+                    ("Q-000002", Q_STORE, "open"), ("Q-000003", Q_CRASH, "open"))
+    auger.edge(ns, pid, "blocks", "question", "Q-000002", "question", "Q-000001", source="rule",
+               note="the storage choice cannot be made before the record is defined")
+
+    assert [q["id"] for q in auger.blocked_questions(ns, pid)] == ["Q-000002"]
+    assert [q["id"] for q in auger.askable_questions(ns, pid)] == ["Q-000001", "Q-000003"]
+
+    rc, out = run_cli(["-n", ns, "ask"])
+    assert rc == 0, out
+    assert "Q-000003" in out and Q_CRASH in out, out          # the unblocked question is surfaced
+    assert "blocked by an unresolved question: 1" in out, out
+    assert "Q-000002" not in out, out                          # the blocked one is not surfaced
+    assert Q_STORE not in out, out
+    assert row(ns, "question", "id=eq.Q-000002")["status"] == "open", "not surfaced is not deleted"
+
+    # The control: settle the blocker and the very same question becomes askable.
+    auger.set_state(ns, pid, "Q-000001", "answered", "answered by D-001", closed_by="D-001")
+    rc, out = run_cli(["-n", ns, "ask"])
+    assert rc == 0, out
+    assert "blocked by an unresolved question: 0" in out, out
+    assert "Q-000002" in out and Q_STORE in out, out
+
+
+def test_propagate_links_a_question_the_gate_can_answer_after_its_parent_closes(
+        project: dict, monkeypatch):
+    """Criterion (d): once the parent closes, the child is re-examined and LINKED to the answer we
+    already hold instead of being asked again — and it is not re-examined before that."""
+    ns, pid = project["ns"], project["pid"]
+    calls: list = []
+    monkeypatch.setattr(auger, "jev", gate_stub(0.91, calls))
+    store_questions(ns, pid, ("Q-000001", Q_WATCH, "open"), ("Q-000002", Q_STORE, "open"))
+    auger.edge(ns, pid, "derives_from", "question", "Q-000002", "question", "Q-000001",
+               source="rule", note="the storage question only exists once the record question is asked")
+    assert answer_cli(ns, "D-001", "4.05", "single SQLite file", qid="Q-000001")[0] == 0
+    assert auger.recall(ns, Q_STORE, limit=5), \
+        "the substrate returned no evidence for the stored decision — nothing could be linked"
+
+    # CONTROL: while the parent is open the child is not re-examined, and nothing is linked.
+    rc, out = run_cli(["-n", ns, "propagate"])
+    assert rc == 0, out
+    assert calls == [], "the gate ran on a question whose parent had not closed"
+    assert row(ns, "question", "id=eq.Q-000002")["status"] == "open"
+    assert rows(ns, "edge", "kind=eq.satisfies") == []
+
+    # The parent closes (BEAT 2's job), and PROPAGATE re-examines the child.
+    auger.set_state(ns, pid, "Q-000001", "answered", "answered by D-001", closed_by="D-001")
+    rc, out = run_cli(["-n", ns, "propagate"])
+    assert rc == 0, out
+    assert len(calls) == 1, calls
+    assert "linked: 1" in out and "D-001" in out, out
+
+    q2 = row(ns, "question", "id=eq.Q-000002")
+    assert q2["status"] == "linked", "the gate linked it instead of asking it"
+    assert q2["jev_already_answered"] == pytest.approx(0.91), q2
+    assert q2["jev_checked_at"], q2
+
+    sat = rows(ns, "edge", "kind=eq.satisfies")
+    assert len(sat) == 1, sat
+    assert (sat[0]["src_kind"], sat[0]["src_id"]) == ("decision", "D-001")
+    assert (sat[0]["dst_kind"], sat[0]["dst_id"]) == ("question", "Q-000002")
+    assert sat[0]["source"] == "gate" and sat[0]["confidence"] == pytest.approx(0.91)
+    assert "D-001" in auger.q_reason(ns, "Q-000002")
+
+    # Nothing was asked: no new question, no new decision, and a linked question is not on the
+    # askable surface either.
+    assert len(rows(ns, "decision", f"project_id=eq.{pid}")) == 1
+    assert len(rows(ns, "question", f"project_id=eq.{pid}")) == 2
+    assert auger.askable_questions(ns, pid) == []
+    rc, out = run_cli(["-n", ns, "ask"])
+    assert rc == 0, out
+    assert "Q-000002" not in out, out
+
+
 # ================================================================= exit codes (subprocess is the subject)
 def test_unknown_verb_exits_non_zero():
     proc = subprocess.run([sys.executable, str(REPO_ROOT / "auger.py"), "frobnicate"],

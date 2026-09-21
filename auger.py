@@ -329,6 +329,311 @@ def _noul(ans: dict, name: str):
     return float(v) if isinstance(v, (int, float)) else None
 
 
+# ---------------------------------------------------------------- PROPAGATE (SPEC-001 BEAT 4)
+# Closure and moot cascades — docs/SPEC-001-graph.md section 4, BEAT 4. The engineering calls in
+# that spec are settled and are implemented here, not re-litigated: Q4 — a closed branch reopens
+# automatically when the answer that closed it is invalidated, with the reason recorded.
+#
+# Two walks, different in kind:
+#   * the RULE walk — an invalidation (a `breaks` edge) moots the questions the dead decision
+#     answered, and the change runs down the derives_from tree. No model is involved: a stored
+#     edge is an assertion, and following it is arithmetic.
+#   * the GATE walk — a question whose parent just closed is re-examined BEFORE it is asked. That
+#     one costs a retrieval plus one JEV call, so it records its verdict on the question row
+#     (`jev_already_answered` / `jev_checked_at` — the two columns that exist for exactly this)
+#     and is not repeated until --recheck says to. A gate call that fails leaves the question
+#     open: no answer is invented to make a walk look complete.
+#
+# WHERE A QUESTION'S REASON LIVES. The `question` table has no reason column, and the declared
+# table registry caches declarations per namespace IN PROCESS, so appending a column to the
+# declaration is NOT live for a namespace the server has already scanned (verified against the
+# running service: a PATCH naming an undeclared column returns 400 VALIDATION_ERROR even after
+# the declaration file itself is rewritten). So the reason is recorded where SPEC-001 section 3
+# already puts a question's resolution — its facet rows, one per way of looking: closing (or
+# reopening) them with `closed_by` and `note` records the new state and why it changed. q_reason()
+# reads it back, so that storage decision sits behind one function.
+QUESTION_STATES = ("open", "answered", "linked", "moot", "budget_thin")
+#: The states in which a question is SETTLED — an answer exists. `moot` is deliberately not one:
+#: a withdrawn question was never answered, so a question that blocks on it is still blocked.
+SETTLED_STATES = ("answered", "linked")
+#: The states in which a question is CLOSED — it is no longer waiting to be asked.
+CLOSED_STATES = ("answered", "linked", "moot", "budget_thin")
+
+
+def q_states(ns: str, project_id: str) -> dict:
+    """Every question of the project, by id — the nodes both walks move."""
+    return {q["id"]: q for q in select(ns, "question", f"project_id=eq.{project_id}&order=id.asc")}
+
+
+def graph_edges(ns: str, project_id: str) -> list:
+    return select(ns, "edge", f"project_id=eq.{project_id}&order=id.asc")
+
+
+def edge_index(es: list) -> dict:
+    """Index the edges the walks need, in the direction SPEC-001 section 2 defines them.
+
+    derives_from: src is the question that exists only because dst was asked -> children[dst]=src.
+    blocks:       src is the question that CANNOT be answered until dst is -> blockers[src]=dst.
+    closes:       src is the answer, dst the question it is the answer to -> closed[src]=dst.
+    breaks:       src is the answer that invalidates the dst decision.
+    """
+    idx = {"children": {}, "blockers": {}, "closed": {}, "breaks": []}
+    for e in es:
+        k = e.get("kind")
+        if k == "derives_from" and e.get("src_kind") == "question" and e.get("dst_kind") == "question":
+            idx["children"].setdefault(e["dst_id"], []).append(e["src_id"])
+        elif k == "blocks" and e.get("src_kind") == "question" and e.get("dst_kind") == "question":
+            idx["blockers"].setdefault(e["src_id"], []).append(e["dst_id"])
+        elif k == "closes" and e.get("src_kind") == "decision" and e.get("dst_kind") == "question":
+            idx["closed"].setdefault(e["src_id"], []).append(e["dst_id"])
+        elif k == "breaks" and e.get("dst_kind") == "decision":
+            idx["breaks"].append(e)
+    return idx
+
+
+def questions_closed_by(ns: str, project_id: str, idx: dict) -> dict:
+    """decision id -> the questions that decision is the answer to.
+
+    TWO sources, because both are stored assertions of the same fact and either may be the only
+    one present: the `closes` edge (SPEC-001 section 2) and `decision.question_id` (the field the
+    CLI has always accepted and nothing has ever read back).
+    """
+    by = {d: set(v) for d, v in idx["closed"].items()}
+    for d in select(ns, "decision", f"project_id=eq.{project_id}"):
+        qid = (d.get("question_id") or "").strip()
+        if qid:
+            by.setdefault(d["id"], set()).add(qid)
+    return {d: sorted(v) for d, v in by.items()}
+
+
+def q_reason(ns: str, question_id: str) -> str:
+    """Why this question is in the state it is in — "" when nothing is on record."""
+    for f in select(ns, "facet", f"question_id=eq.{question_id}&order=id.asc"):
+        if f.get("note"):
+            return f["note"]
+    return ""
+
+
+def set_state(ns: str, project_id: str, question_id: str, status: str, reason: str,
+              *, closed_by: str = "") -> dict:
+    """Move one question to a state and RECORD WHY (SPEC-001 section 1: a question is never
+    deleted, a moot one keeps its row and its reason).
+
+    The reason goes on the question's facet rows — the rows SPEC-001 section 3 gives every
+    question for exactly this — because the `question` table has no reason column and a
+    declaration the running server has already scanned cannot gain one (see the block comment).
+    A question with no facet rows gets the full set here, so a reason always has a home.
+    The facets are written BEFORE the status: a failure leaves the question in its old state
+    rather than in a new one with no explanation.
+    """
+    if status not in QUESTION_STATES:
+        raise SystemExit(f"unknown question state {status!r}: expected one of {', '.join(QUESTION_STATES)}")
+    fields = {"status": "open" if status == "open" else "closed",
+              "closed_by": "" if status == "open" else closed_by,
+              "note": reason}
+    have = select(ns, "facet", f"question_id=eq.{question_id}&order=id.asc")
+    if have:
+        for f in have:
+            patch(ns, "facet", f["id"], fields)
+    else:
+        first = int(next_id(ns, "facet", "F").split("-")[1])
+        insert(ns, "facet", [{"id": f"F-{first + i:0{ID_WIDTH}d}", "project_id": project_id,
+                              "question_id": question_id, "facet": name, **fields}
+                             for i, name in enumerate(facet_set())])
+    return patch(ns, "question", question_id, {"status": status})
+
+
+def unresolved_blockers(idx: dict, qs: dict, question_id: str) -> list:
+    """The questions this one cannot be answered until (SPEC-001: the blocks edge).
+
+    A `moot` blocker does NOT unblock its dependents: a withdrawn question was never answered, so
+    the dependency it created is still open. A blocker with no stored row is unresolved too — the
+    conservative direction, since an edge that cannot be walked backwards must not read as done.
+    """
+    return [b for b in idx["blockers"].get(question_id, ())
+            if (qs.get(b) or {}).get("status") not in SETTLED_STATES]
+
+
+def askable_questions(ns: str, project_id: str) -> list:
+    """Open questions nothing unresolved is blocking — the surface `ask` may show."""
+    idx, qs = edge_index(graph_edges(ns, project_id)), q_states(ns, project_id)
+    return [q for q in qs.values() if q.get("status") == "open" and not unresolved_blockers(idx, qs, q["id"])]
+
+
+def blocked_questions(ns: str, project_id: str) -> list:
+    """Open questions held back by an unresolved blocker — counted, never surfaced."""
+    idx, qs = edge_index(graph_edges(ns, project_id)), q_states(ns, project_id)
+    return [q for q in qs.values() if q.get("status") == "open" and unresolved_blockers(idx, qs, q["id"])]
+
+
+def decision_for_evidence(ns: str, project_id: str, key: str) -> str:
+    """The decision a stored evidence key belongs to — "" when the key names none.
+
+    `answer` embeds each decision's evidence under /auger/<pid>/<did>, so the gate can name WHICH
+    existing answer satisfies a question. Without a decision to name there is no `satisfies` edge
+    to write, and an unnamed link is not a link (SPEC-001 section 1: `linked` means an EXISTING
+    answer satisfies it), so the caller leaves the question open instead.
+    """
+    m = re.match(r"^/auger/[^/]+/([^/]+)$", key or "")
+    if not m:
+        return ""
+    did = m.group(1)
+    return did if select(ns, "decision", f"id=eq.{did}&project_id=eq.{project_id}&select=id&limit=1") else ""
+
+
+def gate_question(ns: str, project_id: str, text: str, limit: int = 5):
+    """The gate: is this question already fully answered by evidence we already hold?
+
+    Retrieval first, then ONE JEV noul. Returns (verdict, decision_id, err). No stored evidence
+    means no model call — nothing can answer it, so the verdict is None and the question stays
+    open. A transport error is returned, never converted into a verdict (fail-closed).
+    """
+    hits = recall(ns, text, limit=limit)
+    if not hits:
+        return None, "", None
+    evidence = "\n".join(f"- {h.get('key')}: {h.get('content', '')[:400]}" for h in hits)
+    ans, err = jev(f"QUESTION UNDER CONSIDERATION:\n{text}\n\nSTORED EVIDENCE:\n{evidence}",
+                   {"already_answered": {"type": "noul",
+                    "instructions": "Is the question under consideration ALREADY fully answered by the stored evidence?"}})
+    if err:
+        return None, "", err
+    v = _noul(ans["answers"], "already_answered")
+    if v is None or v < T_ANSWERED:
+        return v, "", None
+    for h in sorted(hits, key=lambda h: -(h.get("score") or 0)):
+        did = decision_for_evidence(ns, project_id, h.get("key") or "")
+        if did:
+            return v, did, None
+    return v, "", None           # answered, but by evidence that names no decision node
+
+
+def propagate(ns: str, project_id: str, *, gate: bool = True, recheck: bool = False) -> dict:
+    """Run both walks once and report exactly what moved (SPEC-001 BEAT 4).
+
+    The report is the verb's output AND the tests' handle on it:
+      moot        [(question, reason)]            the questions a dead decision answered
+      reopened    [(question, reason)]            the settled questions that went stale
+      linked      [(question, decision, noul)]    questions the gate satisfied from stored evidence
+      edges       [edge id]                       what the gate wrote
+      askable     [question id]                   open and unblocked after the walk
+      blocked     [question id]                   open and held back by an unresolved blocker
+      unattributed [question id]                  gate says answered, evidence names no decision
+      ungated     [question id]                   left open because the gate was unreachable
+      gate_error  str | None
+    """
+    qs = q_states(ns, project_id)
+    idx = edge_index(graph_edges(ns, project_id))
+    closed_by = questions_closed_by(ns, project_id, idx)
+    rep = {"moot": [], "reopened": [], "linked": [], "edges": [], "askable": [], "blocked": [],
+           "unattributed": [], "ungated": [], "gate_error": None}
+
+    # ---- the rule walk: invalidation -> moot, then down the derives_from tree
+    seen, queue = set(), []
+    for e in idx["breaks"]:
+        dead, root = e["dst_id"], f"{e['dst_id']} was invalidated by {e['id']}"
+        for qid in closed_by.get(dead, ()):
+            q = qs.get(qid)
+            if q is None or q["status"] == "moot":
+                continue                      # already withdrawn, and it keeps the first reason
+            set_state(ns, project_id, qid, "moot", root, closed_by=dead)
+            qs[qid]["status"] = "moot"
+            seen.add(qid)
+            rep["moot"].append((qid, root))
+            queue.append((qid, root))
+    while queue:
+        parent, root = queue.pop(0)
+        for child in sorted(idx["children"].get(parent, ())):
+            if child in seen:
+                continue                      # a cycle in derives_from cannot loop the walk
+            seen.add(child)
+            q = qs.get(child)
+            if q is None:
+                continue
+            if q["status"] in SETTLED_STATES:
+                # The engine's Q4: a closed branch is not closed, it is STALE — stale is worse
+                # than open because it silently reads as done. Reopen it and say why.
+                reason = f"reopened: {parent} is stale ({root})"
+                set_state(ns, project_id, child, "open", reason)
+                qs[child]["status"] = "open"
+                rep["reopened"].append((child, reason))
+            # an already-open question is newly askable, a moot one keeps its reason, and a
+            # budget_thin branch's ceiling has not moved: none of them are rewritten here.
+            queue.append((child, root))
+
+    # ---- the gate walk: children of closed questions, re-examined before they are asked
+    pending = []
+    for parent, kids in idx["children"].items():
+        p = qs.get(parent)
+        if p is None or p["status"] not in CLOSED_STATES:
+            continue                          # the trigger is the parent CLOSING
+        for child in sorted(kids):
+            q = qs.get(child)
+            if q is None or q["status"] != "open":
+                continue
+            if unresolved_blockers(idx, qs, child):
+                continue                      # blocked questions are not gated, only counted
+            if q.get("jev_checked_at") and not recheck:
+                continue                      # the gate already examined this one
+            pending.append(child)
+    if gate and pending:
+        for i, child in enumerate(pending):
+            text = qs[child].get("text") or ""
+            verdict, dec_id, err = gate_question(ns, project_id, text)
+            if err:
+                rep["gate_error"] = err
+                rep["ungated"] = pending[i:]
+                break
+            checked_at = datetime.now(timezone.utc).isoformat()
+            patch(ns, "question", child, {"jev_already_answered": -1.0 if verdict is None else verdict,
+                                         "jev_checked_at": checked_at})
+            qs[child]["jev_checked_at"] = checked_at
+            if verdict is not None and verdict >= T_ANSWERED:
+                if not dec_id:
+                    rep["unattributed"].append(child)
+                    continue
+                row = edge(ns, project_id, "satisfies", "decision", dec_id, "question", child,
+                           confidence=verdict, source="gate",
+                           note=f"the gate found this question already answered (noul {verdict:.2f})")
+                set_state(ns, project_id, child, "linked",
+                          f"linked by the gate to {dec_id} (noul {verdict:.2f})", closed_by=dec_id)
+                qs[child]["status"] = "linked"
+                rep["linked"].append((child, dec_id, verdict))
+                rep["edges"].append(row["id"])
+
+    rep["askable"] = [q["id"] for q in askable_questions(ns, project_id)]
+    rep["blocked"] = [q["id"] for q in blocked_questions(ns, project_id)]
+    return rep
+
+
+def cmd_propagate(a):
+    ns, pid = a.namespace, a.project_id
+    p = _project(ns, pid)
+    pid = p["id"]
+    rep = propagate(ns, pid, gate=not a.no_gate, recheck=a.recheck)
+    print(f"project {pid}  |  {ns}")
+    print(f"moot: {len(rep['moot'])}   reopened: {len(rep['reopened'])}   linked: {len(rep['linked'])}")
+    for qid, reason in rep["moot"]:
+        print(f"  moot       {qid}  {reason}")
+    for qid, reason in rep["reopened"]:
+        print(f"  reopened   {qid}  {reason}")
+    for qid, dec_id, v in rep["linked"]:
+        print(f"  linked     {qid}  -> {dec_id} (noul {v:.2f})")
+    for qid in rep["unattributed"]:
+        print(f"  WARNING    {qid}: the gate says answered, but the evidence names no decision "
+              f"— left open rather than linked to nothing")
+    if rep["edges"]:
+        print(f"edges written: {', '.join(rep['edges'])}")
+    print(f"newly askable: {len(rep['askable'])}   blocked by an unresolved question: {len(rep['blocked'])}")
+    texts = q_states(ns, pid)
+    for qid in rep["askable"]:
+        print(f"  askable    {qid}  {(texts.get(qid, {}).get('text') or '')[:90]}")
+    if rep["gate_error"]:
+        print(f"WARNING gate unavailable — {rep['gate_error']}")
+        print(f"        {len(rep['ungated'])} question(s) left open and NOT linked (fail-closed).")
+        return 1
+    return 0
+
+
 # ---------------------------------------------------------------- verbs
 def cmd_init(a):
     ns = a.namespace
@@ -430,6 +735,14 @@ def cmd_ask(a):
     ans, err = jev(state, qs)
     print(f"project {pid}  |  {ns}")
     print(f"low-confidence decisions (<{T_CONFIDENT}): {len(seats)}   open questions: {len(unans)}   unknowns: {len(unknown)}")
+    # The askable surface (SPEC-001 BEAT 4 + 5): a question ordered behind an unresolved blocker
+    # is NOT surfaced here. Blocked questions are counted, never named — "not surfaced" is the
+    # whole point of the edge, and a reader who can see the text of one has been shown it.
+    ask = askable_questions(ns, pid)
+    blocked = blocked_questions(ns, pid)
+    print(f"askable (open, unblocked): {len(ask)}   blocked by an unresolved question: {len(blocked)}")
+    for q in ask:
+        print(f"  {q['id']}  {(q.get('text') or '')[:100]}")
     if err:
         print(f"\nJEV unavailable — {err}")
         print("(fail-closed: no next-question is invented without the model.)")
@@ -695,6 +1008,13 @@ def main(argv=None):
     s.add_argument("--config", action="append", metavar="D-001=O2",
                    help="hypothetical option set; repeatable. Nothing is written.")
     s.set_defaults(fn=cmd_dump)
+
+    s = sub.add_parser("propagate", help="close/moot/reopen and re-gate (SPEC-001 BEAT 4)")
+    s.add_argument("--no-gate", action="store_true",
+                   help="rule walk only: moot, reopen and cascade, with no retrieval and no model call")
+    s.add_argument("--recheck", action="store_true",
+                   help="re-gate questions the gate has already examined (it records its verdict)")
+    s.set_defaults(fn=cmd_propagate)
 
     s = sub.add_parser("recall", help="semantic search over the namespace")
     s.add_argument("query")
