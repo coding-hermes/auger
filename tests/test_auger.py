@@ -1142,3 +1142,406 @@ def test_a_saturated_limiter_is_bounded_and_the_leak_is_reported(offline_duckbra
     assert fake.registered is True, "the row must still be there for this case to mean anything"
     assert any("429" in p for p in problems), problems
     assert any("still listed" in p for p in problems), problems
+
+
+# ================================================================= the bundle boundary (SPEC-002 2.1/2.2)
+# AUG-010. Two places in the engine cross the line between bundled projects:
+#
+#   * the GATE (2.1) searches EVERY member's namespace, so a question a sibling already answered is
+#     LINKED to that sibling's decision instead of being re-decided and drifting — cross-project
+#     decision dedupe. The link carries the sibling's project name, so a reader sees where the
+#     answer came from.
+#   * the IMPACT pass (2.2) walks the members of a BUNDLE-scoped answer and records what the answer
+#     does to each sibling's contracts: `affects` for a change, `breaks` plus an ESCALATION for an
+#     invalidation. The engine records the break and surfaces it; it never rewrites the sibling.
+#
+# The MODEL is faked in these cases — JEV is an external service, and what is under test here is the
+# engine's behaviour around it, which the `auger check` cases already cover end to end. The
+# SUBSTRATE is not faked: every namespace, project, decision, edge and escalation below is real
+# DuckBrain, so these cases skip loudly on a host without one and need no OpenRouter key.
+def two_fleet_projects() -> tuple[str, str]:
+    """Two DISTINCT real project names — a bundle member names a project the fleet HAS."""
+    scheduler_or_skip()
+    have = auger.known_projects() or set()
+    ordered = [p for p in ("bunker", "crier", "terminal-jail", "coding-hermes") if p in have]
+    ordered += sorted(have)
+    picked: list[str] = []
+    for name in ordered:
+        if name not in picked:
+            picked.append(name)
+    if len(picked) < 2:
+        pytest.skip(f"the fleet's `projects` table holds {len(picked)} name(s): a bundle needs two")
+    return picked[0], picked[1]
+
+
+def start_named_project(ns: str, name: str, pid: str) -> None:
+    """A project whose NAME is what a `bundle_member` row names (start defaults it to the ns)."""
+    rc, out = run_cli(["-n", ns, "start", "--name", name, "--id", pid,
+                       "--seed", f"{name}: one box, one job, one contract the siblings must honour"])
+    assert rc == 0 and "seed stored" in out, out
+
+
+def bundle_with(ns: str, *members: str) -> dict:
+    """A bundle over the given member projects, written through the module's own writers."""
+    b = auger.bundle(ns, "agent-ecosystem", description="the bus, its hosts and their consumers",
+                     contract="crier/specs/AGENT-ECOSYSTEM.md", status="confirmed")
+    for i, member in enumerate(members):
+        auger.bundle_member(ns, b["id"], member, "owner" if i == 0 else "consumer")
+    return b
+
+
+def sibling_decision(ns: str, pid: str, did: str, chosen: str) -> dict:
+    """A BUNDLE-scoped decision in a sibling's namespace, via insert_decision (never a raw db())."""
+    spec = {"id": did, "project_id": pid, "domain": "9.01", "question_id": "", "chosen": chosen,
+            "why_not": "the siblings must agree on the wire shape", "reversal_cost": "",
+            "confidence": 0.9, "status": "decided", "evidence_key": f"/auger/{pid}/{did}",
+            "scope": "bundle"}
+    warning = auger.insert_decision(ns, spec)
+    assert not warning, warning
+    return spec
+
+
+def record_decision(ns: str, did: str, chosen: str, *, scope: str = "", qid: str = "") -> tuple[int, str]:
+    """`auger answer` with its rejected alternatives — optional scope, optional question it answers."""
+    argv = ["-n", ns, "answer", "--id", did, "--domain", "9.01", "--chosen", chosen,
+            "--option", chosen, "--option", "keep the shape the siblings already agreed",
+            "--why-not", "a stream cannot carry the required per-message key",
+            "--confidence", "0.9"]
+    if scope:
+        argv += ["--scope", scope]
+    if qid:
+        argv += ["--question-id", qid]
+    return run_cli(argv)
+
+
+def impact_stub(score: float, calls: list, confidence: float = 0.8):
+    """A JEV stub that answers the impact pass's one score, and counts the questions it was asked."""
+    def _stub(state, questions, *a, **k):
+        calls.append(questions)
+        return ({"answers": {"impact": {"type": "score", "score": score, "confidence": confidence}},
+                 "usage": {"cost": 1e-05}, "model": "stub"}, None)
+    return _stub
+
+
+@pytest.fixture
+def sibling_ns(live_service: str) -> str:
+    """A SECOND ephemeral namespace: where a sibling project's rows live. Real, and torn down."""
+    ns = new_bare_ns()
+    CREATED.append(ns)
+    try:
+        rc, out = run_cli(["-n", ns, "init"])
+        assert rc == 0 and "declared:" in out, out
+        yield ns
+    finally:
+        problems = teardown_namespace(ns)
+        if problems:
+            pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+
+
+def bundled_pair(ns: str, sibling_ns: str, monkeypatch, *, decision: tuple | None = None) -> tuple[str, str]:
+    """The shared arrangement: two bundled projects, the sibling's namespace reachable via the seam.
+
+    `member_namespace` is the ONE place the engine turns a member's project name into the namespace
+    its rows live in, so that is the seam this points at a real second namespace. Monkeypatched
+    rather than worked around: the alternative would be writing rows into whatever namespace the
+    fleet's project name happens to name, which no test may do.
+    """
+    home, sib = two_fleet_projects()
+    start_named_project(ns, home, "P-HOME")
+    start_named_project(sibling_ns, sib, "P-SIB")
+    bundle_with(ns, home, sib)
+    monkeypatch.setattr(auger, "member_namespace", lambda p: sibling_ns if p == sib else p)
+    if decision is not None:
+        sibling_decision(sibling_ns, "P-SIB", *decision)
+    return home, sib
+
+
+def test_the_gate_links_an_answer_held_in_a_sibling_namespace(ns: str, sibling_ns: str, monkeypatch):
+    """SPEC-002 2.1: the gate pools every member's namespace, and the link names where it came from."""
+    _home, sib = bundled_pair(ns, sibling_ns, monkeypatch,
+                              decision=("D-007", "a sandbox isolates the filesystem per process"))
+    store_questions(ns, "P-HOME", ("Q-000001", Q_WATCH, "answered"), ("Q-000002", Q_STORE, "open"))
+    auger.edge(ns, "P-HOME", "derives_from", "question", "Q-000002", "question", "Q-000001",
+               source="rule", note="the storage question only exists once the record question is asked")
+
+    seen: list[str] = []
+
+    def fake_recall(namespace, q, limit=5):
+        seen.append(namespace)
+        if namespace == sibling_ns:
+            return [{"key": "/auger/P-SIB/D-007", "score": 0.93,
+                     "content": "Decision D-007: we chose a sandbox isolates the filesystem per "
+                                "process. Rejected alternatives: shared mounts."}]
+        return []
+
+    monkeypatch.setattr(auger, "recall", fake_recall)
+    calls: list = []
+    monkeypatch.setattr(auger, "jev", gate_stub(0.91, calls))
+
+    rc, out = run_cli(["-n", ns, "propagate"])
+    assert rc == 0, out
+    assert "linked: 1" in out, out
+    assert len(calls) == 1, f"the pooling must stay ONE noul, the model was asked {len(calls)} times"
+    assert seen == [ns, sibling_ns], \
+        f"the gate did not pool the home namespace and the sibling's, in that order: {seen}"
+
+    assert row(ns, "question", "id=eq.Q-000002")["status"] == "linked"
+    sat = rows(ns, "edge", "kind=eq.satisfies")
+    assert len(sat) == 1, sat
+    assert (sat[0]["src_kind"], sat[0]["src_id"]) == ("decision", "D-007"), sat[0]
+    assert (sat[0]["dst_kind"], sat[0]["dst_id"]) == ("question", "Q-000002"), sat[0]
+    assert sat[0]["src_project"] == sib, \
+        f"the satisfies edge does not name the sibling the answer came from: {sat[0]!r}"
+    reason = auger.q_reason(ns, "Q-000002")
+    assert "D-007" in reason and sib in reason, reason
+    assert sib in out, out
+
+
+def test_the_gate_survives_a_sibling_namespace_that_cannot_answer(ns: str, monkeypatch):
+    """A sibling's namespace is FOREIGN: missing, undeclared or unreachable is 'no evidence there'.
+
+    The asking project's own verb must not die over a namespace it does not own, and it must not
+    link to a decision it could not read back — the answer would be invented.
+    """
+    home, sib = two_fleet_projects()
+    start_named_project(ns, home, "P-HOME")
+    bundle_with(ns, home, sib)
+    missing = TEST_NS_PREFIX + "absent-" + uuid.uuid4().hex[:8]
+    assert missing not in api_namespaces(), "this case needs a namespace that does not exist"
+    monkeypatch.setattr(auger, "member_namespace", lambda p: missing if p == sib else p)
+
+    store_questions(ns, "P-HOME", ("Q-000001", Q_WATCH, "answered"), ("Q-000002", Q_STORE, "open"))
+    auger.edge(ns, "P-HOME", "derives_from", "question", "Q-000002", "question", "Q-000001",
+               source="rule", note="the storage question only exists once the record question is asked")
+    monkeypatch.setattr(auger, "recall", lambda n, q, limit=5: (
+        [{"key": "/auger/P-GONE/D-999", "score": 0.95, "content": "a decision we cannot read back"}]
+        if n == missing else []))
+    calls: list = []
+    monkeypatch.setattr(auger, "jev", gate_stub(0.95, calls))
+
+    rc, out = run_cli(["-n", ns, "propagate"])
+    assert rc == 0, out
+    assert row(ns, "question", "id=eq.Q-000002")["status"] == "open", \
+        "the gate linked to a decision that no namespace could serve"
+    assert rows(ns, "edge", "kind=eq.satisfies") == []
+    assert "Q-000002" in out and "WARNING" in out, out
+
+
+def _declare_tables_without_the_cross_project_edge_columns(ns: str) -> None:
+    """Write the declarations an AUG-009-era namespace has: `edge` without the two project columns.
+
+    Only those columns are removed, from the module's own column lists, so this stays a pre-AUG-010
+    shape even as the model grows. It is written BEFORE the API is asked anything, because DuckBrain
+    caches a namespace's declarations on its first read of them — that in-process cache is the whole
+    reason a pre-AUG-010 namespace refuses a cross-project edge at all.
+    """
+    tables = os.path.join(ns_path(ns), "tables")
+    os.makedirs(tables, exist_ok=True)
+    for name, cols in auger.COLS.items():
+        keep = [(c, t) for c, t in cols
+                if not (name == "edge" and c in ("src_project", "dst_project"))]
+        decl = {"name": name, "format": "jsonl-objects", "primary": "id",
+                "glob": f"tables/{name}.jsonl",
+                "columns": [{"name": c, "type": t} for c, t in keep]}
+        with open(os.path.join(tables, f"{name}.table.json"), "w") as f:
+            f.write(json.dumps(decl, indent=1))
+
+
+def test_a_namespace_declared_before_the_cross_project_edge_columns_keeps_working(
+        live_service: str, sibling_ns: str, monkeypatch):
+    """A namespace from before AUG-010 stores the cross-project link ANYWAY, and says what it lost.
+
+    The same hard case AUG-009 had for `decision.scope`, one table over: the running server serves
+    `edge` without src_project/dst_project, so the first insert that carries one is refused. The link
+    must not be lost and must not be lost SILENTLY: the row is stored without the field, its own note
+    says so, and the remedy is printed — while the sibling is still named in the question's reason,
+    so a reader can still see the answer came from another project.
+    """
+    ns = new_bare_ns()
+    CREATED.append(ns)
+    try:
+        _declare_tables_without_the_cross_project_edge_columns(ns)
+        home, sib = two_fleet_projects()
+        start_named_project(ns, home, "P-HOME")
+        start_named_project(sibling_ns, sib, "P-SIB")
+        bundle_with(ns, home, sib)
+        monkeypatch.setattr(auger, "member_namespace", lambda p: sibling_ns if p == sib else p)
+        sibling_decision(sibling_ns, "P-SIB", "D-007", "a sandbox isolates the filesystem per process")
+
+        status, live, _ = auger.db(f"/api/ns/{ns}/tables")
+        assert status == 200, live
+        served = {t["name"]: [c["name"] for c in t["columns"]] for t in live["tables"]}
+        assert "src_project" not in served["edge"], \
+            f"the API is not serving the pre-AUG-010 declaration this test set up: {served['edge']}"
+
+        store_questions(ns, "P-HOME", ("Q-000001", Q_WATCH, "answered"), ("Q-000002", Q_STORE, "open"))
+        auger.edge(ns, "P-HOME", "derives_from", "question", "Q-000002", "question", "Q-000001",
+                   source="rule", note="the storage question only exists once the record question is asked")
+        monkeypatch.setattr(auger, "recall", lambda n, q, limit=5: (
+            [{"key": "/auger/P-SIB/D-007", "score": 0.92,
+              "content": "Decision D-007: a sandbox isolates the filesystem per process."}]
+            if n == sibling_ns else []))
+        monkeypatch.setattr(auger, "jev", gate_stub(0.90, []))
+
+        rc, out = run_cli(["-n", ns, "propagate"])
+        assert rc == 0, out
+        assert "linked: 1" in out, out
+        assert "WARNING" in out and "src_project" in out and "auger init" in out, out
+        assert sib in out, out          # the downgrade never loses WHICH project the link crossed to
+
+        sat = rows(ns, "edge", "kind=eq.satisfies")
+        assert len(sat) == 1, sat
+        assert (sat[0]["src_kind"], sat[0]["src_id"]) == ("decision", "D-007"), sat[0]
+        assert (sat[0]["dst_kind"], sat[0]["dst_id"]) == ("question", "Q-000002"), sat[0]
+        assert not sat[0].get("src_project"), f"a column the API does not serve was stored: {sat[0]!r}"
+        assert "stored without src_project" in sat[0]["note"], sat[0]["note"]
+    finally:
+        assert teardown_namespace(ns) == []
+
+
+def test_a_bundle_scoped_answer_escalates_a_break_instead_of_rewriting_it(
+        ns: str, sibling_ns: str, monkeypatch):
+    """SPEC-002 2.2: an invalidation is recorded and surfaced — and the sibling's row is untouched."""
+    _home, sib = bundled_pair(ns, sibling_ns, monkeypatch,
+                              decision=("D-007", "the envelope is one JSON object per message"))
+    calls: list = []
+    monkeypatch.setattr(auger, "jev", impact_stub(2.0, calls))   # 2 of 2: invalidated
+
+    rc, out = record_decision(ns, "D-012", "the envelope is NDJSON", scope="bundle")
+    assert rc == 0, out
+    assert "D-012 recorded" in out and "scope bundle" in out, out
+    assert len(calls) == 1, f"one answer asked the model {len(calls)} times for one member"
+    assert f"ESCALATION: answer D-012 breaks {sib}'s D-007 — recorded, not rewritten" in out, out
+
+    brk = rows(ns, "edge", "kind=eq.breaks")
+    assert len(brk) == 1, brk
+    assert (brk[0]["src_kind"], brk[0]["src_id"]) == ("decision", "D-012"), brk[0]
+    assert (brk[0]["dst_kind"], brk[0]["dst_id"]) == ("decision", "D-007"), brk[0]
+    assert brk[0]["dst_project"] == sib, f"the break does not name the sibling: {brk[0]!r}"
+    assert brk[0]["source"] == "impact" and brk[0]["confidence"] == pytest.approx(2.0), brk[0]
+
+    esc = rows(ns, "escalation", "")
+    assert len(esc) == 1, esc
+    assert sib in esc[0]["question"] and "D-007" in esc[0]["question"], esc
+    assert esc[0]["project_id"] == "P-HOME" and esc[0]["status"] == "open", esc
+
+    # recorded, NOT rewritten: the sibling's own row still says what the sibling decided.
+    other = row(sibling_ns, "decision", "id=eq.D-007")
+    assert other["chosen"] == "the envelope is one JSON object per message", other
+
+
+def test_a_bundle_scoped_answer_that_changes_a_sibling_records_an_affects_edge(
+        ns: str, sibling_ns: str, monkeypatch):
+    """The middle verdict: `affects`, with the sibling named — and no escalation."""
+    _home, sib = bundled_pair(ns, sibling_ns, monkeypatch,
+                              decision=("D-007", "the envelope is one JSON object per message"))
+    calls: list = []
+    monkeypatch.setattr(auger, "jev", impact_stub(1.0, calls))   # 1 of 2: changed
+
+    rc, out = record_decision(ns, "D-015", "the envelope is NDJSON", scope="bundle")
+    assert rc == 0, out
+    assert "ESCALATION" not in out, out
+    aff = rows(ns, "edge", "kind=eq.affects")
+    assert len(aff) == 1, aff
+    assert (aff[0]["src_id"], aff[0]["dst_id"]) == ("D-015", "D-007"), aff[0]
+    assert aff[0]["dst_project"] == sib and aff[0]["source"] == "impact", aff[0]
+    assert rows(ns, "escalation", "") == [], "a CHANGE was escalated as a break"
+
+
+def test_a_bundle_scoped_answer_that_leaves_a_sibling_unchanged_writes_nothing(
+        ns: str, sibling_ns: str, monkeypatch):
+    """Unchanged -> nothing on the record, for a member the pass did ask about."""
+    _home, _sib = bundled_pair(ns, sibling_ns, monkeypatch,
+                               decision=("D-007", "the envelope is one JSON object per message"))
+    calls: list = []
+    monkeypatch.setattr(auger, "jev", impact_stub(0.0, calls))   # 0 of 2: unchanged
+
+    rc, out = record_decision(ns, "D-016", "the envelope is NDJSON", scope="bundle")
+    assert rc == 0 and "ESCALATION" not in out, out
+    assert len(calls) == 1, f"the member was not asked at all: {calls}"
+    assert rows(ns, "edge", "") == [], "an unchanged sibling gained an edge"
+    assert rows(ns, "escalation", "") == []
+
+
+def test_a_project_scoped_answer_crosses_no_boundary_at_all(ns: str, sibling_ns: str, monkeypatch):
+    """The rule that keeps the pass finite: only BUNDLE-scoped decisions cross the boundary."""
+    _home, _sib = bundled_pair(ns, sibling_ns, monkeypatch,
+                               decision=("D-007", "the envelope is one JSON object per message"))
+    calls: list = []
+    monkeypatch.setattr(auger, "jev", impact_stub(2.0, calls))   # a verdict that WOULD break it
+
+    rc, out = record_decision(ns, "D-013", "the envelope is NDJSON")   # no --scope: project-local
+    assert rc == 0, out
+    assert calls == [], f"a project-local answer asked the model about its bundle: {calls}"
+    assert rows(ns, "edge", "") == [], "a project-local answer wrote a cross-project edge"
+    assert rows(ns, "escalation", "") == []
+    assert row(ns, "decision", "id=eq.D-013")["chosen"] == "the envelope is NDJSON"
+    assert row(sibling_ns, "decision", "id=eq.D-007")["chosen"] == \
+        "the envelope is one JSON object per message"
+
+
+def test_an_unreachable_model_in_the_impact_pass_skips_the_member_and_still_records(
+        ns: str, sibling_ns: str, monkeypatch):
+    """Fail-closed: an unknown verdict writes NO edge, is surfaced, and does not fail the answer."""
+    _home, sib = bundled_pair(ns, sibling_ns, monkeypatch,
+                              decision=("D-007", "the envelope is one JSON object per message"))
+    monkeypatch.setattr(auger, "jev", lambda *a, **k: (None, "all 6 JEV keys failed; last: HTTP 401"))
+
+    rc, out = record_decision(ns, "D-014", "the envelope is NDJSON", scope="bundle")
+    assert rc == 0, out
+    assert "D-014 recorded" in out, out
+    assert "WARNING" in out and sib in out and "JEV" in out, out
+    assert rows(ns, "edge", "") == [], "an edge was written on a verdict the model never gave"
+    assert rows(ns, "escalation", "") == []
+    assert row(sibling_ns, "decision", "id=eq.D-007")["chosen"] == \
+        "the envelope is one JSON object per message"
+
+
+def test_a_break_against_a_sibling_never_moots_a_local_question(ns: str, sibling_ns: str, monkeypatch):
+    """Ids are per NAMESPACE, so a sibling's D-007 and this project's D-007 can both exist.
+
+    The rule walk reads `breaks` edges to moot the questions a dead decision answered. A break
+    recorded against a SIBLING's D-007 (SPEC-002 2.2) is an escalation for that sibling, not this
+    project's D-007 dying — reading it as local would moot a question nobody invalidated.
+    """
+    _home, _sib = bundled_pair(ns, sibling_ns, monkeypatch,
+                               decision=("D-007", "the envelope is one JSON object per message"))
+    store_questions(ns, "P-HOME", ("Q-000001", Q_WATCH, "answered"))
+    assert record_decision(ns, "D-007", "single SQLite file", qid="Q-000001")[0] == 0
+    monkeypatch.setattr(auger, "jev", impact_stub(2.0, []))
+    rc, out = record_decision(ns, "D-012", "the envelope is NDJSON", scope="bundle")
+    assert rc == 0 and "ESCALATION" in out, out
+
+    rc, out = run_cli(["-n", ns, "propagate", "--no-gate"])
+    assert rc == 0, out
+    assert "moot: 0   reopened: 0" in out, out
+    assert row(ns, "question", "id=eq.Q-000001")["status"] == "answered", \
+        "a break against a SIBLING's D-007 mooted this project's own D-007"
+
+
+def test_the_gate_with_no_bundle_membership_recalls_its_own_namespace_only(project: dict, monkeypatch):
+    """The no-bundle path must not regress: one namespace, one noul, a link with no src_project."""
+    ns, pid = project["ns"], project["pid"]
+    assert record_decision(ns, "D-001", "single SQLite file")[0] == 0
+    store_questions(ns, pid, ("Q-000001", Q_WATCH, "answered"), ("Q-000002", Q_STORE, "open"))
+    auger.edge(ns, pid, "derives_from", "question", "Q-000002", "question", "Q-000001",
+               source="rule", note="the storage question only exists once the record question is asked")
+
+    seen: list[str] = []
+
+    def fake_recall(namespace, q, limit=5):
+        seen.append(namespace)
+        return ([{"key": f"/auger/{pid}/D-001", "score": 0.9,
+                  "content": "Decision D-001: we chose single SQLite file."}] if namespace == ns else [])
+
+    monkeypatch.setattr(auger, "recall", fake_recall)
+    calls: list = []
+    monkeypatch.setattr(auger, "jev", gate_stub(0.93, calls))
+
+    rc, out = run_cli(["-n", ns, "propagate"])
+    assert rc == 0, out
+    assert seen == [ns], f"a project with no bundle membership recalled {seen}"
+    assert len(calls) == 1 and "linked: 1" in out, out
+    sat = rows(ns, "edge", "kind=eq.satisfies")
+    assert len(sat) == 1 and sat[0]["src_id"] == "D-001", sat
+    assert not sat[0].get("src_project"), f"a same-namespace link carries a src_project: {sat[0]!r}"

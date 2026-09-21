@@ -88,6 +88,12 @@ COLS = {
     # --- the graph: the relationships the engine reasons over, not the nodes it stores (SPEC-001 2/3)
     "edge":        [("id","varchar"),("project_id","varchar"),("kind","varchar"),
                     ("src_kind","varchar"),("src_id","varchar"),("dst_kind","varchar"),("dst_id","varchar"),
+                    # AUG-010 / SPEC-002 sections 2.1-2.2: which PROJECT an endpoint belongs to when
+                    # that endpoint lives in a SIBLING's namespace — a bundle lets the gate link a
+                    # sibling's answer and the impact pass point at a sibling's decision. Empty means
+                    # "the endpoint is this namespace's", which is what every row written before this
+                    # field means. Both travel as ABSENT KEYS when empty: see insert_edge.
+                    ("src_project","varchar"),("dst_project","varchar"),
                     ("confidence","double"),("source","varchar"),("note","varchar"),
                     ("created_at","timestamp")],
     "facet":       [("id","varchar"),("project_id","varchar"),("question_id","varchar"),("facet","varchar"),
@@ -234,6 +240,20 @@ def select(ns: str, table: str, query: str = "") -> list:
     return body if isinstance(body, list) else []
 
 
+def select_or_empty(ns: str, table: str, query: str = "") -> list:
+    """`select`, but a namespace or table that cannot answer returns NOTHING instead of exiting.
+
+    The bundle reads need this and they are why it exists. A SIBLING's namespace is foreign — it may
+    not exist, may not have the tables declared, or may be unreachable — and a namespace declared
+    before the bundle tables existed (AUG-009) serves a 400 for them. Every one of those means "no
+    rows here", never a crash in the middle of the asking project's own verb and never a row invented
+    to fill the gap. The asking project's OWN namespace keeps the loud `select`: a broken read there
+    is a defect, not a neighbourly absence.
+    """
+    st, body, _ = db(tbl(ns, table, query))
+    return body if st == 200 and isinstance(body, list) else []
+
+
 def insert(ns: str, table: str, rows) -> dict:
     st, body, _ = db(tbl(ns, table), "POST", rows if isinstance(rows, list) else [rows])
     if st not in (200, 201):
@@ -305,30 +325,106 @@ def node_exists(ns: str, kind: str, node_id: str) -> bool:
     return bool(select(ns, table, f"id=eq.{node_id}&select=id&limit=1"))
 
 
+def node_exists_in(ns: str, kind: str, node_id: str) -> bool:
+    """`node_exists` against a namespace that may not exist — the SIBLING case of the same check.
+
+    An edge is stored in ONE namespace, but its endpoint can live in another project's (SPEC-002
+    2.1/2.2), so the referential check is made where that project's rows actually are. An unknown
+    kind is still a hard error; a foreign namespace that cannot answer reads as "the node is not
+    there", which REFUSES the edge rather than storing a claim about a row nobody can read.
+    """
+    if kind not in NODE_TABLES:
+        raise SystemExit(f"unknown node kind {kind!r}: expected one of {', '.join(sorted(NODE_TABLES))}")
+    if not node_id:
+        return False
+    return bool(select_or_empty(ns, NODE_TABLES[kind], f"id=eq.{node_id}&select=id&limit=1"))
+
+
 def edge(ns: str, project_id: str, kind: str, src_kind: str, src_id: str,
          dst_kind: str, dst_id: str, *, confidence: float | None = None,
-         source: str = "human", note: str = "") -> dict:
+         source: str = "human", note: str = "", src_project: str = "", dst_project: str = "",
+         warnings: list | None = None) -> dict:
     """Write one edge, refusing any edge whose endpoints are not already stored.
 
     `source` has no default-by-omission: an edge is born of a model gate, an impact pass, a
     person, or a rule, and an empty string would let a reader mistake an unknown origin for a
     recorded one. `confidence` is -1 — the spec'd "asserted directly, not scored by a model"
     value — whenever no model confidence is supplied.
+
+    `src_project` / `dst_project` name the project an endpoint belongs to when that endpoint lives
+    in a SIBLING's namespace (SPEC-002 sections 2.1-2.2: the gate links a sibling's answer, the
+    impact pass points at a sibling's decision). Two consequences, both of them why this is a FIELD
+    and not a sentence in `note`:
+
+      * the referential check runs where that project's rows are, so a cross-namespace edge is
+        VERIFIED instead of refused;
+      * ids are per NAMESPACE — a sibling's D-007 and this project's D-007 are different decisions —
+        so a row that did not name the project would read as a local link between two rows of this
+        namespace, and the rule walk would treat a sibling's break as a local decision dying.
+
+    Both travel as ABSENT KEYS when empty, so every edge written before this field sends exactly the
+    payload it always sent (the same reason insert_decision gives: a namespace whose declaration
+    predates a column refuses the key). `warnings` is an out-parameter for the insert's own degraded
+    path, which is the one thing a caller must not lose.
     """
     if kind not in EDGE_KINDS:
         raise SystemExit(f"unknown edge kind {kind!r}: expected one of {', '.join(EDGE_KINDS)}")
     if source not in EDGE_SOURCES:
         raise SystemExit(f"unknown edge source {source!r}: expected one of {', '.join(EDGE_SOURCES)}")
-    for role, k, i in (("src", src_kind, src_id), ("dst", dst_kind, dst_id)):
-        if not node_exists(ns, k, i):
+    for role, k, i, project in (("src", src_kind, src_id, src_project),
+                                ("dst", dst_kind, dst_id, dst_project)):
+        where = member_namespace(project) if project else ns
+        ok = node_exists(where, k, i) if where == ns else node_exists_in(where, k, i)
+        if not ok:
             raise SystemExit(f"refused: {role} {k} {i!r} does not exist in table "
-                             f"{NODE_TABLES.get(k, '?')} — an edge to a missing node is not stored")
+                             f"{NODE_TABLES.get(k, '?')}"
+                             + (f" of project {project!r}" if project else "")
+                             + " — an edge to a missing node is not stored")
     row = {"id": next_id(ns, "edge", "E"), "project_id": project_id, "kind": kind,
            "src_kind": src_kind, "src_id": src_id, "dst_kind": dst_kind, "dst_id": dst_id,
            "confidence": float(confidence) if confidence is not None else -1.0,
            "source": source, "note": note, "created_at": datetime.now(timezone.utc).isoformat()}
-    insert(ns, "edge", row)
+    for key, val in (("src_project", src_project), ("dst_project", dst_project)):
+        if val:
+            row[key] = val
+    warning = insert_edge(ns, row)
+    if warning and warnings is not None:
+        warnings.append(warning)
     return row
+
+
+UNDECLARED_PROJECT_COL = re.compile(r"unknown column\(s\).*?\b(?:src_project|dst_project)\b", re.I)
+
+
+def insert_edge(ns: str, row: dict) -> str:
+    """Insert an edge row, never losing a cross-project endpoint SILENTLY. Returns a WARNING.
+
+    "" when nothing was downgraded. `insert` raises on a refusal, and that is right for almost every
+    edge — but a namespace whose `edge` declaration predates `src_project` / `dst_project` cannot
+    hold a cross-namespace link, and DuckBrain's declared-table registry caches a namespace's
+    declarations IN PROCESS (the rule insert_decision states at length): the payload every existing
+    namespace accepts has to stay available. So the specific 400 that names those columns retries
+    without them, marks the row's own `note` with what was dropped, and hands the remedy back for the
+    caller to print. The edge is still a true claim — a cross-project link recorded one field short
+    of the ideal, saying so where it is stored.
+    """
+    st, body, _ = db(tbl(ns, "edge"), "POST", [row])
+    if st in (200, 201):
+        return ""
+    if st == 400 and UNDECLARED_PROJECT_COL.search(json.dumps(body)):
+        dropped = [k for k in ("src_project", "dst_project") if k in row]
+        keep = {k: v for k, v in row.items() if k not in ("src_project", "dst_project")}
+        keep["note"] = ((row.get("note") or "").rstrip()
+                        + f" [stored without {'/'.join(dropped)}: this namespace's `edge` declaration "
+                          f"predates them, so the project this edge crosses to is named here only]").strip()
+        st2, body2, _ = db(tbl(ns, "edge"), "POST", [keep])
+        if st2 in (200, 201):
+            return (f"WARNING: this namespace's `edge` declaration predates {' and '.join(dropped)}, so "
+                    f"{row['id']} is stored WITHOUT the project its cross-namespace endpoint belongs to "
+                    f"(the note says so). Remedy: run `auger init` and restart the DuckBrain API so the "
+                    f"declaration is re-read.")
+        raise SystemExit(f"insert edge failed ({st2}): {body2}")
+    raise SystemExit(f"insert edge failed ({st}): {body}")
 
 
 def facet(ns: str, project_id: str, question_id: str, name: str, *, status: str = "open",
@@ -485,6 +581,100 @@ def recall(ns: str, q: str, limit: int = 5) -> list:
     return body.get("items", []) if isinstance(body, dict) else []
 
 
+# ---------------------------------------------------------------- the bundle walk (SPEC-002 section 2)
+# What a bundle makes REACHABLE. These readers are the only places a project name is turned into the
+# namespace its rows live in, and that mapping is a convention rather than a fact auger stores: a
+# project is ADDRESSED by the namespace it is pointed at (`auger init -n bunker`), and `start`
+# defaults the project's own `name` to that namespace — so a member's name IS its namespace. It is
+# one function so the convention has exactly one place to change.
+#
+# Membership is by project NAME because that is what the fleet's own table carries: bundle_member()
+# verifies every row against the scheduler's `projects` table. Every read here goes through
+# select_or_empty: a namespace declared before the bundle tables (AUG-009) or a sibling that does not
+# exist has NO memberships, and that is not a reason to kill the asking project's verb.
+def member_namespace(project: str) -> str:
+    """The DuckBrain namespace a bundle MEMBER's rows live in — the project's own name."""
+    return project
+
+
+def project_name(ns: str, project_id: str) -> str:
+    """The NAME of the project a pid belongs to in this namespace — "" when there is no such row.
+
+    Deliberately not `_project`, which exits: this is read on paths (the gate, the impact pass) where
+    a missing name must leave the verb running, because "no bundle membership is knowable" is a gap
+    to report rather than a reason to fail the answer.
+    """
+    found = select_or_empty(ns, "project", f"id=eq.{project_id}&select=id,name&limit=1")
+    return (found[0].get("name") or "") if found else ""
+
+
+def bundles_of(ns: str, project: str) -> list:
+    """The bundles this project is a member of, in id order — RETIRED ones excluded.
+
+    A retired bundle's contract no longer binds anyone, so it is not walked: `status` is a closed set
+    the engine switches on (BUNDLE_STATUSES), and this is where that switch is thrown.
+    """
+    if not project:
+        return []
+    ids: list = []
+    for m in select_or_empty(ns, "bundle_member", f"project=eq.{project}&order=id.asc"):
+        if m.get("bundle_id") and m["bundle_id"] not in ids:
+            ids.append(m["bundle_id"])
+    out = []
+    for bid in ids:
+        found = select_or_empty(ns, "bundle", f"id=eq.{bid}&select=id,name,status&limit=1")
+        if found and found[0].get("status") != "retired":
+            out.append(found[0])
+    return out
+
+
+def bundle_siblings(ns: str, project: str) -> list:
+    """The OTHER member projects sharing an ACTIVE bundle with this one (SPEC-002 2.1/2.2).
+
+    A project in several bundles is walked ONCE: the walk is over projects, and a doubled entry is a
+    doubled blast radius — the rule bundle_member() already applies to its own rows. Ordered by
+    bundle id and then by membership id, so two runs of the same bundle walk it the same way.
+    """
+    siblings: list = []
+    for b in bundles_of(ns, project):
+        for m in select_or_empty(ns, "bundle_member", f"bundle_id=eq.{b['id']}&order=id.asc"):
+            name = m.get("project") or ""
+            if name and name != project and name not in siblings:
+                siblings.append(name)
+    return siblings
+
+
+def bundle_namespaces(ns: str, project: str) -> list:
+    """[(namespace, project)] for the siblings to search — the HOME namespace is not in it.
+
+    The home namespace is searched first and separately (its evidence is the project's own), so it is
+    excluded here; a sibling whose namespace resolves to the home one is dropped rather than searched
+    twice.
+    """
+    out: list = []
+    for name in bundle_siblings(ns, project):
+        where = member_namespace(name)
+        if where and where != ns and (where, name) not in out:
+            out.append((where, name))
+    return out
+
+
+def recall_many(places: list, q: str, limit: int = 5) -> list:
+    """Retrieve from several namespaces; every hit comes back tagged with its namespace.
+
+    Returns [(namespace, hit)] in the order the namespaces were given, each namespace's hits in the
+    substrate's own order. SEQUENTIAL on purpose (SPEC-002 section 2.1's `recall_many`): DuckBrain's
+    API is token-bucketed, so fanning out spends the same budget with more ways to fail, and a
+    namespace that returns nothing — a sibling that does not exist, or holds no evidence — must
+    contribute NOTHING rather than an invented neighbour.
+    """
+    out: list = []
+    for where in places:
+        for hit in recall(where, q, limit=limit):
+            out.append((where, hit))
+    return out
+
+
 # ---------------------------------------------------------------- JEV
 def _jev_keys() -> list:
     keys = []
@@ -570,6 +760,10 @@ def edge_index(es: list) -> dict:
     blocks:       src is the question that CANNOT be answered until dst is -> blockers[src]=dst.
     closes:       src is the answer, dst the question it is the answer to -> closed[src]=dst.
     breaks:       src is the answer that invalidates the dst decision.
+                  A break whose `dst_project` is set points at a SIBLING's decision (SPEC-002 2.2):
+                  that is an escalation for the sibling, not this project's decision dying, so it is
+                  NOT indexed as a local invalidation — ids are per namespace, and a sibling's D-007
+                  is not this project's D-007.
     """
     idx = {"children": {}, "blockers": {}, "closed": {}, "breaks": []}
     for e in es:
@@ -580,7 +774,7 @@ def edge_index(es: list) -> dict:
             idx["blockers"].setdefault(e["src_id"], []).append(e["dst_id"])
         elif k == "closes" and e.get("src_kind") == "decision" and e.get("dst_kind") == "question":
             idx["closed"].setdefault(e["src_id"], []).append(e["dst_id"])
-        elif k == "breaks" and e.get("dst_kind") == "decision":
+        elif k == "breaks" and e.get("dst_kind") == "decision" and not e.get("dst_project"):
             idx["breaks"].append(e)
     return idx
 
@@ -660,66 +854,98 @@ def blocked_questions(ns: str, project_id: str) -> list:
     return [q for q in qs.values() if q.get("status") == "open" and unresolved_blockers(idx, qs, q["id"])]
 
 
+def decision_named(key: str) -> str:
+    """The decision id an evidence key names — "" when the key names none (no storage check).
+
+    `answer` embeds each decision's evidence under /auger/<pid>/<did>, so the key is how a hit says
+    WHICH decision it is evidence of. WHERE that decision is then looked up is the caller's business:
+    this project's namespace (see decision_for_evidence) or a sibling's, which is what a bundle makes
+    reachable (SPEC-002 section 2.1).
+    """
+    m = re.match(r"^/auger/[^/]+/([^/]+)$", key or "")
+    return m.group(1) if m else ""
+
+
 def decision_for_evidence(ns: str, project_id: str, key: str) -> str:
     """The decision a stored evidence key belongs to — "" when the key names none.
 
-    `answer` embeds each decision's evidence under /auger/<pid>/<did>, so the gate can name WHICH
-    existing answer satisfies a question. Without a decision to name there is no `satisfies` edge
-    to write, and an unnamed link is not a link (SPEC-001 section 1: `linked` means an EXISTING
-    answer satisfies it), so the caller leaves the question open instead.
+    Without a decision to name there is no `satisfies` edge to write, and an unnamed link is not a
+    link (SPEC-001 section 1: `linked` means an EXISTING answer satisfies it), so the caller leaves
+    the question open instead.
     """
-    m = re.match(r"^/auger/[^/]+/([^/]+)$", key or "")
-    if not m:
-        return ""
-    did = m.group(1)
-    return did if select(ns, "decision", f"id=eq.{did}&project_id=eq.{project_id}&select=id&limit=1") else ""
+    did = decision_named(key)
+    return did if did and select(ns, "decision", f"id=eq.{did}&project_id=eq.{project_id}&select=id&limit=1") else ""
 
 
 def gate_question(ns: str, project_id: str, text: str, limit: int = 5):
     """The gate: is this question already fully answered by evidence we already hold?
 
-    Retrieval first, then ONE JEV noul. Returns (verdict, decision_id, err). No stored evidence
-    means no model call — nothing can answer it, so the verdict is None and the question stays
-    open. A transport error is returned, never converted into a verdict (fail-closed).
+    Retrieval first — over this project's OWN namespace and then over every sibling namespace a
+    bundle puts in reach (SPEC-002 section 2.1: the gate searches the whole bundle, which is what
+    stops two projects re-deciding the same question and drifting apart) — then ONE JEV noul over the
+    pooled evidence, so a bundle of six members still costs one model call. No stored evidence
+    anywhere means no model call: nothing can answer it, so the verdict is None and the question
+    stays open. A transport error is returned, never converted into a verdict (fail-closed).
+
+    Returns (verdict, decision_id, src_project, err). `src_project` names the SIBLING whose namespace
+    held the winning evidence, and is "" when the answer was this project's own; the caller puts it
+    on the `satisfies` edge, so a reader can see the link crossed the boundary.
     """
-    hits = recall(ns, text, limit=limit)
+    home = project_name(ns, project_id)
+    places = [(ns, home)] + bundle_namespaces(ns, home)
+    hits = recall_many([where for where, _ in places], text, limit=limit)
     if not hits:
-        return None, "", None
-    evidence = "\n".join(f"- {h.get('key')}: {h.get('content', '')[:400]}" for h in hits)
+        return None, "", "", None
+    evidence = "\n".join(f"- {h.get('key')}: {h.get('content', '')[:400]}" for _, h in hits)
     ans, err = jev(f"QUESTION UNDER CONSIDERATION:\n{text}\n\nSTORED EVIDENCE:\n{evidence}",
                    {"already_answered": {"type": "noul",
                     "instructions": "Is the question under consideration ALREADY fully answered by the stored evidence?"}})
     if err:
-        return None, "", err
+        return None, "", "", err
     v = _noul(ans["answers"], "already_answered")
     if v is None or v < T_ANSWERED:
-        return v, "", None
-    for h in sorted(hits, key=lambda h: -(h.get("score") or 0)):
-        did = decision_for_evidence(ns, project_id, h.get("key") or "")
+        return v, "", "", None
+    # Highest score first — the same order as before bundles. What a hit came FROM decides where its
+    # decision is looked for, and therefore which project the link ends up naming.
+    for where, h in sorted(hits, key=lambda pair: -(pair[1].get("score") or 0)):
+        key = h.get("key") or ""
+        if where == ns:
+            did, src = decision_for_evidence(ns, project_id, key), ""
+        else:
+            did = decision_named(key)
+            # Read it back WHERE IT LIVES: a decision that cannot be read is not a link, and a link
+            # to an unread row would be an invented one.
+            if did and not select_or_empty(where, "decision", f"id=eq.{did}&select=id&limit=1"):
+                did = ""
+            src = next((p for w, p in places if w == where), "")
         if did:
-            return v, did, None
-    return v, "", None           # answered, but by evidence that names no decision node
+            return v, did, src, None
+    return v, "", "", None           # answered, but by evidence that names no decision node
 
 
 def propagate(ns: str, project_id: str, *, gate: bool = True, recheck: bool = False) -> dict:
     """Run both walks once and report exactly what moved (SPEC-001 BEAT 4).
 
     The report is the verb's output AND the tests' handle on it:
-      moot        [(question, reason)]            the questions a dead decision answered
-      reopened    [(question, reason)]            the settled questions that went stale
-      linked      [(question, decision, noul)]    questions the gate satisfied from stored evidence
-      edges       [edge id]                       what the gate wrote
-      askable     [question id]                   open and unblocked after the walk
-      blocked     [question id]                   open and held back by an unresolved blocker
-      unattributed [question id]                  gate says answered, evidence names no decision
-      ungated     [question id]                   left open because the gate was unreachable
+      moot        [(question, reason)]                 the questions a dead decision answered
+      reopened    [(question, reason)]                 the settled questions that went stale
+      linked      [(question, decision, noul, project)] questions the gate satisfied from stored
+                                                        evidence; `project` is the SIBLING whose
+                                                        namespace held the answer, "" when it was
+                                                        this project's own (SPEC-002 2.1)
+      edges       [edge id]                            what the gate wrote
+      warnings    [str]                                a write that had to be stored downgraded
+      askable     [question id]                        open and unblocked after the walk
+      blocked     [question id]                        open and held back by an unresolved blocker
+      unattributed [question id]                       gate says answered, evidence names no decision
+      ungated     [question id]                        left open because the gate was unreachable
       gate_error  str | None
     """
     qs = q_states(ns, project_id)
     idx = edge_index(graph_edges(ns, project_id))
     closed_by = questions_closed_by(ns, project_id, idx)
-    rep = {"moot": [], "reopened": [], "linked": [], "edges": [], "askable": [], "blocked": [],
-           "unattributed": [], "ungated": [], "gate_error": None}
+    rep = {"moot": [], "reopened": [], "linked": [], "edges": [], "warnings": [], "askable": [],
+           "blocked": [], "unattributed": [], "ungated": [], "gate_error": None}
 
     # ---- the rule walk: invalidation -> moot, then down the derives_from tree
     seen, queue = set(), []
@@ -772,7 +998,7 @@ def propagate(ns: str, project_id: str, *, gate: bool = True, recheck: bool = Fa
     if gate and pending:
         for i, child in enumerate(pending):
             text = qs[child].get("text") or ""
-            verdict, dec_id, err = gate_question(ns, project_id, text)
+            verdict, dec_id, src_project, err = gate_question(ns, project_id, text)
             if err:
                 rep["gate_error"] = err
                 rep["ungated"] = pending[i:]
@@ -785,13 +1011,19 @@ def propagate(ns: str, project_id: str, *, gate: bool = True, recheck: bool = Fa
                 if not dec_id:
                     rep["unattributed"].append(child)
                     continue
+                # SPEC-002 2.1: when the winning evidence came from a SIBLING's namespace, the link
+                # says so twice — on the edge (src_project, which also tells the referential check
+                # where the decision actually lives) and in the question's own reason.
                 row = edge(ns, project_id, "satisfies", "decision", dec_id, "question", child,
-                           confidence=verdict, source="gate",
-                           note=f"the gate found this question already answered (noul {verdict:.2f})")
+                           confidence=verdict, source="gate", src_project=src_project,
+                           warnings=rep["warnings"],
+                           note=f"the gate found this question already answered (noul {verdict:.2f})"
+                                + (f" by {src_project}'s {dec_id}" if src_project else ""))
                 set_state(ns, project_id, child, "linked",
-                          f"linked by the gate to {dec_id} (noul {verdict:.2f})", closed_by=dec_id)
+                          f"linked by the gate to {dec_id} (noul {verdict:.2f})"
+                          + (f" in {src_project}" if src_project else ""), closed_by=dec_id)
                 qs[child]["status"] = "linked"
-                rep["linked"].append((child, dec_id, verdict))
+                rep["linked"].append((child, dec_id, verdict, src_project))
                 rep["edges"].append(row["id"])
 
     rep["askable"] = [q["id"] for q in askable_questions(ns, project_id)]
@@ -810,11 +1042,14 @@ def cmd_propagate(a):
         print(f"  moot       {qid}  {reason}")
     for qid, reason in rep["reopened"]:
         print(f"  reopened   {qid}  {reason}")
-    for qid, dec_id, v in rep["linked"]:
-        print(f"  linked     {qid}  -> {dec_id} (noul {v:.2f})")
+    for qid, dec_id, v, src in rep["linked"]:
+        print(f"  linked     {qid}  -> {dec_id} (noul {v:.2f})"
+              + (f"  from sibling {src} — the bundle was searched (SPEC-002 2.1)" if src else ""))
     for qid in rep["unattributed"]:
         print(f"  WARNING    {qid}: the gate says answered, but the evidence names no decision "
               f"— left open rather than linked to nothing")
+    for w in rep["warnings"]:
+        print(w)
     if rep["edges"]:
         print(f"edges written: {', '.join(rep['edges'])}")
     print(f"newly askable: {len(rep['askable'])}   blocked by an unresolved question: {len(rep['blocked'])}")
@@ -1016,6 +1251,153 @@ def insert_decision(ns: str, row: dict) -> str:
     raise SystemExit(f"insert decision failed ({st}): {body}")
 
 
+# ---------------------------------------------------------------- the cross-boundary IMPACT pass
+# SPEC-002 section 2.2. An answer to a BUNDLE-scoped decision additionally walks every member of the
+# decision's bundle(s): each sibling's own bundle-scoped decisions are put to JEV, one question per
+# decision, and the verdict is recorded as an edge naming the sibling. Two rules keep the walk finite
+# and honest, and they are the two things this code must not lose:
+#
+#   * ONLY bundle-scoped decisions cross the boundary. A project-local decision never does — or every
+#     answer reaches every project and the pass is quadratic again. The early return in bundle_impact
+#     is that rule, and it is why an ordinary `auger answer` still costs nothing extra.
+#   * a `breaks` edge into a sibling is an ESCALATION, not a silent change. The engine records the
+#     break and surfaces it; it never rewrites another project's spec (the sibling's row is not
+#     touched, and the escalation names it).
+#
+# The three outcomes are ORDERED, so they are one `score` — the type the engine already grades —
+# rather than three separate questions: a bundle with four members and six shared contracts would
+# otherwise cost eighteen model calls for one answer.
+IMPACT_OUTCOMES = ("unchanged", "change", "invalidate")
+T_IMPACT_CHANGE = 0.5        # score below this    -> the sibling's decision is untouched
+T_IMPACT_INVALIDATE = 1.5    # score at/above this -> the sibling's contract is BROKEN
+
+
+def escalate(ns: str, project_id: str, question: str, *, options: str = "", default_action: str = "",
+             risk: str = "", status: str = "open") -> dict:
+    """Record one escalation — a break the engine will not decide on its own (SPEC-002 2.2).
+
+    The row lives in the ANSWERING project's namespace and carries that project's id, naming the
+    sibling in its own text: the break is this answer's consequence, so it is recorded where the
+    answer and the edge are. Nothing is written into the sibling's namespace — the same rule the
+    pass follows for the break itself: auger RECORDS a break in a member's contract, it does not
+    reach into that member's spec.
+    """
+    row = {"id": next_id(ns, "escalation", "ESC"), "project_id": project_id, "question": question,
+           "options": options, "default_action": default_action, "risk": risk, "status": status}
+    insert(ns, "escalation", row)
+    return row
+
+
+def bundle_impact_verdict(answer: dict, other: dict, project: str) -> tuple:
+    """Ask JEV what ONE project's answer does to a SIBLING's bundle-scoped decision.
+
+    Returns (kind, score, err) with kind in IMPACT_OUTCOMES — and "" on ANY error, because a
+    malformed or unreachable model answer is UNKNOWN and never "unchanged": the caller must write no
+    edge on a verdict it did not get. The thresholds are here, in code, like every other threshold in
+    this module; the model supplies the score, never the meaning.
+    """
+    state = (f"AN ANSWER RECORDED IN PROJECT {answer.get('project_id')}:\n"
+             f"{answer.get('id')}: {answer.get('chosen')}\n"
+             f"reason its alternatives were rejected: {answer.get('why_not') or 'not stated'}\n\n"
+             f"A BUNDLE-SCOPED DECISION OF A SIBLING PROJECT ({project}):\n"
+             f"{other.get('id')}: {other.get('chosen')}\n"
+             f"reason its alternatives were rejected: {other.get('why_not') or 'not stated'}\n\n"
+             f"Both decisions bind every member of the bundle they share, so the answer above can "
+             f"leave the sibling's decision standing, force it to change, or break it outright.")
+    ans, err = jev(state, {"impact": {
+        "type": "score",
+        "instructions": (f"Does the answer above leave {project}'s decision {other.get('id')} "
+                         f"unchanged, force it to change, or invalidate it?"),
+        "criteria": ["unchanged: the sibling's decision still stands exactly as written",
+                     "change: the sibling's decision must be re-decided to stay consistent",
+                     "invalidate: the answer breaks the sibling's decision outright"]}})
+    if err:
+        return "", 0.0, err
+    scored = (ans.get("answers") or {}).get("impact") or {}
+    value = scored.get("score")
+    if not isinstance(value, (int, float)):
+        return "", 0.0, f"JEV returned no score for {other.get('id')} ({str(scored)[:120]})"
+    score = float(value)
+    if score < T_IMPACT_CHANGE:
+        return IMPACT_OUTCOMES[0], score, ""
+    if score < T_IMPACT_INVALIDATE:
+        return IMPACT_OUTCOMES[1], score, ""
+    return IMPACT_OUTCOMES[2], score, ""
+
+
+def bundle_impact(ns: str, project_id: str, dec_row: dict) -> dict:
+    """Walk the bundle of a BUNDLE-scoped answer and record what it does to each sibling (2.2).
+
+    The report is both what the verb prints and the tests' handle on it:
+      scoped      bool                   False when the decision does not cross the boundary
+      walked      [project]              members whose bundle-scoped decisions were examined
+      unchanged   [project]              members the model said are untouched
+      affects     [(project, decision)]  a change, recorded as an `affects` edge
+      breaks      [(project, decision)]  a break, recorded as a `breaks` edge + an escalation
+      edges       [edge id]              what the pass wrote
+      escalations [escalation id]        the breaks recorded
+      lines       [str]                  the one-line surfacings to print
+      warnings    [str]                  the model's failures and any degraded write
+      skipped     [(project, reason)]    members left alone BECAUSE the verdict was unknown
+    """
+    rep = {"scoped": False, "walked": [], "unchanged": [], "affects": [], "breaks": [], "edges": [],
+           "escalations": [], "lines": [], "warnings": [], "skipped": []}
+    if decision_scope(dec_row) != "bundle":
+        return rep                    # only a CONTRACT crosses the boundary — the finite rule
+    rep["scoped"] = True
+    home = project_name(ns, project_id)
+    for project in bundle_siblings(ns, home):
+        where = member_namespace(project)
+        # A sibling's rows are read with the SAFE reader: a foreign namespace that cannot answer has
+        # no decisions, and that is not this project's failure. The decision the ANSWER recorded is
+        # never compared with itself, even if the sibling's namespace holds a row with its id.
+        others = [d for d in select_or_empty(where, "decision", "scope=eq.bundle&order=id.asc")
+                  if d.get("id") != dec_row.get("id")]
+        rep["walked"].append(project)
+        for other in others:
+            kind, score, err = bundle_impact_verdict(dec_row, other, project)
+            if err:
+                # FAIL-CLOSED: an unknown verdict writes nothing, is surfaced, and never fails the
+                # answer — the member is skipped, not guessed at.
+                rep["skipped"].append((project, f"{other.get('id')}: {err}"))
+                rep["warnings"].append(
+                    f"WARNING: {project}'s {other.get('id')} was NOT compared with "
+                    f"{dec_row.get('id')} — {err}. No edge is written on a verdict the model did "
+                    f"not give (fail-closed).")
+                continue
+            if kind == IMPACT_OUTCOMES[0]:
+                rep["unchanged"].append(project)
+                continue
+            shared = dict(confidence=score, source="impact", dst_project=project,
+                          warnings=rep["warnings"])
+            if kind == IMPACT_OUTCOMES[1]:
+                wrote = edge(ns, project_id, "affects", "decision", dec_row["id"], "decision",
+                             other["id"], note=f"{project}'s {other['id']} must be re-decided to "
+                                               f"stay consistent with {dec_row['id']} "
+                                               f"(score {score:.2f})", **shared)
+                rep["affects"].append((project, other["id"]))
+                rep["edges"].append(wrote["id"])
+                rep["lines"].append(f"AFFECTS: answer {dec_row['id']} changes {project}'s "
+                                    f"{other['id']} — recorded, not rewritten")
+                continue
+            wrote = edge(ns, project_id, "breaks", "decision", dec_row["id"], "decision", other["id"],
+                         note=f"{project}'s {other['id']} is broken by {dec_row['id']} "
+                              f"(score {score:.2f})", **shared)
+            rep["breaks"].append((project, other["id"]))
+            rep["edges"].append(wrote["id"])
+            esc = escalate(
+                ns, project_id,
+                question=f"answer {dec_row['id']} breaks {project}'s {other['id']}",
+                options=f"{project}/{other['id']}",
+                default_action=f"recorded, not rewritten — {project}'s decision stands until "
+                               f"{project} re-decides it",
+                risk=f"the bundle contract is broken for {project}: {other.get('chosen')}")
+            rep["escalations"].append(esc["id"])
+            rep["lines"].append(f"ESCALATION: answer {dec_row['id']} breaks {project}'s "
+                                f"{other['id']} — recorded, not rewritten")
+    return rep
+
+
 def cmd_answer(a):
     ns, pid = a.namespace, a.project_id
     p = _project(ns, pid)
@@ -1047,8 +1429,19 @@ def cmd_answer(a):
              + (f"Rejected alternatives: {'; '.join(others)}. " if others else "No alternative was recorded. ")
              + f"Reason the alternatives were rejected: {a.why_not or 'not stated'}. "
              + f"Reversal cost: {row['reversal_cost'] or 'not stated'}.")
+    # SPEC-002 section 2.2: an answer that is a CONTRACT walks its bundle. The hook sits here — after
+    # the evidence is embedded and before this verb's own report — and it never changes the exit
+    # code: a model that is down skips a member and says so, it does not undo the answer. The scope
+    # read below is the scope that was STORED: a namespace that could not hold `bundle` (see
+    # insert_decision) recorded a local decision, and a local decision crosses no boundary.
+    stored_scope = DEFAULT_SCOPE if warning else decision_scope(row)
+    impact = bundle_impact(ns, pid, {**row, "scope": stored_scope})
     print(f"{did} recorded  (confidence {row['confidence']}, {len(a.option or [])} options, "
           f"embedded, scope {decision_scope(row)})")
+    for line in impact["lines"]:
+        print(line)
+    for line in impact["warnings"]:
+        print(line)
     if warning:
         print(warning)
     return 0
