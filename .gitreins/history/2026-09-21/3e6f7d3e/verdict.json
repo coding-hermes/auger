@@ -1,0 +1,87 @@
+{
+  "task_id": "AUG-006",
+  "task_title": "a pytest suite against an ephemeral namespace, replacing shell-only coverage",
+  "task_criteria": [
+    "pytest runs green from a clean checkout against a live ephemeral DuckBrain namespace",
+    "the suite asserts on STORED ROWS (re-read via the API), not only on stdout",
+    "the namespace is torn down even when a test fails",
+    "a deliberately broken verb fails exactly one named test"
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "a2ef761656cd104919e45a5d6ce99eaaa98db20e",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": false,
+      "any_failed": true,
+      "summary": "  \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2717 tests: FAIL (tests/test_auger.py::test_a_broken_verb_fails_exactly_one_named_test [first failing id])",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260920T234400.216913Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: scanners=gitleaks+builtin cross-check\n7:01PM INF scanned ~100516 bytes (100.52 KB) in 56.6ms\n7:01PM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 23 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260920T234400.216913Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": false,
+          "output": "== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................FEEF                                             [100%]\n==================================== ERRORS ====================================\n_ ERROR at setup of test_teardown_removes_both_the_registry_entry_and_the_directory _\n\nns_created = 'auger-pytest-05fe6d73c4f4'\n\n    @pytest.fixture\n    def ns(ns_created: str) -> str:\n        \"\"\"An ephemeral namespace with its SDM tables declared (`auger init`).\"\"\"\n>       rc, out = run_cli([\"-n\", ns_created, \"init\"])\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\ntests/conftest.py:176: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \ntests/conftest.py:56: in run_cli\n    rc = auger.main(argv)\n         ^^^^^^^^^^^^^^^^\nauger.py:673: in main\n    return a.fn(a)\n           ^^^^^^^\nauger.py:311: in cmd_init\n    names = [n.get(\"name\") for n in (body.get(\"namespaces\", body) if isinstance(body, dict) else body)] \\\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\n.0 = <dict_keyiterator object at 0x78cc90774220>\n\n>   names = [n.get(\"name\") for n in (body.get(\"namespaces\", body) if isinstance(body, dict) else body)] \\\n             ^^^^^\n        if isinstance(body, (dict, list)) else []\nE   AttributeError: 'str' object has no attribute 'get'\n\nauger.py:311: AttributeError\n_ ERROR at teardown of test_teardown_removes_both_the_registry_entry_and_the_directory _\n\nlive_service = 'http://127.0.0.1:3000'\n\n    @pytest.fixture\n    def ns_created(live_service: str) -> str:\n        \"\"\"A fresh ephemeral namespace, removed in a finalizer even when the test fails.\"\"\"\n        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]\n        status, body, _ = auger.db(\"/api/namespaces\", \"POST\", {\"name\": ns})\n        if status not in (200, 201):\n            pytest.fail(f\"could not create test namespace {ns} ({status}): {body}\")\n        CREATED.append(ns)\n        try:\n            yield ns\n        finally:\n            problems = teardown_namespace(ns)\n            if problems:\n                # Raised in teardown, so a leaking namespace surfaces as an error, not as silence.\n\n\u2026 [14148 chars omitted \u2014 250 line(s)] \u2026\nE           Failed: could not create test namespace auger-pytest-06879d64a4ba (429): {'error': 'Rate limit exceeded', 'retryAfter': 1}\n\nconftest.py:162: Failed\n5 errors in 0.14s\n\n__________________ test_no_test_namespace_survives_the_suite ___________________\n\nlive_service = 'http://127.0.0.1:3000'\n\n    def test_no_test_namespace_survives_the_suite(live_service: str):\n        \"\"\"The leak audit. It runs in the gate, so a leaked namespace fails the gate, not a reader.\"\"\"\n        found = leftovers()\n>       assert found == {\"api\": [], \"disk\": []}, \\\n            f\"test namespaces were left behind: {found} (prefix {TEST_NS_PREFIX!r})\"\nE       AssertionError: test namespaces were left behind: {'api': ['auger-pytest-05fe6d73c4f4'], 'disk': []} (prefix 'auger-pytest-')\nE       assert {'api': ['aug...], 'disk': []} == {'api': [], 'disk': []}\nE         \nE         Omitting 1 identical items, use -vv to show\nE         Differing items:\nE         {'api': ['auger-pytest-05fe6d73c4f4']} != {'api': []}\nE         Use -v to get more diff\n\ntests/test_auger.py:524: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_auger.py::test_a_broken_verb_fails_exactly_one_named_test\nFAILED tests/test_auger.py::test_no_test_namespace_survives_the_suite - Asser...\nERROR tests/test_auger.py::test_teardown_removes_both_the_registry_entry_and_the_directory\nERROR tests/test_auger.py::test_teardown_removes_both_the_registry_entry_and_the_directory\n2 failed, 24 passed, 2 errors in 12.07s\n",
+          "error": "",
+          "data": {
+            "exit_code": 1,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260920T234400.216913Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    }
+  },
+  "summary": "Judge Result: AUG-006\n\nStage tier1: FAIL\n    \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2717 tests: FAIL (tests/test_auger.py::test_a_broken_verb_fails_exactly_one_named_test [first failing id])\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-09-21T00:01:19.886327",
+  "evidence": {
+    "collected_at": "2026-09-21T00:01:19.895411+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 657,
+        "truncated": false,
+        "source": "git show a2ef761656cd"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 21767,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-006"
+  }
+}
