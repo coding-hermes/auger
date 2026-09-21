@@ -1,0 +1,78 @@
+# CI for auger. Before this file the repo had NO automated verdict at all: a contributor could
+# open a pull request and nothing ran against it. This workflow runs the gate the repo already
+# uses by hand — `tests/gate.sh` — on every push to main and on every pull request.
+#
+# LIVE ARMS ARE SKIPPED OUT LOUD, NEVER SILENTLY.
+# `tests/gate.sh` has arms that need a LIVE DuckBrain (http://127.0.0.1:3000 plus a token) and a
+# live JEV / OpenRouter key. A GitHub-hosted runner has neither, so those arms cannot pass here.
+# They are skipped BY NAME, twice over:
+#   1. `AUGER_CI=1` (job env below) is honoured by tests/gate.sh: each arm that cannot run prints
+#      a `SKIPPED [<arm>]: <why>` line and is repeated in the gate's closing summary.
+#   2. the step "live arms skipped (require DuckBrain+JEV): see tests/gate.sh" below prints the
+#      same list as a job-log marker, so the skip is visible without reading the gate output.
+# A GREEN RUN ON THIS WORKFLOW MEANS: syntax + lint + every test that needs no live API passed.
+# It does NOT mean the live arms passed. The live arms run for real on a self-hosted runner that
+# has DuckBrain and an OpenRouter key: set the repository variable AUGER_RUN_LIVE_ARMS to 1
+# (Settings → Variables → Actions) and the last step below drops AUGER_CI and runs the full gate.
+#
+# FLEET CI CAVEAT — ORG BILLING BLOCK: when the GitHub organisation is behind on billing, these
+# jobs fail with EVERY STEP UNRUN (each step skipped / zero-length) — a "steps==0" failure. That
+# is a billing/infrastructure condition, NOT code rot in this repo. Check the job's step list:
+# if no step executed, re-run later; do not "fix" the code.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: gate (tests/gate.sh — live DuckBrain/JEV arms skipped)
+    runs-on: ubuntu-latest
+    # Honour-flag for tests/gate.sh: this host has no live DuckBrain and no JEV key, so the gate
+    # skips those arms WITH A VISIBLE MARKER instead of failing the job. Never set AUGER_CI on a
+    # host that does have the live services — it would turn the real arms into skips.
+    env:
+      AUGER_CI: "1"
+      # The runner has no DuckBrain; point auger at the port nothing listens on so a stray token
+      # file can never make a half-working live call look like progress in the log.
+      DUCKBRAIN_URL: "http://127.0.0.1:3000"
+    steps:
+      - name: checkout
+        uses: actions/checkout@v4
+
+      - name: set up python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: install ruff and pytest
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install ruff pytest
+
+      - name: run the gate (tests/gate.sh)
+        run: bash tests/gate.sh
+
+      # The workflow-level skip marker, run on every default run. It repeats what the gate
+      # skipped, so an "all green" check is never mistaken for "the live arms passed".
+      - name: "live arms skipped (require DuckBrain+JEV): see tests/gate.sh"
+        run: |
+          echo "AUGER_CI=1 — arms needing the live DuckBrain/JEV APIs were SKIPPED, not passed:"
+          echo "  * tests/smoke.sh — end-to-end loop against a live throwaway DuckBrain namespace"
+          echo "  * the pytest cases that need DuckBrain/JEV — they self-skip; see the gate output above"
+          echo "Covered for real: py_compile syntax, ruff lint, and the pytest cases needing no live API."
+          echo "Full gate: bash tests/gate.sh on a host with DuckBrain running and an OpenRouter key."
+
+      # Opt-in, off by default: this step appears as Skipped in the log unless the repository
+      # variable AUGER_RUN_LIVE_ARMS is 1 and the runner really has DuckBrain + a JEV key.
+      - name: run the live arms too (needs DuckBrain + JEV on the runner)
+        if: ${{ vars.AUGER_RUN_LIVE_ARMS == '1' }}
+        env:
+          AUGER_CI: "0"
+        run: bash tests/gate.sh
