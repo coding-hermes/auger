@@ -36,6 +36,7 @@ import argparse
 import json
 import os
 import re
+import sqlite3
 import sys
 import time
 import urllib.error
@@ -67,7 +68,10 @@ COLS = {
                     ("jev_already_answered","double"),("jev_checked_at","varchar")],
     "decision":    [("id","varchar"),("project_id","varchar"),("domain","varchar"),("question_id","varchar"),
                     ("chosen","varchar"),("why_not","varchar"),("reversal_cost","varchar"),
-                    ("confidence","double"),("status","varchar"),("evidence_key","varchar")],
+                    ("confidence","double"),("status","varchar"),("evidence_key","varchar"),
+                    # AUG-009 / SPEC-002 section 1: what the decision BINDS. project | bundle,
+                    # empty = project — the value every row written before this column means.
+                    ("scope","varchar")],
     "option":      [("id","varchar"),("decision_id","varchar"),("label","varchar"),("costs","varchar"),
                     ("breaks","varchar"),("active","boolean")],
     "break":       [("id","varchar"),("decision_id","varchar"),("breaks_what","varchar"),
@@ -88,6 +92,12 @@ COLS = {
                     ("created_at","timestamp")],
     "facet":       [("id","varchar"),("project_id","varchar"),("question_id","varchar"),("facet","varchar"),
                     ("status","varchar"),("closed_by","varchar"),("note","varchar")],
+    # --- the bundles: which projects must honour one contract (SPEC-002 section 1). Membership is
+    # a TABLE and not a column, because a project can belong to several bundles at once.
+    "bundle":      [("id","varchar"),("name","varchar"),("description","varchar"),
+                    ("contract","varchar"),("status","varchar")],
+    "bundle_member":[("id","varchar"),("bundle_id","varchar"),("project","varchar"),
+                     ("role","varchar"),("note","varchar")],
 }
 PRIMARY = {t: "id" for t in COLS}
 
@@ -97,6 +107,16 @@ PRIMARY = {t: "id" for t in COLS}
 EDGE_KINDS = ("opens", "closes", "satisfies", "affects", "breaks",
               "derives_from", "references", "blocks")
 EDGE_SOURCES = ("gate", "impact", "human", "rule")
+# The bundle model's closed sets (SPEC-002 section 1). `status` and `role` are sets the ENGINE
+# switches on — a retired bundle is not walked, a test-target does not own the contract — so they
+# live in code and are refused BY NAME when they are wrong: EDGE_KINDS' rule, applied to the two
+# columns that carry a decision about behaviour rather than a label.
+BUNDLE_STATUSES = ("proposed", "confirmed", "retired")
+BUNDLE_ROLES = ("owner", "consumer", "test-target")
+# What a decision BINDS (SPEC-002 section 1). Empty/absent means DEFAULT_SCOPE, which is why the
+# default is a named constant: no reader re-derives it from a literal.
+DECISION_SCOPES = ("project", "bundle")
+DEFAULT_SCOPE = "project"
 # src_kind/dst_kind -> the table that must ALREADY hold that id (this is the referential check).
 NODE_TABLES = {"decision": "decision", "question": "question",
                "unknown": "unknown", "assumption": "assumption"}
@@ -321,6 +341,139 @@ def facet(ns: str, project_id: str, question_id: str, name: str, *, status: str 
     row = {"id": next_id(ns, "facet", "F"), "project_id": project_id, "question_id": question_id,
            "facet": name, "status": status, "closed_by": closed_by, "note": note}
     insert(ns, "facet", row)
+    return row
+
+
+# ---------------------------------------------------------------- the fleet a member must name
+# A bundle member names a PROJECT, and the projects are the SCHEDULER's, not auger's: auger drills
+# one namespace and keeps no project registry of its own. So membership is verified against the
+# fleet's own table — READ-ONLY — and a member that names nothing the fleet has is refused. Same
+# rule as `edge`: a stored row that names something that does not exist reads as evidence.
+#
+# READ-ONLY, always (mode=ro): a write here would land in the live scheduler's DB. And the DB is
+# NOT required to run auger — on a host without one (a CI runner) membership cannot be verified,
+# so it is refused with a message that says exactly that, never a raw sqlite3 exception.
+SCHEDULER_DB_ENV = "AUGER_SCHEDULER_DB"
+SCHEDULER_DB_CANDIDATES = (
+    os.path.expanduser("~/coding-hermes-scheduler/coding-herms-scheduler/scheduler.db"),
+    os.path.expanduser("~/.hermes/coding-hermes/scheduler.db"),
+)
+
+
+def _scheduler_projects(path: str) -> set | None:
+    """The `projects` names in a scheduler DB read READ-ONLY — None when it cannot answer.
+
+    None is "this DB cannot tell us", and it covers both a file that is not a scheduler DB (the
+    repo-local path is a 0-byte file on the fleet host: an ABSENT answer, not an empty one) and a
+    file that cannot be opened at all.
+    """
+    try:
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5)
+    except sqlite3.Error:
+        return None
+    try:
+        have = con.execute("select 1 from sqlite_master where type='table' and name='projects'").fetchone()
+        if not have:
+            return None
+        return {str(r[0]) for r in con.execute("select name from projects")}
+    except sqlite3.Error:
+        return None
+    finally:
+        con.close()
+
+
+def scheduler_db_path() -> str | None:
+    """The fleet's scheduler DB, or None when this host has none that can answer.
+
+    The env override is EXCLUSIVE when set: a caller that names a DB must not be answered from a
+    different one. Otherwise the first candidate whose `projects` table can actually be read wins.
+    """
+    override = os.environ.get(SCHEDULER_DB_ENV)
+    candidates = [os.path.expanduser(override)] if override else list(SCHEDULER_DB_CANDIDATES)
+    for path in candidates:
+        if path and os.path.exists(path) and _scheduler_projects(path) is not None:
+            return path
+    return None
+
+
+def known_projects() -> set | None:
+    """Every project the fleet has, or None when no scheduler DB can be read.
+
+    An EMPTY SET is a real answer (the fleet has no such project); None is "unverifiable". The two
+    lead to different messages, and neither is allowed to become a silently stored member.
+    """
+    path = scheduler_db_path()
+    return None if path is None else _scheduler_projects(path)
+
+
+def bundle(ns: str, name: str, *, description: str = "", contract: str = "",
+           status: str = "proposed", bundle_id: str = "") -> dict:
+    """Write one bundle row: projects that must honour one contract (SPEC-002 section 1).
+
+    `status` is a closed set the engine switches on, so an unknown one is refused by name rather
+    than stored. `contract` points at where the spanning spec lives TODAY (a path), or is empty
+    when the bundle is real in the code and unwritten on paper — the honest shape of a bundle
+    whose members share a contract nobody has written down.
+    """
+    if status not in BUNDLE_STATUSES:
+        raise SystemExit(f"unknown bundle status {status!r}: expected one of {', '.join(BUNDLE_STATUSES)}")
+    if not name:
+        raise SystemExit("refused: a bundle needs a name — the row is the only place its members are readable")
+    row = {"id": bundle_id or next_id(ns, "bundle", "B"), "name": name, "description": description,
+           "contract": contract, "status": status}
+    insert(ns, "bundle", row)
+    return row
+
+
+def bundle_exists(ns: str, bundle_id: str) -> bool:
+    """Does this bundle row actually exist? A member of a bundle that does not is not stored."""
+    if not bundle_id:
+        return False
+    return bool(select(ns, "bundle", f"id=eq.{bundle_id}&select=id&limit=1"))
+
+
+def bundle_member(ns: str, bundle_id: str, project: str, role: str, *, note: str = "") -> dict:
+    """Write one membership row: what a project owes or expects inside a bundle.
+
+    Membership is a TABLE and not a column because a project can belong to several bundles
+    (SPEC-002 section 1). Three refusals, all of them the rule `edge` already enforces on its
+    endpoints — a row naming something that does not exist reads as a fact nobody can check:
+
+      * `role` must be in the closed set the engine may switch on;
+      * the bundle must already exist;
+      * the project must be one the FLEET has (the scheduler's `projects` table, read-only). Where
+        no scheduler DB can be read at all, membership cannot be verified and is refused rather
+        than guessed.
+
+    A second row for the same (bundle, project) is the same membership written twice, so it is
+    refused too: the walk in SPEC-002 section 2 counts members, and a doubled member is a doubled
+    blast radius.
+    """
+    if role not in BUNDLE_ROLES:
+        raise SystemExit(f"unknown bundle role {role!r}: expected one of {', '.join(BUNDLE_ROLES)}")
+    if not bundle_exists(ns, bundle_id):
+        raise SystemExit(f"refused: bundle {bundle_id!r} does not exist — a member row for a "
+                         f"missing bundle is not stored")
+    projects = known_projects()
+    if projects is None:
+        override = os.environ.get(SCHEDULER_DB_ENV)
+        looked = [os.path.expanduser(override)] if override else list(SCHEDULER_DB_CANDIDATES)
+        raise SystemExit(f"refused: cannot verify project {project!r} — no readable scheduler DB "
+                         f"(looked in {', '.join(looked)}). A bundle member names a project the "
+                         f"fleet has, so membership is refused rather than guessed; point "
+                         f"{SCHEDULER_DB_ENV} at a scheduler.db with a `projects` table.")
+    if project not in projects:
+        raise SystemExit(f"refused: project {project!r} has no row in the fleet's scheduler "
+                         f"projects table ({scheduler_db_path()}) — a bundle member names a "
+                         f"project the fleet has, and this name is not one")
+    have = select(ns, "bundle_member",
+                  f"bundle_id=eq.{bundle_id}&project=eq.{project}&select=id&limit=1")
+    if have:
+        raise SystemExit(f"refused: {project!r} is already a member of {bundle_id} (row "
+                         f"{have[0]['id']}) — a second row is the same membership written twice")
+    row = {"id": next_id(ns, "bundle_member", "BM"), "bundle_id": bundle_id, "project": project,
+           "role": role, "note": note}
+    insert(ns, "bundle_member", row)
     return row
 
 
@@ -811,16 +964,75 @@ def cmd_ask(a):
     return 0
 
 
+# ---------------------------------------------------------------- the decision's scope (AUG-009)
+# SPEC-002 section 1 adds ONE field to `decision`: `scope` — what the decision BINDS. `project`
+# (the default, and what every row written before the column means) binds only its own project.
+# `bundle` binds every member of a bundle the project belongs to, which makes it a contract its
+# siblings can BREAK rather than merely differ from.
+#
+# WHY THE DEFAULT TRAVELS AS AN ABSENT KEY. DuckBrain's declared-table registry caches a
+# namespace's declarations IN PROCESS the first time it reads them (see the block comment above
+# QUESTION_STATES; re-proven live 2026-09-21 for this column: a namespace read before this change
+# is served a `decision` table with NO `scope` column, and an insert carrying one is refused with
+# 400 VALIDATION_ERROR "Unknown column(s) in insert"). So the default path must send the payload
+# every existing namespace already accepts — omitting the key when the scope is the default does
+# exactly that, and a namespace declared before the column keeps working untouched. Where a caller
+# DID ask for `bundle` and the column is not there, insert_decision() says so out loud rather than
+# storing a contract that reads as a local choice.
+UNDECLARED_SCOPE = re.compile(r"unknown column\(s\).*?\bscope\b", re.I)
+
+
+def decision_scope(row: dict) -> str:
+    """What a stored decision row binds — DEFAULT_SCOPE when nothing was recorded.
+
+    One reader, because the default is a storage decision no caller should re-derive: a row
+    written before the column existed, a row with an empty scope, and a row written explicitly
+    `project` all mean the same thing, and this is the only place that says so.
+    """
+    return (row or {}).get("scope") or DEFAULT_SCOPE
+
+
+def insert_decision(ns: str, row: dict) -> str:
+    """Insert a decision row, never losing a non-default scope SILENTLY. Returns a WARNING.
+
+    "" when nothing was downgraded. The two failure shapes are deliberately different: a 400 that
+    names `scope` as an undeclared column is a namespace whose declaration predates the column, and
+    dropping the key stores the decision the way that namespace can hold it — project-scoped, SAID
+    OUT LOUD, with the remedy. Every other status is raised exactly as `insert` raises it: a failed
+    write must never look like a stored row.
+    """
+    st, body, _ = db(tbl(ns, "decision"), "POST", [row])
+    if st in (200, 201):
+        return ""
+    if "scope" in row and st == 400 and UNDECLARED_SCOPE.search(json.dumps(body)):
+        st2, body2, _ = db(tbl(ns, "decision"), "POST",
+                           [{k: v for k, v in row.items() if k != "scope"}])
+        if st2 in (200, 201):
+            return (f"WARNING: this namespace's `decision` declaration predates `scope` and the API "
+                    f"is serving a cached declaration, so {row['id']} is stored {DEFAULT_SCOPE}-scoped, "
+                    f"NOT bundle-scoped. Remedy: run `auger init` and restart the DuckBrain API so "
+                    f"the declaration is re-read.")
+        raise SystemExit(f"insert decision failed ({st2}): {body2}")
+    raise SystemExit(f"insert decision failed ({st}): {body}")
+
+
 def cmd_answer(a):
     ns, pid = a.namespace, a.project_id
     p = _project(ns, pid)
     pid = p["id"]
+    scope = (a.scope or "").strip().lower()
+    if scope and scope not in DECISION_SCOPES:
+        raise SystemExit(f"unknown decision scope {a.scope!r}: expected one of {', '.join(DECISION_SCOPES)}")
     did = a.id or f"D-{len(select(ns,'decision',f'project_id=eq.{pid}'))+1:03d}"
     row = {"id": did, "project_id": pid, "domain": a.domain or "", "question_id": a.question_id or "",
            "chosen": a.chosen, "why_not": a.why_not or "", "reversal_cost": a.reversal_cost or "",
            "confidence": float(a.confidence if a.confidence is not None else -1),
            "status": a.status or "decided", "evidence_key": f"/auger/{pid}/{did}"}
-    insert(ns, "decision", row)
+    # `scope` is sent only when it is NOT the default: see insert_decision for why the default
+    # travels as an absent key rather than as the word "project".
+    if scope and scope != DEFAULT_SCOPE:
+        row["scope"] = scope
+    warning = insert_decision(ns, row)
     for i, opt in enumerate(a.option or []):
         insert(ns, "option", {"id": f"{did}-O{i+1}", "decision_id": did, "label": opt,
                               "costs": "", "breaks": "", "active": opt == a.chosen})
@@ -835,7 +1047,10 @@ def cmd_answer(a):
              + (f"Rejected alternatives: {'; '.join(others)}. " if others else "No alternative was recorded. ")
              + f"Reason the alternatives were rejected: {a.why_not or 'not stated'}. "
              + f"Reversal cost: {row['reversal_cost'] or 'not stated'}.")
-    print(f"{did} recorded  (confidence {row['confidence']}, {len(a.option or [])} options, embedded)")
+    print(f"{did} recorded  (confidence {row['confidence']}, {len(a.option or [])} options, "
+          f"embedded, scope {decision_scope(row)})")
+    if warning:
+        print(warning)
     return 0
 
 
@@ -1037,6 +1252,8 @@ def main(argv=None):
     s.add_argument("--reversal-cost")
     s.add_argument("--confidence", type=float)
     s.add_argument("--status")
+    s.add_argument("--scope", help=f"what this decision BINDS: {' | '.join(DECISION_SCOPES)} "
+                                   f"(default {DEFAULT_SCOPE})")
     s.set_defaults(fn=cmd_answer)
 
     s = sub.add_parser("check", help="is this question already answered by stored evidence?")

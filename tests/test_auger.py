@@ -12,8 +12,8 @@ the assertions one layer down, onto the rows:
   * after `dump --config` -> prove the stored flags did NOT change (non-mutation, on data)
 
 The suite never hardcodes the module's table count: it reads `len(auger.COLS)` and the names
-the API reports back, so it is correct whether the module declares 9 tables or 11 (AUG-007
-adds `edge` and `facet` in a sibling worktree).
+the API reports back, so it is correct whether the module declares 9 tables or 13 (AUG-007 adds
+`edge` and `facet`; AUG-009 adds `bundle` and `bundle_member` and `decision.scope`).
 
 Tests that call JEV are marked `@pytest.mark.jev`. That marker means "this case exercises the
 external decisions model", which can be unreachable for reasons that have nothing to do with
@@ -209,6 +209,259 @@ def test_answer_without_a_project_is_refused(live_service: str):
         assert code != 0
         assert "no project row" in msg, msg
         assert rows(ns, "decision", "") == []
+    finally:
+        assert teardown_namespace(ns) == []
+
+
+# ================================================================= bundles (AUG-009, SPEC-002 section 1)
+def scheduler_or_skip() -> str:
+    """The fleet's scheduler DB, or a loud skip: a CI runner has no fleet and no DB.
+
+    Membership is verified against the fleet's own `projects` table. Without it there is nothing to
+    verify AGAINST — the unverifiable path is exercised separately, by pointing the override at a
+    path that cannot answer.
+    """
+    path = auger.scheduler_db_path()
+    if path is None:
+        msg = ("bundle membership is verified against the fleet's scheduler DB (`projects` table) "
+               "and this host has none that can be read. Remedy: set AUGER_SCHEDULER_DB to a "
+               "scheduler.db with a `projects` table (the fleet daemon's DB on the fleet host is "
+               "~/.hermes/coding-hermes/scheduler.db).")
+        if os.environ.get("AUGER_REQUIRE_LIVE") == "1":
+            raise AssertionError(msg)
+        pytest.skip(msg)
+    return path
+
+
+def fleet_project(prefer: str = "bunker") -> str:
+    """A real project name from the fleet, preferring one SPEC-002's own membership names."""
+    have = auger.known_projects() or set()
+    if prefer in have:
+        return prefer
+    assert have, "the scheduler DB answered with no projects at all"
+    return sorted(have)[0]
+
+
+def test_init_declares_the_bundle_tables_and_the_scope_column(ns: str):
+    """Criterion 1: both tables and `decision.scope` are DECLARED, as the API serves them.
+
+    Asserted on the declaration the API returns rather than on the file init wrote: the registry is
+    what a reader queries, and a declaration the API cannot see is not a table.
+    """
+    status, live, _ = auger.db(f"/api/ns/{ns}/tables")
+    assert status == 200, live
+    by_name = {t["name"]: [c["name"] for c in t["columns"]] for t in live["tables"]}
+    assert set(by_name) == set(auger.COLS), \
+        f"API serves {sorted(by_name)}, module declares {sorted(auger.COLS)}"
+    assert by_name["bundle"] == ["id", "name", "description", "contract", "status"]
+    assert by_name["bundle_member"] == ["id", "bundle_id", "project", "role", "note"]
+    assert by_name["decision"][-1] == "scope"
+
+    # idempotent: a second init rewrites nothing and still reports the full set
+    declared = len(auger.COLS)
+    rc, out = run_cli(["-n", ns, "init"])
+    assert rc == 0 and f"declared: {declared}/{declared} tables" in out, out
+    assert "wrote declarations" not in out, f"init rewrote declarations it had already written:\n{out}"
+
+
+def test_bundle_rows_round_trip_with_their_closed_set_status(ns: str):
+    """The bundle table's fields come back off the stored row, and status is a closed set."""
+    b = auger.bundle(ns, "agent-ecosystem", description="the bus, its hosts and their consumers",
+                     contract="crier/specs/AGENT-ECOSYSTEM.md", status="confirmed")
+    assert b["id"].startswith("B-"), b
+    stored = row(ns, "bundle", f"id=eq.{b['id']}")
+    assert stored["name"] == "agent-ecosystem"
+    assert stored["contract"] == "crier/specs/AGENT-ECOSYSTEM.md"
+    assert stored["status"] == "confirmed"
+
+    # A contract-less bundle is a real shape (SPEC-002 section 3: B-02 has no spanning spec yet).
+    plain = auger.bundle(ns, "memory-core")
+    assert row(ns, "bundle", f"id=eq.{plain['id']}")["contract"] == ""
+    assert plain["id"] != b["id"], "two bundles got the same id"
+
+    with pytest.raises(SystemExit) as ei:
+        auger.bundle(ns, "games", status="maybe")
+    assert "maybe" in str(ei.value) and "proposed" in str(ei.value), str(ei.value)
+    assert len(rows(ns, "bundle", "")) == 2, "a refused bundle was stored anyway"
+
+
+def test_unknown_role_and_missing_bundle_are_refused_without_a_fleet_db(ns: str):
+    """The two refusals that need no scheduler DB — enforced before membership is even looked up."""
+    with pytest.raises(SystemExit) as ei:
+        auger.bundle_member(ns, "B-999999", "bunker", "owner")
+    assert "B-999999" in str(ei.value) and "does not exist" in str(ei.value), str(ei.value)
+
+    b = auger.bundle(ns, "agent-ecosystem")
+    with pytest.raises(SystemExit) as ei:
+        auger.bundle_member(ns, b["id"], "bunker", "observer")
+    assert "observer" in str(ei.value) and "test-target" in str(ei.value), str(ei.value)
+    assert rows(ns, "bundle_member", "") == [], "a refused member was stored anyway"
+
+
+def test_a_bundle_member_naming_a_real_fleet_project_is_stored(ns: str):
+    """Criterion 4, the accepted half: a project the fleet HAS becomes a member."""
+    scheduler_or_skip()
+    b = auger.bundle(ns, "agent-ecosystem", contract="crier/specs/AGENT-ECOSYSTEM.md")
+    project = fleet_project("bunker")
+    m = auger.bundle_member(ns, b["id"], project, "test-target", note="the deployment host")
+    assert m["id"].startswith("BM-"), m
+    stored = row(ns, "bundle_member", f"id=eq.{m['id']}")
+    assert (stored["bundle_id"], stored["project"], stored["role"]) == (b["id"], project, "test-target")
+    assert stored["note"] == "the deployment host"
+
+    # the same membership written twice is the same membership: refused, not doubled
+    with pytest.raises(SystemExit) as ei:
+        auger.bundle_member(ns, b["id"], project, "owner")
+    assert "already a member" in str(ei.value), str(ei.value)
+    assert len(rows(ns, "bundle_member", "")) == 1
+
+
+def test_a_bundle_member_naming_a_project_with_no_scheduler_row_is_refused(ns: str):
+    """Criterion 4: a member naming nothing the fleet has is refused, and no row is written."""
+    scheduler_or_skip()
+    b = auger.bundle(ns, "agent-ecosystem")
+    with pytest.raises(SystemExit) as ei:
+        auger.bundle_member(ns, b["id"], "no-such-project-zzz", "consumer")
+    msg = str(ei.value)
+    assert "no-such-project-zzz" in msg and "scheduler" in msg, msg
+    assert rows(ns, "bundle_member", "") == [], "a member naming no fleet project was stored"
+
+
+def test_bundle_membership_refuses_when_no_scheduler_db_can_be_read(ns: str, monkeypatch, tmp_path):
+    """Criterion 4's other half: a MISSING DB refuses clearly and never raises out of sqlite.
+
+    A CI runner has no fleet DB, and `auger` must still say what it could not verify and why. The
+    override is exclusive, so this cannot be answered from the fleet's real DB by accident.
+    """
+    missing = tmp_path / "no-fleet-here" / "scheduler.db"
+    monkeypatch.setenv(auger.SCHEDULER_DB_ENV, str(missing))
+    assert auger.scheduler_db_path() is None
+    assert auger.known_projects() is None
+
+    empty = tmp_path / "zero-byte.db"          # a file that exists and is not a scheduler DB
+    empty.write_text("")
+    monkeypatch.setenv(auger.SCHEDULER_DB_ENV, str(empty))
+    assert auger.scheduler_db_path() is None, "a 0-byte file answered as a scheduler DB"
+
+    monkeypatch.setenv(auger.SCHEDULER_DB_ENV, str(missing))
+    b = auger.bundle(ns, "agent-ecosystem")
+    with pytest.raises(SystemExit) as ei:
+        auger.bundle_member(ns, b["id"], "bunker", "owner")
+    msg = str(ei.value)
+    assert "cannot verify" in msg and auger.SCHEDULER_DB_ENV in msg, msg
+    assert rows(ns, "bundle_member", "") == []
+
+
+def test_a_bundle_scoped_decision_round_trips_through_the_api(project: dict):
+    """Criterion 2: `scope bundle` survives the write, the API re-read, and the default reader."""
+    ns = project["ns"]
+    rc, out = run_cli(["-n", ns, "answer", "--id", "D-010", "--domain", "9.01",
+                       "--chosen", "one message envelope", "--option", "one message envelope",
+                       "--option", "one envelope per member",
+                       "--why-not", "the siblings must agree on the wire shape",
+                       "--confidence", "0.9", "--scope", "bundle"])
+    assert rc == 0 and "D-010 recorded" in out, out
+    assert "scope bundle" in out, out
+
+    stored = row(ns, "decision", "id=eq.D-010")
+    assert stored["scope"] == "bundle"
+    assert auger.decision_scope(stored) == "bundle"
+    with open(os.path.join(ns_path(ns), "tables", "decision.jsonl")) as fh:
+        disk = [json.loads(line) for line in fh if line.strip()]
+    assert [r["scope"] for r in disk if r["id"] == "D-010"] == ["bundle"], disk
+
+
+def test_the_default_decision_scope_is_project_and_sends_no_scope_key(decided: dict):
+    """Criterion 3: without `--scope` the behaviour AND the stored payload are unchanged.
+
+    Asserted on the namespace's own JSONL — the storage of record — because "the default is
+    project" has to mean the column was never written, not that a reader is papering over it.
+    """
+    ns = decided["ns"]
+    d = row(ns, "decision", "id=eq.D-001")
+    assert not d.get("scope"), f"a decision written without --scope carries one: {d!r}"
+    assert auger.decision_scope(d) == "project"
+    assert auger.decision_scope({}) == "project", "an absent scope must read as the default"
+
+    with open(os.path.join(ns_path(ns), "tables", "decision.jsonl")) as fh:
+        disk = [json.loads(line) for line in fh if line.strip()]
+    # The declared column is MATERIALISED as JSON null for a row that never carried a scope (the
+    # namespace writer projects every declared column), so the assertion is on the value: nothing
+    # was written that a reader could mistake for a scope, and none of "project"/"bundle" appears.
+    assert disk and all(not r.get("scope") for r in disk), disk
+
+    rc, out = run_cli(["-n", ns, "answer", "--id", "D-011", "--chosen", "staging table",
+                       "--confidence", "0.7", "--scope", "project"])
+    assert rc == 0 and "scope project" in out, out
+    assert "WARNING" not in out, out
+
+
+def test_an_unknown_decision_scope_is_refused(project: dict):
+    """The scope is a closed set, refused by name — like EDGE_KINDS is."""
+    ns = project["ns"]
+    code, msg, _ = run_cli_exit(["-n", ns, "answer", "--id", "D-012", "--chosen", "x",
+                                 "--confidence", "0.5", "--scope", "bundle-ish"])
+    assert code != 0
+    assert "bundle-ish" in msg and "project" in msg and "bundle" in msg, msg
+    assert rows(ns, "decision", "id=eq.D-012") == []
+
+
+def _declare_tables_as_a_namespace_that_predates_scope(ns: str) -> None:
+    """Write the declarations an OLD namespace has: `decision` with no `scope` column.
+
+    Only the three tables the `answer` flow touches are declared. They are written BEFORE the API
+    is asked anything, because DuckBrain caches a namespace's declarations on its first read of
+    them — a declaration written after that read is invisible to the running server, which is the
+    exact situation this reproduces. Nothing is copied from init's declare path except the column
+    lists, and `scope` is removed from the module's own list so this stays a pre-AUG-009 shape even
+    as the model grows.
+    """
+    tables = os.path.join(ns_path(ns), "tables")
+    os.makedirs(tables, exist_ok=True)
+    for name in ("project", "decision", "option"):
+        cols = [(c, t) for c, t in auger.COLS[name] if not (name == "decision" and c == "scope")]
+        decl = {"name": name, "format": "jsonl-objects", "primary": "id",
+                "glob": f"tables/{name}.jsonl",
+                "columns": [{"name": c, "type": t} for c, t in cols]}
+        with open(os.path.join(tables, f"{name}.table.json"), "w") as f:
+            f.write(json.dumps(decl, indent=1))
+
+
+def test_a_namespace_declared_before_scope_keeps_working(live_service: str):
+    """Criterion 3's hard half: an old namespace keeps working, and loses its scope OUT LOUD.
+
+    DuckBrain never introspects or migrates a declared table, and its registry cache lives for the
+    process, so a namespace read before this change is served a `decision` table without `scope`.
+    The default path sends no scope key and is therefore untouched. A BUNDLE-scoped decision cannot
+    be stored there, and auger says exactly that instead of recording a contract as a local choice.
+    """
+    ns = new_bare_ns()
+    try:
+        _declare_tables_as_a_namespace_that_predates_scope(ns)
+        rc, out = run_cli(["-n", ns, "start", "--name", "oldns", "--id", "P-OLD",
+                           "--seed", "one small CLI on one box"])
+        assert rc == 0 and "seed stored" in out, out
+
+        status, live, _ = auger.db(f"/api/ns/{ns}/tables")
+        assert status == 200, live
+        served = {t["name"]: [c["name"] for c in t["columns"]] for t in live["tables"]}
+        assert "scope" not in served["decision"], \
+            f"the API is not serving the pre-AUG-009 declaration this test set up: {served}"
+
+        # the default path: same verb, same payload, no warning
+        rc, out = run_cli(["-n", ns, "answer", "--id", "D-001", "--chosen", "single SQLite file",
+                           "--confidence", "0.8"])
+        assert rc == 0 and "WARNING" not in out, out
+        assert auger.decision_scope(row(ns, "decision", "id=eq.D-001")) == "project"
+
+        # a bundle-scoped decision cannot be stored here: stored project-scoped, SAID OUT LOUD
+        rc, out = run_cli(["-n", ns, "answer", "--id", "D-002", "--chosen", "one envelope",
+                           "--confidence", "0.9", "--scope", "bundle"])
+        assert rc == 0, out
+        assert "WARNING" in out and "NOT bundle-scoped" in out, out
+        stored = row(ns, "decision", "id=eq.D-002")
+        assert not stored.get("scope"), stored
+        assert auger.decision_scope(stored) == "project"
     finally:
         assert teardown_namespace(ns) == []
 
