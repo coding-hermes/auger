@@ -42,6 +42,7 @@ from conftest import (
     D002,
     REPO_ROOT,
     TEST_NS_PREFIX,
+    answer,
     api_namespaces,
     leftovers,
     ns_path,
@@ -1545,3 +1546,436 @@ def test_the_gate_with_no_bundle_membership_recalls_its_own_namespace_only(proje
     sat = rows(ns, "edge", "kind=eq.satisfies")
     assert len(sat) == 1 and sat[0]["src_id"] == "D-001", sat
     assert not sat[0].get("src_project"), f"a same-namespace link carries a src_project: {sat[0]!r}"
+
+
+# ================================================================= the feedback engine (AUG-001)
+# docs/DESIGN.md R12 + its open decision 4, built on the graph AUG-007..AUG-011 landed, with the
+# two recorded leanings of SPEC-001 section 7 taken as the working defaults: Q2 — a LARGE MODEL
+# proposes and JEV gates and ranks; Q5 — the run is unattended, stops only at a priority judgment,
+# records an escalation with a default and continues on the default.
+#
+# The MODELS are faked in the cases below (the proposer is an external chat model and JEV is an
+# external decisions model; what is under test is the engine's behaviour AROUND them — what it
+# stores, what it refuses to ask, and what it does with a ceiling). `test_feedback_live_*` at the
+# end runs the real pair. The SUBSTRATE is never faked: every project, decision, question, facet,
+# edge and escalation asserted below is re-read from DuckBrain.
+#
+# Every acceptance criterion of AUG-001 is asserted on STORED ROWS, not on stdout:
+#   (1) a 0.41-confidence decision produces a named follow-up question  -> the `question` row, its
+#       facets and the `opens` edge;
+#   (2) a question the gate scores >= 0.55 is REFUSED, not asked        -> state `linked` + the
+#       `satisfies` edge, and an EMPTY askable surface;
+#   (3) the run stops at the ceiling and records `budget-thin: true`    -> the stopped questions
+#       keep their rows in state `budget_thin` with their reason, plus the marker escalation row.
+_PROBE_ERR: dict = {}
+FOLLOWUP_Q = "How is the staging table drained if the writer stops halfway through a run?"
+
+
+def proposer_stub(texts, calls: list):
+    """A proposer stub: one scripted question per call, and the state each call was given."""
+    queue = list(texts)
+
+    def _stub(state, *a, **k):
+        calls.append(state)
+        if not queue:
+            return "", "the stub ran out of questions"
+        return queue.pop(0), ""
+    return _stub
+
+
+def proposer_down(err: str = "all 6 proposer keys failed; last: HTTP 401"):
+    """A proposer that is unreachable — the fail-closed case."""
+    def _stub(state, *a, **k):  # noqa: ARG001 - mirrors the real proposer's signature
+        return "", err
+    return _stub
+
+
+def recall_hits(ns: str, pid: str, *decisions: str):
+    """The gate's retrieval, stubbed to the named decisions' own evidence rows.
+
+    The keys are the ones `auger answer` embeds, so the gate can name a decision from a hit —
+    which is what makes the difference between a LINK and an unlinkable verdict testable.
+    """
+    def _stub(namespace, q, limit=5):  # noqa: ARG001 - mirrors recall's signature
+        return ([{"key": f"/auger/{pid}/{d}", "score": 0.9,
+                  "content": f"Decision {d}: we chose the recorded option."} for d in decisions]
+                if namespace == ns else [])
+    return _stub
+
+
+def proposer_or_skip() -> None:
+    """Fail loudly (or skip loudly) when the question proposer cannot be reached."""
+    if "err" not in _PROBE_ERR:
+        text, err = auger.propose_question(
+            "THE DECISION WHOSE CONFIDENCE IS TOO LOW TO BUILD ON:\n"
+            "D-000 (probe): the probe\nconfidence: 0.4\n"
+            "why the rejected alternatives lost: the probe")
+        _PROBE_ERR["err"] = err if not text else ""
+    if _PROBE_ERR["err"]:
+        msg = (f"the question proposer is unreachable ({_PROBE_ERR['err']}) — the feedback engine "
+               f"is fail-closed and proposes nothing without it. Remedy: a live OpenRouter key in "
+               f"~/.hermes/.env or OPENROUTER_API_KEY.")
+        if os.environ.get("AUGER_REQUIRE_LIVE") == "1":
+            raise AssertionError(msg)
+        pytest.skip(msg)
+
+
+def test_feedback_turns_a_thin_decision_into_a_named_followup(decided: dict, monkeypatch):
+    """Criterion 1: the 0.41 decision becomes a NAMED question on the record — its own row, its
+    facets, and the `opens` edge that makes the branch trackable from the decision that raised it."""
+    ns, pid = decided["ns"], decided["pid"]
+    assert [d["id"] for d in auger.thin_decisions(ns, pid)] == ["D-002"], \
+        "the thin-decision pick does not start from the lowest confidence"
+    monkeypatch.setattr(auger, "recall", recall_hits(ns, pid, "D-002"))
+    calls: list = []
+    monkeypatch.setattr(auger, "jev", gate_stub(0.10, calls))
+    monkeypatch.setattr(auger, "propose_question", proposer_stub([FOLLOWUP_Q], []))
+
+    rc, out = run_cli(["-n", ns, "feedback", "--budget", "1"])
+    assert rc == 0, out
+    assert FOLLOWUP_Q in out and "ASKED" in out, out
+    assert len(calls) == 1, f"the gate did not run exactly once on the proposed question: {calls}"
+
+    q = row(ns, "question", "qclass=eq.follow_up")
+    assert q["status"] == "open", "a question below the answered threshold must be ASKED"
+    assert q["text"] == FOLLOWUP_Q
+    assert q["domain"] == D002["domain"], "the drill left the subject the decision lives in"
+    assert q["ring"] == 1 and q["jev_checked_at"], q       # depth recorded; the gate's verdict logged
+    assert q["jev_already_answered"] == pytest.approx(0.10), q
+
+    opens = row(ns, "edge", "kind=eq.opens")
+    assert (opens["src_kind"], opens["src_id"]) == ("decision", "D-002")
+    assert (opens["dst_kind"], opens["dst_id"]) == ("question", q["id"])
+    assert opens["source"] == "rule", opens
+    # Nothing was linked and nothing derived: D-002 answers no question and the gate refused nothing.
+    assert rows(ns, "edge", "kind=eq.satisfies") == []
+    assert rows(ns, "edge", "kind=eq.derives_from") == []
+
+    facets = rows(ns, "facet", f"question_id=eq.{q['id']}&order=id.asc")
+    assert [f["facet"] for f in facets] == list(auger.facet_set()), facets
+    assert all(f["status"] == "open" for f in facets), \
+        f"an OPEN question must keep its facets open — it is only partly resolved: {facets}"
+
+    assert [x["id"] for x in auger.askable_questions(ns, pid)] == [q["id"]], \
+        "the new question is not on the askable surface: the batch did not reach the next pass"
+    # The decision itself is untouched: the engine asks, it does not re-decide.
+    assert row(ns, "decision", "id=eq.D-002")["confidence"] == pytest.approx(0.41)
+
+
+def test_feedback_refuses_a_question_the_gate_already_answers(decided: dict, monkeypatch):
+    """Criterion 2: a proposed question JEV scores >= T_ANSWERED is REFUSED — recorded `linked` to
+    the answer that already exists, with a `satisfies` edge, and never asked of anyone."""
+    ns, pid = decided["ns"], decided["pid"]
+    monkeypatch.setattr(auger, "recall", recall_hits(ns, pid, "D-001"))
+    calls: list = []
+    monkeypatch.setattr(auger, "jev", gate_stub(0.91, calls))
+    monkeypatch.setattr(auger, "propose_question", proposer_stub(
+        ["What file layout should the record of seen files use?"], []))
+
+    rc, out = run_cli(["-n", ns, "feedback", "--budget", "1"])
+    assert rc == 0, out
+    assert "REFUSED" in out and "NOT asked" in out and "asked: 0" in out, out
+    assert len(calls) == 1, f"the gate did not run exactly once: {calls}"
+
+    q = row(ns, "question", "qclass=eq.follow_up")
+    assert q["status"] == "linked", "the question was ASKED after the gate refused it"
+    assert q["jev_already_answered"] == pytest.approx(0.91), q
+    assert q["jev_checked_at"], q
+    reason = auger.q_reason(ns, q["id"])
+    assert "already answered" in reason and "D-001" in reason, reason
+
+    sat = row(ns, "edge", "kind=eq.satisfies")
+    assert (sat["src_kind"], sat["src_id"]) == ("decision", "D-001")
+    assert (sat["dst_kind"], sat["dst_id"]) == ("question", q["id"])
+    assert sat["source"] == "gate" and sat["confidence"] == pytest.approx(0.91), sat
+
+    # The branch is still trackable: the question was RAISED by D-002 and satisfied by D-001.
+    assert row(ns, "edge", "kind=eq.opens")["src_id"] == "D-002"
+    assert auger.askable_questions(ns, pid) == [], "a refused question reached the askable surface"
+    assert row(ns, "decision", "id=eq.D-002")["confidence"] == pytest.approx(0.41)
+
+
+def test_feedback_stops_at_the_ceiling_and_records_budget_thin(project: dict, monkeypatch):
+    """Criterion 3: the run STOPS at the ceiling and records `budget-thin: true`. The questions it
+    could not ask keep their TEXT and their reason in state `budget_thin` — recorded, never dropped."""
+    ns, pid = project["ns"], project["pid"]
+    for did, conf in (("D-002", 0.41), ("D-003", 0.35), ("D-004", 0.30)):
+        rc, out = answer(ns, did=did, domain="4.06", chosen=f"option for {did}",
+                         options=[f"option for {did}", "the other one"],
+                         why_not="the seed forbids the other one", confidence=conf)
+        assert rc == 0 and f"{did} recorded" in out, out
+    assert [d["id"] for d in auger.thin_decisions(ns, pid)] == ["D-004", "D-003", "D-002"], \
+        "the thinnest decision is not the one the run starts from"
+
+    monkeypatch.setattr(auger, "recall", recall_hits(ns, pid, "D-002"))
+    monkeypatch.setattr(auger, "jev", gate_stub(0.10, []))
+    monkeypatch.setattr(auger, "propose_question",
+                        proposer_stub([f"Follow-up for {d}?" for d in ("D-004", "D-003", "D-002")], []))
+
+    rc, out = run_cli(["-n", ns, "feedback", "--budget", "1"])
+    assert rc == 0, out
+    assert "budget-thin: true" in out, out
+    assert "asked: 1" in out and "budget-thin: 2" in out, out
+
+    stored = rows(ns, "question", "qclass=eq.follow_up&order=id.asc")
+    assert len(stored) == 3, f"the ceiling DROPPED questions instead of recording them: {stored}"
+    asked = [q for q in stored if q["status"] == "open"]
+    stopped = [q for q in stored if q["status"] == "budget_thin"]
+    assert len(asked) == 1 and len(stopped) == 2, [q["status"] for q in stored]
+    assert all(q["text"].endswith("?") for q in stored), \
+        f"a stopped question lost its text: {[q['text'] for q in stored]}"
+
+    opens = {e["dst_id"]: e["src_id"] for e in rows(ns, "edge", "kind=eq.opens")}
+    assert opens[asked[0]["id"]] == "D-004", f"the run did not ask its thinnest decision: {opens}"
+    for q in stopped:
+        reason = auger.q_reason(ns, q["id"])
+        assert "budget-thin" in reason and "ceiling of 1" in reason, reason
+        facets = rows(ns, "facet", f"question_id=eq.{q['id']}")
+        assert facets and all(f["status"] == "closed" for f in facets), \
+            f"a budget_thin question has no recorded resolution: {facets}"
+
+    # The run-level marker, on a stored row rather than only in the output.
+    esc = rows(ns, "escalation", "")
+    assert len(esc) == 1, esc
+    assert "budget-thin: true" in esc[0]["question"], esc[0]
+    assert "ceiling of 1" in esc[0]["question"] and "2 proposed question(s)" in esc[0]["question"], esc[0]
+    assert esc[0]["default_action"] and esc[0]["risk"] and esc[0]["status"] == "open", esc[0]
+    assert esc[0]["project_id"] == pid and stopped[0]["id"] in esc[0]["options"], esc[0]
+
+    assert [q["id"] for q in auger.askable_questions(ns, pid)] == [asked[0]["id"]]
+
+
+def test_a_budget_thin_question_is_still_owed_to_its_decision(project: dict, monkeypatch):
+    """The ceiling bounds ASKING, not the work: a question the ceiling stopped was never asked, so
+    its decision is still owed one and the next run picks the decision up. The stopped row keeps
+    its own state and its reason — nothing is rewritten and nothing is deleted."""
+    ns, pid = project["ns"], project["pid"]
+    for did, conf in (("D-002", 0.41), ("D-003", 0.35)):
+        assert answer(ns, did=did, domain="4.06", chosen=f"option for {did}",
+                      options=[f"option for {did}", "the other one"],
+                      why_not="the seed forbids the other one", confidence=conf)[0] == 0
+    monkeypatch.setattr(auger, "recall", recall_hits(ns, pid, "D-002"))
+    monkeypatch.setattr(auger, "jev", gate_stub(0.10, []))
+    calls: list = []
+    monkeypatch.setattr(auger, "propose_question", proposer_stub(
+        ["First run for D-003?", "First run for D-002?",
+         "Second run for D-003?", "Second run for D-002?"], calls))
+
+    rc, out = run_cli(["-n", ns, "feedback", "--budget", "0"])
+    assert rc == 0 and "budget-thin: true" in out, out
+    assert "asked: 0" in out and "budget-thin: 2" in out, out
+    assert [q["status"] for q in rows(ns, "question", "order=id.asc")] == ["budget_thin"] * 2
+    assert len(calls) == 2, calls
+
+    rc, out = run_cli(["-n", ns, "feedback", "--budget", "1"])
+    assert rc == 0, out
+    assert "already drilled" not in out, "a budget_thin question was treated as a live drill"
+    stored = rows(ns, "question", "order=id.asc")
+    assert [q["status"] for q in stored] == ["budget_thin", "budget_thin", "open", "budget_thin"], \
+        [q["status"] for q in stored]
+    asked = [q for q in stored if q["status"] == "open"]
+    assert len(asked) == 1 and "Second run for D-003?" == asked[0]["text"]
+    assert opens_of(ns, asked[0]["id"]) == "D-003", \
+        "the next run drilled a decision that was not the thinnest still waiting"
+
+
+def test_feedback_does_not_drill_a_decision_twice(decided: dict, monkeypatch):
+    """A decision with a LIVE follow-up is left alone: the question is on the board already, and a
+    second one would be the duplicate the gate exists to prevent."""
+    ns, pid = decided["ns"], decided["pid"]
+    monkeypatch.setattr(auger, "recall", recall_hits(ns, pid, "D-002"))
+    monkeypatch.setattr(auger, "jev", gate_stub(0.10, []))
+    calls: list = []
+    monkeypatch.setattr(auger, "propose_question", proposer_stub([FOLLOWUP_Q, "a duplicate?"], calls))
+
+    assert run_cli(["-n", ns, "feedback", "--budget", "2"])[0] == 0
+    assert len(calls) == 1, calls
+
+    rc, out = run_cli(["-n", ns, "feedback", "--budget", "2"])
+    assert rc == 0, out
+    assert "already drilled" in out and "D-002" in out, out
+    assert len(calls) == 1, "a decision with a live follow-up was drilled a second time"
+    assert len(rows(ns, "question", "")) == 1
+    assert len(rows(ns, "edge", "kind=eq.opens")) == 1
+
+
+def test_feedback_records_a_priority_judgment_and_continues_on_the_default(project: dict, monkeypatch):
+    """Q5: a decision thin enough to be a priority judgment is ESCALATED with a default, and the
+    unattended run continues on that default instead of waiting for a person."""
+    ns, pid = project["ns"], project["pid"]
+    assert answer(ns, did="D-002", domain="4.06", chosen="staging table",
+                  options=["staging table", "row locking"], why_not="no concurrent writer",
+                  confidence=0.21)[0] == 0
+    monkeypatch.setattr(auger, "recall", recall_hits(ns, pid, "D-002"))
+    monkeypatch.setattr(auger, "jev", gate_stub(0.10, []))
+    monkeypatch.setattr(auger, "propose_question", proposer_stub(["Who drains the staging table?"], []))
+
+    rc, out = run_cli(["-n", ns, "feedback", "--budget", "1"])
+    assert rc == 0, out
+
+    esc = row(ns, "escalation", "")
+    assert esc["project_id"] == pid and esc["status"] == "open", esc
+    assert "priority judgment" in esc["question"] and "0.21" in esc["question"], esc
+    assert "DEFAULT" in esc["default_action"] and "D-002" in esc["default_action"], esc
+    assert "0.21" in esc["risk"], esc
+    assert "escalations:" in out and esc["id"] in out, out
+
+    # ...and it CONTINUED on the default: the question it would have asked was asked.
+    q = row(ns, "question", "qclass=eq.follow_up")
+    assert q["status"] == "open", "the run stopped at the priority judgment instead of continuing"
+    assert q["jev_already_answered"] == pytest.approx(0.10)
+
+
+def test_feedback_invents_nothing_when_the_proposer_is_unreachable(decided: dict, monkeypatch):
+    """Fail-closed: no question is proposed, so no question is stored, asked or linked — and the
+    decisions the run could not drill are named rather than silently skipped."""
+    ns = decided["ns"]
+    monkeypatch.setattr(auger, "propose_question", proposer_down())
+
+    rc, out = run_cli(["-n", ns, "feedback", "--budget", "1"])
+    assert rc == 1, out
+    assert "proposer unavailable" in out and "D-002" in out, out
+    assert rows(ns, "question", "") == [], "a question was stored without a proposal"
+    assert rows(ns, "edge", "") == []
+    assert rows(ns, "escalation", "") == []
+    assert row(ns, "decision", "id=eq.D-002")["confidence"] == pytest.approx(0.41)
+
+
+def test_feedback_asks_nothing_when_the_gate_is_unreachable(decided: dict, monkeypatch):
+    """Fail-closed on the other side: with no verdict from the gate, the proposed question is NOT
+    asked (that is exactly the duplicate the gate prevents) — and its text is printed, not lost."""
+    ns, pid = decided["ns"], decided["pid"]
+    monkeypatch.setattr(auger, "propose_question", proposer_stub([FOLLOWUP_Q], []))
+    monkeypatch.setattr(auger, "recall", recall_hits(ns, pid, "D-002"))
+    monkeypatch.setattr(auger, "jev", lambda *a, **k: (None, "all 6 JEV keys failed; last: HTTP 401"))
+
+    rc, out = run_cli(["-n", ns, "feedback", "--budget", "1"])
+    assert rc == 1, out
+    assert "gate unavailable" in out and FOLLOWUP_Q in out and "D-002" in out, out
+    assert rows(ns, "question", "") == [], "a question was asked on a verdict the gate never gave"
+    assert rows(ns, "edge", "") == []
+
+
+def test_feedback_does_not_ask_a_question_it_cannot_link(decided: dict, monkeypatch):
+    """The gate can score a question answered while the winning evidence names NO decision. Asking it
+    would ask a duplicate, and linking it would invent a link — so it is neither, and the reason is
+    on the record."""
+    ns = decided["ns"]
+    monkeypatch.setattr(auger, "propose_question", proposer_stub([FOLLOWUP_Q], []))
+    monkeypatch.setattr(auger, "recall", lambda namespace, q, limit=5: (
+        [{"key": "/notes/somewhere-else", "score": 0.9, "content": "an answer, filed elsewhere"}]
+        if namespace == ns else []))
+    monkeypatch.setattr(auger, "jev", gate_stub(0.88, []))
+
+    rc, out = run_cli(["-n", ns, "feedback", "--budget", "1"])
+    assert rc == 0, out
+    assert "UNLINKED" in out and "not asked" in out and "D-002" in out, out
+    assert rows(ns, "question", "") == [], "an unlinkable question was stored as if it were a link"
+    assert rows(ns, "edge", "") == []
+
+
+@pytest.mark.jev
+def test_feedback_live_proposes_gates_and_asks_a_real_question(decided: dict):
+    """The live arm: the REAL large model proposes from the real decision, and the REAL gate judges
+    the proposal. Only the outcome ACCEPTANCE is asserted here because the verdict is the model's:
+    either a question row exists (asked, or refused-and-linked with the `satisfies` edge), or the
+    run said out loud that the evidence named no decision. What must hold every time is that the
+    decision was drilled and that the row was stored — never that a model agreed with a plan."""
+    proposer_or_skip()
+    jev_or_skip()
+    ns, pid = decided["ns"], decided["pid"]
+
+    rc, out = run_cli(["-n", ns, "feedback", "--budget", "1"])
+    assert rc == 0, out
+    assert "proposed: 1" in out, f"the live proposer produced no question: {out}"
+    assert "D-002" in out, out
+
+    stored = rows(ns, "question", "qclass=eq.follow_up")
+    if not stored:
+        assert "UNLINKED" in out, \
+            f"no question was stored and no reason was given (fail-closed must be loud): {out}"
+        return
+    q = stored[0]
+    assert q["text"].strip() and "?" in q["text"], q
+    assert q["status"] in ("open", "linked"), q
+    assert q["jev_checked_at"] and q["jev_already_answered"] >= 0, q
+    assert opens_of(ns, q["id"]) == "D-002", \
+        "the live question is not trackable back to the decision that raised it"
+    if q["status"] == "linked":
+        sat = row(ns, "edge", f"kind=eq.satisfies&dst_id=eq.{q['id']}")
+        assert sat["source"] == "gate" and sat["confidence"] >= auger.T_ANSWERED, sat
+    else:
+        assert [x["id"] for x in auger.askable_questions(ns, pid)] == [q["id"]]
+
+
+def opens_of(ns: str, question_id: str) -> str:
+    """The decision an `opens` edge names as the raiser of a question — "" when there is none."""
+    for e in rows(ns, "edge", f"kind=eq.opens&dst_id=eq.{question_id}"):
+        if e.get("src_kind") == "decision":
+            return e["src_id"]
+    return ""
+
+
+# ---------------------------------------------------------------- the proposer and the governor
+# Both of these are pure functions with no live dependency, and both are places where a wrong
+# answer is cheap to make and expensive to find: a parser that accepts an ANSWER as a question
+# stores a branch nobody asked for, and a governor that ignores the number it was given is not one.
+def reply(content) -> dict:
+    """A chat-completion reply in the shape `propose_question` parses."""
+    return {"choices": [{"message": {"role": "assistant", "content": content}}]}
+
+
+def test_the_proposer_parser_takes_one_question_and_rejects_everything_else():
+    assert auger.question_from_reply(reply("What drains the staging table if the writer dies?")) == \
+        "What drains the staging table if the writer dies?"
+    # The decorations a large model adds unasked: numbering, a bullet, a "Q1:" label, quotes.
+    assert auger.question_from_reply(reply('1. "What drains the staging table?"')) == \
+        "What drains the staging table?"
+    assert auger.question_from_reply(reply("Q2: Who owns the drain after delivery?")) == \
+        "Who owns the drain after delivery?"
+    assert auger.question_from_reply(reply("\n\n- Is the drain retried?\n- Is it logged?")) == \
+        "Is the drain retried?"          # one question, as asked for
+    # Anything that is not a question is not a question — an answer, a list of options, a refusal.
+    assert auger.question_from_reply(reply("The staging table is drained by the writer.")) == ""
+    assert auger.question_from_reply(reply("Here are three candidates:\n- one\n- two")) == ""
+    assert auger.question_from_reply(reply("   ")) == ""
+    assert auger.question_from_reply(reply("x" * 500 + "?")) == ("x" * 500 + "?")[:auger.QUESTION_MAX]
+    # Malformed completions are "" and never an exception: the caller turns "" into a refusal.
+    for bad in (None, {}, {"choices": []}, {"choices": [{}]}, {"choices": [{"message": None}]},
+                {"choices": [{"message": {"content": None}}]}, {"choices": "not a list"}):
+        assert auger.question_from_reply(bad) == "", bad
+
+
+def test_the_governor_refuses_a_ceiling_it_cannot_obey(monkeypatch):
+    """The ceiling comes from the environment when it names one; a value that is not a
+    non-negative integer is REFUSED, and the refusal names the variable."""
+    monkeypatch.delenv(auger.BUDGET_ENV, raising=False)
+    assert auger.feedback_budget() == auger.FEEDBACK_BUDGET
+    monkeypatch.setenv(auger.BUDGET_ENV, "2")
+    assert auger.feedback_budget() == 2
+    monkeypatch.setenv(auger.BUDGET_ENV, " 0 ")
+    assert auger.feedback_budget() == 0
+    for bad in ("two", "1.5", "-1"):
+        monkeypatch.setenv(auger.BUDGET_ENV, bad)
+        code, msg, _out = run_cli_exit(["-n", "irrelevant", "feedback"])
+        assert code == 1 and auger.BUDGET_ENV in msg, (bad, msg)
+    # ...and the CLI flag is held to the same rule, without touching a namespace.
+    code, msg, _out = run_cli_exit(["-n", "irrelevant", "feedback", "--budget", "-2"])
+    assert code == 1 and "negative" in msg, msg
+
+
+def test_feedback_with_nothing_thin_asks_nothing(project: dict, monkeypatch):
+    """A project whose decisions are all above the threshold has no question to raise, and the run
+    says so instead of inventing one."""
+    ns = project["ns"]
+    assert answer(ns, did="D-001", domain="4.05", chosen="single SQLite file",
+                  options=["single SQLite file", "Postgres"], why_not="no service allowed",
+                  confidence=0.82)[0] == 0
+    monkeypatch.setattr(auger, "propose_question", proposer_down("the proposer must not be called"))
+
+    rc, out = run_cli(["-n", ns, "feedback", "--budget", "3"])
+    assert rc == 0, out
+    assert "(none" in out and "proposed: 0   asked: 0" in out, out
+    assert rows(ns, "question", "") == []
+    assert rows(ns, "edge", "") == []
+    assert rows(ns, "escalation", "") == []
