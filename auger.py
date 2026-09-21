@@ -704,8 +704,13 @@ def cmd_init(a):
                 "columns": [{"name": c, "type": t} for c, t in cols]}
         p = os.path.join(d, f"{name}.table.json")
         text = json.dumps(decl, indent=1)
-        if not os.path.exists(p) or open(p).read() != text:
-            open(p, "w").write(text)
+        current = None
+        if os.path.exists(p):
+            with open(p) as f:
+                current = f.read()
+        if current != text:
+            with open(p, "w") as f:
+                f.write(text)
             wrote.append(name)
     st, live, _ = db(f"/api/ns/{ns}/tables")
     have = sorted(t["name"] for t in (live.get("tables", []) if isinstance(live, dict) else []))
@@ -731,7 +736,10 @@ def _project(ns, pid=None):
 def cmd_start(a):
     ns = a.namespace
     pid = a.id or f"P-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
-    seed = open(a.seed_file, errors="replace").read() if a.seed_file else (a.seed or "")
+    seed = a.seed or ""
+    if a.seed_file:
+        with open(a.seed_file, errors="replace") as f:
+            seed = f.read()
     row = {"id": pid, "name": a.name or ns, "seed": seed, "core_statement": "",
            "status": "open", "created_at": datetime.now(timezone.utc).isoformat()}
     insert(ns, "project", row)
@@ -986,7 +994,8 @@ def cmd_dump(a):
         lines.append(f"WARNING: unparsed --config entries ignored: {', '.join(bad)}")
     out = "\n".join(lines)
     if a.out:
-        open(a.out, "w").write(out)
+        with open(a.out, "w") as f:
+            f.write(out)
         print(f"wrote {a.out}  ({len(out)} chars, {len(dec)} decisions, {len(confs)} choices)")
     else:
         print(out)
