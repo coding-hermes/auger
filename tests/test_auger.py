@@ -696,7 +696,9 @@ def test_propagate_moots_the_question_a_breaks_edge_invalidates(project: dict):
     assert answer_cli(ns, "D-002", "4.09", "an embedded index")[0] == 0
     inv = auger.edge(ns, pid, "breaks", "decision", "D-002", "decision", "D-001", source="human",
                      note="the embedded index makes the SQLite file the wrong store")
-    assert inv["id"] == "E-000001", inv
+    # The id is read off the write, not assumed to be E-000001: the answer above named a question,
+    # so it wrote the `closes` edge first (BEAT 2) and that edge holds the lower id.
+    assert inv["id"].startswith("E-"), inv
 
     rc, out = run_cli(["-n", ns, "propagate"])
     assert rc == 0, out
@@ -706,7 +708,7 @@ def test_propagate_moots_the_question_a_breaks_edge_invalidates(project: dict):
     assert q["status"] == "moot"
     assert q["text"] == Q_WATCH, "a moot question keeps its row — it is never deleted"
 
-    reason = "D-001 was invalidated by E-000001"
+    reason = f"D-001 was invalidated by {inv['id']}"
     assert auger.q_reason(ns, "Q-000001") == reason
     facets = rows(ns, "facet", "question_id=eq.Q-000001&order=id.asc")
     assert [f["facet"] for f in facets] == list(auger.facet_set()), facets
@@ -732,8 +734,8 @@ def test_propagate_reopens_the_stale_branch_and_reaches_the_grandchild(project: 
                     ("Q-000002", Q_STORE, "linked"), ("Q-000003", Q_CRASH, "linked"))
     assert answer_cli(ns, "D-001", "4.05", "single SQLite file", qid="Q-000001")[0] == 0
     assert answer_cli(ns, "D-002", "4.09", "an embedded index")[0] == 0
-    auger.edge(ns, pid, "breaks", "decision", "D-002", "decision", "D-001", source="human",
-               note="the embedded index makes the SQLite file the wrong store")
+    inv = auger.edge(ns, pid, "breaks", "decision", "D-002", "decision", "D-001", source="human",
+                     note="the embedded index makes the SQLite file the wrong store")
     auger.edge(ns, pid, "derives_from", "question", "Q-000002", "question", "Q-000001",
                source="rule", note="the storage question only exists once the record question is asked")
     auger.edge(ns, pid, "derives_from", "question", "Q-000003", "question", "Q-000002",
@@ -747,7 +749,9 @@ def test_propagate_reopens_the_stale_branch_and_reaches_the_grandchild(project: 
     assert row(ns, "question", "id=eq.Q-000002")["status"] == "open", "the stale branch did not reopen"
     assert row(ns, "question", "id=eq.Q-000003")["status"] == "open", "the cascade stopped one hop short"
 
-    cause = "D-001 was invalidated by E-000001"
+    # Both reasons name the BREAKING EDGE, whose id is read off the write: the answer above named a
+    # question, so BEAT 2's `closes` edge holds the lowest id in this namespace.
+    cause = f"D-001 was invalidated by {inv['id']}"
     child, grandchild = auger.q_reason(ns, "Q-000002"), auger.q_reason(ns, "Q-000003")
     assert "reopened" in child and "Q-000001" in child and cause in child, child
     assert "reopened" in grandchild and "Q-000002" in grandchild and cause in grandchild, grandchild
@@ -804,7 +808,9 @@ def test_propagate_links_a_question_the_gate_can_answer_after_its_parent_closes(
     store_questions(ns, pid, ("Q-000001", Q_WATCH, "open"), ("Q-000002", Q_STORE, "open"))
     auger.edge(ns, pid, "derives_from", "question", "Q-000002", "question", "Q-000001",
                source="rule", note="the storage question only exists once the record question is asked")
-    assert answer_cli(ns, "D-001", "4.05", "single SQLite file", qid="Q-000001")[0] == 0
+    # The control arm needs the parent to stay OPEN, so this answer names no question: BEAT 2
+    # closes the question a decision names, and an answer that names none closes none (AUG-002).
+    assert answer_cli(ns, "D-001", "4.05", "single SQLite file")[0] == 0
     assert auger.recall(ns, Q_STORE, limit=5), \
         "the substrate returned no evidence for the stored decision — nothing could be linked"
 
@@ -815,7 +821,8 @@ def test_propagate_links_a_question_the_gate_can_answer_after_its_parent_closes(
     assert row(ns, "question", "id=eq.Q-000002")["status"] == "open"
     assert rows(ns, "edge", "kind=eq.satisfies") == []
 
-    # The parent closes (BEAT 2's job), and PROPAGATE re-examines the child.
+    # The parent closes (BEAT 2's job in the verb; driven at the store here so this case isolates
+    # PROPAGATE from ANSWER), and PROPAGATE re-examines the child.
     auger.set_state(ns, pid, "Q-000001", "answered", "answered by D-001", closed_by="D-001")
     rc, out = run_cli(["-n", ns, "propagate"])
     assert rc == 0, out
@@ -842,6 +849,118 @@ def test_propagate_links_a_question_the_gate_can_answer_after_its_parent_closes(
     rc, out = run_cli(["-n", ns, "ask"])
     assert rc == 0, out
     assert "Q-000002" not in out, out
+
+
+# ================================================================= answer -> closes (SPEC-001 BEAT 2 / AUG-002)
+# The half of ANSWER the spec calls for and the CLI never did: the record named the question it
+# answers, and no edge, no state change and no reader followed. Each case asserts the STORED rows —
+# the edge and the question — not just the printed line.
+def test_answer_with_a_question_id_closes_that_question(project: dict):
+    """A decision that names a question IS its answer: the edge, the state and the reason all land."""
+    ns, pid = project["ns"], project["pid"]
+    store_questions(ns, pid, ("Q-000001", Q_WATCH, "open"))
+
+    rc, out = answer_cli(ns, "D-001", "4.05", "single SQLite file", qid="Q-000001")
+    assert rc == 0, out
+    assert row(ns, "decision", "id=eq.D-001")["question_id"] == "Q-000001"
+
+    e = row(ns, "edge", "kind=eq.closes")
+    assert (e["src_kind"], e["src_id"], e["dst_kind"], e["dst_id"]) == \
+        ("decision", "D-001", "question", "Q-000001"), e
+    assert e["source"] == "rule" and "BEAT 2" in e["note"], e
+
+    assert row(ns, "question", "id=eq.Q-000001")["status"] == "answered", "the question stayed open"
+    facets = rows(ns, "facet", "question_id=eq.Q-000001&order=id.asc")
+    assert [f["facet"] for f in facets] == list(auger.facet_set()), facets
+    assert all(f["status"] == "closed" and f["closed_by"] == "D-001"
+               and "answered by D-001" in f["note"] for f in facets), facets
+
+    # The verb says what it did, and it is off the askable surface afterwards.
+    assert "closed Q-000001" in out, out
+    assert auger.askable_questions(ns, pid) == [], "an answered question is still askable"
+
+
+def test_answer_without_a_question_id_touches_no_question_row(project: dict):
+    """The zero-change case: no --question-id means no edge, no state flip, the same output shape."""
+    ns, pid = project["ns"], project["pid"]
+    store_questions(ns, pid, ("Q-000001", Q_WATCH, "open"))
+
+    rc, out = answer_cli(ns, "D-001", "4.05", "single SQLite file")
+    assert rc == 0, out
+    assert "closed" not in out, out
+    assert row(ns, "decision", "id=eq.D-001")["question_id"] == ""
+    assert rows(ns, "edge", "kind=eq.closes") == []
+    assert row(ns, "question", "id=eq.Q-000001")["status"] == "open"
+    assert rows(ns, "facet", "question_id=eq.Q-000001") == [], "no link, no facet write"
+
+
+def test_answer_refuses_a_question_id_that_is_not_stored(project: dict):
+    """A typo must stop here rather than store a link to nothing and flip a row that is not there."""
+    ns = project["ns"]
+    code, msg, _out = run_cli_exit(["-n", ns, "answer", "--id", "D-001", "--domain", "4.05",
+                                    "--chosen", "single SQLite file",
+                                    "--question-id", "Q-000404"])
+    assert code != 0
+    assert "refused" in msg and "Q-000404" in msg, msg
+    assert rows(ns, "edge", "kind=eq.closes") == []
+    assert rows(ns, "facet", "") == []
+    # The refusal is about the LINK, not about the answer: the decision the call recorded first
+    # stands, the same way a model that is down does not unrecord an answer (BEAT 3's doctrine).
+    assert row(ns, "decision", "id=eq.D-001")["question_id"] == "Q-000404"
+
+
+def test_status_reports_the_open_branches_and_their_depth(project: dict):
+    """The status line comes off the ROWS: the open question count and the longest stored chain."""
+    ns, pid = project["ns"], project["pid"]
+    store_questions(ns, pid, ("Q-000001", Q_WATCH, "open"), ("Q-000002", Q_STORE, "open"),
+                    ("Q-000003", Q_CRASH, "open"))
+    assert answer_cli(ns, "D-001", "4.05", "single SQLite file", qid="Q-000001")[0] == 0
+    # The shape the feedback engine writes: the answer raised Q-000002 (`opens`) and Q-000002
+    # descends from the question that answer closed (`derives_from`) — two levels below Q-000001.
+    auger.edge(ns, pid, "opens", "decision", "D-001", "question", "Q-000002", source="rule",
+               note="the confidence in D-001 is thin, so the engine proposed a follow-up")
+    auger.edge(ns, pid, "derives_from", "question", "Q-000002", "question", "Q-000001",
+               source="rule", note="Q-000002 drills D-001, which answers Q-000001")
+    auger.edge(ns, pid, "derives_from", "question", "Q-000003", "question", "Q-000002",
+               source="rule", note="the crash question descends from the storage question")
+
+    rc, out = run_cli(["-n", ns, "status"])
+    assert rc == 0, out
+    assert "branches: 2 open | max depth 3" in out, out
+
+
+def test_status_on_a_project_with_no_questions_adds_no_branch_line(project: dict):
+    """Empty is not a crash and not a fabricated zero-line: nothing stored, nothing claimed."""
+    rc, out = run_cli(["-n", project["ns"], "status"])
+    assert rc == 0, out
+    assert "branches:" not in out, out
+
+
+def test_branch_depth_follows_dependency_and_never_hangs_on_a_cycle():
+    """Pure function, no namespace: the walk's two rules and its cycle guard.
+
+    `derives_from` and `blocks` both put the source one level below the destination; a
+    decision -> question `opens` edge is NOT a level (the level it adds is recorded as the
+    `derives_from` back to the question that answer closed, so counting both double-counts).
+    """
+    def q(qid):
+        return {"id": qid}
+
+    def e(kind, src, dst):
+        return {"kind": kind, "src_kind": "question", "src_id": src,
+                "dst_kind": "question", "dst_id": dst}
+
+    # Q-2 cannot be answered until Q-1 is, and Q-3 descends from Q-2: three levels.
+    assert auger.branch_depth([q("Q-1"), q("Q-2"), q("Q-3")],
+                              [e("blocks", "Q-2", "Q-1"), e("derives_from", "Q-3", "Q-2")]) == 3
+    assert auger.branch_depth([q("Q-1"), q("Q-2")],
+                              [{"kind": "opens", "src_kind": "decision", "src_id": "D-1",
+                                "dst_kind": "question", "dst_id": "Q-2"}]) == 1
+    # A cycle is one level, not a hang and not an invented length.
+    assert auger.branch_depth([q("Q-1"), q("Q-2")],
+                              [e("derives_from", "Q-2", "Q-1"),
+                               e("derives_from", "Q-1", "Q-2")]) == 1
+    assert auger.branch_depth([], []) == 0
 
 
 # ================================================================= exit codes (subprocess is the subject)
