@@ -25,6 +25,9 @@ Hard-won rules encoded here:
     UNKNOWN, never a silent optimistic default.
   * JEV key sets contain expired keys; failover across all of them, in order.
   * Thresholds live in THIS FILE, not in the model.
+  * A 429 is BACKPRESSURE, not a failure: the transport retries it inline, bounded, honouring
+    the server's own retryAfter / Retry-After. The destructive calls carry the larger budget,
+    because giving up on a namespace DELETE leaks a registry row instead of losing a write.
 """
 
 from __future__ import annotations
@@ -115,6 +118,17 @@ def ns_dir(ns: str) -> str:
     return os.path.join(os.path.expanduser("~"), "duckbrain", "namespaces", ns)
 
 
+# ---------------------------------------------------------------- the 429 budget
+# DuckBrain's HTTP API is token-bucketed (measured: 600 requests/minute per IP) and answers
+# 429 with the wait in the body (`retryAfter`) and/or in the `Retry-After` header. A 429 is
+# BACKPRESSURE, not a failure, so `_req` absorbs it inline before any caller sees a status.
+# The budget is per CALL, and it is deliberately not one number: giving up on a read costs a
+# retry, while giving up on a namespace DELETE leaves a registry row behind for a namespace
+# whose directory the caller is about to remove.
+RETRIES = 4             # an ordinary call
+TEARDOWN_RETRIES = 8    # a destructive call, where a give-up leaks state instead of losing work
+
+
 # ---------------------------------------------------------------- transport
 def _token() -> str:
     t = os.environ.get("DUCKBRAIN_API_KEY")
@@ -132,7 +146,7 @@ def _token() -> str:
 
 
 def _req(url: str, method: str = "GET", body: dict | list | None = None,
-         headers: dict | None = None, timeout: int = 45, retries: int = 4):
+         headers: dict | None = None, timeout: int = 45, retries: int = RETRIES):
     """Send JSON as BYTES. Never build a request body by string interpolation.
 
     A 429 is BACKPRESSURE, not a failure (proven: the pytest suite bursts enough
@@ -140,6 +154,11 @@ def _req(url: str, method: str = "GET", body: dict | list | None = None,
     is retried inline, honouring the server's own Retry-After, before the caller
     ever sees a status. A test suite that flakes on the substrate's rate limiter
     is a test suite nobody trusts.
+
+    `retries` is the BOUND: one try plus at most this many retries, then the last
+    429 is returned to the caller like any other status. A substrate that never
+    recovers must not hang its caller forever, which is why there is no
+    unbounded loop here.
     """
     data = json.dumps(body).encode() if body is not None else None
     hdrs = {"content-type": "application/json"}
@@ -180,8 +199,8 @@ def _req(url: str, method: str = "GET", body: dict | list | None = None,
             return 0, {"error": f"transport: {e}"}, {}
 
 
-def db(path: str, method: str = "GET", body=None, timeout: int = 45):
-    return _req(f"{DB_URL}{path}", method, body, {"x-api-key": _token()}, timeout)
+def db(path: str, method: str = "GET", body=None, timeout: int = 45, retries: int = RETRIES):
+    return _req(f"{DB_URL}{path}", method, body, {"x-api-key": _token()}, timeout, retries)
 
 
 def tbl(ns: str, table: str, query: str = "") -> str:
@@ -215,6 +234,28 @@ def remember(ns: str, key: str, content: str, domain: str = "concept") -> dict:
     if st not in (200, 201):
         raise SystemExit(f"remember {key} failed ({st}): {body}")
     return body
+
+
+def delete_namespace(ns: str, retries: int = TEARDOWN_RETRIES) -> tuple[int, object]:
+    """DELETE a namespace over the retrying transport. Returns (status, body).
+
+    404 is NOT an error here: the desired end state is "gone", and a namespace that is
+    already gone has reached it. Anything else is the caller's to report — this returns the
+    status instead of raising, because the teardown path must go on and remove the directory
+    rather than leave both paths half-done.
+
+    Why the deletion has its own function, with its own budget, instead of an inline
+    `db(...)` at the call site: it is the one call in the teardown path whose FAILURE LEAVES
+    STATE BEHIND. A 429 on this DELETE aborts nothing visible — the registry row simply
+    survives while the directory is removed — and the next reader then sees a namespace that
+    does not exist (observed live: stale test entries in /api/namespaces whose directories
+    were already gone, which is exactly the leak this function exists to prevent). So it runs
+    on the same 429-retrying transport as every other call, honouring the server's own
+    retryAfter / Retry-After, and it carries a LARGER bounded budget than an ordinary call:
+    a read that gives up costs one retry, a delete that gives up leaks a row.
+    """
+    st, body, _ = db(f"/api/namespaces/{ns}", "DELETE", {"confirm": True}, retries=retries)
+    return st, body
 
 
 # ---------------------------------------------------------------- the graph write path

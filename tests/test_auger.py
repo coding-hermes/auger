@@ -23,11 +23,14 @@ must pass every run.
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import shutil
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 import uuid
 
 import pytest
@@ -723,3 +726,166 @@ def test_no_test_namespace_survives_the_suite(live_service: str):
     found = leftovers(scope=CREATED)
     assert found == {"api": [], "disk": []}, \
         f"test namespaces were left behind: {found} (prefix {TEST_NS_PREFIX!r})"
+
+
+# ================================================================= 429 backpressure on teardown
+# DuckBrain's limiter answers 429 with the wait in the BODY (`retryAfter`) and/or in the
+# `Retry-After` header. The teardown path is the one place where an unretried 429 is not a
+# retry lost but STATE LOST: the registry row survives while the directory is removed. These
+# cases are OFFLINE — the wire (`urlopen`) and the filesystem root (`ns_dir`) are the only
+# two fakes — so they run in gate.sh's quiet arm AND under the busy one that tripped the
+# limiter in the first place, and they never touch the real DuckBrain.
+RETRY_HINT_BODY = {"error": "too many requests", "retryAfter": 0.25}
+
+#: Scripted payload sentinel: "the registry as the fake currently holds it", so a script does
+#: not have to know which rows exist before the test has run.
+REGISTRY = object()
+
+
+class _FakeResponse:
+    """The part of `http.client.HTTPResponse` that `auger._req` actually reads."""
+
+    def __init__(self, status: int, payload, headers: dict | None = None):
+        self.status = status
+        self._body = json.dumps(payload).encode()
+        self.headers = headers or {}
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> "_FakeResponse":
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        return False
+
+
+class FakeDuckBrain:
+    """A scripted, OFFLINE stand-in for the two endpoints the teardown path touches.
+
+    The script is consumed in ORDER, one entry per HTTP request, and an UNSCRIPTED request
+    fails the test rather than being served. That is the point: a request this section did
+    not allow (a second DELETE from a hand-rolled retry loop, or a call that bypassed the
+    module's transport) is a defect of exactly the kind being guarded, so it must be loud.
+    """
+
+    def __init__(self, ns: str, script: list[tuple[int, object, dict]]):
+        self.ns = ns
+        self.script = list(script)
+        self.requests: list[tuple[str, str]] = []   # (method, path) per HTTP request, in order
+        self.sleeps: list[float] = []               # every backoff the transport asked for
+        self.req_calls: list[str] = []              # every auger._req CALL (not per-request)
+        self.registered = True
+
+    def urlopen(self, req, timeout=None):  # noqa: ARG002 - mirrors the transport's signature
+        method, url = req.get_method(), req.full_url
+        path = url.split("://", 1)[-1].split("/", 1)[-1]
+        self.requests.append((method, path))
+        assert self.script, \
+            f"unscripted request {method} {path} — the teardown made a call this test does not allow"
+        status, payload, headers = self.script.pop(0)
+        if payload is REGISTRY:
+            payload = {"namespaces": [{"name": self.ns}] if self.registered else []}
+        if status == 429:
+            raise urllib.error.HTTPError(url, 429, "Too Many Requests", headers,
+                                         io.BytesIO(json.dumps(payload).encode()))
+        if method == "DELETE":
+            self.registered = False
+        return _FakeResponse(status, payload, headers)
+
+    def count(self, method: str) -> int:
+        return sum(1 for m, _ in self.requests if m == method)
+
+
+@pytest.fixture
+def offline_duckbrain(monkeypatch, tmp_path):
+    """Install the scripted transport and expose the counters the assertions read.
+
+    Both boundaries are fake and everything between them is real: `teardown_namespace` runs
+    the module's own deletion, its own 429 retry and its own registry re-check. `sleep` is
+    recorded instead of taken, so a bounded linear backoff costs the suite no wall-clock time.
+    """
+    def install(script):
+        fake = FakeDuckBrain(TEST_NS_PREFIX + "429mocked", script)
+        real_req = auger._req
+
+        def spy_req(url, method="GET", body=None, headers=None, timeout=45, retries=auger.RETRIES):
+            fake.req_calls.append(method)
+            return real_req(url, method, body, headers, timeout, retries)
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake.urlopen)
+        monkeypatch.setattr(auger, "_req", spy_req)
+        monkeypatch.setattr(auger.time, "sleep", fake.sleeps.append)
+        monkeypatch.setattr(auger, "_token", lambda: "offline-test-token")
+        monkeypatch.setattr(auger, "ns_dir", lambda n: str(tmp_path / n))
+        return fake
+
+    return install
+
+
+def test_teardown_survives_a_429_on_its_delete(offline_duckbrain):
+    """(a) teardown completes; (b) the retry that saved it was the HELPER's, not a bypass."""
+    fake = offline_duckbrain([
+        (429, RETRY_HINT_BODY, {}),      # the first DELETE meets the limiter
+        (200, {"deleted": True}, {}),    # retried through
+        (200, REGISTRY, {}),             # the registry re-check
+    ])
+
+    problems = teardown_namespace(fake.ns)
+
+    assert problems == [], f"teardown reported problems over a 429 it should have retried: {problems}"
+    assert fake.registered is False, "the namespace is gone: the DELETE did get through"
+    assert fake.count("DELETE") == 2, fake.requests
+    # NO BYPASS, stated as a relationship between the two counters: TWO _req calls (the
+    # delete, the re-check) issued THREE HTTP requests, so the second DELETE came from INSIDE
+    # the retry helper. A retry written at the call site would show three _req calls, and a
+    # request that bypassed the module's transport would not appear in req_calls at all.
+    assert fake.req_calls == ["DELETE", "GET"], fake.req_calls
+    assert len(fake.requests) == 3, fake.requests
+    assert fake.sleeps == [0.25], f"the server's own retryAfter hint was not honoured: {fake.sleeps}"
+
+
+def test_teardown_honours_the_retry_after_header_when_the_body_is_silent(offline_duckbrain):
+    """The header is the other half of the hint, and it must beat the built-in default."""
+    fake = offline_duckbrain([
+        (429, {"error": "too many requests"}, {"Retry-After": "2"}),
+        (200, {"deleted": True}, {}),
+        (200, REGISTRY, {}),
+    ])
+
+    assert teardown_namespace(fake.ns) == []
+    assert fake.count("DELETE") == 2, fake.requests
+    assert fake.sleeps == [2.0], f"Retry-After was ignored (a default-wait would show [1.0]): {fake.sleeps}"
+
+
+def test_teardown_survives_a_429_on_its_registry_re_check(offline_duckbrain):
+    """The teardown's other call rides the same retry, so it cannot fail the fixture over a 429.
+
+    An unretried 429 on this GET is not a leak, but it is a false alarm: the re-check reads
+    an error body where it expects a namespace list and the fixture fails a teardown that in
+    fact succeeded.
+    """
+    fake = offline_duckbrain([
+        (200, {"deleted": True}, {}),
+        (429, RETRY_HINT_BODY, {}),
+        (200, REGISTRY, {}),
+    ])
+
+    assert teardown_namespace(fake.ns) == []
+    assert fake.count("GET") == 2, fake.requests
+    assert fake.req_calls == ["DELETE", "GET"], fake.req_calls
+
+
+def test_a_saturated_limiter_is_bounded_and_the_leak_is_reported(offline_duckbrain):
+    """Giving up is BOUNDED and LOUD — never an unbounded loop, never a silent leak."""
+    retries = auger.TEARDOWN_RETRIES
+    fake = offline_duckbrain([(429, RETRY_HINT_BODY, {})] * (retries + 1) + [(200, REGISTRY, {})])
+
+    problems = teardown_namespace(fake.ns)
+
+    assert fake.count("DELETE") == retries + 1, \
+        f"expected one try plus {retries} retries, saw {fake.count('DELETE')}: {fake.requests}"
+    assert len(fake.sleeps) == retries, f"one backoff per retry, none for the first try: {fake.sleeps}"
+    assert fake.registered is True, "the row must still be there for this case to mean anything"
+    assert any("429" in p for p in problems), problems
+    assert any("still listed" in p for p in problems), problems

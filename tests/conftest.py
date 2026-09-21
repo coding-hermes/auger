@@ -137,12 +137,19 @@ def teardown_namespace(ns: str) -> list[str]:
 
     Refuses anything without the test prefix, so a bug here can never rmtree a real
     namespace. 404 from the API counts as success: the desired end state is "gone".
+
+    The deletion goes through `auger.delete_namespace`, never a hand-rolled request: that
+    call is the one the 429 retry exists for. A 429 landing on a bare DELETE leaves the
+    registry row behind while this function still removes the directory — a namespace that
+    is listed but does not exist — which is the leak this teardown was observed to produce.
+    Routing it through the module means the retry budget, the Retry-After handling and the
+    "no bypass" property are all one implementation, proved in `test_auger.py`.
     """
     if not ns.startswith(TEST_NS_PREFIX):
         raise ValueError(f"refusing to tear down a namespace that is not a test namespace: {ns!r}")
     problems: list[str] = []
 
-    status, body, _ = auger.db(f"/api/namespaces/{ns}", "DELETE", {"confirm": True})
+    status, body = auger.delete_namespace(ns)
     if status not in (200, 404):
         problems.append(f"DELETE /api/namespaces/{ns} returned {status}: {str(body)[:200]}")
 
