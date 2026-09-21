@@ -1,0 +1,120 @@
+{
+  "task_id": "AUG-006",
+  "task_title": "a pytest suite against an ephemeral namespace, replacing shell-only coverage",
+  "task_criteria": [
+    "pytest runs green from a clean checkout against a live ephemeral DuckBrain namespace",
+    "the suite asserts on STORED ROWS (re-read via the API), not only on stdout",
+    "the namespace is torn down even when a test fails",
+    "a deliberately broken verb fails exactly one named test"
+  ],
+  "passed": true,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "1f3fafc8d42ac6dee922ed5bc89fe8e1c9ba6aa2",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260921T004719.312129Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: scanners=gitleaks+builtin cross-check\n7:47PM INF scanned ~108710 bytes (108.71 KB) in 61.5ms\n7:47PM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 23 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260921T004719.312129Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n...........................                                              [100%]\n27 passed in 149.70s (0:02:29)\n== end-to-end smoke ==\nnamespace: auger-smoke-904609\n== init ==\n  PASS all eleven tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n  PASS toggle changed the stored configuration\n\npassed 15, failed 0   (namespace left behind: auger-smoke-904609 \u2014 remove with:\n  rm -rf ~/duckbrain/namespaces/auger-smoke-904609)\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260921T004719.312129Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 pytest runs green from a clean checkout against a live ephemeral DuckBrain namespace: Fresh, cache-defeating run in /home/kara/auger: `python3 -m pytest tests/test_auger.py -q -p no:cacheprovider` -> \"27 passed in 74.96s\" (0 failed, 0 skipped; 27 tests collected). The repo gate also ran: /tmp/gate.log shows \"== pytest == 27 passed in 51.87s\" and \"GATE PASS\". Live service confirmed: `curl http://127.0.0.1:3000/api/namespaces` -> 401 (up, auth required) and `auger.db('/api/namespaces')` -> 200. Namespaces are ephemeral per test (conftest.py:169-196, TEST_NS_PREFIX + uuid4).\n  \u2713 the suite asserts on STORED ROWS (re-read via the API), not only on stdout: tests/test_auger.py:75-88 defines rows()/row()/option_flags() on top of auger.select (auger.py:191 -> HTTP GET /api/ns/<ns>/tables/<table>), and they are the assertion basis throughout: :140 (project row), :167/:180/:186 (decision + option rows), :197, :208, :220 (status counts stored rows), :243-253 (dump --config non-mutation on stored flags), :263, :297-327 (toggle flips re-read flags), :426-431, :448-462. Also auger.recall at :159 and the on-disk JSONL at :151-157. Not stdout-only.\n  \u2713 the namespace is torn down even when a test fails: Empirically proven: I added a temporary test using the `ns` fixture that asserts False. Output: \"NS_UNDER_TEST=auger-pytest-cc40aae93699 ... 1 failed in 0.09s\". Immediately after: `ls -d ~/duckbrain/namespaces/auger-pytest-cc40aae93699` -> No such file or directory; `grep auger-pytest-cc40aae93699 ~/duckbrain/duckbrain.config.json` -> exit 1 (no entry); API /api/namespaces -> 200 with [] for that name. Teardown ran despite the failure. Mechanism: conftest.py:186-196 finalizer calls teardown_namespace in a `finally` (both DELETE /api/namespaces/<ns> and shutil.rmtree), and test_auger.py:522-533 audits leaks scoped to CREATED. Temp test file removed afterwards; working tree clean.\n  \u2713 a deliberately broken verb fails exactly one named test: Ran `python3 -m pytest tests/test_auger.py -q -p no:cacheprovider -k broken_verb -s` (test_auger.py:472-505). The child suite (BROKEN_VERB_SUITE, auger.patch = lambda: {\"updated\": 0}) reported \"1 failed, 3 passed in 0.62s\" with exactly one FAILED line: `FAILED test_broken_3c365744.py::test_alpha_toggle_flips_the_stored_flag - AssertionError: the toggle reported success but wrote nothing`. The outer test passed (\"1 passed, 26 deselected\"), and it asserts \"1 failed, 3 passed\", exactly one FAILED line, and that the failure names the toggle test.\nAll four criteria verified with fresh command output: 27 pytest tests pass against a live ephemeral DuckBrain namespace, assertions are on API-re-read stored rows, teardown provably runs on failure (namespace gone from disk/config/API), and a deliberately broken toggle verb fails exactly one named test.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 pytest runs green from a clean checkout against a live ephemeral DuckBrain namespace: Fresh, cache-defeating run in /home/kara/auger: `python3 -m pytest tests/test_auger.py -q -p no:cacheprovider` -> \"27 passed in 74.96s\" (0 failed, 0 skipped; 27 tests collected). The repo gate also ran: /tmp/gate.log shows \"== pytest == 27 passed in 51.87s\" and \"GATE PASS\". Live service confirmed: `curl http://127.0.0.1:3000/api/namespaces` -> 401 (up, auth required) and `auger.db('/api/namespaces')` -> 200. Namespaces are ephemeral per test (conftest.py:169-196, TEST_NS_PREFIX + uuid4).\n  \u2713 the suite asserts on STORED ROWS (re-read via the API), not only on stdout: tests/test_auger.py:75-88 defines rows()/row()/option_flags() on top of auger.select (auger.py:191 -> HTTP GET /api/ns/<ns>/tables/<table>), and they are the assertion basis throughout: :140 (project row), :167/:180/:186 (decision + option rows), :197, :208, :220 (status counts stored rows), :243-253 (dump --config non-mutation on stored flags), :263, :297-327 (toggle flips re-read flags), :426-431, :448-462. Also auger.recall at :159 and the on-disk JSONL at :151-157. Not stdout-only.\n  \u2713 the namespace is torn down even when a test fails: Empirically proven: I added a temporary test using the `ns` fixture that asserts False. Output: \"NS_UNDER_TEST=auger-pytest-cc40aae93699 ... 1 failed in 0.09s\". Immediately after: `ls -d ~/duckbrain/namespaces/auger-pytest-cc40aae93699` -> No such file or directory; `grep auger-pytest-cc40aae93699 ~/duckbrain/duckbrain.config.json` -> exit 1 (no entry); API /api/namespaces -> 200 with [] for that name. Teardown ran despite the failure. Mechanism: conftest.py:186-196 finalizer calls teardown_namespace in a `finally` (both DELETE /api/namespaces/<ns> and shutil.rmtree), and test_auger.py:522-533 audits leaks scoped to CREATED. Temp test file removed afterwards; working tree clean.\n  \u2713 a deliberately broken verb fails exactly one named test: Ran `python3 -m pytest tests/test_auger.py -q -p no:cacheprovider -k broken_verb -s` (test_auger.py:472-505). The child suite (BROKEN_VERB_SUITE, auger.patch = lambda: {\"updated\": 0}) reported \"1 failed, 3 passed in 0.62s\" with exactly one FAILED line: `FAILED test_broken_3c365744.py::test_alpha_toggle_flips_the_stored_flag - AssertionError: the toggle reported success but wrote nothing`. The outer test passed (\"1 passed, 26 deselected\"), and it asserts \"1 failed, 3 passed\", exactly one FAILED line, and that the failure names the toggle test.\nAll four criteria verified with fresh command output: 27 pytest tests pass against a live ephemeral DuckBrain namespace, assertions are on API-re-read stored rows, teardown provably runs on failure (namespace gone from disk/config/API), and a deliberately broken toggle verb fails exactly one named test.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "pytest runs green from a clean checkout against a live ephemeral DuckBrain namespace",
+                "status": "PASS",
+                "detail": "Fresh, cache-defeating run in /home/kara/auger: `python3 -m pytest tests/test_auger.py -q -p no:cacheprovider` -> \"27 passed in 74.96s\" (0 failed, 0 skipped; 27 tests collected). The repo gate also ran: /tmp/gate.log shows \"== pytest == 27 passed in 51.87s\" and \"GATE PASS\". Live service confirmed: `curl http://127.0.0.1:3000/api/namespaces` -> 401 (up, auth required) and `auger.db('/api/namespaces')` -> 200. Namespaces are ephemeral per test (conftest.py:169-196, TEST_NS_PREFIX + uuid4)."
+              },
+              {
+                "criterion": "the suite asserts on STORED ROWS (re-read via the API), not only on stdout",
+                "status": "PASS",
+                "detail": "tests/test_auger.py:75-88 defines rows()/row()/option_flags() on top of auger.select (auger.py:191 -> HTTP GET /api/ns/<ns>/tables/<table>), and they are the assertion basis throughout: :140 (project row), :167/:180/:186 (decision + option rows), :197, :208, :220 (status counts stored rows), :243-253 (dump --config non-mutation on stored flags), :263, :297-327 (toggle flips re-read flags), :426-431, :448-462. Also auger.recall at :159 and the on-disk JSONL at :151-157. Not stdout-only."
+              },
+              {
+                "criterion": "the namespace is torn down even when a test fails",
+                "status": "PASS",
+                "detail": "Empirically proven: I added a temporary test using the `ns` fixture that asserts False. Output: \"NS_UNDER_TEST=auger-pytest-cc40aae93699 ... 1 failed in 0.09s\". Immediately after: `ls -d ~/duckbrain/namespaces/auger-pytest-cc40aae93699` -> No such file or directory; `grep auger-pytest-cc40aae93699 ~/duckbrain/duckbrain.config.json` -> exit 1 (no entry); API /api/namespaces -> 200 with [] for that name. Teardown ran despite the failure. Mechanism: conftest.py:186-196 finalizer calls teardown_namespace in a `finally` (both DELETE /api/namespaces/<ns> and shutil.rmtree), and test_auger.py:522-533 audits leaks scoped to CREATED. Temp test file removed afterwards; working tree clean."
+              },
+              {
+                "criterion": "a deliberately broken verb fails exactly one named test",
+                "status": "PASS",
+                "detail": "Ran `python3 -m pytest tests/test_auger.py -q -p no:cacheprovider -k broken_verb -s` (test_auger.py:472-505). The child suite (BROKEN_VERB_SUITE, auger.patch = lambda: {\"updated\": 0}) reported \"1 failed, 3 passed in 0.62s\" with exactly one FAILED line: `FAILED test_broken_3c365744.py::test_alpha_toggle_flips_the_stored_flag - AssertionError: the toggle reported success but wrote nothing`. The outer test passed (\"1 passed, 26 deselected\"), and it asserts \"1 failed, 3 passed\", exactly one FAILED line, and that the failure names the toggle test."
+              }
+            ],
+            "summary": "All four criteria verified with fresh command output: 27 pytest tests pass against a live ephemeral DuckBrain namespace, assertions are on API-re-read stored rows, teardown provably runs on failure (namespace gone from disk/config/API), and a deliberately broken toggle verb fails exactly one named test."
+          }
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: AUG-006\n\nStage tier1: PASS\n    \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 pytest runs green from a clean checkout against a live ephemeral DuckBrain namespace: Fresh, cache-defeating run in /home/kara/auger: `python3 -m pytest tests/test_auger.py -q -p no:cacheprovider` -> \"27 passed in 74.96s\" (0 failed, 0 skipped; 27 tests collected). The repo gate also ran: /tmp/gate.log shows \"== pytest == 27 passed in 51.87s\" and \"GATE PASS\". Live service confirmed: `curl http://127.0.0.1:3000/api/namespaces` -> 401 (up, auth required) and `auger.db('/api/namespaces')` -> 200. Namespaces are ephemeral per test (conftest.py:169-196, TEST_NS_PREFIX + uuid4).\n  \u2713 the suite asserts on STORED ROWS (re-read via the API), not only on stdout: tests/test_auger.py:75-88 defines rows()/row()/option_flags() on top of auger.select (auger.py:191 -> HTTP GET /api/ns/<ns>/tables/<table>), and they are the assertion basis throughout: :140 (project row), :167/:180/:186 (decision + option rows), :197, :208, :220 (status counts stored rows), :243-253 (dump --config non-mutation on stored flags), :263, :297-327 (toggle flips re-read flags), :426-431, :448-462. Also auger.recall at :159 and the on-disk JSONL at :151-157. Not stdout-only.\n  \u2713 the namespace is torn down even when a test fails: Empirically proven: I added a temporary test using the `ns` fixture that asserts False. Output: \"NS_UNDER_TEST=auger-pytest-cc40aae93699 ... 1 failed in 0.09s\". Immediately after: `ls -d ~/duckbrain/namespaces/auger-pytest-cc40aae93699` -> No such file or directory; `grep auger-pytest-cc40aae93699 ~/duckbrain/duckbrain.config.json` -> exit 1 (no entry); API /api/namespaces -> 200 with [] for that name. Teardown ran despite the failure. Mechanism: conftest.py:186-196 finalizer calls teardown_namespace in a `finally` (both DELETE /api/namespaces/<ns> and shutil.rmtree), and test_auger.py:522-533 audits leaks scoped to CREATED. Temp test file removed afterwards; working tree clean.\n  \u2713 a deliberately broken verb fails exactly one named test: Ran `python3 -m pytest tests/test_auger.py -q -p no:cacheprovider -k broken_verb -s` (test_auger.py:472-505). The child suite (BROKEN_VERB_SUITE, auger.patch = lambda: {\"updated\": 0}) reported \"1 failed, 3 passed in 0.62s\" with exactly one FAILED line: `FAILED test_broken_3c365744.py::test_alpha_toggle_flips_the_stored_flag - AssertionError: the toggle reported success but wrote nothing`. The outer test passed (\"1 passed, 26 deselected\"), and it asserts \"1 failed, 3 passed\", exactly one FAILED line, and that the failure names the toggle test.\nAll four criteria verified with fresh command output: 27 pytest tests pass against a live ephemeral DuckBrain namespace, assertions are on API-re-read stored rows, teardown provably runs on failure (namespace gone from disk/config/API), and a deliberately broken toggle verb fails exactly one named test.\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-09-21T00:55:42.343610",
+  "evidence": {
+    "collected_at": "2026-09-21T00:55:42.354651+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 209721,
+        "truncated": false,
+        "source": "git show 1f3fafc8d42a"
+      }
+    ],
+    "task_id": "AUG-006"
+  }
+}

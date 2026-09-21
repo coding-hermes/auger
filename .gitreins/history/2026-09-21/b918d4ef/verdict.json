@@ -1,0 +1,128 @@
+{
+  "task_id": "AUG-007",
+  "task_title": "add the graph tables (edge, facet) and declare them in the namespace \u2014 SPEC-001 2/3",
+  "task_criteria": [
+    "auger init declares the edge and facet tables idempotently and the live namespace exposes them at /api/ns/<ns>/tables",
+    "an edge row round-trips through the declared-table API with its kind, confidence and source intact",
+    "inserting an edge whose src_id does not exist is REFUSED rather than silently stored (referential check)",
+    "facet rows are written one per facet for a question, and the facet set is data rather than hardcoded in the code path"
+  ],
+  "passed": true,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "1fbe3244cdb5a859d29a4e3c0ac6f615aeb2c0bb",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260921T004719.312129Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: scanners=gitleaks+builtin cross-check\n7:48PM INF scanned ~108710 bytes (108.71 KB) in 68.9ms\n7:48PM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 23 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260921T004719.312129Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n...........................                                              [100%]\n27 passed in 86.26s (0:01:26)\n== end-to-end smoke ==\nnamespace: auger-smoke-900543\n== init ==\n  PASS all eleven tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n  PASS toggle changed the stored configuration\n\npassed 15, failed 0   (namespace left behind: auger-smoke-900543 \u2014 remove with:\n  rm -rf ~/duckbrain/namespaces/auger-smoke-900543)\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260921T004719.312129Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 auger init declares the edge and facet tables idempotently and the live namespace exposes them at /api/ns/<ns>/tables: Live run: `python3 auger.py -n auger-eval-944473 init` -> \"declared: 11/11 tables -> assumption, break, decision, domain, edge, escalation, facet, option, project, question, unknown\" with \"wrote declarations: ... edge, facet\". Second init -> \"namespace auger-eval-944473: existing\", \"declared: 11/11 tables\", and NO \"wrote declarations\" line (idempotent). GET /api/ns/auger-eval-944473/tables returned ['assumption','break','decision','domain','edge','escalation','facet','option','project','question','unknown'] \u2014 edge and facet are live. Code: auger.py:82-88 declares both in COLS; cmd_init (auger.py:333-378) writes each declaration only when the file content differs and then reads back /api/ns/<ns>/tables. Gate: `bash tests/gate.sh` -> ruff \"All checks passed!\", pytest \"27 passed in 51.87s\", smoke \"passed 15, failed 0\", \"GATE PASS\".\n  \u2713 an edge row round-trips through the declared-table API with its kind, confidence and source intact: Live on ns auger-eval-944473: auger.edge(ns,'P-EVAL','satisfies','decision','D-001','question','Q-000001',confidence=0.73,source='gate') returned E-000001; re-reading via auger.select(ns,'edge','id=eq.E-000001') gave kind='satisfies', confidence=0.73, source='gate', src_id='D-001', dst_id='Q-000001' \u2014 all intact through the declared-table API (auger.py:247-270 writes via insert() -> POST /api/ns/<ns>/tables/edge).\n  \u2713 inserting an edge whose src_id does not exist is REFUSED rather than silently stored (referential check): Live on ns auger-eval-944473: auger.edge(...,src_id='D-DOES-NOT-EXIST',...) raised SystemExit \"refused: src decision 'D-DOES-NOT-EXIST' does not exist in table decision \u2014 an edge to a missing node is not stored\". A missing dst_id was likewise refused, and an unknown node kind raised \"unknown node kind 'banana'\". Edge row count before=1, after=1 \u2014 nothing was silently stored. Code: auger.py:262-264 loops over both endpoints calling node_exists() (auger.py:238-245) and raises before insert().\n  \u2713 facet rows are written one per facet for a question, and the facet set is data rather than hardcoded in the code path: Live on ns auger-eval-944473: iterating auger.facet_set() = ('data','failure','ownership','cost','test','who_else') and calling auger.facet() per name produced exactly F-000001..F-000006 for question Q-000001, one row per facet, names matching the set. The set is DATA, not a hardcoded gate: (a) facet() accepted an out-of-set name ('regulatory' -> F-000007) with no rejection; (b) monkeypatching auger.facet_set to ('alpha','beta') made the write path emit exactly those two rows for Q-000002 \u2014 the code path follows the data. The six strings appear only in DEFAULT_FACETS (auger.py:104) and docs/SPEC-001-graph.md:88, never as a literal in a code path; facet_set() (auger.py:109-111) is the single read point. facet() for a missing question is refused (auger.py:278-279).\nAll four criteria verified against a live DuckBrain namespace plus a full green gate run (ruff clean, 27 pytest passed, 15/15 smoke assertions, GATE PASS).",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 auger init declares the edge and facet tables idempotently and the live namespace exposes them at /api/ns/<ns>/tables: Live run: `python3 auger.py -n auger-eval-944473 init` -> \"declared: 11/11 tables -> assumption, break, decision, domain, edge, escalation, facet, option, project, question, unknown\" with \"wrote declarations: ... edge, facet\". Second init -> \"namespace auger-eval-944473: existing\", \"declared: 11/11 tables\", and NO \"wrote declarations\" line (idempotent). GET /api/ns/auger-eval-944473/tables returned ['assumption','break','decision','domain','edge','escalation','facet','option','project','question','unknown'] \u2014 edge and facet are live. Code: auger.py:82-88 declares both in COLS; cmd_init (auger.py:333-378) writes each declaration only when the file content differs and then reads back /api/ns/<ns>/tables. Gate: `bash tests/gate.sh` -> ruff \"All checks passed!\", pytest \"27 passed in 51.87s\", smoke \"passed 15, failed 0\", \"GATE PASS\".\n  \u2713 an edge row round-trips through the declared-table API with its kind, confidence and source intact: Live on ns auger-eval-944473: auger.edge(ns,'P-EVAL','satisfies','decision','D-001','question','Q-000001',confidence=0.73,source='gate') returned E-000001; re-reading via auger.select(ns,'edge','id=eq.E-000001') gave kind='satisfies', confidence=0.73, source='gate', src_id='D-001', dst_id='Q-000001' \u2014 all intact through the declared-table API (auger.py:247-270 writes via insert() -> POST /api/ns/<ns>/tables/edge).\n  \u2713 inserting an edge whose src_id does not exist is REFUSED rather than silently stored (referential check): Live on ns auger-eval-944473: auger.edge(...,src_id='D-DOES-NOT-EXIST',...) raised SystemExit \"refused: src decision 'D-DOES-NOT-EXIST' does not exist in table decision \u2014 an edge to a missing node is not stored\". A missing dst_id was likewise refused, and an unknown node kind raised \"unknown node kind 'banana'\". Edge row count before=1, after=1 \u2014 nothing was silently stored. Code: auger.py:262-264 loops over both endpoints calling node_exists() (auger.py:238-245) and raises before insert().\n  \u2713 facet rows are written one per facet for a question, and the facet set is data rather than hardcoded in the code path: Live on ns auger-eval-944473: iterating auger.facet_set() = ('data','failure','ownership','cost','test','who_else') and calling auger.facet() per name produced exactly F-000001..F-000006 for question Q-000001, one row per facet, names matching the set. The set is DATA, not a hardcoded gate: (a) facet() accepted an out-of-set name ('regulatory' -> F-000007) with no rejection; (b) monkeypatching auger.facet_set to ('alpha','beta') made the write path emit exactly those two rows for Q-000002 \u2014 the code path follows the data. The six strings appear only in DEFAULT_FACETS (auger.py:104) and docs/SPEC-001-graph.md:88, never as a literal in a code path; facet_set() (auger.py:109-111) is the single read point. facet() for a missing question is refused (auger.py:278-279).\nAll four criteria verified against a live DuckBrain namespace plus a full green gate run (ruff clean, 27 pytest passed, 15/15 smoke assertions, GATE PASS).",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "auger init declares the edge and facet tables idempotently and the live namespace exposes them at /api/ns/<ns>/tables",
+                "status": "PASS",
+                "detail": "Live run: `python3 auger.py -n auger-eval-944473 init` -> \"declared: 11/11 tables -> assumption, break, decision, domain, edge, escalation, facet, option, project, question, unknown\" with \"wrote declarations: ... edge, facet\". Second init -> \"namespace auger-eval-944473: existing\", \"declared: 11/11 tables\", and NO \"wrote declarations\" line (idempotent). GET /api/ns/auger-eval-944473/tables returned ['assumption','break','decision','domain','edge','escalation','facet','option','project','question','unknown'] \u2014 edge and facet are live. Code: auger.py:82-88 declares both in COLS; cmd_init (auger.py:333-378) writes each declaration only when the file content differs and then reads back /api/ns/<ns>/tables. Gate: `bash tests/gate.sh` -> ruff \"All checks passed!\", pytest \"27 passed in 51.87s\", smoke \"passed 15, failed 0\", \"GATE PASS\"."
+              },
+              {
+                "criterion": "an edge row round-trips through the declared-table API with its kind, confidence and source intact",
+                "status": "PASS",
+                "detail": "Live on ns auger-eval-944473: auger.edge(ns,'P-EVAL','satisfies','decision','D-001','question','Q-000001',confidence=0.73,source='gate') returned E-000001; re-reading via auger.select(ns,'edge','id=eq.E-000001') gave kind='satisfies', confidence=0.73, source='gate', src_id='D-001', dst_id='Q-000001' \u2014 all intact through the declared-table API (auger.py:247-270 writes via insert() -> POST /api/ns/<ns>/tables/edge)."
+              },
+              {
+                "criterion": "inserting an edge whose src_id does not exist is REFUSED rather than silently stored (referential check)",
+                "status": "PASS",
+                "detail": "Live on ns auger-eval-944473: auger.edge(...,src_id='D-DOES-NOT-EXIST',...) raised SystemExit \"refused: src decision 'D-DOES-NOT-EXIST' does not exist in table decision \u2014 an edge to a missing node is not stored\". A missing dst_id was likewise refused, and an unknown node kind raised \"unknown node kind 'banana'\". Edge row count before=1, after=1 \u2014 nothing was silently stored. Code: auger.py:262-264 loops over both endpoints calling node_exists() (auger.py:238-245) and raises before insert()."
+              },
+              {
+                "criterion": "facet rows are written one per facet for a question, and the facet set is data rather than hardcoded in the code path",
+                "status": "PASS",
+                "detail": "Live on ns auger-eval-944473: iterating auger.facet_set() = ('data','failure','ownership','cost','test','who_else') and calling auger.facet() per name produced exactly F-000001..F-000006 for question Q-000001, one row per facet, names matching the set. The set is DATA, not a hardcoded gate: (a) facet() accepted an out-of-set name ('regulatory' -> F-000007) with no rejection; (b) monkeypatching auger.facet_set to ('alpha','beta') made the write path emit exactly those two rows for Q-000002 \u2014 the code path follows the data. The six strings appear only in DEFAULT_FACETS (auger.py:104) and docs/SPEC-001-graph.md:88, never as a literal in a code path; facet_set() (auger.py:109-111) is the single read point. facet() for a missing question is refused (auger.py:278-279)."
+              }
+            ],
+            "summary": "All four criteria verified against a live DuckBrain namespace plus a full green gate run (ruff clean, 27 pytest passed, 15/15 smoke assertions, GATE PASS)."
+          }
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: AUG-007\n\nStage tier1: PASS\n    \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 auger init declares the edge and facet tables idempotently and the live namespace exposes them at /api/ns/<ns>/tables: Live run: `python3 auger.py -n auger-eval-944473 init` -> \"declared: 11/11 tables -> assumption, break, decision, domain, edge, escalation, facet, option, project, question, unknown\" with \"wrote declarations: ... edge, facet\". Second init -> \"namespace auger-eval-944473: existing\", \"declared: 11/11 tables\", and NO \"wrote declarations\" line (idempotent). GET /api/ns/auger-eval-944473/tables returned ['assumption','break','decision','domain','edge','escalation','facet','option','project','question','unknown'] \u2014 edge and facet are live. Code: auger.py:82-88 declares both in COLS; cmd_init (auger.py:333-378) writes each declaration only when the file content differs and then reads back /api/ns/<ns>/tables. Gate: `bash tests/gate.sh` -> ruff \"All checks passed!\", pytest \"27 passed in 51.87s\", smoke \"passed 15, failed 0\", \"GATE PASS\".\n  \u2713 an edge row round-trips through the declared-table API with its kind, confidence and source intact: Live on ns auger-eval-944473: auger.edge(ns,'P-EVAL','satisfies','decision','D-001','question','Q-000001',confidence=0.73,source='gate') returned E-000001; re-reading via auger.select(ns,'edge','id=eq.E-000001') gave kind='satisfies', confidence=0.73, source='gate', src_id='D-001', dst_id='Q-000001' \u2014 all intact through the declared-table API (auger.py:247-270 writes via insert() -> POST /api/ns/<ns>/tables/edge).\n  \u2713 inserting an edge whose src_id does not exist is REFUSED rather than silently stored (referential check): Live on ns auger-eval-944473: auger.edge(...,src_id='D-DOES-NOT-EXIST',...) raised SystemExit \"refused: src decision 'D-DOES-NOT-EXIST' does not exist in table decision \u2014 an edge to a missing node is not stored\". A missing dst_id was likewise refused, and an unknown node kind raised \"unknown node kind 'banana'\". Edge row count before=1, after=1 \u2014 nothing was silently stored. Code: auger.py:262-264 loops over both endpoints calling node_exists() (auger.py:238-245) and raises before insert().\n  \u2713 facet rows are written one per facet for a question, and the facet set is data rather than hardcoded in the code path: Live on ns auger-eval-944473: iterating auger.facet_set() = ('data','failure','ownership','cost','test','who_else') and calling auger.facet() per name produced exactly F-000001..F-000006 for question Q-000001, one row per facet, names matching the set. The set is DATA, not a hardcoded gate: (a) facet() accepted an out-of-set name ('regulatory' -> F-000007) with no rejection; (b) monkeypatching auger.facet_set to ('alpha','beta') made the write path emit exactly those two rows for Q-000002 \u2014 the code path follows the data. The six strings appear only in DEFAULT_FACETS (auger.py:104) and docs/SPEC-001-graph.md:88, never as a literal in a code path; facet_set() (auger.py:109-111) is the single read point. facet() for a missing question is refused (auger.py:278-279).\nAll four criteria verified against a live DuckBrain namespace plus a full green gate run (ruff clean, 27 pytest passed, 15/15 smoke assertions, GATE PASS).\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-09-21T00:53:29.075553",
+  "evidence": {
+    "collected_at": "2026-09-21T00:53:29.085355+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 13548,
+        "truncated": false,
+        "source": "git show 1fbe3244cdb5"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 206650,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-007"
+  }
+}
