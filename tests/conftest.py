@@ -109,12 +109,25 @@ def ns_path(ns: str) -> str:
     return auger.ns_dir(ns)
 
 
-def leftovers() -> dict[str, list[str]]:
-    """Every leftover test namespace, split by the two places one can linger."""
+def leftovers(scope: list[str] | None = None) -> dict[str, list[str]]:
+    """Every leftover test namespace, split by the two places one can linger.
+
+    `scope` restricts the audit to a known set of names, and the gate relies on
+    that: the suite can run CONCURRENTLY with another process running the same
+    suite in the same workdir (a gitreins judge re-runs it — proven 2026-09-20,
+    two async judges plus this suite at once), and an unscoped prefix scan then
+    reports the other run's live, in-flight namespace as a leak of THIS run. That
+    race blocked a correct board commit. The property this suite must prove is
+    that IT cleaned up, which is exactly and only the names it created.
+    """
     api = [n for n in api_namespaces() if n.startswith(TEST_NS_PREFIX)]
     root = Path(os.path.expanduser("~")) / "duckbrain" / "namespaces"
     disk = sorted(p.name for p in root.iterdir() if p.name.startswith(TEST_NS_PREFIX)) \
         if root.is_dir() else []
+    if scope is not None:
+        want = set(scope)
+        api = [n for n in api if n in want]
+        disk = [n for n in disk if n in want]
     return {"api": api, "disk": disk}
 
 

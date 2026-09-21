@@ -34,6 +34,7 @@ import pytest
 
 import auger
 from conftest import (
+    CREATED,
     D001,
     D002,
     REPO_ROOT,
@@ -519,7 +520,14 @@ def test_teardown_removes_both_the_registry_entry_and_the_directory(ns: str):
 
 
 def test_no_test_namespace_survives_the_suite(live_service: str):
-    """The leak audit. It runs in the gate, so a leaked namespace fails the gate, not a reader."""
-    found = leftovers()
+    """The leak audit. It runs in the gate, so a leaked namespace fails the gate, not a reader.
+
+    Scoped to the namespaces THIS session created: another process can be running
+    the same suite concurrently in the same workdir (a gitreins judge re-runs it),
+    and its live in-flight namespace is not a leak of this run. The audit still
+    fails the gate for a real leak — it just cannot be fooled by a sibling's
+    correctly-managed one.
+    """
+    found = leftovers(scope=CREATED)
     assert found == {"api": [], "disk": []}, \
         f"test namespaces were left behind: {found} (prefix {TEST_NS_PREFIX!r})"
