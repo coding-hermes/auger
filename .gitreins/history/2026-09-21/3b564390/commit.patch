@@ -1,0 +1,89 @@
+commit 67cc6d9356811834eb82d3c9f62e5f3ab3655e0f
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Mon Sep 21 00:19:05 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Mon Sep 21 00:19:05 2026 -0500
+
+    fix(ci): pin the lint gate's ruff and clear SIM115 in auger.py (AUG-013)
+    
+    CI went red on its first real run over main (run 35562792047, step "run the
+    gate"): the workflow installs ruff UNPINNED, so the runner resolved 0.16.8
+    while this host's gate runs 0.15.22 — and 0.16.8 flags 4 SIM115
+    "Use a context manager for opening files" sites in auger.py that 0.15.22
+    does not. The gate must mean the same thing locally and in CI.
+    
+      * ci.yml pins ruff==0.15.22 (the host gate's version) with a comment
+        saying to bump both together.
+      * The 4 sites are also FIXED so the tree passes under BOTH versions
+        (proved: ruff 0.16.8 "All checks passed!" on auger.py from a clean
+        venv, and the local gate green on 0.15.22):
+        - the table-declaration writer now reads/writes through with-blocks;
+        - cmd_start reads --seed-file through a with-block (same precedence:
+          file wins over --seed);
+        - cmd_dump's --out write goes through a with-block.
+    
+    GATE PASS locally: py_compile, ruff check auger.py clean, pytest 35
+    passed, smoke 15/0.
+---
+ .github/workflows/ci.yml |  5 ++++-
+ auger.py                 | 17 +++++++++++++----
+ 2 files changed, 17 insertions(+), 5 deletions(-)
+
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 398c4f1..23eb41f 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -54,7 +54,10 @@ jobs:
+       - name: install ruff and pytest
+         run: |
+           python3 -m pip install --upgrade pip
+-          python3 -m pip install ruff pytest
++          # Pinned to the host gate's ruff (0.15.22): the lint gate must mean the
++          # same thing locally and in CI. Bump both together; the 4 former SIM115
++          # sites in auger.py now pass under 0.16.8 as well.
++          python3 -m pip install "ruff==0.15.22" pytest
+ 
+       - name: run the gate (tests/gate.sh)
+         run: bash tests/gate.sh
+diff --git a/auger.py b/auger.py
+index e5da49b..84ec816 100755
+--- a/auger.py
++++ b/auger.py
+@@ -704,8 +704,13 @@ def cmd_init(a):
+                 "columns": [{"name": c, "type": t} for c, t in cols]}
+         p = os.path.join(d, f"{name}.table.json")
+         text = json.dumps(decl, indent=1)
+-        if not os.path.exists(p) or open(p).read() != text:
+-            open(p, "w").write(text)
++        current = None
++        if os.path.exists(p):
++            with open(p) as f:
++                current = f.read()
++        if current != text:
++            with open(p, "w") as f:
++                f.write(text)
+             wrote.append(name)
+     st, live, _ = db(f"/api/ns/{ns}/tables")
+     have = sorted(t["name"] for t in (live.get("tables", []) if isinstance(live, dict) else []))
+@@ -731,7 +736,10 @@ def _project(ns, pid=None):
+ def cmd_start(a):
+     ns = a.namespace
+     pid = a.id or f"P-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+-    seed = open(a.seed_file, errors="replace").read() if a.seed_file else (a.seed or "")
++    seed = a.seed or ""
++    if a.seed_file:
++        with open(a.seed_file, errors="replace") as f:
++            seed = f.read()
+     row = {"id": pid, "name": a.name or ns, "seed": seed, "core_statement": "",
+            "status": "open", "created_at": datetime.now(timezone.utc).isoformat()}
+     insert(ns, "project", row)
+@@ -986,7 +994,8 @@ def cmd_dump(a):
+         lines.append(f"WARNING: unparsed --config entries ignored: {', '.join(bad)}")
+     out = "\n".join(lines)
+     if a.out:
+-        open(a.out, "w").write(out)
++        with open(a.out, "w") as f:
++            f.write(out)
+         print(f"wrote {a.out}  ({len(out)} chars, {len(dec)} decisions, {len(confs)} choices)")
+     else:
+         print(out)
