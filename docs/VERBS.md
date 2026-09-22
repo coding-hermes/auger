@@ -183,3 +183,25 @@ Semantic search over everything the namespace has embedded.
 **Writes:** nothing. One GET against the memory store.
 
 **Never writes:** anything.
+
+## verdict
+
+Judge a configuration — good or bad, with the reasons — and put that judgment on the
+record (DESIGN R11). Two shapes, one row shape: a verdict ON FILE (you or another model
+judged it elsewhere), or `--ask-jev`, where JEV judges the dump itself — rendered exactly
+as `dump` renders it, so the model judges the real artifact, not a summary string.
+
+**Arguments:** exactly one of `--good [CONFIG]` / `--bad [CONFIG]` (the configuration
+string that was judged); `--reasons TEXT` (why); `--ask-jev` (JEV judges the dump first);
+`--config D-001=O2` (repeatable — judge a hypothetical option set instead of the active
+one, requires `--ask-jev`); `--judged-by NAME` (default `human`; `--ask-jev` forces
+`jev`); `--confidence X`; `--note TEXT`; `--list` (show every recorded verdict, newest
+first).
+
+**Writes:** one `verdict` row per call (`id` V-prefixed, `config_summary`, the word,
+`reasons`, `judged_by`, `confidence` when given). `--ask-jev` is fail-closed: no key, no
+score, NO row. `status` reads verdicts to tally good/bad per project.
+
+**Never writes:** anything when both or neither of `--good`/`--bad` is given; anything
+when an invalid word is named (the word set is closed in code — `good`, `bad`); a verdict
+row when `--ask-jev` cannot reach JEV; a `--config` hypothetical without `--ask-jev`.

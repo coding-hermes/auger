@@ -44,6 +44,7 @@ auger dump        render the system under the current set, or a --config hypothe
 auger propagate   run the graph walks: moot, reopen, cascade — and re-gate the children
 auger feedback    turn thin decisions into the next question batch (model proposes, JEV gates)
 auger recall "Q"  semantic search over everything the project has embedded
+auger verdict     judge a configuration good/bad with reasons, on the record (DESIGN R11)
 ```
 
 Every verb is documented — arguments, what it writes, what it must never write — in
