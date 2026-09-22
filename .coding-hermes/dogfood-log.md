@@ -1,0 +1,5 @@
+# auger dogfood log
+
+| date | verdict | promise | top findings | TTFS | install_seconds |
+|---|---|---|---|---|---|
+| 2026-09-22 | ✅ SHIPPABLE (with substrate caveat) | "A user can drill a project into a git-backed spec of choices via an 11-verb CLI backed by DuckBrain+JEV" — core loop holds: init/start/ask/answer/check/toggle/dump all correct and fast on the working substrate; the documented fresh-install pairing is broken (README + duckbrain default branch lack the declared-tables API). | AUG-016 (P0 fresh-user pairing broken: duckbrain default branch has no tables API — README must pin feat/native-s3) · AUG-015 (P1 toggle allows two active options per decision; dump renders both as the config) · AUG-017 (P1 live namespace edge declaration drifts from code; cross-project fields silently dropped; one init repairs) | ~90s on control box; fresh box: broken as documented, ~4 min once branch pinned | fresh leg ~240s incl. npm (bunker las-bunker-03, agent cab82db4, destroyed; smoke=ok on branch) |
