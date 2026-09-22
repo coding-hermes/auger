@@ -33,6 +33,8 @@ Hard-won rules encoded here:
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
 import re
@@ -48,13 +50,19 @@ JEV_URL = "https://openrouter.ai/api/alpha/decisions"
 JEV_MODEL = "typesafe/jev-1.13"
 
 # ---------------------------------------------------------------- thresholds (code, not model)
-T_ANSWERED = 0.55      # noul >= this  -> the question is already answered by stored evidence
-T_CONFIDENT = 0.60     # decision confidence below this is surfaced as "needs drilling"
-T_SUBJECT = 0.45       # choice confidence below this -> we do not trust the "next subject" pick
-T_PRIORITY = 0.30      # decision confidence below this -> a PRIORITY JUDGMENT, which the skill
-                       # reserves for the human. The engine records an escalation with a default
-                       # and CONTINUES ON THE DEFAULT: it never blocks waiting for a person
-                       # (SPEC-001 section 7, Q5; docs/ENGINE.md open question 5).
+T_ANSWERED = (
+    0.55  # noul >= this  -> the question is already answered by stored evidence
+)
+T_CONFIDENT = 0.60  # decision confidence below this is surfaced as "needs drilling"
+T_SUBJECT = (
+    0.45  # choice confidence below this -> we do not trust the "next subject" pick
+)
+T_PRIORITY = (
+    0.30  # decision confidence below this -> a PRIORITY JUDGMENT, which the skill
+)
+# reserves for the human. The engine records an escalation with a default
+# and CONTINUES ON THE DEFAULT: it never blocks waiting for a person
+# (SPEC-001 section 7, Q5; docs/ENGINE.md open question 5).
 
 # The budget governor. The ceiling is a NUMBER OF QUESTIONS ASKED BY ONE RUN, and it is enforced
 # by the program rather than trusted to an agent — that refusal is the whole reason this is
@@ -71,57 +79,170 @@ TOKEN_PATHS = [
 # One table per register of the spec-decomposition-matrix method. Declared to DuckBrain
 # as namespaces/<ns>/tables/<name>.table.json  (DB-SUPA-3 registry).
 COLS = {
-    "project":     [("id","varchar"),("name","varchar"),("seed","varchar"),("core_statement","varchar"),
-                    ("status","varchar"),("created_at","timestamp")],
-    "question":    [("id","varchar"),("project_id","varchar"),("domain","varchar"),("text","varchar"),
-                    ("ring","integer"),("qclass","varchar"),("status","varchar"),
-                    ("jev_already_answered","double"),("jev_checked_at","varchar")],
-    "decision":    [("id","varchar"),("project_id","varchar"),("domain","varchar"),("question_id","varchar"),
-                    ("chosen","varchar"),("why_not","varchar"),("reversal_cost","varchar"),
-                    ("confidence","double"),("status","varchar"),("evidence_key","varchar"),
-                    # AUG-009 / SPEC-002 section 1: what the decision BINDS. project | bundle,
-                    # empty = project — the value every row written before this column means.
-                    ("scope","varchar")],
-    "option":      [("id","varchar"),("decision_id","varchar"),("label","varchar"),("costs","varchar"),
-                    ("breaks","varchar"),("active","boolean")],
-    "break":       [("id","varchar"),("decision_id","varchar"),("breaks_what","varchar"),
-                    ("consequence","varchar"),("applied","boolean")],
-    "escalation":  [("id","varchar"),("project_id","varchar"),("question","varchar"),("options","varchar"),
-                    ("default_action","varchar"),("risk","varchar"),("status","varchar")],
-    "assumption":  [("id","varchar"),("project_id","varchar"),("text","varchar"),("falsifier","varchar"),
-                    ("monitoring","varchar")],
-    "unknown":     [("id","varchar"),("project_id","varchar"),("text","varchar"),("owner","varchar"),
-                    ("trigger","varchar"),("containment","varchar")],
-    "domain":      [("id","varchar"),("project_id","varchar"),("num","varchar"),("name","varchar"),
-                    ("triage","integer"),("ring_floor","integer"),("terminating_ring","integer"),
-                    ("status","varchar"),("owner","varchar"),("trigger","varchar"),("containment","varchar")],
+    "project": [
+        ("id", "varchar"),
+        ("name", "varchar"),
+        ("seed", "varchar"),
+        ("core_statement", "varchar"),
+        ("status", "varchar"),
+        ("created_at", "timestamp"),
+    ],
+    "question": [
+        ("id", "varchar"),
+        ("project_id", "varchar"),
+        ("domain", "varchar"),
+        ("text", "varchar"),
+        ("ring", "integer"),
+        ("qclass", "varchar"),
+        ("status", "varchar"),
+        ("jev_already_answered", "double"),
+        ("jev_checked_at", "varchar"),
+    ],
+    "decision": [
+        ("id", "varchar"),
+        ("project_id", "varchar"),
+        ("domain", "varchar"),
+        ("question_id", "varchar"),
+        ("chosen", "varchar"),
+        ("why_not", "varchar"),
+        ("reversal_cost", "varchar"),
+        ("confidence", "double"),
+        ("status", "varchar"),
+        ("evidence_key", "varchar"),
+        # AUG-009 / SPEC-002 section 1: what the decision BINDS. project | bundle,
+        # empty = project — the value every row written before this column means.
+        ("scope", "varchar"),
+    ],
+    "option": [
+        ("id", "varchar"),
+        ("decision_id", "varchar"),
+        ("label", "varchar"),
+        ("costs", "varchar"),
+        ("breaks", "varchar"),
+        ("active", "boolean"),
+    ],
+    "break": [
+        ("id", "varchar"),
+        ("decision_id", "varchar"),
+        ("breaks_what", "varchar"),
+        ("consequence", "varchar"),
+        ("applied", "boolean"),
+    ],
+    "escalation": [
+        ("id", "varchar"),
+        ("project_id", "varchar"),
+        ("question", "varchar"),
+        ("options", "varchar"),
+        ("default_action", "varchar"),
+        ("risk", "varchar"),
+        ("status", "varchar"),
+    ],
+    "assumption": [
+        ("id", "varchar"),
+        ("project_id", "varchar"),
+        ("text", "varchar"),
+        ("falsifier", "varchar"),
+        ("monitoring", "varchar"),
+    ],
+    "unknown": [
+        ("id", "varchar"),
+        ("project_id", "varchar"),
+        ("text", "varchar"),
+        ("owner", "varchar"),
+        ("trigger", "varchar"),
+        ("containment", "varchar"),
+    ],
+    "domain": [
+        ("id", "varchar"),
+        ("project_id", "varchar"),
+        ("num", "varchar"),
+        ("name", "varchar"),
+        ("triage", "integer"),
+        ("ring_floor", "integer"),
+        ("terminating_ring", "integer"),
+        ("status", "varchar"),
+        ("owner", "varchar"),
+        ("trigger", "varchar"),
+        ("containment", "varchar"),
+    ],
     # --- the graph: the relationships the engine reasons over, not the nodes it stores (SPEC-001 2/3)
-    "edge":        [("id","varchar"),("project_id","varchar"),("kind","varchar"),
-                    ("src_kind","varchar"),("src_id","varchar"),("dst_kind","varchar"),("dst_id","varchar"),
-                    # AUG-010 / SPEC-002 sections 2.1-2.2: which PROJECT an endpoint belongs to when
-                    # that endpoint lives in a SIBLING's namespace — a bundle lets the gate link a
-                    # sibling's answer and the impact pass point at a sibling's decision. Empty means
-                    # "the endpoint is this namespace's", which is what every row written before this
-                    # field means. Both travel as ABSENT KEYS when empty: see insert_edge.
-                    ("src_project","varchar"),("dst_project","varchar"),
-                    ("confidence","double"),("source","varchar"),("note","varchar"),
-                    ("created_at","timestamp")],
-    "facet":       [("id","varchar"),("project_id","varchar"),("question_id","varchar"),("facet","varchar"),
-                    ("status","varchar"),("closed_by","varchar"),("note","varchar")],
+    "edge": [
+        ("id", "varchar"),
+        ("project_id", "varchar"),
+        ("kind", "varchar"),
+        ("src_kind", "varchar"),
+        ("src_id", "varchar"),
+        ("dst_kind", "varchar"),
+        ("dst_id", "varchar"),
+        # AUG-010 / SPEC-002 sections 2.1-2.2: which PROJECT an endpoint belongs to when
+        # that endpoint lives in a SIBLING's namespace — a bundle lets the gate link a
+        # sibling's answer and the impact pass point at a sibling's decision. Empty means
+        # "the endpoint is this namespace's", which is what every row written before this
+        # field means. Both travel as ABSENT KEYS when empty: see insert_edge.
+        ("src_project", "varchar"),
+        ("dst_project", "varchar"),
+        ("confidence", "double"),
+        ("source", "varchar"),
+        ("note", "varchar"),
+        ("created_at", "timestamp"),
+    ],
+    "facet": [
+        ("id", "varchar"),
+        ("project_id", "varchar"),
+        ("question_id", "varchar"),
+        ("facet", "varchar"),
+        ("status", "varchar"),
+        ("closed_by", "varchar"),
+        ("note", "varchar"),
+    ],
     # --- the bundles: which projects must honour one contract (SPEC-002 section 1). Membership is
     # a TABLE and not a column, because a project can belong to several bundles at once.
-    "bundle":      [("id","varchar"),("name","varchar"),("description","varchar"),
-                    ("contract","varchar"),("status","varchar")],
-    "bundle_member":[("id","varchar"),("bundle_id","varchar"),("project","varchar"),
-                     ("role","varchar"),("note","varchar")],
+    "bundle": [
+        ("id", "varchar"),
+        ("name", "varchar"),
+        ("description", "varchar"),
+        ("contract", "varchar"),
+        ("status", "varchar"),
+    ],
+    "bundle_member": [
+        ("id", "varchar"),
+        ("bundle_id", "varchar"),
+        ("project", "varchar"),
+        ("role", "varchar"),
+        ("note", "varchar"),
+    ],
+    # --- the verdict register (R11): what a human or a model SAID about a dump, with the reasons.
+    # The judged artifact is named by `config_summary` (the ACTIVE CONFIGURATION line, or the
+    # --config spec string a hypothesis was judged by), so the row reads as evidence even when the
+    # configuration it judged has since been toggled away.
+    "verdict": [
+        ("id", "varchar"),
+        ("project_id", "varchar"),
+        ("config_summary", "varchar"),
+        ("verdict", "varchar"),
+        ("reasons", "varchar"),
+        ("judged_by", "varchar"),
+        ("confidence", "double"),
+        ("source", "varchar"),
+        ("note", "varchar"),
+        ("created_at", "timestamp"),
+    ],
 }
 PRIMARY = {t: "id" for t in COLS}
 
 # ---------------------------------------------------------------- the graph's closed sets
 # Edge kinds and sources are sets the ENGINE switches on, so they live in code. The facet set is
 # the deliberate exception — SPEC-001 section 3 makes it DATA so a project can extend it.
-EDGE_KINDS = ("opens", "closes", "satisfies", "affects", "breaks",
-              "derives_from", "references", "blocks")
+EDGE_KINDS = (
+    "opens",
+    "closes",
+    "satisfies",
+    "affects",
+    "breaks",
+    "derives_from",
+    "references",
+    "blocks",
+)
 EDGE_SOURCES = ("gate", "impact", "human", "rule")
 # The bundle model's closed sets (SPEC-002 section 1). `status` and `role` are sets the ENGINE
 # switches on — a retired bundle is not walked, a test-target does not own the contract — so they
@@ -132,17 +253,26 @@ BUNDLE_ROLES = ("owner", "consumer", "test-target")
 # What a decision BINDS (SPEC-002 section 1). Empty/absent means DEFAULT_SCOPE, which is why the
 # default is a named constant: no reader re-derives it from a literal.
 DECISION_SCOPES = ("project", "bundle")
+# What a VERDICT says (docs/DESIGN.md R11: "record good/bad with reasons"). A verdict is not a
+# sentence — a reader greps it, a tally counts it, and a dump judged by ten words and one by two
+# is not a judgement anyone can aggregate. Two words, closed in code like EDGE_KINDS, refused by
+# name when wrong.
+VERDICT_WORDS = ("good", "bad")
 DEFAULT_SCOPE = "project"
 # src_kind/dst_kind -> the table that must ALREADY hold that id (this is the referential check).
-NODE_TABLES = {"decision": "decision", "question": "question",
-               "unknown": "unknown", "assumption": "assumption"}
+NODE_TABLES = {
+    "decision": "decision",
+    "question": "question",
+    "unknown": "unknown",
+    "assumption": "assumption",
+}
 # The DEFAULT facet set, not the only one: a project may extend it (SPEC-001 section 3, "the facet
 # set is data, not code, so a project can extend it"). This is the INITIAL set; read it through
 # facet_set() so an extension mechanism has exactly one place to land rather than a code path
 # that hardcodes six strings no project can add to.
 DEFAULT_FACETS = ("data", "failure", "ownership", "cost", "test", "who_else")
 FACET_STATUSES = ("open", "closed")
-ID_WIDTH = 6           # E-000001, F-000001 — fixed width, per the project's own id law
+ID_WIDTH = 6  # E-000001, F-000001 — fixed width, per the project's own id law
 
 
 def facet_set() -> tuple:
@@ -161,8 +291,10 @@ def ns_dir(ns: str) -> str:
 # The budget is per CALL, and it is deliberately not one number: giving up on a read costs a
 # retry, while giving up on a namespace DELETE leaves a registry row behind for a namespace
 # whose directory the caller is about to remove.
-RETRIES = 4             # an ordinary call
-TEARDOWN_RETRIES = 8    # a destructive call, where a give-up leaks state instead of losing work
+RETRIES = 4  # an ordinary call
+TEARDOWN_RETRIES = (
+    8  # a destructive call, where a give-up leaks state instead of losing work
+)
 
 
 # ---------------------------------------------------------------- transport
@@ -178,11 +310,19 @@ def _token() -> str:
                     return v
         except OSError:
             continue
-    raise SystemExit("no DuckBrain token: set DUCKBRAIN_API_KEY or ~/.duckbrain/foreman-status.token")
+    raise SystemExit(
+        "no DuckBrain token: set DUCKBRAIN_API_KEY or ~/.duckbrain/foreman-status.token"
+    )
 
 
-def _req(url: str, method: str = "GET", body: dict | list | None = None,
-         headers: dict | None = None, timeout: int = 45, retries: int = RETRIES):
+def _req(
+    url: str,
+    method: str = "GET",
+    body: dict | list | None = None,
+    headers: dict | None = None,
+    timeout: int = 45,
+    retries: int = RETRIES,
+):
     """Send JSON as BYTES. Never build a request body by string interpolation.
 
     A 429 is BACKPRESSURE, not a failure (proven: the pytest suite bursts enough
@@ -225,7 +365,7 @@ def _req(url: str, method: str = "GET", body: dict | list | None = None,
                     except ValueError:
                         pass
                 attempt += 1
-                time.sleep(min(wait, 10.0) * attempt)   # bounded linear backoff
+                time.sleep(min(wait, 10.0) * attempt)  # bounded linear backoff
                 continue
             try:
                 return e.code, json.loads(raw), dict(e.headers)
@@ -235,8 +375,12 @@ def _req(url: str, method: str = "GET", body: dict | list | None = None,
             return 0, {"error": f"transport: {e}"}, {}
 
 
-def db(path: str, method: str = "GET", body=None, timeout: int = 45, retries: int = RETRIES):
-    return _req(f"{DB_URL}{path}", method, body, {"x-api-key": _token()}, timeout, retries)
+def db(
+    path: str, method: str = "GET", body=None, timeout: int = 45, retries: int = RETRIES
+):
+    return _req(
+        f"{DB_URL}{path}", method, body, {"x-api-key": _token()}, timeout, retries
+    )
 
 
 def tbl(ns: str, table: str, query: str = "") -> str:
@@ -279,8 +423,11 @@ def patch(ns: str, table: str, pk: str, values: dict) -> dict:
 
 
 def remember(ns: str, key: str, content: str, domain: str = "concept") -> dict:
-    st, body, _ = db("/api/memories", "POST",
-                     {"key": key, "namespace": ns, "domain": domain, "content": content})
+    st, body, _ = db(
+        "/api/memories",
+        "POST",
+        {"key": key, "namespace": ns, "domain": domain, "content": content},
+    )
     if st not in (200, 201):
         raise SystemExit(f"remember {key} failed ({st}): {body}")
     return body
@@ -304,7 +451,9 @@ def delete_namespace(ns: str, retries: int = TEARDOWN_RETRIES) -> tuple[int, obj
     retryAfter / Retry-After, and it carries a LARGER bounded budget than an ordinary call:
     a read that gives up costs one retry, a delete that gives up leaks a row.
     """
-    st, body, _ = db(f"/api/namespaces/{ns}", "DELETE", {"confirm": True}, retries=retries)
+    st, body, _ = db(
+        f"/api/namespaces/{ns}", "DELETE", {"confirm": True}, retries=retries
+    )
     return st, body
 
 
@@ -322,14 +471,20 @@ def next_id(ns: str, table: str, prefix: str) -> str:
     if not rows or not rows[0].get("id"):
         return f"{prefix}-{'0' * (ID_WIDTH - 1)}1"
     m = re.search(r"(\d+)\s*$", str(rows[0]["id"]))
-    return f"{prefix}-{int(m.group(1)) + 1:0{ID_WIDTH}d}" if m else f"{prefix}-{'0' * (ID_WIDTH - 1)}1"
+    return (
+        f"{prefix}-{int(m.group(1)) + 1:0{ID_WIDTH}d}"
+        if m
+        else f"{prefix}-{'0' * (ID_WIDTH - 1)}1"
+    )
 
 
 def node_exists(ns: str, kind: str, node_id: str) -> bool:
     """Does a node of this kind actually exist? Unknown kinds are a hard error, not a pass."""
     table = NODE_TABLES.get(kind)
     if table is None:
-        raise SystemExit(f"unknown node kind {kind!r}: expected one of {', '.join(sorted(NODE_TABLES))}")
+        raise SystemExit(
+            f"unknown node kind {kind!r}: expected one of {', '.join(sorted(NODE_TABLES))}"
+        )
     if not node_id:
         return False
     return bool(select(ns, table, f"id=eq.{node_id}&select=id&limit=1"))
@@ -344,16 +499,32 @@ def node_exists_in(ns: str, kind: str, node_id: str) -> bool:
     there", which REFUSES the edge rather than storing a claim about a row nobody can read.
     """
     if kind not in NODE_TABLES:
-        raise SystemExit(f"unknown node kind {kind!r}: expected one of {', '.join(sorted(NODE_TABLES))}")
+        raise SystemExit(
+            f"unknown node kind {kind!r}: expected one of {', '.join(sorted(NODE_TABLES))}"
+        )
     if not node_id:
         return False
-    return bool(select_or_empty(ns, NODE_TABLES[kind], f"id=eq.{node_id}&select=id&limit=1"))
+    return bool(
+        select_or_empty(ns, NODE_TABLES[kind], f"id=eq.{node_id}&select=id&limit=1")
+    )
 
 
-def edge(ns: str, project_id: str, kind: str, src_kind: str, src_id: str,
-         dst_kind: str, dst_id: str, *, confidence: float | None = None,
-         source: str = "human", note: str = "", src_project: str = "", dst_project: str = "",
-         warnings: list | None = None) -> dict:
+def edge(
+    ns: str,
+    project_id: str,
+    kind: str,
+    src_kind: str,
+    src_id: str,
+    dst_kind: str,
+    dst_id: str,
+    *,
+    confidence: float | None = None,
+    source: str = "human",
+    note: str = "",
+    src_project: str = "",
+    dst_project: str = "",
+    warnings: list | None = None,
+) -> dict:
     """Write one edge, refusing any edge whose endpoints are not already stored.
 
     `source` has no default-by-omission: an edge is born of a model gate, an impact pass, a
@@ -378,22 +549,39 @@ def edge(ns: str, project_id: str, kind: str, src_kind: str, src_id: str,
     path, which is the one thing a caller must not lose.
     """
     if kind not in EDGE_KINDS:
-        raise SystemExit(f"unknown edge kind {kind!r}: expected one of {', '.join(EDGE_KINDS)}")
+        raise SystemExit(
+            f"unknown edge kind {kind!r}: expected one of {', '.join(EDGE_KINDS)}"
+        )
     if source not in EDGE_SOURCES:
-        raise SystemExit(f"unknown edge source {source!r}: expected one of {', '.join(EDGE_SOURCES)}")
-    for role, k, i, project in (("src", src_kind, src_id, src_project),
-                                ("dst", dst_kind, dst_id, dst_project)):
+        raise SystemExit(
+            f"unknown edge source {source!r}: expected one of {', '.join(EDGE_SOURCES)}"
+        )
+    for role, k, i, project in (
+        ("src", src_kind, src_id, src_project),
+        ("dst", dst_kind, dst_id, dst_project),
+    ):
         where = member_namespace(project) if project else ns
         ok = node_exists(where, k, i) if where == ns else node_exists_in(where, k, i)
         if not ok:
-            raise SystemExit(f"refused: {role} {k} {i!r} does not exist in table "
-                             f"{NODE_TABLES.get(k, '?')}"
-                             + (f" of project {project!r}" if project else "")
-                             + " — an edge to a missing node is not stored")
-    row = {"id": next_id(ns, "edge", "E"), "project_id": project_id, "kind": kind,
-           "src_kind": src_kind, "src_id": src_id, "dst_kind": dst_kind, "dst_id": dst_id,
-           "confidence": float(confidence) if confidence is not None else -1.0,
-           "source": source, "note": note, "created_at": datetime.now(timezone.utc).isoformat()}
+            raise SystemExit(
+                f"refused: {role} {k} {i!r} does not exist in table "
+                f"{NODE_TABLES.get(k, '?')}"
+                + (f" of project {project!r}" if project else "")
+                + " — an edge to a missing node is not stored"
+            )
+    row = {
+        "id": next_id(ns, "edge", "E"),
+        "project_id": project_id,
+        "kind": kind,
+        "src_kind": src_kind,
+        "src_id": src_id,
+        "dst_kind": dst_kind,
+        "dst_id": dst_id,
+        "confidence": float(confidence) if confidence is not None else -1.0,
+        "source": source,
+        "note": note,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
     for key, val in (("src_project", src_project), ("dst_project", dst_project)):
         if val:
             row[key] = val
@@ -403,7 +591,9 @@ def edge(ns: str, project_id: str, kind: str, src_kind: str, src_id: str,
     return row
 
 
-UNDECLARED_PROJECT_COL = re.compile(r"unknown column\(s\).*?\b(?:src_project|dst_project)\b", re.I)
+UNDECLARED_PROJECT_COL = re.compile(
+    r"unknown column\(s\).*?\b(?:src_project|dst_project)\b", re.I
+)
 
 
 def insert_edge(ns: str, row: dict) -> str:
@@ -424,28 +614,51 @@ def insert_edge(ns: str, row: dict) -> str:
     if st == 400 and UNDECLARED_PROJECT_COL.search(json.dumps(body)):
         dropped = [k for k in ("src_project", "dst_project") if k in row]
         keep = {k: v for k, v in row.items() if k not in ("src_project", "dst_project")}
-        keep["note"] = ((row.get("note") or "").rstrip()
-                        + f" [stored without {'/'.join(dropped)}: this namespace's `edge` declaration "
-                          f"predates them, so the project this edge crosses to is named here only]").strip()
+        keep["note"] = (
+            (row.get("note") or "").rstrip()
+            + f" [stored without {'/'.join(dropped)}: this namespace's `edge` declaration "
+            f"predates them, so the project this edge crosses to is named here only]"
+        ).strip()
         st2, body2, _ = db(tbl(ns, "edge"), "POST", [keep])
         if st2 in (200, 201):
-            return (f"WARNING: this namespace's `edge` declaration predates {' and '.join(dropped)}, so "
-                    f"{row['id']} is stored WITHOUT the project its cross-namespace endpoint belongs to "
-                    f"(the note says so). Remedy: run `auger init` and restart the DuckBrain API so the "
-                    f"declaration is re-read.")
+            return (
+                f"WARNING: this namespace's `edge` declaration predates {' and '.join(dropped)}, so "
+                f"{row['id']} is stored WITHOUT the project its cross-namespace endpoint belongs to "
+                f"(the note says so). Remedy: run `auger init` and restart the DuckBrain API so the "
+                f"declaration is re-read."
+            )
         raise SystemExit(f"insert edge failed ({st2}): {body2}")
     raise SystemExit(f"insert edge failed ({st}): {body}")
 
 
-def facet(ns: str, project_id: str, question_id: str, name: str, *, status: str = "open",
-          closed_by: str = "", note: str = "") -> dict:
+def facet(
+    ns: str,
+    project_id: str,
+    question_id: str,
+    name: str,
+    *,
+    status: str = "open",
+    closed_by: str = "",
+    note: str = "",
+) -> dict:
     """Write one facet row. The facet name is a label, not a gate — the set is extensible data."""
     if status not in FACET_STATUSES:
-        raise SystemExit(f"unknown facet status {status!r}: expected one of {', '.join(FACET_STATUSES)}")
+        raise SystemExit(
+            f"unknown facet status {status!r}: expected one of {', '.join(FACET_STATUSES)}"
+        )
     if not node_exists(ns, "question", question_id):
-        raise SystemExit(f"refused: question {question_id!r} does not exist — facet not stored")
-    row = {"id": next_id(ns, "facet", "F"), "project_id": project_id, "question_id": question_id,
-           "facet": name, "status": status, "closed_by": closed_by, "note": note}
+        raise SystemExit(
+            f"refused: question {question_id!r} does not exist — facet not stored"
+        )
+    row = {
+        "id": next_id(ns, "facet", "F"),
+        "project_id": project_id,
+        "question_id": question_id,
+        "facet": name,
+        "status": status,
+        "closed_by": closed_by,
+        "note": note,
+    }
     insert(ns, "facet", row)
     return row
 
@@ -478,7 +691,9 @@ def _scheduler_projects(path: str) -> set | None:
     except sqlite3.Error:
         return None
     try:
-        have = con.execute("select 1 from sqlite_master where type='table' and name='projects'").fetchone()
+        have = con.execute(
+            "select 1 from sqlite_master where type='table' and name='projects'"
+        ).fetchone()
         if not have:
             return None
         return {str(r[0]) for r in con.execute("select name from projects")}
@@ -495,7 +710,9 @@ def scheduler_db_path() -> str | None:
     different one. Otherwise the first candidate whose `projects` table can actually be read wins.
     """
     override = os.environ.get(SCHEDULER_DB_ENV)
-    candidates = [os.path.expanduser(override)] if override else list(SCHEDULER_DB_CANDIDATES)
+    candidates = (
+        [os.path.expanduser(override)] if override else list(SCHEDULER_DB_CANDIDATES)
+    )
     for path in candidates:
         if path and os.path.exists(path) and _scheduler_projects(path) is not None:
             return path
@@ -512,8 +729,15 @@ def known_projects() -> set | None:
     return None if path is None else _scheduler_projects(path)
 
 
-def bundle(ns: str, name: str, *, description: str = "", contract: str = "",
-           status: str = "proposed", bundle_id: str = "") -> dict:
+def bundle(
+    ns: str,
+    name: str,
+    *,
+    description: str = "",
+    contract: str = "",
+    status: str = "proposed",
+    bundle_id: str = "",
+) -> dict:
     """Write one bundle row: projects that must honour one contract (SPEC-002 section 1).
 
     `status` is a closed set the engine switches on, so an unknown one is refused by name rather
@@ -522,11 +746,20 @@ def bundle(ns: str, name: str, *, description: str = "", contract: str = "",
     whose members share a contract nobody has written down.
     """
     if status not in BUNDLE_STATUSES:
-        raise SystemExit(f"unknown bundle status {status!r}: expected one of {', '.join(BUNDLE_STATUSES)}")
+        raise SystemExit(
+            f"unknown bundle status {status!r}: expected one of {', '.join(BUNDLE_STATUSES)}"
+        )
     if not name:
-        raise SystemExit("refused: a bundle needs a name — the row is the only place its members are readable")
-    row = {"id": bundle_id or next_id(ns, "bundle", "B"), "name": name, "description": description,
-           "contract": contract, "status": status}
+        raise SystemExit(
+            "refused: a bundle needs a name — the row is the only place its members are readable"
+        )
+    row = {
+        "id": bundle_id or next_id(ns, "bundle", "B"),
+        "name": name,
+        "description": description,
+        "contract": contract,
+        "status": status,
+    }
     insert(ns, "bundle", row)
     return row
 
@@ -538,7 +771,9 @@ def bundle_exists(ns: str, bundle_id: str) -> bool:
     return bool(select(ns, "bundle", f"id=eq.{bundle_id}&select=id&limit=1"))
 
 
-def bundle_member(ns: str, bundle_id: str, project: str, role: str, *, note: str = "") -> dict:
+def bundle_member(
+    ns: str, bundle_id: str, project: str, role: str, *, note: str = ""
+) -> dict:
     """Write one membership row: what a project owes or expects inside a bundle.
 
     Membership is a TABLE and not a column because a project can belong to several bundles
@@ -556,36 +791,61 @@ def bundle_member(ns: str, bundle_id: str, project: str, role: str, *, note: str
     blast radius.
     """
     if role not in BUNDLE_ROLES:
-        raise SystemExit(f"unknown bundle role {role!r}: expected one of {', '.join(BUNDLE_ROLES)}")
+        raise SystemExit(
+            f"unknown bundle role {role!r}: expected one of {', '.join(BUNDLE_ROLES)}"
+        )
     if not bundle_exists(ns, bundle_id):
-        raise SystemExit(f"refused: bundle {bundle_id!r} does not exist — a member row for a "
-                         f"missing bundle is not stored")
+        raise SystemExit(
+            f"refused: bundle {bundle_id!r} does not exist — a member row for a "
+            f"missing bundle is not stored"
+        )
     projects = known_projects()
     if projects is None:
         override = os.environ.get(SCHEDULER_DB_ENV)
-        looked = [os.path.expanduser(override)] if override else list(SCHEDULER_DB_CANDIDATES)
-        raise SystemExit(f"refused: cannot verify project {project!r} — no readable scheduler DB "
-                         f"(looked in {', '.join(looked)}). A bundle member names a project the "
-                         f"fleet has, so membership is refused rather than guessed; point "
-                         f"{SCHEDULER_DB_ENV} at a scheduler.db with a `projects` table.")
+        looked = (
+            [os.path.expanduser(override)]
+            if override
+            else list(SCHEDULER_DB_CANDIDATES)
+        )
+        raise SystemExit(
+            f"refused: cannot verify project {project!r} — no readable scheduler DB "
+            f"(looked in {', '.join(looked)}). A bundle member names a project the "
+            f"fleet has, so membership is refused rather than guessed; point "
+            f"{SCHEDULER_DB_ENV} at a scheduler.db with a `projects` table."
+        )
     if project not in projects:
-        raise SystemExit(f"refused: project {project!r} has no row in the fleet's scheduler "
-                         f"projects table ({scheduler_db_path()}) — a bundle member names a "
-                         f"project the fleet has, and this name is not one")
-    have = select(ns, "bundle_member",
-                  f"bundle_id=eq.{bundle_id}&project=eq.{project}&select=id&limit=1")
+        raise SystemExit(
+            f"refused: project {project!r} has no row in the fleet's scheduler "
+            f"projects table ({scheduler_db_path()}) — a bundle member names a "
+            f"project the fleet has, and this name is not one"
+        )
+    have = select(
+        ns,
+        "bundle_member",
+        f"bundle_id=eq.{bundle_id}&project=eq.{project}&select=id&limit=1",
+    )
     if have:
-        raise SystemExit(f"refused: {project!r} is already a member of {bundle_id} (row "
-                         f"{have[0]['id']}) — a second row is the same membership written twice")
-    row = {"id": next_id(ns, "bundle_member", "BM"), "bundle_id": bundle_id, "project": project,
-           "role": role, "note": note}
+        raise SystemExit(
+            f"refused: {project!r} is already a member of {bundle_id} (row "
+            f"{have[0]['id']}) — a second row is the same membership written twice"
+        )
+    row = {
+        "id": next_id(ns, "bundle_member", "BM"),
+        "bundle_id": bundle_id,
+        "project": project,
+        "role": role,
+        "note": note,
+    }
     insert(ns, "bundle_member", row)
     return row
 
 
 def recall(ns: str, q: str, limit: int = 5) -> list:
     from urllib.parse import quote
-    st, body, _ = db(f"/api/memories?namespace={ns}&q={quote(q)}&limit={limit}", timeout=60)
+
+    st, body, _ = db(
+        f"/api/memories?namespace={ns}&q={quote(q)}&limit={limit}", timeout=60
+    )
     if st != 200:
         return []
     return body.get("items", []) if isinstance(body, dict) else []
@@ -632,7 +892,9 @@ def bundles_of(ns: str, project: str) -> list:
             ids.append(m["bundle_id"])
     out = []
     for bid in ids:
-        found = select_or_empty(ns, "bundle", f"id=eq.{bid}&select=id,name,status&limit=1")
+        found = select_or_empty(
+            ns, "bundle", f"id=eq.{bid}&select=id,name,status&limit=1"
+        )
         if found and found[0].get("status") != "retired":
             out.append(found[0])
     return out
@@ -647,7 +909,9 @@ def bundle_siblings(ns: str, project: str) -> list:
     """
     siblings: list = []
     for b in bundles_of(ns, project):
-        for m in select_or_empty(ns, "bundle_member", f"bundle_id=eq.{b['id']}&order=id.asc"):
+        for m in select_or_empty(
+            ns, "bundle_member", f"bundle_id=eq.{b['id']}&order=id.asc"
+        ):
             name = m.get("project") or ""
             if name and name != project and name not in siblings:
                 siblings.append(name)
@@ -710,8 +974,13 @@ def jev(state: str, questions: dict):
         return None, "no OpenRouter key found for JEV"
     last = "no attempt"
     for k in keys:
-        st, body, _ = _req(JEV_URL, "POST", {"model": JEV_MODEL, "state": state, "questions": questions},
-                           {"Authorization": f"Bearer {k}"}, timeout=90)
+        st, body, _ = _req(
+            JEV_URL,
+            "POST",
+            {"model": JEV_MODEL, "state": state, "questions": questions},
+            {"Authorization": f"Bearer {k}"},
+            timeout=90,
+        )
         if st == 200 and isinstance(body, dict) and "answers" in body:
             return body, None
         last = f"HTTP {st}: {str(body)[:180]}"
@@ -745,8 +1014,9 @@ PROPOSER_SYSTEM = (
     "nothing else: a single sentence ending in a question mark, no preamble, no numbering, no "
     "quotes, no explanation. It must be answerable for THIS project and must attack the specific "
     "decision whose confidence is too low to build on — not a general question about the subject. "
-    "Never repeat a question that is already open.")
-QUESTION_MAX = 400     # a proposed question longer than this is a document, not a question
+    "Never repeat a question that is already open."
+)
+QUESTION_MAX = 400  # a proposed question longer than this is a document, not a question
 #: A chat reply arrives with list markers, numbering or a "Question:" label often enough that
 #: stripping them is part of parsing rather than a courtesy. The group REPEATS, because the shapes
 #: stack: `1. "What drains the table?"` is numbering AND a quote before the question.
@@ -775,7 +1045,7 @@ def question_from_reply(resp) -> str:
     if not isinstance(choices, list) or not choices:
         return ""
     first = choices[0] if isinstance(choices[0], dict) else {}
-    text = ((first.get("message") or {}).get("content") or "")
+    text = (first.get("message") or {}).get("content") or ""
     if not isinstance(text, str):
         return ""
     for raw in text.splitlines():
@@ -796,12 +1066,19 @@ def propose_question(state: str) -> tuple[str, str]:
     keys = _jev_keys()
     if not keys:
         return "", "no OpenRouter key found for the question proposer"
-    body = {"model": proposer_model(), "max_tokens": 220,
-            "messages": [{"role": "system", "content": PROPOSER_SYSTEM},
-                         {"role": "user", "content": state}]}
+    body = {
+        "model": proposer_model(),
+        "max_tokens": 220,
+        "messages": [
+            {"role": "system", "content": PROPOSER_SYSTEM},
+            {"role": "user", "content": state},
+        ],
+    }
     last = "no attempt"
     for k in keys:
-        st, resp, _ = _req(PROPOSER_URL, "POST", body, {"Authorization": f"Bearer {k}"}, timeout=90)
+        st, resp, _ = _req(
+            PROPOSER_URL, "POST", body, {"Authorization": f"Bearer {k}"}, timeout=90
+        )
         if st == 200 and isinstance(resp, dict):
             text = question_from_reply(resp)
             if text:
@@ -845,7 +1122,10 @@ CLOSED_STATES = ("answered", "linked", "moot", "budget_thin")
 
 def q_states(ns: str, project_id: str) -> dict:
     """Every question of the project, by id — the nodes both walks move."""
-    return {q["id"]: q for q in select(ns, "question", f"project_id=eq.{project_id}&order=id.asc")}
+    return {
+        q["id"]: q
+        for q in select(ns, "question", f"project_id=eq.{project_id}&order=id.asc")
+    }
 
 
 def graph_edges(ns: str, project_id: str) -> list:
@@ -867,13 +1147,29 @@ def edge_index(es: list) -> dict:
     idx = {"children": {}, "blockers": {}, "closed": {}, "breaks": []}
     for e in es:
         k = e.get("kind")
-        if k == "derives_from" and e.get("src_kind") == "question" and e.get("dst_kind") == "question":
+        if (
+            k == "derives_from"
+            and e.get("src_kind") == "question"
+            and e.get("dst_kind") == "question"
+        ):
             idx["children"].setdefault(e["dst_id"], []).append(e["src_id"])
-        elif k == "blocks" and e.get("src_kind") == "question" and e.get("dst_kind") == "question":
+        elif (
+            k == "blocks"
+            and e.get("src_kind") == "question"
+            and e.get("dst_kind") == "question"
+        ):
             idx["blockers"].setdefault(e["src_id"], []).append(e["dst_id"])
-        elif k == "closes" and e.get("src_kind") == "decision" and e.get("dst_kind") == "question":
+        elif (
+            k == "closes"
+            and e.get("src_kind") == "decision"
+            and e.get("dst_kind") == "question"
+        ):
             idx["closed"].setdefault(e["src_id"], []).append(e["dst_id"])
-        elif k == "breaks" and e.get("dst_kind") == "decision" and not e.get("dst_project"):
+        elif (
+            k == "breaks"
+            and e.get("dst_kind") == "decision"
+            and not e.get("dst_project")
+        ):
             idx["breaks"].append(e)
     return idx
 
@@ -901,8 +1197,15 @@ def q_reason(ns: str, question_id: str) -> str:
     return ""
 
 
-def set_state(ns: str, project_id: str, question_id: str, status: str, reason: str,
-              *, closed_by: str = "") -> dict:
+def set_state(
+    ns: str,
+    project_id: str,
+    question_id: str,
+    status: str,
+    reason: str,
+    *,
+    closed_by: str = "",
+) -> dict:
     """Move one question to a state and RECORD WHY (SPEC-001 section 1: a question is never
     deleted, a moot one keeps its row and its reason).
 
@@ -914,24 +1217,45 @@ def set_state(ns: str, project_id: str, question_id: str, status: str, reason: s
     rather than in a new one with no explanation.
     """
     if status not in QUESTION_STATES:
-        raise SystemExit(f"unknown question state {status!r}: expected one of {', '.join(QUESTION_STATES)}")
-    fields = {"status": "open" if status == "open" else "closed",
-              "closed_by": "" if status == "open" else closed_by,
-              "note": reason}
+        raise SystemExit(
+            f"unknown question state {status!r}: expected one of {', '.join(QUESTION_STATES)}"
+        )
+    fields = {
+        "status": "open" if status == "open" else "closed",
+        "closed_by": "" if status == "open" else closed_by,
+        "note": reason,
+    }
     have = select(ns, "facet", f"question_id=eq.{question_id}&order=id.asc")
     if have:
         for f in have:
             patch(ns, "facet", f["id"], fields)
     else:
         first = int(next_id(ns, "facet", "F").split("-")[1])
-        insert(ns, "facet", [{"id": f"F-{first + i:0{ID_WIDTH}d}", "project_id": project_id,
-                              "question_id": question_id, "facet": name, **fields}
-                             for i, name in enumerate(facet_set())])
+        insert(
+            ns,
+            "facet",
+            [
+                {
+                    "id": f"F-{first + i:0{ID_WIDTH}d}",
+                    "project_id": project_id,
+                    "question_id": question_id,
+                    "facet": name,
+                    **fields,
+                }
+                for i, name in enumerate(facet_set())
+            ],
+        )
     return patch(ns, "question", question_id, {"status": status})
 
 
-def close_question(ns: str, project_id: str, decision_id: str, question_id: str,
-                   *, warnings: list | None = None) -> dict:
+def close_question(
+    ns: str,
+    project_id: str,
+    decision_id: str,
+    question_id: str,
+    *,
+    warnings: list | None = None,
+) -> dict:
     """SPEC-001 BEAT 2: record that ONE decision IS the answer to ONE question.
 
     Both writes the spec directs, and neither is optional. The `closes` edge is what
@@ -946,14 +1270,30 @@ def close_question(ns: str, project_id: str, decision_id: str, question_id: str,
     a link to nothing; a link to nothing reads as evidence that a question was answered.
     """
     if not node_exists(ns, "question", question_id):
-        raise SystemExit(f"refused: question {question_id!r} does not exist — a decision cannot "
-                         f"close a question that is not stored")
-    wrote = edge(ns, project_id, "closes", "decision", decision_id, "question", question_id,
-                 source="rule",
-                 note=f"BEAT 2: decision {decision_id} is the answer to {question_id}",
-                 warnings=warnings)
-    set_state(ns, project_id, question_id, "answered", f"answered by {decision_id}",
-              closed_by=decision_id)
+        raise SystemExit(
+            f"refused: question {question_id!r} does not exist — a decision cannot "
+            f"close a question that is not stored"
+        )
+    wrote = edge(
+        ns,
+        project_id,
+        "closes",
+        "decision",
+        decision_id,
+        "question",
+        question_id,
+        source="rule",
+        note=f"BEAT 2: decision {decision_id} is the answer to {question_id}",
+        warnings=warnings,
+    )
+    set_state(
+        ns,
+        project_id,
+        question_id,
+        "answered",
+        f"answered by {decision_id}",
+        closed_by=decision_id,
+    )
     return wrote
 
 
@@ -970,7 +1310,9 @@ def declared_columns(ns: str, table: str) -> list:
         return []
     for t in body.get("tables", []):
         if isinstance(t, dict) and t.get("name") == table:
-            return [c.get("name") for c in (t.get("columns") or []) if isinstance(c, dict)]
+            return [
+                c.get("name") for c in (t.get("columns") or []) if isinstance(c, dict)
+            ]
     return []
 
 
@@ -985,8 +1327,15 @@ def project_questions(ns: str, project_id: str) -> list:
     """
     cols = declared_columns(ns, "question")
     if cols and "project_id" not in cols:
-        ids = {f.get("question_id") for f in select_or_empty(ns, "facet", f"project_id=eq.{project_id}")}
-        return [q for q in select_or_empty(ns, "question", "order=id.asc") if q.get("id") in ids]
+        ids = {
+            f.get("question_id")
+            for f in select_or_empty(ns, "facet", f"project_id=eq.{project_id}")
+        }
+        return [
+            q
+            for q in select_or_empty(ns, "question", "order=id.asc")
+            if q.get("id") in ids
+        ]
     return select(ns, "question", f"project_id=eq.{project_id}&order=id.asc")
 
 
@@ -1037,20 +1386,31 @@ def unresolved_blockers(idx: dict, qs: dict, question_id: str) -> list:
     the dependency it created is still open. A blocker with no stored row is unresolved too — the
     conservative direction, since an edge that cannot be walked backwards must not read as done.
     """
-    return [b for b in idx["blockers"].get(question_id, ())
-            if (qs.get(b) or {}).get("status") not in SETTLED_STATES]
+    return [
+        b
+        for b in idx["blockers"].get(question_id, ())
+        if (qs.get(b) or {}).get("status") not in SETTLED_STATES
+    ]
 
 
 def askable_questions(ns: str, project_id: str) -> list:
     """Open questions nothing unresolved is blocking — the surface `ask` may show."""
     idx, qs = edge_index(graph_edges(ns, project_id)), q_states(ns, project_id)
-    return [q for q in qs.values() if q.get("status") == "open" and not unresolved_blockers(idx, qs, q["id"])]
+    return [
+        q
+        for q in qs.values()
+        if q.get("status") == "open" and not unresolved_blockers(idx, qs, q["id"])
+    ]
 
 
 def blocked_questions(ns: str, project_id: str) -> list:
     """Open questions held back by an unresolved blocker — counted, never surfaced."""
     idx, qs = edge_index(graph_edges(ns, project_id)), q_states(ns, project_id)
-    return [q for q in qs.values() if q.get("status") == "open" and unresolved_blockers(idx, qs, q["id"])]
+    return [
+        q
+        for q in qs.values()
+        if q.get("status") == "open" and unresolved_blockers(idx, qs, q["id"])
+    ]
 
 
 def decision_named(key: str) -> str:
@@ -1073,7 +1433,14 @@ def decision_for_evidence(ns: str, project_id: str, key: str) -> str:
     the question open instead.
     """
     did = decision_named(key)
-    return did if did and select(ns, "decision", f"id=eq.{did}&project_id=eq.{project_id}&select=id&limit=1") else ""
+    return (
+        did
+        if did
+        and select(
+            ns, "decision", f"id=eq.{did}&project_id=eq.{project_id}&select=id&limit=1"
+        )
+        else ""
+    )
 
 
 def gate_question(ns: str, project_id: str, text: str, limit: int = 5):
@@ -1095,10 +1462,18 @@ def gate_question(ns: str, project_id: str, text: str, limit: int = 5):
     hits = recall_many([where for where, _ in places], text, limit=limit)
     if not hits:
         return None, "", "", None
-    evidence = "\n".join(f"- {h.get('key')}: {h.get('content', '')[:400]}" for _, h in hits)
-    ans, err = jev(f"QUESTION UNDER CONSIDERATION:\n{text}\n\nSTORED EVIDENCE:\n{evidence}",
-                   {"already_answered": {"type": "noul",
-                    "instructions": "Is the question under consideration ALREADY fully answered by the stored evidence?"}})
+    evidence = "\n".join(
+        f"- {h.get('key')}: {h.get('content', '')[:400]}" for _, h in hits
+    )
+    ans, err = jev(
+        f"QUESTION UNDER CONSIDERATION:\n{text}\n\nSTORED EVIDENCE:\n{evidence}",
+        {
+            "already_answered": {
+                "type": "noul",
+                "instructions": "Is the question under consideration ALREADY fully answered by the stored evidence?",
+            }
+        },
+    )
     if err:
         return None, "", "", err
     v = _noul(ans["answers"], "already_answered")
@@ -1114,15 +1489,19 @@ def gate_question(ns: str, project_id: str, text: str, limit: int = 5):
             did = decision_named(key)
             # Read it back WHERE IT LIVES: a decision that cannot be read is not a link, and a link
             # to an unread row would be an invented one.
-            if did and not select_or_empty(where, "decision", f"id=eq.{did}&select=id&limit=1"):
+            if did and not select_or_empty(
+                where, "decision", f"id=eq.{did}&select=id&limit=1"
+            ):
                 did = ""
             src = next((p for w, p in places if w == where), "")
         if did:
             return v, did, src, None
-    return v, "", "", None           # answered, but by evidence that names no decision node
+    return v, "", "", None  # answered, but by evidence that names no decision node
 
 
-def propagate(ns: str, project_id: str, *, gate: bool = True, recheck: bool = False) -> dict:
+def propagate(
+    ns: str, project_id: str, *, gate: bool = True, recheck: bool = False
+) -> dict:
     """Run both walks once and report exactly what moved (SPEC-001 BEAT 4).
 
     The report is the verb's output AND the tests' handle on it:
@@ -1143,8 +1522,18 @@ def propagate(ns: str, project_id: str, *, gate: bool = True, recheck: bool = Fa
     qs = q_states(ns, project_id)
     idx = edge_index(graph_edges(ns, project_id))
     closed_by = questions_closed_by(ns, project_id, idx)
-    rep = {"moot": [], "reopened": [], "linked": [], "edges": [], "warnings": [], "askable": [],
-           "blocked": [], "unattributed": [], "ungated": [], "gate_error": None}
+    rep = {
+        "moot": [],
+        "reopened": [],
+        "linked": [],
+        "edges": [],
+        "warnings": [],
+        "askable": [],
+        "blocked": [],
+        "unattributed": [],
+        "ungated": [],
+        "gate_error": None,
+    }
 
     # ---- the rule walk: invalidation -> moot, then down the derives_from tree
     seen, queue = set(), []
@@ -1153,7 +1542,7 @@ def propagate(ns: str, project_id: str, *, gate: bool = True, recheck: bool = Fa
         for qid in closed_by.get(dead, ()):
             q = qs.get(qid)
             if q is None or q["status"] == "moot":
-                continue                      # already withdrawn, and it keeps the first reason
+                continue  # already withdrawn, and it keeps the first reason
             set_state(ns, project_id, qid, "moot", root, closed_by=dead)
             qs[qid]["status"] = "moot"
             seen.add(qid)
@@ -1163,7 +1552,7 @@ def propagate(ns: str, project_id: str, *, gate: bool = True, recheck: bool = Fa
         parent, root = queue.pop(0)
         for child in sorted(idx["children"].get(parent, ())):
             if child in seen:
-                continue                      # a cycle in derives_from cannot loop the walk
+                continue  # a cycle in derives_from cannot loop the walk
             seen.add(child)
             q = qs.get(child)
             if q is None:
@@ -1184,15 +1573,15 @@ def propagate(ns: str, project_id: str, *, gate: bool = True, recheck: bool = Fa
     for parent, kids in idx["children"].items():
         p = qs.get(parent)
         if p is None or p["status"] not in CLOSED_STATES:
-            continue                          # the trigger is the parent CLOSING
+            continue  # the trigger is the parent CLOSING
         for child in sorted(kids):
             q = qs.get(child)
             if q is None or q["status"] != "open":
                 continue
             if unresolved_blockers(idx, qs, child):
-                continue                      # blocked questions are not gated, only counted
+                continue  # blocked questions are not gated, only counted
             if q.get("jev_checked_at") and not recheck:
-                continue                      # the gate already examined this one
+                continue  # the gate already examined this one
             pending.append(child)
     if gate and pending:
         for i, child in enumerate(pending):
@@ -1203,8 +1592,15 @@ def propagate(ns: str, project_id: str, *, gate: bool = True, recheck: bool = Fa
                 rep["ungated"] = pending[i:]
                 break
             checked_at = datetime.now(timezone.utc).isoformat()
-            patch(ns, "question", child, {"jev_already_answered": -1.0 if verdict is None else verdict,
-                                         "jev_checked_at": checked_at})
+            patch(
+                ns,
+                "question",
+                child,
+                {
+                    "jev_already_answered": -1.0 if verdict is None else verdict,
+                    "jev_checked_at": checked_at,
+                },
+            )
             qs[child]["jev_checked_at"] = checked_at
             if verdict is not None and verdict >= T_ANSWERED:
                 if not dec_id:
@@ -1213,14 +1609,30 @@ def propagate(ns: str, project_id: str, *, gate: bool = True, recheck: bool = Fa
                 # SPEC-002 2.1: when the winning evidence came from a SIBLING's namespace, the link
                 # says so twice — on the edge (src_project, which also tells the referential check
                 # where the decision actually lives) and in the question's own reason.
-                row = edge(ns, project_id, "satisfies", "decision", dec_id, "question", child,
-                           confidence=verdict, source="gate", src_project=src_project,
-                           warnings=rep["warnings"],
-                           note=f"the gate found this question already answered (noul {verdict:.2f})"
-                                + (f" by {src_project}'s {dec_id}" if src_project else ""))
-                set_state(ns, project_id, child, "linked",
-                          f"linked by the gate to {dec_id} (noul {verdict:.2f})"
-                          + (f" in {src_project}" if src_project else ""), closed_by=dec_id)
+                row = edge(
+                    ns,
+                    project_id,
+                    "satisfies",
+                    "decision",
+                    dec_id,
+                    "question",
+                    child,
+                    confidence=verdict,
+                    source="gate",
+                    src_project=src_project,
+                    warnings=rep["warnings"],
+                    note=f"the gate found this question already answered (noul {verdict:.2f})"
+                    + (f" by {src_project}'s {dec_id}" if src_project else ""),
+                )
+                set_state(
+                    ns,
+                    project_id,
+                    child,
+                    "linked",
+                    f"linked by the gate to {dec_id} (noul {verdict:.2f})"
+                    + (f" in {src_project}" if src_project else ""),
+                    closed_by=dec_id,
+                )
                 qs[child]["status"] = "linked"
                 rep["linked"].append((child, dec_id, verdict, src_project))
                 rep["edges"].append(row["id"])
@@ -1236,28 +1648,42 @@ def cmd_propagate(a):
     pid = p["id"]
     rep = propagate(ns, pid, gate=not a.no_gate, recheck=a.recheck)
     print(f"project {pid}  |  {ns}")
-    print(f"moot: {len(rep['moot'])}   reopened: {len(rep['reopened'])}   linked: {len(rep['linked'])}")
+    print(
+        f"moot: {len(rep['moot'])}   reopened: {len(rep['reopened'])}   linked: {len(rep['linked'])}"
+    )
     for qid, reason in rep["moot"]:
         print(f"  moot       {qid}  {reason}")
     for qid, reason in rep["reopened"]:
         print(f"  reopened   {qid}  {reason}")
     for qid, dec_id, v, src in rep["linked"]:
-        print(f"  linked     {qid}  -> {dec_id} (noul {v:.2f})"
-              + (f"  from sibling {src} — the bundle was searched (SPEC-002 2.1)" if src else ""))
+        print(
+            f"  linked     {qid}  -> {dec_id} (noul {v:.2f})"
+            + (
+                f"  from sibling {src} — the bundle was searched (SPEC-002 2.1)"
+                if src
+                else ""
+            )
+        )
     for qid in rep["unattributed"]:
-        print(f"  WARNING    {qid}: the gate says answered, but the evidence names no decision "
-              f"— left open rather than linked to nothing")
+        print(
+            f"  WARNING    {qid}: the gate says answered, but the evidence names no decision "
+            f"— left open rather than linked to nothing"
+        )
     for w in rep["warnings"]:
         print(w)
     if rep["edges"]:
         print(f"edges written: {', '.join(rep['edges'])}")
-    print(f"newly askable: {len(rep['askable'])}   blocked by an unresolved question: {len(rep['blocked'])}")
+    print(
+        f"newly askable: {len(rep['askable'])}   blocked by an unresolved question: {len(rep['blocked'])}"
+    )
     texts = q_states(ns, pid)
     for qid in rep["askable"]:
         print(f"  askable    {qid}  {(texts.get(qid, {}).get('text') or '')[:90]}")
     if rep["gate_error"]:
         print(f"WARNING gate unavailable — {rep['gate_error']}")
-        print(f"        {len(rep['ungated'])} question(s) left open and NOT linked (fail-closed).")
+        print(
+            f"        {len(rep['ungated'])} question(s) left open and NOT linked (fail-closed)."
+        )
         return 1
     return 0
 
@@ -1302,7 +1728,7 @@ def cmd_propagate(a):
 # either — a question whose verdict is unknown is not asked, because asking it is exactly the
 # duplicate the gate exists to prevent. Both cases are named in the report, the unproposed /
 # ungated questions are printed with their text, and the verb exits non-zero.
-FOLLOWUP_CLASS = "follow_up"     # the `qclass` a question opened by this engine carries
+FOLLOWUP_CLASS = "follow_up"  # the `qclass` a question opened by this engine carries
 
 
 def feedback_budget() -> int:
@@ -1320,7 +1746,9 @@ def feedback_budget() -> int:
     except ValueError:
         raise SystemExit(f"refused: {BUDGET_ENV}={raw!r} is not an integer")
     if n < 0:
-        raise SystemExit(f"refused: {BUDGET_ENV}={raw!r} is negative — a ceiling cannot be")
+        raise SystemExit(
+            f"refused: {BUDGET_ENV}={raw!r} is negative — a ceiling cannot be"
+        )
     return n
 
 
@@ -1331,9 +1759,15 @@ def thin_decisions(ns: str, project_id: str) -> list:
     "unknown" is not "low" — the same distinction `status` makes. Ordered by confidence and then
     by id, so two runs over an unchanged project drill it in the same order.
     """
-    rows = select(ns, "decision", f"project_id=eq.{project_id}&order=confidence.asc,id.asc")
-    return [d for d in rows
-            if isinstance(d.get("confidence"), (int, float)) and 0 <= d["confidence"] < T_CONFIDENT]
+    rows = select(
+        ns, "decision", f"project_id=eq.{project_id}&order=confidence.asc,id.asc"
+    )
+    return [
+        d
+        for d in rows
+        if isinstance(d.get("confidence"), (int, float))
+        and 0 <= d["confidence"] < T_CONFIDENT
+    ]
 
 
 def drilled_decisions(ns: str, project_id: str, qs: dict | None = None) -> dict:
@@ -1365,14 +1799,23 @@ def decision_parent_question(ns: str, project_id: str, dec_row: dict) -> str:
     qid = (dec_row.get("question_id") or "").strip()
     if qid and node_exists(ns, "question", qid):
         return qid
-    for e in select(ns, "edge", f"project_id=eq.{project_id}&kind=eq.closes&src_id=eq.{dec_row['id']}"):
-        if e.get("src_kind") == "decision" and e.get("dst_kind") == "question" \
-                and node_exists(ns, "question", e["dst_id"]):
+    for e in select(
+        ns,
+        "edge",
+        f"project_id=eq.{project_id}&kind=eq.closes&src_id=eq.{dec_row['id']}",
+    ):
+        if (
+            e.get("src_kind") == "decision"
+            and e.get("dst_kind") == "question"
+            and node_exists(ns, "question", e["dst_id"])
+        ):
             return e["dst_id"]
     return ""
 
 
-def feedback_state(proj: dict, dec_row: dict, parent_text: str, open_questions: list) -> str:
+def feedback_state(
+    proj: dict, dec_row: dict, parent_text: str, open_questions: list
+) -> str:
     """Everything the proposer needs to write ONE specific question, and nothing else.
 
     Deliberately narrow. The proposer is told about the SEED (what the project is), the DECISION
@@ -1381,23 +1824,39 @@ def feedback_state(proj: dict, dec_row: dict, parent_text: str, open_questions: 
     shown the stored evidence: the gate reads that, and a proposer fed the answer tends to restate
     it as a question.
     """
-    lines = [f"PROJECT SEED:\n{(proj.get('seed') or '')[:800]}", "",
-             "THE DECISION WHOSE CONFIDENCE IS TOO LOW TO BUILD ON:",
-             f"{dec_row['id']} ({dec_row.get('domain') or 'no domain'}): {dec_row.get('chosen')}",
-             f"confidence: {dec_row.get('confidence')}",
-             f"reversal cost: {dec_row.get('reversal_cost') or 'not recorded'}",
-             f"why the rejected alternatives lost: {dec_row.get('why_not') or 'not recorded'}"]
+    lines = [
+        f"PROJECT SEED:\n{(proj.get('seed') or '')[:800]}",
+        "",
+        "THE DECISION WHOSE CONFIDENCE IS TOO LOW TO BUILD ON:",
+        f"{dec_row['id']} ({dec_row.get('domain') or 'no domain'}): {dec_row.get('chosen')}",
+        f"confidence: {dec_row.get('confidence')}",
+        f"reversal cost: {dec_row.get('reversal_cost') or 'not recorded'}",
+        f"why the rejected alternatives lost: {dec_row.get('why_not') or 'not recorded'}",
+    ]
     if parent_text:
         lines += ["", f"THE QUESTION THIS DECISION ANSWERED: {parent_text}"]
     if open_questions:
         lines += ["", "QUESTIONS ALREADY OPEN IN THIS PROJECT (never repeat one):"]
-        lines += [f"- {q['id']}: {(q.get('text') or '')[:140]}" for q in open_questions[:8]]
+        lines += [
+            f"- {q['id']}: {(q.get('text') or '')[:140]}" for q in open_questions[:8]
+        ]
     return "\n".join(lines)
 
 
-def record_followup(ns: str, project_id: str, dec_row: dict, text: str, status: str, *,
-                    parent_qid: str = "", noul: float | None = None, checked_at: str = "",
-                    reason: str = "", closed_by: str = "", warnings: list | None = None) -> dict:
+def record_followup(
+    ns: str,
+    project_id: str,
+    dec_row: dict,
+    text: str,
+    status: str,
+    *,
+    parent_qid: str = "",
+    noul: float | None = None,
+    checked_at: str = "",
+    reason: str = "",
+    closed_by: str = "",
+    warnings: list | None = None,
+) -> dict:
     """Write ONE follow-up question row and its edges. Returns {"row":..., "edges":[...]}.
 
     The row travels with the gate's own verdict (`jev_already_answered` / `jev_checked_at` — the
@@ -1418,24 +1877,55 @@ def record_followup(ns: str, project_id: str, dec_row: dict, text: str, status: 
     qid = next_id(ns, "question", "Q")
     ring = 1
     if parent_qid:
-        prows = select_or_empty(ns, "question", f"id=eq.{parent_qid}&select=ring&limit=1")
+        prows = select_or_empty(
+            ns, "question", f"id=eq.{parent_qid}&select=ring&limit=1"
+        )
         ring = int(prows[0].get("ring") or 0) + 1 if prows else 1
-    row = {"id": qid, "project_id": project_id, "domain": dec_row.get("domain") or "", "text": text,
-           "ring": ring, "qclass": FOLLOWUP_CLASS, "status": "open",
-           "jev_already_answered": -1.0 if noul is None else float(noul),
-           "jev_checked_at": checked_at}
+    row = {
+        "id": qid,
+        "project_id": project_id,
+        "domain": dec_row.get("domain") or "",
+        "text": text,
+        "ring": ring,
+        "qclass": FOLLOWUP_CLASS,
+        "status": "open",
+        "jev_already_answered": -1.0 if noul is None else float(noul),
+        "jev_checked_at": checked_at,
+    }
     insert(ns, "question", row)
     for name in facet_set():
         facet(ns, project_id, qid, name)
-    edges = [edge(ns, project_id, "opens", "decision", dec_row["id"], "question", qid,
-                  source="rule", warnings=warnings,
-                  note=f"the confidence in {dec_row['id']} is {dec_row.get('confidence')} "
-                       f"(< {T_CONFIDENT}), so the engine proposed a follow-up "
-                       f"({proposer_model()})")["id"]]
+    edges = [
+        edge(
+            ns,
+            project_id,
+            "opens",
+            "decision",
+            dec_row["id"],
+            "question",
+            qid,
+            source="rule",
+            warnings=warnings,
+            note=f"the confidence in {dec_row['id']} is {dec_row.get('confidence')} "
+            f"(< {T_CONFIDENT}), so the engine proposed a follow-up "
+            f"({proposer_model()})",
+        )["id"]
+    ]
     if parent_qid:
-        edges.append(edge(ns, project_id, "derives_from", "question", qid, "question", parent_qid,
-                          source="rule", warnings=warnings,
-                          note=f"{qid} drills {dec_row['id']}, which answers {parent_qid}")["id"])
+        edges.append(
+            edge(
+                ns,
+                project_id,
+                "derives_from",
+                "question",
+                qid,
+                "question",
+                parent_qid,
+                source="rule",
+                warnings=warnings,
+                note=f"{qid} drills {dec_row['id']}, which answers {parent_qid}",
+            )["id"]
+        )
     if status != "open":
         set_state(ns, project_id, qid, status, reason, closed_by=closed_by)
     row["status"] = status
@@ -1467,12 +1957,29 @@ def feedback(ns: str, project_id: str, *, budget: int | None = None) -> dict:
     """
     ceiling = feedback_budget() if budget is None else int(budget)
     if ceiling < 0:
-        raise SystemExit(f"refused: a question ceiling of {ceiling} is negative — a ceiling cannot be")
+        raise SystemExit(
+            f"refused: a question ceiling of {ceiling} is negative — a ceiling cannot be"
+        )
     proj = _project(ns, project_id)
     pid = proj["id"]
-    rep = {"ceiling": ceiling, "thin": [], "drilled": [], "proposed": [], "asked": [], "refused": [],
-           "budget_thin": [], "unattributed": [], "unproposed": [], "ungated": [], "escalations": [],
-           "edges": [], "askable": [], "warnings": [], "proposer_error": None, "gate_error": None}
+    rep = {
+        "ceiling": ceiling,
+        "thin": [],
+        "drilled": [],
+        "proposed": [],
+        "asked": [],
+        "refused": [],
+        "budget_thin": [],
+        "unattributed": [],
+        "unproposed": [],
+        "ungated": [],
+        "escalations": [],
+        "edges": [],
+        "askable": [],
+        "warnings": [],
+        "proposer_error": None,
+        "gate_error": None,
+    }
 
     # ---- 1. the thinnest decisions, minus the ones already being drilled
     qs = q_states(ns, pid)
@@ -1491,16 +1998,22 @@ def feedback(ns: str, project_id: str, *, budget: int | None = None) -> dict:
     # ---- 2. Q5: a decision this thin is a PRIORITY JUDGMENT, not a drilling problem. Escalate it
     # with a default and CONTINUE on the default — the run is unattended and never blocks.
     for d in cand:
-        if isinstance(d.get("confidence"), (int, float)) and d["confidence"] < T_PRIORITY:
-            esc = escalate(ns, pid,
-                           question=f"priority judgment: {d['id']} has confidence "
-                                    f"{d['confidence']:.2f}, below the {T_PRIORITY} floor — "
-                                    f"{d.get('chosen')} rests on a weighing only you can make",
-                           options=d["id"],
-                           default_action=f"continue ON THE DEFAULT: the run drills {d['id']} "
-                                          f"first and does not wait for an answer",
-                           risk=f"every decision resting on {d['id']} inherits a confidence of "
-                                f"{d['confidence']:.2f}")
+        if (
+            isinstance(d.get("confidence"), (int, float))
+            and d["confidence"] < T_PRIORITY
+        ):
+            esc = escalate(
+                ns,
+                pid,
+                question=f"priority judgment: {d['id']} has confidence "
+                f"{d['confidence']:.2f}, below the {T_PRIORITY} floor — "
+                f"{d.get('chosen')} rests on a weighing only you can make",
+                options=d["id"],
+                default_action=f"continue ON THE DEFAULT: the run drills {d['id']} "
+                f"first and does not wait for an answer",
+                risk=f"every decision resting on {d['id']} inherits a confidence of "
+                f"{d['confidence']:.2f}",
+            )
             rep["escalations"].append(esc["id"])
 
     # ---- 3. propose ONE question per decision (the large model's half of Q2)
@@ -1528,9 +2041,17 @@ def feedback(ns: str, project_id: str, *, budget: int | None = None) -> dict:
             rep["gate_error"] = err
             rep["ungated"] = [(x["id"], t) for x, t, _ in proposed[i:]]
             break
-        gated.append({"dec": d, "text": text, "parent": parent, "noul": verdict,
-                      "dec_id": dec_id, "src_project": src_project,
-                      "checked_at": datetime.now(timezone.utc).isoformat()})
+        gated.append(
+            {
+                "dec": d,
+                "text": text,
+                "parent": parent,
+                "noul": verdict,
+                "dec_id": dec_id,
+                "src_project": src_project,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
     if not gated:
         rep["askable"] = [q["id"] for q in askable_questions(ns, pid)]
         return rep
@@ -1538,13 +2059,23 @@ def feedback(ns: str, project_id: str, *, budget: int | None = None) -> dict:
     # ---- 5. rank (thinnest decision first, then the question the gate judged LEAST answered — a
     # noul of None means no stored evidence could answer it at all, which is the most unanswered
     # there is) and ask while the ceiling lasts; the rest are RECORDED, not dropped.
-    ranked = sorted(gated, key=lambda g: (_conf(g["dec"]), -1.0 if g["noul"] is None else g["noul"],
-                                          g["dec"]["id"]))
+    ranked = sorted(
+        gated,
+        key=lambda g: (
+            _conf(g["dec"]),
+            -1.0 if g["noul"] is None else g["noul"],
+            g["dec"]["id"],
+        ),
+    )
     left = ceiling
     for g in ranked:
         d, text, noul = g["dec"], g["text"], g["noul"]
-        shared = {"parent_qid": g["parent"], "noul": noul, "checked_at": g["checked_at"],
-                  "warnings": rep["warnings"]}
+        shared = {
+            "parent_qid": g["parent"],
+            "noul": noul,
+            "checked_at": g["checked_at"],
+            "warnings": rep["warnings"],
+        }
         if noul is not None and noul >= T_ANSWERED:
             if not g["dec_id"]:
                 # Answered by evidence that names no decision: linking it would be an invented
@@ -1555,46 +2086,79 @@ def feedback(ns: str, project_id: str, *, budget: int | None = None) -> dict:
                 rep["warnings"].append(
                     f"WARNING: the gate scores the proposed question for {d['id']} as already "
                     f"answered (noul {noul:.2f}) but the evidence names no decision — not asked, "
-                    f"not linked, not stored.")
+                    f"not linked, not stored."
+                )
                 continue
             where = f" in {g['src_project']}" if g["src_project"] else ""
-            rec = record_followup(ns, pid, d, text, "linked",
-                                  reason=f"refused: the gate found this already answered by "
-                                         f"{g['dec_id']} (noul {noul:.2f}){where}", **shared,
-                                  closed_by=g["dec_id"])
-            sat = edge(ns, pid, "satisfies", "decision", g["dec_id"], "question", rec["row"]["id"],
-                       confidence=noul, source="gate", src_project=g["src_project"],
-                       warnings=rep["warnings"],
-                       note=f"the gate found this question already answered by {g['dec_id']}"
-                            f" (noul {noul:.2f}){where}")
+            rec = record_followup(
+                ns,
+                pid,
+                d,
+                text,
+                "linked",
+                reason=f"refused: the gate found this already answered by "
+                f"{g['dec_id']} (noul {noul:.2f}){where}",
+                **shared,
+                closed_by=g["dec_id"],
+            )
+            sat = edge(
+                ns,
+                pid,
+                "satisfies",
+                "decision",
+                g["dec_id"],
+                "question",
+                rec["row"]["id"],
+                confidence=noul,
+                source="gate",
+                src_project=g["src_project"],
+                warnings=rep["warnings"],
+                note=f"the gate found this question already answered by {g['dec_id']}"
+                f" (noul {noul:.2f}){where}",
+            )
             rec["edges"].append(sat["id"])
-            rep["refused"].append((rec["row"]["id"], g["dec_id"], noul, g["src_project"]))
+            rep["refused"].append(
+                (rec["row"]["id"], g["dec_id"], noul, g["src_project"])
+            )
         elif left > 0:
             rec = record_followup(ns, pid, d, text, "open", **shared)
             left -= 1
             rep["asked"].append((rec["row"]["id"], d["id"], noul, text))
         else:
             rec = record_followup(
-                ns, pid, d, text, "budget_thin",
+                ns,
+                pid,
+                d,
+                text,
+                "budget_thin",
                 reason=f"budget-thin: the run's ceiling of {ceiling} question(s) was reached — "
-                       f"recorded, NOT asked", **shared)
+                f"recorded, NOT asked",
+                **shared,
+            )
             rep["budget_thin"].append(
-                (rec["row"]["id"], d["id"],
-                 f"budget-thin: the run's ceiling of {ceiling} question(s) was reached — "
-                 f"recorded, NOT asked"))
+                (
+                    rec["row"]["id"],
+                    d["id"],
+                    f"budget-thin: the run's ceiling of {ceiling} question(s) was reached — "
+                    f"recorded, NOT asked",
+                )
+            )
         rep["edges"] += rec["edges"]
 
     # ---- 6. the run-level marker: the ceiling WAS hit, and that is on the record too.
     if rep["budget_thin"]:
-        esc = escalate(ns, pid,
-                       question=f"budget-thin: true — the run hit its ceiling of {ceiling} "
-                                f"question(s) with {len(rep['budget_thin'])} proposed question(s) "
-                                f"recorded but NOT asked",
-                       options=", ".join(q for q, _, _ in rep["budget_thin"]),
-                       default_action="the questions keep their rows in state budget_thin and are "
-                                      "asked on a later run",
-                       risk="those branches stay thin until then: an honest shallow branch, never "
-                            "a silent one")
+        esc = escalate(
+            ns,
+            pid,
+            question=f"budget-thin: true — the run hit its ceiling of {ceiling} "
+            f"question(s) with {len(rep['budget_thin'])} proposed question(s) "
+            f"recorded but NOT asked",
+            options=", ".join(q for q, _, _ in rep["budget_thin"]),
+            default_action="the questions keep their rows in state budget_thin and are "
+            "asked on a later run",
+            risk="those branches stay thin until then: an honest shallow branch, never "
+            "a silent one",
+        )
         rep["escalations"].append(esc["id"])
     rep["askable"] = [q["id"] for q in askable_questions(ns, pid)]
     return rep
@@ -1617,41 +2181,58 @@ def cmd_feedback(a):
         print(f"  {did}  {conf}  <- thinnest first")
     for did, qid in rep["drilled"]:
         print(f"  {did}  already drilled: {qid} is open and awaiting an answer")
-    print(f"ceiling: {rep['ceiling']} question(s) this run   "
-          f"proposed: {len(rep['proposed'])}   asked: {len(rep['asked'])}   "
-          f"refused: {len(rep['refused'])}   budget-thin: {len(rep['budget_thin'])}")
+    print(
+        f"ceiling: {rep['ceiling']} question(s) this run   "
+        f"proposed: {len(rep['proposed'])}   asked: {len(rep['asked'])}   "
+        f"refused: {len(rep['refused'])}   budget-thin: {len(rep['budget_thin'])}"
+    )
     for qid, did, noul, text in rep["asked"]:
         print(f"  ASKED       {qid}  <- {did}  {text}")
     for qid, did, _reason in rep["budget_thin"]:
-        print(f"  BUDGET-THIN {qid}  <- {did}  recorded, NOT asked (ceiling {rep['ceiling']})")
+        print(
+            f"  BUDGET-THIN {qid}  <- {did}  recorded, NOT asked (ceiling {rep['ceiling']})"
+        )
     for qid, did, noul, src in rep["refused"]:
-        print(f"  REFUSED     {qid}  already answered by {did} (noul {noul:.2f})"
-              + (f" in {src}" if src else "") + " — NOT asked")
+        print(
+            f"  REFUSED     {qid}  already answered by {did} (noul {noul:.2f})"
+            + (f" in {src}" if src else "")
+            + " — NOT asked"
+        )
     for did, text, noul in rep["unattributed"]:
-        print(f"  UNLINKED    <- {did}  the gate says answered (noul {noul:.2f}) but the evidence "
-              f"names no decision — not asked: {text}")
+        print(
+            f"  UNLINKED    <- {did}  the gate says answered (noul {noul:.2f}) but the evidence "
+            f"names no decision — not asked: {text}"
+        )
     for line in rep["warnings"]:
         print(line)
     if rep["escalations"]:
-        print(f"escalations: {', '.join(rep['escalations'])}  "
-              f"(questions only a person can weight, each with a default — the run continued on it)")
+        print(
+            f"escalations: {', '.join(rep['escalations'])}  "
+            f"(questions only a person can weight, each with a default — the run continued on it)"
+        )
     for qid in rep["askable"]:
         print(f"  askable     {qid}")
     if rep["edges"]:
         print(f"edges written: {', '.join(rep['edges'])}")
     if rep["budget_thin"]:
-        print(f"budget-thin: true — {len(rep['budget_thin'])} question(s) recorded but NOT asked "
-              f"(ceiling {rep['ceiling']})")
+        print(
+            f"budget-thin: true — {len(rep['budget_thin'])} question(s) recorded but NOT asked "
+            f"(ceiling {rep['ceiling']})"
+        )
     if rep["proposer_error"]:
         print(f"WARNING proposer unavailable — {rep['proposer_error']}")
-        print(f"        {len(rep['unproposed'])} decision(s) left unproposed: "
-              f"{', '.join(rep['unproposed'])}")
+        print(
+            f"        {len(rep['unproposed'])} decision(s) left unproposed: "
+            f"{', '.join(rep['unproposed'])}"
+        )
         print("        (fail-closed: no question is invented without the model.)")
         return 1
     if rep["gate_error"]:
         print(f"WARNING gate unavailable — {rep['gate_error']}")
-        print(f"        {len(rep['ungated'])} proposed question(s) were NOT asked and NOT stored "
-              f"(fail-closed):")
+        print(
+            f"        {len(rep['ungated'])} proposed question(s) were NOT asked and NOT stored "
+            f"(fail-closed):"
+        )
         for did, text in rep["ungated"]:
             print(f"          {did}  {text}")
         return 1
@@ -1670,7 +2251,11 @@ def cmd_init(a):
         raise SystemExit(f"could not list namespaces ({st}): {body}")
     if isinstance(body, dict):
         body = body.get("namespaces", [])
-    names = [n.get("name") for n in body if isinstance(n, dict)] if isinstance(body, list) else []
+    names = (
+        [n.get("name") for n in body if isinstance(n, dict)]
+        if isinstance(body, list)
+        else []
+    )
     created = False
     if ns not in names:
         st, body, _ = db("/api/namespaces", "POST", {"name": ns})
@@ -1682,9 +2267,13 @@ def cmd_init(a):
     os.makedirs(d, exist_ok=True)
     wrote = []
     for name, cols in COLS.items():
-        decl = {"name": name, "format": "jsonl-objects", "primary": PRIMARY[name],
-                "glob": f"tables/{name}.jsonl",
-                "columns": [{"name": c, "type": t} for c, t in cols]}
+        decl = {
+            "name": name,
+            "format": "jsonl-objects",
+            "primary": PRIMARY[name],
+            "glob": f"tables/{name}.jsonl",
+            "columns": [{"name": c, "type": t} for c, t in cols],
+        }
         p = os.path.join(d, f"{name}.table.json")
         text = json.dumps(decl, indent=1)
         current = None
@@ -1696,7 +2285,9 @@ def cmd_init(a):
                 f.write(text)
             wrote.append(name)
     st, live, _ = db(f"/api/ns/{ns}/tables")
-    have = sorted(t["name"] for t in (live.get("tables", []) if isinstance(live, dict) else []))
+    have = sorted(
+        t["name"] for t in (live.get("tables", []) if isinstance(live, dict) else [])
+    )
     print(f"namespace {ns}: {'created' if created else 'existing'}")
     print(f"declared: {len(have)}/{len(COLS)} tables -> {', '.join(have)}")
     if wrote:
@@ -1723,8 +2314,14 @@ def cmd_start(a):
     if a.seed_file:
         with open(a.seed_file, errors="replace") as f:
             seed = f.read()
-    row = {"id": pid, "name": a.name or ns, "seed": seed, "core_statement": "",
-           "status": "open", "created_at": datetime.now(timezone.utc).isoformat()}
+    row = {
+        "id": pid,
+        "name": a.name or ns,
+        "seed": seed,
+        "core_statement": "",
+        "status": "open",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
     insert(ns, "project", row)
     remember(ns, f"/auger/{pid}/seed", seed)
     print(f"project {pid} in namespace {ns}")
@@ -1737,42 +2334,78 @@ def cmd_ask(a):
     ns, pid = a.namespace, a.project_id
     p = _project(ns, pid)
     pid = p["id"]
-    seats = select(ns, "decision", f"project_id=eq.{pid}&confidence=lt.{T_CONFIDENT}&select=id,domain,chosen,confidence,status&order=confidence.asc")
+    seats = select(
+        ns,
+        "decision",
+        f"project_id=eq.{pid}&confidence=lt.{T_CONFIDENT}&select=id,domain,chosen,confidence,status&order=confidence.asc",
+    )
     unknown = select(ns, "unknown", f"project_id=eq.{pid}")
     unans = select(ns, "question", f"project_id=eq.{pid}&status=eq.open")
     hits = recall(ns, p.get("seed", "") or "project spec", limit=6)
-    evidence = "\n".join(f"- {h.get('key')}: {h.get('content','')[:300]}" for h in hits)
-    decisions = "\n".join(f"- {d['id']} (conf {d['confidence']}): {d['chosen']}" for d in seats) or "(none yet)"
-    state = (f"SEED:\n{p.get('seed','')}\n\nDECISIONS:\n{decisions}\n\n"
-             f"OPEN QUESTIONS: {len(unans)}\nUNKNOWNS: {len(unknown)}\n\nRELATED EVIDENCE:\n{evidence}")
+    evidence = "\n".join(
+        f"- {h.get('key')}: {h.get('content', '')[:300]}" for h in hits
+    )
+    decisions = (
+        "\n".join(f"- {d['id']} (conf {d['confidence']}): {d['chosen']}" for d in seats)
+        or "(none yet)"
+    )
+    state = (
+        f"SEED:\n{p.get('seed', '')}\n\nDECISIONS:\n{decisions}\n\n"
+        f"OPEN QUESTIONS: {len(unans)}\nUNKNOWNS: {len(unknown)}\n\nRELATED EVIDENCE:\n{evidence}"
+    )
     qs = {
-        "next_subject": {"type": "choice", "instructions": "Which subject of this system needs coverage next?",
-            "criteria": {"none_needed": "evidence is sufficient for a v1",
-                         "deployment_and_alerts": "deployment, boot survival, failure notification",
-                         "retention_and_privacy": "retention horizons, privacy, data lifecycle",
-                         "concurrency_and_scaling": "concurrency, load, growth beyond v1",
-                         "testability": "how correctness will be proven"}},
-        "new_question": {"type": "choice", "instructions": "Which single question should be asked next?",
-            "criteria": {"how_does_it_fail": "what happens when a component stops working",
-                         "what_does_it_break": "which existing decision this next choice would invalidate",
-                         "what_is_the_data": "what the data means, not where it is stored",
-                         "who_owns_it": "ownership and lifecycle after delivery",
-                         "how_is_it_tested": "the test that proves it works",
-                         "none": "nothing left worth asking"}},
-        "already_answered": {"type": "noul", "instructions": "Is that question already fully answered by the evidence above?"},
-        "completeness": {"type": "score", "instructions": "How complete is the design evidence for a buildable v1?",
-            "criteria": ["nothing decided", "partial, major gaps", "mostly decided, minor gaps",
-                         "decided enough to build", "complete and verified"]},
+        "next_subject": {
+            "type": "choice",
+            "instructions": "Which subject of this system needs coverage next?",
+            "criteria": {
+                "none_needed": "evidence is sufficient for a v1",
+                "deployment_and_alerts": "deployment, boot survival, failure notification",
+                "retention_and_privacy": "retention horizons, privacy, data lifecycle",
+                "concurrency_and_scaling": "concurrency, load, growth beyond v1",
+                "testability": "how correctness will be proven",
+            },
+        },
+        "new_question": {
+            "type": "choice",
+            "instructions": "Which single question should be asked next?",
+            "criteria": {
+                "how_does_it_fail": "what happens when a component stops working",
+                "what_does_it_break": "which existing decision this next choice would invalidate",
+                "what_is_the_data": "what the data means, not where it is stored",
+                "who_owns_it": "ownership and lifecycle after delivery",
+                "how_is_it_tested": "the test that proves it works",
+                "none": "nothing left worth asking",
+            },
+        },
+        "already_answered": {
+            "type": "noul",
+            "instructions": "Is that question already fully answered by the evidence above?",
+        },
+        "completeness": {
+            "type": "score",
+            "instructions": "How complete is the design evidence for a buildable v1?",
+            "criteria": [
+                "nothing decided",
+                "partial, major gaps",
+                "mostly decided, minor gaps",
+                "decided enough to build",
+                "complete and verified",
+            ],
+        },
     }
     ans, err = jev(state, qs)
     print(f"project {pid}  |  {ns}")
-    print(f"low-confidence decisions (<{T_CONFIDENT}): {len(seats)}   open questions: {len(unans)}   unknowns: {len(unknown)}")
+    print(
+        f"low-confidence decisions (<{T_CONFIDENT}): {len(seats)}   open questions: {len(unans)}   unknowns: {len(unknown)}"
+    )
     # The askable surface (SPEC-001 BEAT 4 + 5): a question ordered behind an unresolved blocker
     # is NOT surfaced here. Blocked questions are counted, never named — "not surfaced" is the
     # whole point of the edge, and a reader who can see the text of one has been shown it.
     ask = askable_questions(ns, pid)
     blocked = blocked_questions(ns, pid)
-    print(f"askable (open, unblocked): {len(ask)}   blocked by an unresolved question: {len(blocked)}")
+    print(
+        f"askable (open, unblocked): {len(ask)}   blocked by an unresolved question: {len(blocked)}"
+    )
     for q in ask:
         print(f"  {q['id']}  {(q.get('text') or '')[:100]}")
     if err:
@@ -1783,14 +2416,22 @@ def cmd_ask(a):
     nq = ans["answers"].get("new_question", {})
     comp = ans["answers"].get("completeness", {})
     already = _noul(ans["answers"], "already_answered")
-    print(f"\ncompleteness : {comp.get('score')} / 4  (confidence {comp.get('confidence')})")
+    print(
+        f"\ncompleteness : {comp.get('score')} / 4  (confidence {comp.get('confidence')})"
+    )
     print(f"next subject : {subj.get('choice')}  ({subj.get('confidence')})")
     if subj.get("confidence", 0) < T_SUBJECT:
-        print(f"               ^ below threshold {T_SUBJECT} — treat as one option, not an answer")
+        print(
+            f"               ^ below threshold {T_SUBJECT} — treat as one option, not an answer"
+        )
     print(f"next question: {nq.get('choice')}  ({nq.get('confidence')})")
-    print(f"already answered? {already}  ->", "ask something else" if (already or 0) >= T_ANSWERED
-          else "genuinely new, ask it")
-    print(f"\njev cost: {ans.get('usage',{}).get('cost')}  build: {ans.get('model')}")
+    print(
+        f"already answered? {already}  ->",
+        "ask something else"
+        if (already or 0) >= T_ANSWERED
+        else "genuinely new, ask it",
+    )
+    print(f"\njev cost: {ans.get('usage', {}).get('cost')}  build: {ans.get('model')}")
     return 0
 
 
@@ -1835,13 +2476,18 @@ def insert_decision(ns: str, row: dict) -> str:
     if st in (200, 201):
         return ""
     if "scope" in row and st == 400 and UNDECLARED_SCOPE.search(json.dumps(body)):
-        st2, body2, _ = db(tbl(ns, "decision"), "POST",
-                           [{k: v for k, v in row.items() if k != "scope"}])
+        st2, body2, _ = db(
+            tbl(ns, "decision"),
+            "POST",
+            [{k: v for k, v in row.items() if k != "scope"}],
+        )
         if st2 in (200, 201):
-            return (f"WARNING: this namespace's `decision` declaration predates `scope` and the API "
-                    f"is serving a cached declaration, so {row['id']} is stored {DEFAULT_SCOPE}-scoped, "
-                    f"NOT bundle-scoped. Remedy: run `auger init` and restart the DuckBrain API so "
-                    f"the declaration is re-read.")
+            return (
+                f"WARNING: this namespace's `decision` declaration predates `scope` and the API "
+                f"is serving a cached declaration, so {row['id']} is stored {DEFAULT_SCOPE}-scoped, "
+                f"NOT bundle-scoped. Remedy: run `auger init` and restart the DuckBrain API so "
+                f"the declaration is re-read."
+            )
         raise SystemExit(f"insert decision failed ({st2}): {body2}")
     raise SystemExit(f"insert decision failed ({st}): {body}")
 
@@ -1863,12 +2509,20 @@ def insert_decision(ns: str, row: dict) -> str:
 # rather than three separate questions: a bundle with four members and six shared contracts would
 # otherwise cost eighteen model calls for one answer.
 IMPACT_OUTCOMES = ("unchanged", "change", "invalidate")
-T_IMPACT_CHANGE = 0.5        # score below this    -> the sibling's decision is untouched
-T_IMPACT_INVALIDATE = 1.5    # score at/above this -> the sibling's contract is BROKEN
+T_IMPACT_CHANGE = 0.5  # score below this    -> the sibling's decision is untouched
+T_IMPACT_INVALIDATE = 1.5  # score at/above this -> the sibling's contract is BROKEN
 
 
-def escalate(ns: str, project_id: str, question: str, *, options: str = "", default_action: str = "",
-             risk: str = "", status: str = "open") -> dict:
+def escalate(
+    ns: str,
+    project_id: str,
+    question: str,
+    *,
+    options: str = "",
+    default_action: str = "",
+    risk: str = "",
+    status: str = "open",
+) -> dict:
     """Record one escalation — a break the engine will not decide on its own (SPEC-002 2.2).
 
     The row lives in the ANSWERING project's namespace and carries that project's id, naming the
@@ -1877,9 +2531,34 @@ def escalate(ns: str, project_id: str, question: str, *, options: str = "", defa
     pass follows for the break itself: auger RECORDS a break in a member's contract, it does not
     reach into that member's spec.
     """
-    row = {"id": next_id(ns, "escalation", "ESC"), "project_id": project_id, "question": question,
-           "options": options, "default_action": default_action, "risk": risk, "status": status}
+    row = {
+        "id": next_id(ns, "escalation", "ESC"),
+        "project_id": project_id,
+        "question": question,
+        "options": options,
+        "default_action": default_action,
+        "risk": risk,
+        "status": status,
+    }
     insert(ns, "escalation", row)
+    return row
+
+
+def record_verdict(ns: str, row: dict) -> dict:
+    """Store one verdict row, refusing an out-of-set word BY NAME (the EDGE_KINDS rule).
+
+    The word is what readers grep and tallies count, so it is closed in code (VERDICT_WORDS) and
+    the refusal happens at the WRITE — the one place every path to a row passes through, whichever
+    caller built it. A verdict is never degraded or re-written: either it is stored or the write
+    fails loudly, because a verdict nobody can read is a judgement nobody made.
+    """
+    word = str(row.get("verdict", "")).lower()
+    if word not in VERDICT_WORDS:
+        raise SystemExit(
+            f"unknown verdict word {row.get('verdict')!r}: "
+            f"expected one of {', '.join(VERDICT_WORDS)}"
+        )
+    insert(ns, "verdict", row)
     return row
 
 
@@ -1891,27 +2570,43 @@ def bundle_impact_verdict(answer: dict, other: dict, project: str) -> tuple:
     edge on a verdict it did not get. The thresholds are here, in code, like every other threshold in
     this module; the model supplies the score, never the meaning.
     """
-    state = (f"AN ANSWER RECORDED IN PROJECT {answer.get('project_id')}:\n"
-             f"{answer.get('id')}: {answer.get('chosen')}\n"
-             f"reason its alternatives were rejected: {answer.get('why_not') or 'not stated'}\n\n"
-             f"A BUNDLE-SCOPED DECISION OF A SIBLING PROJECT ({project}):\n"
-             f"{other.get('id')}: {other.get('chosen')}\n"
-             f"reason its alternatives were rejected: {other.get('why_not') or 'not stated'}\n\n"
-             f"Both decisions bind every member of the bundle they share, so the answer above can "
-             f"leave the sibling's decision standing, force it to change, or break it outright.")
-    ans, err = jev(state, {"impact": {
-        "type": "score",
-        "instructions": (f"Does the answer above leave {project}'s decision {other.get('id')} "
-                         f"unchanged, force it to change, or invalidate it?"),
-        "criteria": ["unchanged: the sibling's decision still stands exactly as written",
-                     "change: the sibling's decision must be re-decided to stay consistent",
-                     "invalidate: the answer breaks the sibling's decision outright"]}})
+    state = (
+        f"AN ANSWER RECORDED IN PROJECT {answer.get('project_id')}:\n"
+        f"{answer.get('id')}: {answer.get('chosen')}\n"
+        f"reason its alternatives were rejected: {answer.get('why_not') or 'not stated'}\n\n"
+        f"A BUNDLE-SCOPED DECISION OF A SIBLING PROJECT ({project}):\n"
+        f"{other.get('id')}: {other.get('chosen')}\n"
+        f"reason its alternatives were rejected: {other.get('why_not') or 'not stated'}\n\n"
+        f"Both decisions bind every member of the bundle they share, so the answer above can "
+        f"leave the sibling's decision standing, force it to change, or break it outright."
+    )
+    ans, err = jev(
+        state,
+        {
+            "impact": {
+                "type": "score",
+                "instructions": (
+                    f"Does the answer above leave {project}'s decision {other.get('id')} "
+                    f"unchanged, force it to change, or invalidate it?"
+                ),
+                "criteria": [
+                    "unchanged: the sibling's decision still stands exactly as written",
+                    "change: the sibling's decision must be re-decided to stay consistent",
+                    "invalidate: the answer breaks the sibling's decision outright",
+                ],
+            }
+        },
+    )
     if err:
         return "", 0.0, err
     scored = (ans.get("answers") or {}).get("impact") or {}
     value = scored.get("score")
     if not isinstance(value, (int, float)):
-        return "", 0.0, f"JEV returned no score for {other.get('id')} ({str(scored)[:120]})"
+        return (
+            "",
+            0.0,
+            f"JEV returned no score for {other.get('id')} ({str(scored)[:120]})",
+        )
     score = float(value)
     if score < T_IMPACT_CHANGE:
         return IMPACT_OUTCOMES[0], score, ""
@@ -1935,10 +2630,20 @@ def bundle_impact(ns: str, project_id: str, dec_row: dict) -> dict:
       warnings    [str]                  the model's failures and any degraded write
       skipped     [(project, reason)]    members left alone BECAUSE the verdict was unknown
     """
-    rep = {"scoped": False, "walked": [], "unchanged": [], "affects": [], "breaks": [], "edges": [],
-           "escalations": [], "lines": [], "warnings": [], "skipped": []}
+    rep = {
+        "scoped": False,
+        "walked": [],
+        "unchanged": [],
+        "affects": [],
+        "breaks": [],
+        "edges": [],
+        "escalations": [],
+        "lines": [],
+        "warnings": [],
+        "skipped": [],
+    }
     if decision_scope(dec_row) != "bundle":
-        return rep                    # only a CONTRACT crosses the boundary — the finite rule
+        return rep  # only a CONTRACT crosses the boundary — the finite rule
     rep["scoped"] = True
     home = project_name(ns, project_id)
     for project in bundle_siblings(ns, home):
@@ -1946,8 +2651,11 @@ def bundle_impact(ns: str, project_id: str, dec_row: dict) -> dict:
         # A sibling's rows are read with the SAFE reader: a foreign namespace that cannot answer has
         # no decisions, and that is not this project's failure. The decision the ANSWER recorded is
         # never compared with itself, even if the sibling's namespace holds a row with its id.
-        others = [d for d in select_or_empty(where, "decision", "scope=eq.bundle&order=id.asc")
-                  if d.get("id") != dec_row.get("id")]
+        others = [
+            d
+            for d in select_or_empty(where, "decision", "scope=eq.bundle&order=id.asc")
+            if d.get("id") != dec_row.get("id")
+        ]
         rep["walked"].append(project)
         for other in others:
             kind, score, err = bundle_impact_verdict(dec_row, other, project)
@@ -1958,38 +2666,67 @@ def bundle_impact(ns: str, project_id: str, dec_row: dict) -> dict:
                 rep["warnings"].append(
                     f"WARNING: {project}'s {other.get('id')} was NOT compared with "
                     f"{dec_row.get('id')} — {err}. No edge is written on a verdict the model did "
-                    f"not give (fail-closed).")
+                    f"not give (fail-closed)."
+                )
                 continue
             if kind == IMPACT_OUTCOMES[0]:
                 rep["unchanged"].append(project)
                 continue
-            shared = dict(confidence=score, source="impact", dst_project=project,
-                          warnings=rep["warnings"])
+            shared = dict(
+                confidence=score,
+                source="impact",
+                dst_project=project,
+                warnings=rep["warnings"],
+            )
             if kind == IMPACT_OUTCOMES[1]:
-                wrote = edge(ns, project_id, "affects", "decision", dec_row["id"], "decision",
-                             other["id"], note=f"{project}'s {other['id']} must be re-decided to "
-                                               f"stay consistent with {dec_row['id']} "
-                                               f"(score {score:.2f})", **shared)
+                wrote = edge(
+                    ns,
+                    project_id,
+                    "affects",
+                    "decision",
+                    dec_row["id"],
+                    "decision",
+                    other["id"],
+                    note=f"{project}'s {other['id']} must be re-decided to "
+                    f"stay consistent with {dec_row['id']} "
+                    f"(score {score:.2f})",
+                    **shared,
+                )
                 rep["affects"].append((project, other["id"]))
                 rep["edges"].append(wrote["id"])
-                rep["lines"].append(f"AFFECTS: answer {dec_row['id']} changes {project}'s "
-                                    f"{other['id']} — recorded, not rewritten")
+                rep["lines"].append(
+                    f"AFFECTS: answer {dec_row['id']} changes {project}'s "
+                    f"{other['id']} — recorded, not rewritten"
+                )
                 continue
-            wrote = edge(ns, project_id, "breaks", "decision", dec_row["id"], "decision", other["id"],
-                         note=f"{project}'s {other['id']} is broken by {dec_row['id']} "
-                              f"(score {score:.2f})", **shared)
+            wrote = edge(
+                ns,
+                project_id,
+                "breaks",
+                "decision",
+                dec_row["id"],
+                "decision",
+                other["id"],
+                note=f"{project}'s {other['id']} is broken by {dec_row['id']} "
+                f"(score {score:.2f})",
+                **shared,
+            )
             rep["breaks"].append((project, other["id"]))
             rep["edges"].append(wrote["id"])
             esc = escalate(
-                ns, project_id,
+                ns,
+                project_id,
                 question=f"answer {dec_row['id']} breaks {project}'s {other['id']}",
                 options=f"{project}/{other['id']}",
                 default_action=f"recorded, not rewritten — {project}'s decision stands until "
-                               f"{project} re-decides it",
-                risk=f"the bundle contract is broken for {project}: {other.get('chosen')}")
+                f"{project} re-decides it",
+                risk=f"the bundle contract is broken for {project}: {other.get('chosen')}",
+            )
             rep["escalations"].append(esc["id"])
-            rep["lines"].append(f"ESCALATION: answer {dec_row['id']} breaks {project}'s "
-                                f"{other['id']} — recorded, not rewritten")
+            rep["lines"].append(
+                f"ESCALATION: answer {dec_row['id']} breaks {project}'s "
+                f"{other['id']} — recorded, not rewritten"
+            )
     return rep
 
 
@@ -1999,31 +2736,58 @@ def cmd_answer(a):
     pid = p["id"]
     scope = (a.scope or "").strip().lower()
     if scope and scope not in DECISION_SCOPES:
-        raise SystemExit(f"unknown decision scope {a.scope!r}: expected one of {', '.join(DECISION_SCOPES)}")
-    did = a.id or f"D-{len(select(ns,'decision',f'project_id=eq.{pid}'))+1:03d}"
-    row = {"id": did, "project_id": pid, "domain": a.domain or "", "question_id": a.question_id or "",
-           "chosen": a.chosen, "why_not": a.why_not or "", "reversal_cost": a.reversal_cost or "",
-           "confidence": float(a.confidence if a.confidence is not None else -1),
-           "status": a.status or "decided", "evidence_key": f"/auger/{pid}/{did}"}
+        raise SystemExit(
+            f"unknown decision scope {a.scope!r}: expected one of {', '.join(DECISION_SCOPES)}"
+        )
+    did = a.id or f"D-{len(select(ns, 'decision', f'project_id=eq.{pid}')) + 1:03d}"
+    row = {
+        "id": did,
+        "project_id": pid,
+        "domain": a.domain or "",
+        "question_id": a.question_id or "",
+        "chosen": a.chosen,
+        "why_not": a.why_not or "",
+        "reversal_cost": a.reversal_cost or "",
+        "confidence": float(a.confidence if a.confidence is not None else -1),
+        "status": a.status or "decided",
+        "evidence_key": f"/auger/{pid}/{did}",
+    }
     # `scope` is sent only when it is NOT the default: see insert_decision for why the default
     # travels as an absent key rather than as the word "project".
     if scope and scope != DEFAULT_SCOPE:
         row["scope"] = scope
     warning = insert_decision(ns, row)
     for i, opt in enumerate(a.option or []):
-        insert(ns, "option", {"id": f"{did}-O{i+1}", "decision_id": did, "label": opt,
-                              "costs": "", "breaks": "", "active": opt == a.chosen})
+        insert(
+            ns,
+            "option",
+            {
+                "id": f"{did}-O{i + 1}",
+                "decision_id": did,
+                "label": opt,
+                "costs": "",
+                "breaks": "",
+                "active": opt == a.chosen,
+            },
+        )
     # The embedded evidence must not contradict itself: the chosen option is CHOSEN, and the
     # rejected list is the other options. Writing all options as "rejected" (the first version
     # of this) produced evidence reading "chose X. Rejected: X, Y, Z" — which made the
     # already-answered check score a genuinely-answered question as unanswered.
     others = [o for o in (a.option or []) if o != a.chosen]
-    remember(ns, row["evidence_key"],
-             f"Question: {a.domain or ''} {a.question_id or ''}".strip()
-             + f". Decision {did}: we chose {a.chosen}. "
-             + (f"Rejected alternatives: {'; '.join(others)}. " if others else "No alternative was recorded. ")
-             + f"Reason the alternatives were rejected: {a.why_not or 'not stated'}. "
-             + f"Reversal cost: {row['reversal_cost'] or 'not stated'}.")
+    remember(
+        ns,
+        row["evidence_key"],
+        f"Question: {a.domain or ''} {a.question_id or ''}".strip()
+        + f". Decision {did}: we chose {a.chosen}. "
+        + (
+            f"Rejected alternatives: {'; '.join(others)}. "
+            if others
+            else "No alternative was recorded. "
+        )
+        + f"Reason the alternatives were rejected: {a.why_not or 'not stated'}. "
+        + f"Reversal cost: {row['reversal_cost'] or 'not stated'}.",
+    )
     # SPEC-002 section 2.2: an answer that is a CONTRACT walks its bundle. The hook sits here — after
     # the evidence is embedded and before this verb's own report — and it never changes the exit
     # code: a model that is down skips a member and says so, it does not undo the answer. The scope
@@ -2044,8 +2808,10 @@ def cmd_answer(a):
         closed = f", closed {qid}"
     stored_scope = DEFAULT_SCOPE if warning else decision_scope(row)
     impact = bundle_impact(ns, pid, {**row, "scope": stored_scope})
-    print(f"{did} recorded  (confidence {row['confidence']}, {len(a.option or [])} options, "
-          f"embedded, scope {decision_scope(row)}{closed})")
+    print(
+        f"{did} recorded  (confidence {row['confidence']}, {len(a.option or [])} options, "
+        f"embedded, scope {decision_scope(row)}{closed})"
+    )
     for line in impact["lines"]:
         print(line)
     for line in impact["warnings"] + beat2_warnings:
@@ -2062,20 +2828,30 @@ def cmd_check(a):
     if not hits:
         print("no stored evidence matched — treat as a new question")
         return 0
-    evidence = "\n".join(f"- {h.get('key')}: {h.get('content','')[:400]}" for h in hits)
-    ans, err = jev(f"QUESTION UNDER CONSIDERATION:\n{a.question}\n\nSTORED EVIDENCE:\n{evidence}",
-                   {"already_answered": {"type": "noul",
-                     "instructions": "Is the question under consideration ALREADY fully answered by the stored evidence?"}})
+    evidence = "\n".join(
+        f"- {h.get('key')}: {h.get('content', '')[:400]}" for h in hits
+    )
+    ans, err = jev(
+        f"QUESTION UNDER CONSIDERATION:\n{a.question}\n\nSTORED EVIDENCE:\n{evidence}",
+        {
+            "already_answered": {
+                "type": "noul",
+                "instructions": "Is the question under consideration ALREADY fully answered by the stored evidence?",
+            }
+        },
+    )
     print(f"nearest stored rows ({len(hits)}):")
     for h in hits:
         print(f"  {h.get('score'):.3f}  {h.get('key')}")
     if err:
-        print(f"\nJEV unavailable — {err}\n(fail-closed: UNKNOWN, not 'already answered'.)")
+        print(
+            f"\nJEV unavailable — {err}\n(fail-closed: UNKNOWN, not 'already answered'.)"
+        )
         return 1
     v = _noul(ans["answers"], "already_answered")
     verdict = "ALREADY ANSWERED" if (v or 0) >= T_ANSWERED else "NOT YET ANSWERED"
     print(f"\n{verdict}  (noul {v}, threshold {T_ANSWERED})")
-    print(f"jev cost: {ans.get('usage',{}).get('cost')}")
+    print(f"jev cost: {ans.get('usage', {}).get('cost')}")
     return 0
 
 
@@ -2092,22 +2868,46 @@ def cmd_status(a):
     for d in dec:
         by_dom.setdefault(d.get("domain") or "(none)", []).append(d)
     print(f"project {pid} — {p.get('name')}  [{p.get('status')}]")
-    print(f"decisions {len(dec)} | options {len(opt)} | escalations {len(esc)} | unknowns {len(unk)} | domains {len(dom)}")
+    print(
+        f"decisions {len(dec)} | options {len(opt)} | escalations {len(esc)} | unknowns {len(unk)} | domains {len(dom)}"
+    )
     if dec:
-        confs = [d["confidence"] for d in dec if isinstance(d.get("confidence"), (int, float)) and d["confidence"] >= 0]
+        confs = [
+            d["confidence"]
+            for d in dec
+            if isinstance(d.get("confidence"), (int, float)) and d["confidence"] >= 0
+        ]
         if confs:
-            print(f"confidence: min {min(confs):.2f}  mean {sum(confs)/len(confs):.2f}  max {max(confs):.2f}")
+            print(
+                f"confidence: min {min(confs):.2f}  mean {sum(confs) / len(confs):.2f}  max {max(confs):.2f}"
+            )
     if by_dom:
         print("\ncoverage by domain (decisions, mean confidence):")
         for k in sorted(by_dom):
             rows = by_dom[k]
-            cs = [r["confidence"] for r in rows if isinstance(r.get("confidence"), (int, float)) and r["confidence"] >= 0]
-            m = f"{sum(cs)/len(cs):.2f}" if cs else "n/a"
-            flag = "  <- needs drilling" if (cs and sum(cs)/len(cs) < T_CONFIDENT) else ""
+            cs = [
+                r["confidence"]
+                for r in rows
+                if isinstance(r.get("confidence"), (int, float))
+                and r["confidence"] >= 0
+            ]
+            m = f"{sum(cs) / len(cs):.2f}" if cs else "n/a"
+            flag = (
+                "  <- needs drilling"
+                if (cs and sum(cs) / len(cs) < T_CONFIDENT)
+                else ""
+            )
             print(f"  {k:10s} {len(rows):3d}  {m}{flag}")
-    thin = [d for d in dec if isinstance(d.get("confidence"), (int, float)) and 0 <= d["confidence"] < T_CONFIDENT]
+    thin = [
+        d
+        for d in dec
+        if isinstance(d.get("confidence"), (int, float))
+        and 0 <= d["confidence"] < T_CONFIDENT
+    ]
     if thin:
-        print(f"\n{len(thin)} decision(s) below {T_CONFIDENT} — these are what `auger ask` will drill:")
+        print(
+            f"\n{len(thin)} decision(s) below {T_CONFIDENT} — these are what `auger ask` will drill:"
+        )
         for d in sorted(thin, key=lambda x: x["confidence"]):
             print(f"  {d['id']}  {d['confidence']:.2f}  {d['chosen'][:70]}")
     # The selection invariant (AUG-015): the counts above cannot show WHICH options are active, so a
@@ -2126,8 +2926,20 @@ def cmd_status(a):
     questions = project_questions(ns, pid)
     if questions:
         opened = [q for q in questions if q.get("status") == "open"]
-        print(f"\nbranches: {len(opened)} open | max depth "
-              f"{branch_depth(questions, graph_edges(ns, pid))}")
+        print(
+            f"\nbranches: {len(opened)} open | max depth "
+            f"{branch_depth(questions, graph_edges(ns, pid))}"
+        )
+    # R11's register in the coverage line: a verdict recorded and never shown is a judgement
+    # nobody can find. Nothing extra prints when none are on file (the same quiet rule the
+    # branch block above follows for a question-less project).
+    verdicts = select_or_empty(ns, "verdict", f"project_id=eq.{pid}")
+    if verdicts:
+        good = sum(1 for v in verdicts if v.get("verdict") == "good")
+        print(
+            f"\nverdicts {len(verdicts)} ({good} good, {len(verdicts) - good} bad)"
+            " — auger verdict --list for the rows"
+        )
     return 0
 
 
@@ -2142,8 +2954,10 @@ def cmd_status(a):
 #   * `dump` and `status` NAME a decision whose active-option count is not one — zero OR two-or-more
 #     — and carry on. A drifted record is still worth reading; a verb that refused to render would
 #     hide the very contradiction the reader needs to see.
-WARN_ACTIVATION = ("WARNING: decisions with != 1 active option "
-                   "(a configuration SELECTS one option per decision):")
+WARN_ACTIVATION = (
+    "WARNING: decisions with != 1 active option "
+    "(a configuration SELECTS one option per decision):"
+)
 
 
 def options_by_decision(opts: list[dict]) -> dict[str, list[dict]]:
@@ -2162,8 +2976,9 @@ def decision_options(by_dec: dict[str, list[dict]], oid: str) -> tuple[str, list
     return "", []
 
 
-def activation_warning_lines(dec: list[dict], opts: list[dict],
-                             live_by_dec: dict[str, set[str]] | None = None) -> list[str]:
+def activation_warning_lines(
+    dec: list[dict], opts: list[dict], live_by_dec: dict[str, set[str]] | None = None
+) -> list[str]:
     """The warning block for every decision whose active-option count is not exactly one.
 
     `live_by_dec` is the selection a caller is RENDERING — a `dump --config` hypothesis. Without it
@@ -2183,11 +2998,15 @@ def activation_warning_lines(dec: list[dict], opts: list[dict],
         if len(live) == 1:
             continue
         if not live:
-            lines.append(f"  - {d['id']}: 0 of {len(cand)} options active — this decision contributes "
-                         f"NOTHING to the configuration")
+            lines.append(
+                f"  - {d['id']}: 0 of {len(cand)} options active — this decision contributes "
+                f"NOTHING to the configuration"
+            )
         else:
-            lines.append(f"  - {d['id']}: {len(live)} of {len(cand)} options active "
-                         f"({', '.join(sorted(live))}) — one decision bound to contradictory choices")
+            lines.append(
+                f"  - {d['id']}: {len(live)} of {len(cand)} options active "
+                f"({', '.join(sorted(live))}) — one decision bound to contradictory choices"
+            )
     return [WARN_ACTIVATION] + lines if lines else []
 
 
@@ -2202,9 +3021,11 @@ def cmd_toggle(a):
     """
     ns = a.namespace
     additive = bool(a.additive)
-    by_dec = {} if additive else options_by_decision(select(ns, "option", "order=id.asc"))
+    by_dec = (
+        {} if additive else options_by_decision(select(ns, "option", "order=id.asc"))
+    )
     took = []
-    touched: dict[str, bool] = {}   # the state THIS invocation set, per option
+    touched: dict[str, bool] = {}  # the state THIS invocation set, per option
 
     def write(oid: str, state: bool) -> int:
         """PATCH one option's flag, and remember the write.
@@ -2226,8 +3047,11 @@ def cmd_toggle(a):
         if additive:
             return line
         did, cand = decision_options(by_dec, oid)
-        siblings = [o for o in cand if o["id"] != oid
-                    and touched.get(o["id"], bool(o.get("active")))]
+        siblings = [
+            o
+            for o in cand
+            if o["id"] != oid and touched.get(o["id"], bool(o.get("active")))
+        ]
         if not siblings:
             return line
         # The flip is part of the write, so it is part of the report: the defect this fixes was a
@@ -2237,11 +3061,14 @@ def cmd_toggle(a):
 
     for oid, state in a.set or []:
         took.append(activate(oid) if state else flip(oid, False))
-    for oid in (a.on or []):
+    for oid in a.on or []:
         took.append(activate(oid))
-    for oid in (a.off or []):
+    for oid in a.off or []:
         took.append(flip(oid, False))
-    print("toggled: " + (", ".join(took) if took else "(nothing — pass --on/--off/--set ID=on|off)"))
+    print(
+        "toggled: "
+        + (", ".join(took) if took else "(nothing — pass --on/--off/--set ID=on|off)")
+    )
     return 0
 
 
@@ -2267,15 +3094,16 @@ def cmd_dump(a):
 
     # --config overrides: accept "D-001=O2" (option id) or "D-001=Postgres" (label)
     overrides, bad = {}, []
-    for spec in (a.config or []):
+    for spec in a.config or []:
         if "=" not in spec:
             bad.append(spec)
             continue
         d_id, val = spec.split("=", 1)
         d_id, val = d_id.strip(), val.strip()
         cand = by_dec.get(d_id, [])
-        hit = next((o for o in cand if o["id"] == val), None) or \
-              next((o for o in cand if o["label"].lower() == val.lower()), None)
+        hit = next((o for o in cand if o["id"] == val), None) or next(
+            (o for o in cand if o["label"].lower() == val.lower()), None
+        )
         if hit:
             overrides.setdefault(d_id, set()).add(hit["id"])
         else:
@@ -2287,15 +3115,21 @@ def cmd_dump(a):
 
     lines = []
     lines.append(f"# {p.get('name')} — configuration dump")
-    lines.append(f"project {pid} · namespace {ns} · generated {datetime.now(timezone.utc).isoformat()}")
-    lines.append(f"mode: {'HYPOTHETICAL (nothing written)' if hypothetical else 'current stored state'}")
-    lines.append(f"seed: {p.get('seed','')[:300]}")
+    lines.append(
+        f"project {pid} · namespace {ns} · generated {datetime.now(timezone.utc).isoformat()}"
+    )
+    lines.append(
+        f"mode: {'HYPOTHETICAL (nothing written)' if hypothetical else 'current stored state'}"
+    )
+    lines.append(f"seed: {p.get('seed', '')[:300]}")
     lines.append("")
     confs, shadows, live_by_dec = [], [], {}
     for d in dec:
         cand = by_dec.get(d["id"], [])
         if hypothetical:
-            live_ids = overrides.get(d["id"]) or {o["id"] for o in cand if o.get("active")}
+            live_ids = overrides.get(d["id"]) or {
+                o["id"] for o in cand if o.get("active")
+            }
         else:
             live_ids = {o["id"] for o in cand if o.get("active")}
         # The selection this render TREATS as the configuration. A hypothesis is as capable of
@@ -2307,19 +3141,27 @@ def cmd_dump(a):
         # a hypothesis that contradicts a recorded reason is worth naming, not hiding
         for o in live:
             if o["id"] in override_ids and o["label"] != d.get("chosen"):
-                shadows.append(f"{d['id']}: choosing {o['label']} contradicts the recorded choice "
-                               f"({d.get('chosen')}) — reason on file: {d.get('why_not') or 'none'}")
-        lines.append(f"## {d['id']}  ({d.get('domain') or '—'})  conf {d.get('confidence')}")
+                shadows.append(
+                    f"{d['id']}: choosing {o['label']} contradicts the recorded choice "
+                    f"({d.get('chosen')}) — reason on file: {d.get('why_not') or 'none'}"
+                )
+        lines.append(
+            f"## {d['id']}  ({d.get('domain') or '—'})  conf {d.get('confidence')}"
+        )
         lines.append(f"   chosen   : {d.get('chosen')}")
         lines.append(f"   why not  : {d.get('why_not') or '(not recorded)'}")
         if cand:
             lines.append("   options  :")
             for o in cand:
                 mark = "[x]" if o["id"] in live_ids else "[ ]"
-                lines.append(f"     {mark} {o['id']}  {o['label']}  costs={o.get('costs') or '—'}  breaks={o.get('breaks') or '—'}")
+                lines.append(
+                    f"     {mark} {o['id']}  {o['label']}  costs={o.get('costs') or '—'}  breaks={o.get('breaks') or '—'}"
+                )
         lines.append("")
     lines.append("---")
-    lines.append(f"ACTIVE CONFIGURATION: {', '.join(confs) if confs else '(nothing active)'}")
+    lines.append(
+        f"ACTIVE CONFIGURATION: {', '.join(confs) if confs else '(nothing active)'}"
+    )
     if shadows:
         lines.append("")
         lines.append("CONTRADICTIONS WITH THE RECORD:")
@@ -2332,7 +3174,9 @@ def cmd_dump(a):
     if a.out:
         with open(a.out, "w") as f:
             f.write(out)
-        print(f"wrote {a.out}  ({len(out)} chars, {len(dec)} decisions, {len(confs)} choices)")
+        print(
+            f"wrote {a.out}  ({len(out)} chars, {len(dec)} decisions, {len(confs)} choices)"
+        )
     else:
         print(out)
     return 0
@@ -2340,17 +3184,184 @@ def cmd_dump(a):
 
 def cmd_recall(a):
     for h in recall(a.namespace, a.query, a.limit):
-        print(f"{h.get('score'):.3f}  {h.get('key')}\n     {h.get('content','')[:200]}")
+        print(
+            f"{h.get('score'):.3f}  {h.get('key')}\n     {h.get('content', '')[:200]}"
+        )
     return 0
 
 
+def render_dump(
+    ns: str, project_id: str | None, overrides_spec: list[str] | None = None
+) -> str:
+    """Render a configuration as text: the stored state, or the --config overrides as a hypothesis.
+
+    `cmd_dump` prints this; `verdict --ask-jev` puts it in front of the model. One renderer, so a
+    verdict judges the artifact the reader sees, never a paraphrase of it (AUG-003).
+    """
+    a_dump = argparse.Namespace(
+        namespace=ns, project_id=project_id, out=None, config=overrides_spec or []
+    )
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        cmd_dump(a_dump)
+    return buf.getvalue()
+
+
+def cmd_verdict(a):
+    """Judge a configuration: good or bad, with the reasons, on the record (DESIGN R11).
+
+    Two shapes, one row shape:
+      verdict --good|--bad <config string> --reasons ...   a verdict ON FILE (human or another
+                                                           model judged it elsewhere)
+      verdict --ask-jev [--config D-001=O2 ...]            JEV judges the DUMP ITSELF — rendered
+                                                           exactly as `dump` renders it, so the
+                                                           model judges the real artifact
+    --ask-jev is fail-closed: no key, no score, NO ROW — a verdict with no judge behind it reads
+    as evidence it is not, and a silently stored one is worse than a refused one.
+    """
+    ns = a.namespace
+    if a.good and a.bad:
+        raise SystemExit(
+            "verdict takes exactly one of --good/--bad, not both — nothing recorded"
+        )
+    if not a.ask_jev and a.good is None and a.bad is None:
+        raise SystemExit(
+            "verdict needs exactly one of --good/--bad (got none) — pass one, or "
+            "pass --ask-jev to let JEV judge the dump; nothing recorded"
+        )
+    if a.config and not a.ask_jev:
+        raise SystemExit(
+            "--config names a hypothetical dump, which only --ask-jev can judge — "
+            "a verdict on file judges a configuration string, not a render"
+        )
+    word = "good" if a.good is not None else "bad" if a.bad is not None else None
+
+    if a.ask_jev:
+        dump = render_dump(ns, a.project_id, a.config or [])
+        # The summary the row stores: the ACTIVE CONFIGURATION line of the render, so the list
+        # names WHAT was judged without a re-render.
+        conf_lines = [
+            line
+            for line in dump.splitlines()
+            if line.startswith("ACTIVE CONFIGURATION:")
+        ]
+        summary = conf_lines[0] if conf_lines else dump
+        ans, err = jev(
+            dump,
+            {
+                "verdict": {
+                    "type": "noul",
+                    "instructions": (
+                        "Is this configuration GOOD (coherent, buildable, consistent with "
+                        "its recorded reasons) or BAD (contradictory, unbuildable, contradicts "
+                        "what its decisions say)? Higher noul = more confident it is GOOD."
+                    ),
+                }
+            },
+        )
+        if err:
+            raise SystemExit(
+                f"JEV unavailable — {err}\n(fail-closed: nothing recorded — an "
+                "unjudged verdict must never look like a recorded one.)"
+            )
+        v = _noul(ans["answers"], "verdict")
+        if v is None:
+            raise SystemExit(
+                f"JEV returned no noul for the verdict ({str(ans)[:200]}) — "
+                "nothing recorded"
+            )
+        # An explicit human word wins (the human saw the same dump and said so); no word, the
+        # model's score chooses through the module's own threshold.
+        if word is None:
+            word = "good" if (v or 0) >= T_ANSWERED else "bad"
+        pid = _project(ns, a.project_id)["id"]
+        row = {
+            "id": next_id(ns, "verdict", "V"),
+            "project_id": pid,
+            "config_summary": summary,
+            "verdict": word,
+            "reasons": a.reasons or "",
+            "judged_by": "jev",
+            "confidence": v,
+            "source": f"jev:{ans.get('model', JEV_MODEL)}",
+            "note": a.note or "",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        record_verdict(ns, row)
+        print(
+            f"{row['id']} recorded  (verdict {word}, judged_by jev, noul {v}, "
+            f"cost {ans.get('usage', {}).get('cost')})"
+        )
+        print(f"config judged: {row['config_summary']}")
+        if row["reasons"]:
+            print(f"reasons: {row['reasons']}")
+        return 0
+
+    pid = _project(ns, a.project_id)["id"]
+    row = {
+        "id": next_id(ns, "verdict", "V"),
+        "project_id": pid,
+        "config_summary": (a.good or a.bad) or "",
+        "verdict": word,
+        "reasons": a.reasons or "",
+        "judged_by": a.judged_by or "human",
+        # A human verdict carries no model score: null is the declared-but-absent value,
+        # and it travels as an ABSENT KEY (the namespace writer would reject a JSON null
+        # for a `double` column).
+        "source": a.judged_by or "human",
+        "note": a.note or "",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if a.confidence is not None:
+        row["confidence"] = float(a.confidence)
+    record_verdict(ns, row)
+    print(f"{row['id']} recorded  (verdict {word}, judged_by {row['judged_by']})")
+    print(f"config judged: {row['config_summary']}")
+    if row["reasons"]:
+        print(f"reasons: {row['reasons']}")
+    return 0
+
+
+def cmd_verdict_list(a):
+    """Every verdict on file, newest first — the register's reading half."""
+    ns = a.namespace
+    rows = select(ns, "verdict", "order=created_at.desc,id.desc")
+    if not rows:
+        print(
+            "no verdicts recorded — auger verdict --good|--bad <config> --reasons ..."
+        )
+        return 0
+    for r in rows:
+        conf = (
+            f"{r['confidence']:.2f}"
+            if isinstance(r.get("confidence"), (int, float))
+            else "—"
+        )
+        print(
+            f"{r['id']}  {str(r.get('verdict', '')).upper():4s}  "
+            f"by {r.get('judged_by') or '—'}  conf {conf}  {str(r.get('created_at', ''))[:19]}"
+        )
+        print(f"    config: {r.get('config_summary') or '—'}")
+        if r.get("reasons"):
+            print(f"    reasons: {r['reasons']}")
+    return 0
+
+
+def cmd_verdict_dispatch(a):
+    return cmd_verdict_list(a) if a.list else cmd_verdict(a)
+
+
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="auger", description="spec drilling backed by DuckBrain")
+    ap = argparse.ArgumentParser(
+        prog="auger", description="spec drilling backed by DuckBrain"
+    )
     ap.add_argument("--namespace", "-n", default=os.environ.get("AUGER_NS", "auger"))
     ap.add_argument("--project-id", "-p", default=None)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("init", help="create/verify the namespace and declare the SDM tables")
+    s = sub.add_parser(
+        "init", help="create/verify the namespace and declare the SDM tables"
+    )
     s.set_defaults(fn=cmd_init)
 
     s = sub.add_parser("start", help="register a project + store/embed its seed")
@@ -2360,10 +3371,14 @@ def main(argv=None):
     s.add_argument("--seed-file")
     s.set_defaults(fn=cmd_start)
 
-    s = sub.add_parser("ask", help="surface the next questions (JEV) + low-confidence decisions")
+    s = sub.add_parser(
+        "ask", help="surface the next questions (JEV) + low-confidence decisions"
+    )
     s.set_defaults(fn=cmd_ask)
 
-    s = sub.add_parser("answer", help="record a decision with its rejected alternatives")
+    s = sub.add_parser(
+        "answer", help="record a decision with its rejected alternatives"
+    )
     s.add_argument("--id")
     s.add_argument("--chosen", required=True)
     s.add_argument("--option", action="append")
@@ -2373,11 +3388,16 @@ def main(argv=None):
     s.add_argument("--reversal-cost")
     s.add_argument("--confidence", type=float)
     s.add_argument("--status")
-    s.add_argument("--scope", help=f"what this decision BINDS: {' | '.join(DECISION_SCOPES)} "
-                                   f"(default {DEFAULT_SCOPE})")
+    s.add_argument(
+        "--scope",
+        help=f"what this decision BINDS: {' | '.join(DECISION_SCOPES)} "
+        f"(default {DEFAULT_SCOPE})",
+    )
     s.set_defaults(fn=cmd_answer)
 
-    s = sub.add_parser("check", help="is this question already answered by stored evidence?")
+    s = sub.add_parser(
+        "check", help="is this question already answered by stored evidence?"
+    )
     s.add_argument("question")
     s.add_argument("--limit", type=int, default=5)
     s.set_defaults(fn=cmd_check)
@@ -2388,36 +3408,108 @@ def main(argv=None):
     s = sub.add_parser("toggle", help="turn options on/off (the what-if switch)")
     s.add_argument("--on", action="append")
     s.add_argument("--off", action="append")
-    s.add_argument("--set", action="append", type=lambda v: (v.split("=")[0], v.split("=")[1].lower() in ("on", "true", "1")))
-    s.add_argument("--additive", action="store_true",
-                   help="do NOT deactivate the target's siblings: keep the old behaviour, where one "
-                        "decision can hold several active options (dump/status then WARN about it)")
+    s.add_argument(
+        "--set",
+        action="append",
+        type=lambda v: (
+            v.split("=")[0],
+            v.split("=")[1].lower() in ("on", "true", "1"),
+        ),
+    )
+    s.add_argument(
+        "--additive",
+        action="store_true",
+        help="do NOT deactivate the target's siblings: keep the old behaviour, where one "
+        "decision can hold several active options (dump/status then WARN about it)",
+    )
     s.set_defaults(fn=cmd_toggle)
 
-    s = sub.add_parser("dump", help="render a configuration: current, or a --config hypothesis")
+    s = sub.add_parser(
+        "dump", help="render a configuration: current, or a --config hypothesis"
+    )
     s.add_argument("--out")
-    s.add_argument("--config", action="append", metavar="D-001=O2",
-                   help="hypothetical option set; repeatable. Nothing is written.")
+    s.add_argument(
+        "--config",
+        action="append",
+        metavar="D-001=O2",
+        help="hypothetical option set; repeatable. Nothing is written.",
+    )
     s.set_defaults(fn=cmd_dump)
 
-    s = sub.add_parser("propagate", help="close/moot/reopen and re-gate (SPEC-001 BEAT 4)")
-    s.add_argument("--no-gate", action="store_true",
-                   help="rule walk only: moot, reopen and cascade, with no retrieval and no model call")
-    s.add_argument("--recheck", action="store_true",
-                   help="re-gate questions the gate has already examined (it records its verdict)")
+    s = sub.add_parser(
+        "propagate", help="close/moot/reopen and re-gate (SPEC-001 BEAT 4)"
+    )
+    s.add_argument(
+        "--no-gate",
+        action="store_true",
+        help="rule walk only: moot, reopen and cascade, with no retrieval and no model call",
+    )
+    s.add_argument(
+        "--recheck",
+        action="store_true",
+        help="re-gate questions the gate has already examined (it records its verdict)",
+    )
     s.set_defaults(fn=cmd_propagate)
 
-    s = sub.add_parser("feedback",
-                       help="turn low-confidence decisions into the next question batch (AUG-001)")
-    s.add_argument("--budget", type=int, default=None,
-                   help=f"how many questions ONE run may ask (default {FEEDBACK_BUDGET}, "
-                        f"env {BUDGET_ENV}); a question the ceiling stops is RECORDED, not dropped")
+    s = sub.add_parser(
+        "feedback",
+        help="turn low-confidence decisions into the next question batch (AUG-001)",
+    )
+    s.add_argument(
+        "--budget",
+        type=int,
+        default=None,
+        help=f"how many questions ONE run may ask (default {FEEDBACK_BUDGET}, "
+        f"env {BUDGET_ENV}); a question the ceiling stops is RECORDED, not dropped",
+    )
     s.set_defaults(fn=cmd_feedback)
 
     s = sub.add_parser("recall", help="semantic search over the namespace")
     s.add_argument("query")
     s.add_argument("--limit", type=int, default=5)
     s.set_defaults(fn=cmd_recall)
+
+    s = sub.add_parser(
+        "verdict", help="record good/bad on a configuration, with reasons (R11)"
+    )
+    s.add_argument(
+        "--good",
+        nargs="?",
+        const="",
+        metavar="CONFIG",
+        help="record a GOOD verdict; CONFIG is the configuration string that was "
+        "judged (exactly one of --good/--bad; bare --good with --ask-jev "
+        "lets the model's score choose the word)",
+    )
+    s.add_argument(
+        "--bad",
+        nargs="?",
+        const="",
+        metavar="CONFIG",
+        help="record a BAD verdict; CONFIG is the configuration string that was "
+        "judged (exactly one of --good/--bad)",
+    )
+    s.add_argument("--reasons")
+    s.add_argument(
+        "--ask-jev",
+        action="store_true",
+        help="ask JEV to judge the dump first (fail-closed: no key, no record)",
+    )
+    s.add_argument(
+        "--config",
+        action="append",
+        metavar="D-001=O2",
+        help="judge this hypothetical option set (with --ask-jev); repeatable",
+    )
+    s.add_argument(
+        "--judged-by", help="who judged it (default human; --ask-jev forces jev)"
+    )
+    s.add_argument("--confidence", type=float)
+    s.add_argument("--note")
+    s.add_argument(
+        "--list", action="store_true", help="show every recorded verdict, newest first"
+    )
+    s.set_defaults(fn=cmd_verdict_dispatch)
 
     a = ap.parse_args(argv)
     return a.fn(a)
