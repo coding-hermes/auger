@@ -2239,6 +2239,396 @@ def cmd_feedback(a):
     return 0
 
 
+# ---------------------------------------------------------------- the 44-domain grid (AUG-004)
+# The method's grid is EXACTLY 44 domains, and its coverage gate counts what a run reached against
+# that canonical set (spec-decomposition-matrix-tradeoff, section 4 and the coverage gate in 7.6):
+# a run that interrogates 43 domains and leaves the 44th silent FAILS, "because silence and 'this
+# does not apply' are different claims". The `domain` table was declared and empty until this
+# landed, so the program could make neither claim: it held no grid, `status` counted zero domains,
+# and the 44-domain rule was enforced nowhere but in prose. Seeding the grid as rows is what turns
+# that rule into something a program can fail.
+#
+# THE GRID IS READ, NEVER COPIED. The canonical files live with the skill, and a copy in this repo
+# would drift the moment the skill's grid changes — a drifted copy is worse than no copy, because
+# it would report 44 domains while the method defines others. So the seeder reads the 44 files,
+# refuses a grid that is not exactly the canonical set (4.01-4.44), and refuses a file whose header
+# it cannot parse: a guessed triage score is a fabricated one, and the whole point of these rows is
+# that the numbers on them were read rather than asserted.
+DOMAIN_GRID_ENV = "AUGER_DOMAIN_GRID"
+DOMAIN_GRID_DIR = os.path.join(
+    os.path.expanduser("~"),
+    ".hermes",
+    "skills",
+    "software-development",
+    "spec-decomposition-matrix-tradeoff",
+    "references",
+    "dogfood-artifact",
+    "02-domains",
+)
+DOMAIN_GRID_SIZE = 44  # the method's rule, not a preference: 43 files is the named failure
+DOMAIN_GRID_HEAD_LINES = 14  # both live headers sit in the first 3 lines; 14 leaves room to move
+DOMAIN_ID_PREFIX = "DM"  # D- is the decision register; a domain row is not a decision
+# Every seeded row's state, and the ONE reason it holds it. The `domain` table has no `reason`
+# column (AUG-004 fixes COLS), and every seeded row is NOT-REACHED for the same reason — the
+# program holds no answer in the domain yet — so the report STATES that sentence once instead of
+# storing 44 copies of it. owner/trigger/containment are the same kind of default: the grid's own
+# files name a design-run owner for some domains, but this program has assigned nobody, and a row
+# that claimed an owner it never assigned would read as a commitment.
+DOMAIN_SEED_STATUS = "NOT-REACHED"
+DOMAIN_SEED_REASON = "not reached: no rows yet"
+DOMAIN_SEED_OWNER = "unassigned"
+DOMAIN_SEED_TRIGGER = "first question in domain"
+DOMAIN_SEED_CONTAINMENT = "none"
+
+# The file name IS the number and the name: `4.05-data.md` -> num 4.05, name data. Zero-padded to
+# two digits, which the method requires precisely so a glob and a count are deterministic (unpadded
+# `4.1` and padded `4.10` sort and match inconsistently).
+DOMAIN_FILE_RE = re.compile(r"^(?P<num>\d+\.\d{2})-(?P<name>[a-z0-9][a-z0-9-]*)\.md$")
+# TWO HEADER SHAPES live in the grid (all 44 read at AUG-004: 9 inline, 35 key/value), and each is
+# matched BY NAME rather than by a loose "find some numbers on line 3" scan, because a header this
+# half-reads is a score it invented:
+#
+#   * the inline one-liner of a domain the design run CASCADED (9 files):
+#       Triage: 3×3×3=27; floor 5; status CASCADED; terminating ring 5.
+#     `unconditional floor 5` instead of `floor 5` is the SAME header for a domain whose ring-5
+#     floor is unconditional from the grid (the ⊕ marker; 4.12 in the live grid) — accepted, and it
+#     fills the same field.
+#   * the key/value block of a domain the run did NOT open (35 files):
+#       status: NOT-REACHED / triage: 2×1×3=6 / ring_floor: 2 / ... / terminating_ring: null — ...
+#     There `terminating_ring` is the WORD null, because the domain was never opened. That value
+#     travels as an ABSENT key on the stored row: the substrate REFUSES a null in an integer column
+#     (422, measured), and 0 would be a claim about a ring that was never reached.
+DOMAIN_INLINE_HEADER_RE = re.compile(
+    r"^Triage:\s*(?P<a>\d+)\s*[x×]\s*(?P<b>\d+)\s*[x×]\s*(?P<c>\d+)\s*=\s*(?P<score>\d+)\s*;"
+    r"\s*(?:unconditional\s+)?floor\s+(?P<floor>\d+)\s*;\s*status\s+[A-Z][A-Z-]*\s*;\s*"
+    r"terminating\s+ring\s+(?P<ring>\d+)\s*\.?\s*$",
+    re.IGNORECASE,
+)
+DOMAIN_KV_TRIAGE_RE = re.compile(
+    r"^triage:\s*(?P<a>\d+)\s*[x×]\s*(?P<b>\d+)\s*[x×]\s*(?P<c>\d+)\s*=\s*(?P<score>\d+)\s*$",
+    re.IGNORECASE,
+)
+DOMAIN_KV_FLOOR_RE = re.compile(r"^ring_floor:\s*(?P<floor>\d+)", re.IGNORECASE)
+DOMAIN_KV_RING_RE = re.compile(
+    r"^terminating_ring:\s*(?P<ring>null|none|\d+)", re.IGNORECASE
+)
+
+
+def domain_grid_dir() -> str:
+    """Where the method's 44 grid files are. `AUGER_DOMAIN_GRID` wins, for a host that moved them."""
+    return os.environ.get(DOMAIN_GRID_ENV) or DOMAIN_GRID_DIR
+
+
+def domain_numbers() -> list:
+    """The canonical number set the coverage gate counts against: 4.01 … 4.44."""
+    return [f"4.{n:02d}" for n in range(1, DOMAIN_GRID_SIZE + 1)]
+
+
+def _triage_product(path: str, hit) -> int:
+    """The triage score, after proving the header's own arithmetic. The product IS the score.
+
+    `blast_radius × uncertainty × irreversibility`, each 1-3, integer, score >= 18 -> ring-5 floor.
+    A header whose factors do not multiply to its stated score is a corrupt grid line, and taking
+    the number on the right-hand side of it would store a score nothing else in the file supports.
+    """
+    a, b, c, score = (int(hit.group(k)) for k in ("a", "b", "c", "score"))
+    if a * b * c != score:
+        raise SystemExit(
+            f"domain grid: {path} triage {a}×{b}×{c}={score} does not multiply — "
+            "refusing to store a score the file's own factors contradict"
+        )
+    return score
+
+
+def _grid_head_match(path: str, head: list, pattern, field: str):
+    """The first header line this pattern reads, or a REFUSAL naming the file and the field."""
+    for line in head:
+        hit = pattern.match(line)
+        if hit:
+            return hit
+    raise SystemExit(
+        f"domain grid: {path} has no readable `{field}` header in its first "
+        f"{DOMAIN_GRID_HEAD_LINES} lines — refusing to guess a grid number (build the grid's own "
+        "file shape, or teach parse_domain_file the new shape)"
+    )
+
+
+def parse_domain_file(path: str) -> dict:
+    """One grid file -> {num, name, triage, ring_floor, terminating_ring}.
+
+    `terminating_ring` is None when the file records that the domain was never opened. That is a
+    VALUE, not a missing one — "the domain was not reached" is exactly the distinction the coverage
+    report exists to keep — and it is why the None is carried through instead of being flattened to
+    a zero somewhere in the middle.
+
+    A header neither live shape reads raises, naming the file and the field: the seeder stops rather
+    than storing a guess.
+    """
+    m = DOMAIN_FILE_RE.match(os.path.basename(path))
+    if not m:
+        raise SystemExit(
+            f"domain grid: {path} is not named 4.NN-<slug>.md — that name IS the domain's number "
+            "and its slug (section 4: files are always zero-padded, 4.05-data.md)"
+        )
+    with open(path, errors="replace") as fh:
+        head = [line.strip() for line in fh.read().splitlines()[:DOMAIN_GRID_HEAD_LINES]]
+    inline = None
+    for line in head:
+        inline = DOMAIN_INLINE_HEADER_RE.match(line)
+        if inline:
+            break
+    if inline:
+        triage = _triage_product(path, inline)
+        ring_floor = int(inline.group("floor"))
+        terminating_ring = int(inline.group("ring"))
+    else:
+        triage = _triage_product(
+            path, _grid_head_match(path, head, DOMAIN_KV_TRIAGE_RE, "triage")
+        )
+        ring_floor = int(
+            _grid_head_match(path, head, DOMAIN_KV_FLOOR_RE, "ring_floor").group("floor")
+        )
+        word = _grid_head_match(
+            path, head, DOMAIN_KV_RING_RE, "terminating_ring"
+        ).group("ring")
+        terminating_ring = None if word.lower() in ("null", "none") else int(word)
+    if not 1 <= triage <= 27:
+        raise SystemExit(
+            f"domain grid: {path} triage {triage} is outside 1-27 (3 × 3 × 3)"
+        )
+    if ring_floor < 1:
+        raise SystemExit(f"domain grid: {path} ring_floor {ring_floor} is not a ring number")
+    return {
+        "num": m.group("num"),
+        "name": m.group("name"),
+        "triage": triage,
+        "ring_floor": ring_floor,
+        "terminating_ring": terminating_ring,
+    }
+
+
+def read_domain_grid(grid_dir: str | None = None) -> list:
+    """The method's 44 domains, parsed — refused unless they are EXACTLY the canonical set.
+
+    The coverage gate's rule, enforced where it can fail a run instead of asserted in prose: a grid
+    missing a domain, holding an unexpected one, or naming two files for one number is refused WITH
+    THE NUMBERS NAMED, because a seeder that seats 43 domains and says nothing has reproduced
+    exactly the silence the rule exists to forbid.
+    """
+    d = grid_dir or domain_grid_dir()
+    if not os.path.isdir(d):
+        raise SystemExit(
+            f"domain grid not found: {d} — point {DOMAIN_GRID_ENV} at the skill's "
+            "references/dogfood-artifact/02-domains directory"
+        )
+    files = sorted(f for f in os.listdir(d) if f.endswith(".md"))
+    entries = [parse_domain_file(os.path.join(d, f)) for f in files]
+    got = [e["num"] for e in entries]
+    want = domain_numbers()
+    missing = [n for n in want if n not in got]
+    extra = sorted({n for n in got if n not in want})
+    dupes = sorted({n for n in got if got.count(n) > 1})
+    if missing or extra or dupes:
+        raise SystemExit(
+            f"domain grid {d} is not the canonical {DOMAIN_GRID_SIZE} domains "
+            f"({want[0]}-{want[-1]}): {len(files)} file(s); missing {missing or 'none'}; "
+            f"unexpected {extra or 'none'}; duplicated {dupes or 'none'}"
+        )
+    return entries
+
+
+def _latest_project_id(ns: str) -> str:
+    """The namespace's most recent project id, or "" when it has none yet.
+
+    `init` is the verb that seeds the grid and also the verb that runs BEFORE `start`, so "no
+    project yet" is the ordinary case rather than an error: the rows are then stored UNBOUND
+    (`project_id` empty) and `domain_coverage` reads them for whichever project the namespace has.
+    """
+    rows = select(ns, "project", "order=created_at.desc&limit=1")
+    return (rows[0].get("id") or "") if rows else ""
+
+
+def seed_domains(ns: str, project_id: str = "", grid_dir: str | None = None) -> dict:
+    """Seed the grid as `domain` rows for this project, idempotently. Returns the tally.
+
+    IDEMPOTENT BY READ-BEFORE-WRITE, not by a unique index: the substrate enforces nothing, so the
+    check is ours — every stored `domain` row is read ONCE and a number already present is skipped
+    rather than written again. The read is the whole table and the project filter happens in PYTHON
+    for a measured reason: the API cannot filter on an empty value (`project_id=eq.` matches
+    nothing), and the rows a pre-`start` seeding writes carry exactly that empty value, so a
+    query-shaped filter would have found no rows and re-seeded all 44 on every run.
+
+    The 44 rows go in ONE insert (one request, not 44): three trip a rate limiter where one does
+    not, and a half-seeded grid is worse than an unseeded one — it reads as a coverage result.
+    """
+    grid = read_domain_grid(grid_dir)
+    bind = project_id or _latest_project_id(ns)
+    have = set()
+    for r in select(ns, "domain", ""):
+        proj = r.get("project_id")
+        if proj and proj != bind:
+            continue  # a sibling project's slice of the same 44 numbers
+        num = str(r.get("num") or "")
+        if num:
+            have.add(num)
+    missing = [e for e in grid if e["num"] not in have]
+    if not missing:
+        return {"grid": len(grid), "written": 0, "present": len(grid), "ids": []}
+    start = int(re.search(r"(\d+)\s*$", next_id(ns, "domain", DOMAIN_ID_PREFIX)).group(1))
+    rows = []
+    for offset, entry in enumerate(missing):
+        row = {
+            "id": f"{DOMAIN_ID_PREFIX}-{start + offset:0{ID_WIDTH}d}",
+            "project_id": bind,
+            "num": entry["num"],
+            "name": entry["name"],
+            "triage": entry["triage"],
+            "ring_floor": entry["ring_floor"],
+            "status": DOMAIN_SEED_STATUS,
+            "owner": DOMAIN_SEED_OWNER,
+            "trigger": DOMAIN_SEED_TRIGGER,
+            "containment": DOMAIN_SEED_CONTAINMENT,
+        }
+        if entry["terminating_ring"] is not None:
+            row["terminating_ring"] = entry["terminating_ring"]
+        rows.append(row)
+    insert(ns, "domain", rows)
+    return {
+        "grid": len(grid),
+        "written": len(rows),
+        "present": len(grid) - len(rows),
+        "ids": [r["id"] for r in rows],
+    }
+
+
+def domain_coverage(ns: str, project_id: str) -> dict:
+    """Per-domain coverage for one project: the grid, the rows, and what the rows do NOT cover.
+
+    ABSENCE IS A CLAIM, and this is where `status` earns the right to make it: a grid number with
+    no stored `domain` row is carried as ABSENT and printed by NAME — never dropped, because "we
+    have no row for 4.21" and "4.21 does not apply" are different sentences and only the first one
+    is true. The expected set is READ (not remembered) so a grid that cannot be read is reported as
+    unreadable instead of silently becoming 44 absences.
+
+    A stored number the grid does not define is carried too: a coverage count that cannot see a row
+    is not a count. "answered" is EVIDENCE, not a status word — a domain is answered when a decision
+    or a question row carries its number, so the report never depends on a status write nobody
+    performed.
+    """
+    mine: dict = {}
+    nameless: list = []
+    for r in select(ns, "domain", ""):
+        proj = r.get("project_id")
+        if proj and proj != project_id:
+            continue  # a sibling project's slice of the same numbers
+        num = str(r.get("num") or "")
+        if not num:
+            # A row no grid number can be matched to: it is not coverage of anything, and it is
+            # named rather than dropped — a report that hides a row is the failure this block is
+            # for, whichever end of it the row falls off.
+            nameless.append(str(r.get("id") or "?"))
+        elif num not in mine or proj == project_id:
+            mine[num] = r  # a row BOUND to this project outranks an unbound one
+    counts: dict = {}
+    for rows_ in (
+        select(ns, "decision", f"project_id=eq.{project_id}"),
+        project_questions(ns, project_id),
+    ):
+        for r in rows_:
+            num = str(r.get("domain") or "")
+            if num:
+                counts[num] = counts.get(num, 0) + 1
+    grid, grid_error = [], ""
+    try:
+        grid = read_domain_grid()
+    except (SystemExit, OSError) as exc:
+        # A grid this host cannot read is a grid this report cannot judge absence against. OSError
+        # is caught with the SystemExit because "the files are there but unreadable" is the same
+        # answer to the same question: no expected set, so no absence claim.
+        grid_error = str(exc)
+    by_num = {e["num"]: e for e in grid}
+    lines = []
+    for num in sorted(set(by_num) | set(mine)):
+        r, g = mine.get(num), by_num.get(num)
+        lines.append(
+            {
+                "num": num,
+                "name": (r or {}).get("name") or (g or {}).get("name") or "",
+                "row": r,
+                "grid": g,
+                "evidence": counts.get(num, 0),
+                "off_grid": g is None,
+            }
+        )
+    answered = [
+        ln["num"]
+        for ln in lines
+        if ln["row"] is not None and not ln["off_grid"] and ln["evidence"] > 0
+    ]
+    present = [ln for ln in lines if ln["row"] is not None]
+    seeded = sum(1 for ln in present if not ln["off_grid"])
+    return {
+        "grid": len(grid),
+        "grid_error": grid_error,
+        "lines": lines,
+        # rows present at all, then the grid's own slice of them: a number the grid does not define
+        # is a stored row without being one of the 44, and the two counts say different things.
+        "rows": len(present),
+        "seeded": seeded,
+        "absent": [ln["num"] for ln in lines if ln["row"] is None],
+        "off_grid": [ln["num"] for ln in present if ln["off_grid"]],
+        "answered": len(answered),
+        "not_reached": seeded - len(answered),
+        "nameless": nameless,
+        # Rows whose STORED status is the seed's own word — the ones the default note describes.
+        "seeded_status": sum(
+            1 for ln in present if str(ln["row"].get("status") or "") == DOMAIN_SEED_STATUS
+        ),
+    }
+
+
+def domain_line(ln: dict) -> str:
+    """One coverage line: the domain's state, the grid's numbers, and its terminating ring.
+
+    The STATE is the derived coverage word — ABSENT (no row), `answered` (a decision or question
+    row carries the number), or the stored row status when neither holds — and when the stored
+    status disagrees with it, the line says so rather than choosing one and hiding the other: a row
+    still reading NOT-REACHED while it holds an answer is a status nobody updated, which is a fact
+    about the record and not something a report gets to smooth over.
+
+    Three cases, kept apart on purpose. A SEEDED row prints the ring it holds — or
+    `none (not opened)` when the grid recorded that the domain was never opened. An ABSENT domain
+    prints ABSENT with the grid's numbers, because what is missing is the ROW, and naming what the
+    grid expects while saying the row is gone is the whole point of the line. A number the grid does
+    not define says so, so a stray row cannot pass for one of the 44.
+    """
+    r, g = ln["row"], ln["grid"]
+    stored = str((r or {}).get("status") or "")
+    if r is None:
+        state = "ABSENT"
+    elif ln["evidence"]:
+        state = "answered"
+    else:
+        state = stored or DOMAIN_SEED_STATUS
+    drift = f"  (row status {stored})" if stored and stored != state else ""
+    ring = r.get("terminating_ring") if r else (g or {}).get("terminating_ring")
+    ring_txt = (
+        str(ring) if isinstance(ring, int) else ("none (not opened)" if r else "none")
+    )
+    triage, floor = (g or {}).get("triage"), (g or {}).get("ring_floor")
+    grid_txt = (
+        f"triage {triage:>3}  floor {floor}"
+        if isinstance(triage, int) and isinstance(floor, int)
+        else "triage  —  floor —"
+    )
+    return (
+        f"  {ln['num']}  {str(ln['name'])[:22]:<22} {state:<12} {grid_txt}  "
+        f"terminating ring {ring_txt}  decisions/questions {ln['evidence']}"
+        + ("  (off-grid: not one of the 44)" if ln["off_grid"] else "")
+        + drift
+    )
+
+
 # ---------------------------------------------------------------- verbs
 def cmd_init(a):
     ns = a.namespace
@@ -2295,6 +2685,26 @@ def cmd_init(a):
     missing = sorted(set(COLS) - set(have))
     if missing:
         print(f"WARNING not visible to the API yet: {', '.join(missing)}")
+    if a.seed_domains:
+        # The one row-writing arm of `init`, and it belongs here because `init` owns namespace
+        # setup: the 44-domain grid is the shape of the namespace, not an answer about a project.
+        # Without the flag `init` writes no rows at all — the property its VERBS.md entry states —
+        # so this is an extension a caller asks for, never a side effect of declaring tables.
+        tally = seed_domains(ns)
+        print(
+            f"domain grid: {tally['grid']} domains -> {tally['written']} row(s) written, "
+            f"{tally['present']} already present"
+        )
+        if tally["written"]:
+            print(
+                f"  each new row starts {DOMAIN_SEED_STATUS}: owner {DOMAIN_SEED_OWNER!r}, "
+                f"trigger {DOMAIN_SEED_TRIGGER!r}, containment {DOMAIN_SEED_CONTAINMENT!r} "
+                f"('{DOMAIN_SEED_REASON}' — the `domain` table has no reason column)"
+            )
+            print(f"  ids: {tally['ids'][0]} … {tally['ids'][-1]}")
+        print(
+            f"  grid source: {domain_grid_dir()} (read, never copied — a copy would drift)"
+        )
     return 0
 
 
@@ -2863,13 +3273,13 @@ def cmd_status(a):
     opt = select(ns, "option", "")
     esc = select(ns, "escalation", f"project_id=eq.{pid}")
     unk = select(ns, "unknown", f"project_id=eq.{pid}")
-    dom = select(ns, "domain", f"project_id=eq.{pid}")
+    cov = domain_coverage(ns, pid)
     by_dom = {}
     for d in dec:
         by_dom.setdefault(d.get("domain") or "(none)", []).append(d)
     print(f"project {pid} — {p.get('name')}  [{p.get('status')}]")
     print(
-        f"decisions {len(dec)} | options {len(opt)} | escalations {len(esc)} | unknowns {len(unk)} | domains {len(dom)}"
+        f"decisions {len(dec)} | options {len(opt)} | escalations {len(esc)} | unknowns {len(unk)} | domains {cov['rows']}"
     )
     if dec:
         confs = [
@@ -2898,6 +3308,56 @@ def cmd_status(a):
                 else ""
             )
             print(f"  {k:10s} {len(rows):3d}  {m}{flag}")
+    # AUG-004, the GRID half of coverage — and it is a different question from the block above.
+    # That one groups the decisions by the domain string they carry; this one walks the method's
+    # own 44-domain grid and says what each domain HOLDS and which grid domains have NO ROW AT ALL
+    # (section 4's coverage gate: "silence and 'this does not apply' are different claims"). It
+    # prints even when nothing is stored, which is the case it exists for — a report that listed
+    # only the domains it happened to have would be the silent-43 failure in miniature. Nothing is
+    # omitted and nothing is invented: a domain with no row is named ABSENT, and a grid that cannot
+    # be read makes `status` say it cannot judge absence rather than print 44 of them.
+    if cov["grid_error"]:
+        print(f"\ndomain grid coverage: WARNING {cov['grid_error']}")
+        print(
+            "  absence CANNOT be claimed from here: with no grid there is no expected set for a\n"
+            "  domain to be absent AGAINST. The rows below are what is stored; nothing is claimed\n"
+            "  about the rest."
+        )
+    else:
+        print(
+            f"\ndomain grid coverage ({cov['grid']} in the grid | {cov['seeded']} seeded | "
+            f"{len(cov['absent'])} absent):"
+        )
+        print(
+            f"  answered {cov['answered']} (a decision or question row carries the num) | "
+            f"NOT-REACHED {cov['not_reached']} (no such row)"
+        )
+    for ln in cov["lines"]:
+        print(domain_line(ln))
+    if not cov["lines"]:
+        print("  (no domain row is stored in this namespace)")
+    if cov["absent"]:
+        print(
+            "  ABSENT (a grid domain with no stored `domain` row — absence, which is NOT the "
+            f"same claim as 'does not apply'): {', '.join(cov['absent'])}"
+        )
+    if cov["seeded_status"]:
+        print(
+            f"  {cov['seeded_status']} row(s) still carry the seed's status {DOMAIN_SEED_STATUS} "
+            f"— owner {DOMAIN_SEED_OWNER!r}, trigger {DOMAIN_SEED_TRIGGER!r}, containment "
+            f"{DOMAIN_SEED_CONTAINMENT!r}, reason '{DOMAIN_SEED_REASON}' (`domain` has no reason "
+            "column)"
+        )
+    if cov["off_grid"]:
+        print(
+            "  OFF-GRID rows (a num the 44-domain grid does not define — it counts for nothing "
+            f"in the gate): {', '.join(cov['off_grid'])}"
+        )
+    if cov["nameless"]:
+        print(
+            "  ROWS WITH NO `num` (they cannot be matched to the grid at all): "
+            f"{', '.join(cov['nameless'])}"
+        )
     thin = [
         d
         for d in dec
@@ -3361,6 +3821,12 @@ def main(argv=None):
 
     s = sub.add_parser(
         "init", help="create/verify the namespace and declare the SDM tables"
+    )
+    s.add_argument(
+        "--seed-domains",
+        action="store_true",
+        help="also seed the 44-domain grid as `domain` rows (idempotent): every row starts "
+        "NOT-REACHED with no owner, so `status` can report coverage and name what is absent",
     )
     s.set_defaults(fn=cmd_init)
 

@@ -3368,3 +3368,283 @@ def test_render_dump_matches_the_dump_verb_structure(decided: dict):
             assert exp.startswith("project ") and "generated " in exp, (got, exp)
         else:
             assert got == exp, (got, exp)
+
+
+# ================================================================= the 44-domain grid (AUG-004)
+# The grid lives with the method's skill (`~/.hermes/skills/.../02-domains/`), NOT in this repo,
+# because a copy here would drift the moment the skill's grid changes. Every case that READS it
+# therefore skips loudly on a host that does not have it, naming AUGER_DOMAIN_GRID — and every case
+# that must run on any host builds the grid files it needs in `tmp_path`.
+#
+# Assertions are on the STORED ROWS wherever the claim is about storage (that is what the coverage
+# numbers are derived from); they read stdout only where the claim IS about the report, which is
+# the one claim that cannot be checked anywhere else: a domain with no row is reported ABSENT
+# rather than silently omitted, and "silently omitted" is a property of the output.
+GRID_NUMBERS = [f"4.{n:02d}" for n in range(1, 45)]
+# The two header shapes the live grid uses, taken from it verbatim (4.20 for the inline one, 4.01
+# for the key/value one). The cases below drive both so a shape change fails HERE, loudly, rather
+# than silently defaulting a triage score somewhere.
+GRID_INLINE_HEADER = "Triage: 3×3×3=27; floor 5; status CASCADED; terminating ring 5.\n"
+GRID_KV_HEADER = (
+    "status: NOT-REACHED\n"
+    "triage: 2×1×3=6\n"
+    "ring_floor: 2\n"
+    "reason: the single-operator model is known\n"
+    "owner: product owner\n"
+    "trigger: before PRD acceptance\n"
+    "containment_default: preserve what is recorded; reopen at the trigger.\n"
+    "terminating_ring: null — domain was not opened; NOT-REACHED satisfies coverage.\n"
+)
+
+
+def grid_or_skip() -> list[dict]:
+    """The method's grid as parsed, or a SKIP naming the path where the skill keeps it."""
+    try:
+        return auger.read_domain_grid()
+    except SystemExit as exc:
+        pytest.skip(f"the 44-domain grid is not on this host: {exc}")
+
+
+def write_grid_file(directory: str, stem: str, header: str) -> str:
+    """One grid file in `directory`, in the grid's own shape: heading, blank line, header."""
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, f"{stem}.md")
+    with open(path, "w") as fh:
+        fh.write(f"# Domain {stem[:4]}\n\n{header}\n")
+    return path
+
+
+def seed_grid(ns: str) -> str:
+    """`init --seed-domains` in this namespace. Returns its output; fails the test if it refused."""
+    rc, out = run_cli(["-n", ns, "init", "--seed-domains"])
+    assert rc == 0 and "domain grid:" in out, out
+    return out
+
+
+def coverage_lines(out: str) -> list[str]:
+    """The per-domain coverage lines of a `status` run — one per domain, including the absent."""
+    return [ln for ln in out.splitlines() if "terminating ring" in ln]
+
+
+# ---------------------------------------------------------------- the parser (no live API needed)
+def test_the_grid_source_parses_to_exactly_the_canonical_44():
+    """Every live grid file, read: 44 numbers, 4.01-4.44, and a plausible score on each."""
+    grid = grid_or_skip()
+    assert [e["num"] for e in grid] == GRID_NUMBERS, [e["num"] for e in grid]
+    for e in grid:
+        assert e["name"] == e["name"].lower() and e["name"], e
+        assert 1 <= e["triage"] <= 27, e  # blast radius × uncertainty × irreversibility, each 1-3
+        assert e["ring_floor"] >= 2, e
+        # the grid's ring ceiling is 8; None is the "not opened" value and is not a number at all
+        assert e["terminating_ring"] is None or 1 <= e["terminating_ring"] <= 8, e
+
+
+def test_the_parser_reads_both_header_shapes_the_grid_actually_uses(tmp_path):
+    """The inline CASCADED header and the key/value NOT-REACHED header, field for field."""
+    inline = auger.parse_domain_file(
+        write_grid_file(str(tmp_path), "4.20-concurrency", GRID_INLINE_HEADER)
+    )
+    assert (inline["num"], inline["name"]) == ("4.20", "concurrency")
+    assert (inline["triage"], inline["ring_floor"], inline["terminating_ring"]) == (27, 5, 5)
+
+    # the ⊕ header spells the floor `unconditional floor 5` and fills the same field (4.12's shape)
+    uncond = auger.parse_domain_file(
+        write_grid_file(
+            str(tmp_path),
+            "4.12-runbox-runtime",
+            "Triage: 3×2×3=18; unconditional floor 5; status CASCADED; terminating ring 5.\n",
+        )
+    )
+    assert (uncond["triage"], uncond["ring_floor"], uncond["terminating_ring"]) == (18, 5, 5)
+
+    kv = auger.parse_domain_file(
+        write_grid_file(str(tmp_path), "4.01-product-people", GRID_KV_HEADER)
+    )
+    assert (kv["num"], kv["name"]) == ("4.01", "product-people")
+    assert kv["triage"] == 6 and kv["ring_floor"] == 2
+    assert kv["terminating_ring"] is None, "an unopened domain's ring is None, not a number"
+
+
+def test_a_header_the_parser_cannot_read_is_refused_with_the_file_name(tmp_path):
+    """Neither shape, so the parser stops — no default score, no zero ring, no silent skip."""
+    path = write_grid_file(
+        str(tmp_path),
+        "4.07-cache",
+        "Triage: high; ring floor: soon; terminating ring: eventually.\n",
+    )
+    with pytest.raises(SystemExit) as ei:
+        auger.parse_domain_file(path)
+    message = str(ei.value)
+    assert "4.07-cache.md" in message and "triage" in message, message
+
+
+def test_a_triage_line_whose_own_factors_do_not_multiply_is_refused(tmp_path):
+    """2×1×2 is 4, and a grid line claiming 9 is corrupt: store neither number."""
+    path = write_grid_file(
+        str(tmp_path),
+        "4.09-layout",
+        "status: NOT-REACHED\ntriage: 2×1×2=9\nring_floor: 2\n"
+        "terminating_ring: null — domain was not opened.\n",
+    )
+    with pytest.raises(SystemExit) as ei:
+        auger.parse_domain_file(path)
+    message = str(ei.value)
+    assert "does not multiply" in message and "2×1×2=9" in message, message
+
+
+def test_a_file_that_is_not_named_4_NN_slug_is_refused(tmp_path):
+    """The file name IS the number and the slug (section 4: zero-padded, always)."""
+    path = write_grid_file(str(tmp_path), "4.1-product-people", GRID_KV_HEADER)
+    with pytest.raises(SystemExit) as ei:
+        auger.parse_domain_file(path)
+    assert "4.NN-<slug>.md" in str(ei.value), str(ei.value)
+
+
+def test_a_grid_that_is_not_the_canonical_44_is_refused_by_name(tmp_path):
+    """Two files is not 44: refused, with the numbers it is missing NAMED rather than assumed."""
+    directory = str(tmp_path / "02-domains")
+    write_grid_file(directory, "4.01-product-people", GRID_KV_HEADER)
+    write_grid_file(directory, "4.02-user-model", GRID_KV_HEADER)
+    with pytest.raises(SystemExit) as ei:
+        auger.read_domain_grid(directory)
+    message = str(ei.value)
+    assert "4.03" in message and "44" in message and "missing" in message, message
+
+
+# ---------------------------------------------------------------- seeding (live namespace)
+def test_seeding_writes_the_44_domain_rows_with_the_grids_own_numbers(ns: str):
+    """44 rows that round-trip, at both ends of the grid, with the numbers the FILES carry."""
+    grid = grid_or_skip()
+    seed_grid(ns)
+    stored = rows(ns, "domain", "order=num.asc")
+    assert len(stored) == 44, f"expected the 44-domain grid, stored {len(stored)} row(s)"
+    assert [r["num"] for r in stored] == GRID_NUMBERS
+
+    first = row(ns, "domain", "num=eq.4.01")
+    assert (first["name"], first["triage"], first["ring_floor"]) == ("product-people", 6, 2)
+    assert first.get("terminating_ring") is None, "4.01 was never opened: it has no ring"
+    assert first["status"] == auger.DOMAIN_SEED_STATUS == "NOT-REACHED"
+    assert first["owner"] == "unassigned"
+    assert first["trigger"] == "first question in domain"
+    assert first["containment"] == "none"
+    assert first["id"].startswith("DM-")
+    # seeded by `init`, i.e. before any `start`: the namespace's grid, unbound to a project
+    assert first["project_id"] == ""
+
+    last = row(ns, "domain", "num=eq.4.44")
+    assert (
+        last["name"],
+        last["triage"],
+        last["ring_floor"],
+        last["terminating_ring"],
+    ) == ("meta-unknowns", 27, 5, 5)
+
+    # field by field, against the files themselves: the seeder is a reader, and this proves it
+    # did not carry a table of its own
+    by_num = {e["num"]: e for e in grid}
+    for r in stored:
+        e = by_num[r["num"]]
+        assert [r["triage"], r["ring_floor"], r.get("terminating_ring")] == [
+            e["triage"],
+            e["ring_floor"],
+            e["terminating_ring"],
+        ], r
+
+
+def test_reseeding_the_grid_adds_no_second_copy(ns: str):
+    """Idempotent by read-before-write: the second run SKIPS 44 and rewrites no id."""
+    grid_or_skip()
+    first_out = seed_grid(ns)
+    before = {r["num"]: r["id"] for r in rows(ns, "domain", "")}
+    assert len(before) == 44
+    second_out = seed_grid(ns)
+    after = {r["num"]: r["id"] for r in rows(ns, "domain", "")}
+    assert len(after) == 44, f"a re-seed duplicated the grid: {len(after)} row(s) stored"
+    assert after == before, "a re-seed churned ids instead of skipping what was already stored"
+    assert "44 row(s) written, 0 already present" in first_out, first_out
+    assert "0 row(s) written, 44 already present" in second_out, second_out
+
+
+def test_the_grid_is_bound_to_the_project_that_already_exists(project: dict):
+    """`init --seed-domains` AFTER `start` binds the rows; `status` reads that slice too."""
+    grid_or_skip()
+    seed_grid(project["ns"])
+    stored = rows(project["ns"], "domain", "")
+    assert len(stored) == 44
+    assert {r["project_id"] for r in stored} == {project["pid"]}
+
+
+# ---------------------------------------------------------------- coverage reporting
+def test_status_names_every_absent_grid_domain_when_no_row_is_stored(project: dict):
+    """The case the rule is FOR: an empty `domain` table is 44 ABSENT, each one NAMED."""
+    grid = grid_or_skip()
+    ns = project["ns"]
+    assert rows(ns, "domain", "") == []
+    rc, out = run_cli(["-n", ns, "status"])
+    assert rc == 0, out
+    assert "44 in the grid | 0 seeded | 44 absent" in out, out
+    reported = coverage_lines(out)
+    assert len(reported) == 44, f"{len(reported)} domain line(s) for a 44-domain grid:\n{out}"
+    for e in grid:
+        assert e["num"] in out, f"{e['num']} was silently omitted from the coverage report"
+        line = next(ln for ln in reported if ln.strip().startswith(e["num"]))
+        assert "ABSENT" in line, line
+    assert "ABSENT (a grid domain with no stored" in out, out
+
+
+def test_status_reports_coverage_and_the_terminating_ring_per_domain(decided: dict):
+    """Seeded around two stored decisions: one line per domain, each carrying its ring."""
+    grid = grid_or_skip()
+    ns = decided["ns"]
+    seed_grid(ns)
+    rc, out = run_cli(["-n", ns, "status"])
+    assert rc == 0, out
+    assert "44 in the grid | 44 seeded | 0 absent" in out, out
+    reported = coverage_lines(out)
+    assert len(reported) == 44, f"{len(reported)} domain line(s):\n{out}"
+    assert (
+        "answered 2 (a decision or question row carries the num) | NOT-REACHED 42 (no such row)"
+        in out
+    ), out
+
+    answered = next(ln for ln in reported if ln.strip().startswith("4.05"))
+    assert "answered" in answered and "terminating ring 5" in answered, answered
+    assert "decisions/questions 1" in answered, answered
+    unopened = next(ln for ln in reported if ln.strip().startswith("4.01"))
+    assert "NOT-REACHED" in unopened, unopened
+    assert "terminating ring none (not opened)" in unopened, unopened
+
+    # the report is a projection of the STORED rows, so those rows are the assertion
+    stored = {r["num"]: r for r in rows(ns, "domain", "")}
+    assert len(stored) == 44
+    assert stored["4.05"]["terminating_ring"] == 5
+    assert stored["4.01"].get("terminating_ring") is None
+    by_num = {e["num"]: e for e in grid}
+    for num, r in stored.items():
+        assert r["triage"] == by_num[num]["triage"], (num, r)
+        assert r["ring_floor"] == by_num[num]["ring_floor"], (num, r)
+    # a domain holding an answer still carries the seed's own status word, and the line says so
+    # rather than letting a reader believe the status column was updated by an answer
+    assert stored["4.05"]["status"] == "NOT-REACHED"
+    assert "(row status NOT-REACHED)" in answered, answered
+
+
+def test_a_domain_whose_row_is_gone_is_reported_absent_not_skipped(project: dict):
+    """One row moved off the grid: 4.05 prints ABSENT, the moved number prints off-grid."""
+    grid_or_skip()
+    ns = project["ns"]
+    seed_grid(ns)
+    [moving] = rows(ns, "domain", "num=eq.4.05")
+    auger.patch(ns, "domain", moving["id"], {"num": "9.99", "name": "moved-off-the-grid"})
+    rc, out = run_cli(["-n", ns, "status"])
+    assert rc == 0, out
+    assert "44 in the grid | 43 seeded | 1 absent" in out, out
+    absent = next(ln for ln in coverage_lines(out) if ln.strip().startswith("4.05"))
+    assert "ABSENT" in absent, absent
+    assert "no stored `domain` row — absence, which is NOT" in out, out
+    assert "ABSENT (a grid domain with no stored `domain` row" in out and "4.05" in out, out
+    off = next(ln for ln in coverage_lines(out) if ln.strip().startswith("9.99"))
+    assert "off-grid" in off, off
+    assert "OFF-GRID rows" in out and "9.99" in out, out
+    # and the moved row is still a real stored row: the report describes the table, it does not fix it
+    assert row(ns, "domain", "num=eq.9.99")["id"] == moving["id"]
