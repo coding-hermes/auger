@@ -584,6 +584,118 @@ def test_toggle_with_no_arguments_changes_nothing(decided: dict):
     assert option_flags(ns) == before
 
 
+# ================================================================= one option per decision (AUG-015)
+D003 = dict(did="D-003", domain="4.07", chosen="stream the log from disk",
+            options=["stream the log from disk", "grep per request", "in-memory cache"],
+            why_not="the seed forbids a second service", confidence=0.6)
+
+
+def three_option_decision(decided: dict) -> dict:
+    """The board's reproduction shape: ONE decision with three alternatives, the first chosen.
+
+    Two options can be brought into conflict by a single `--on`; three is where "the other one"
+    stops being well defined, so the flip has to be a SET and not a partner.
+    """
+    ns = decided["ns"]
+    rc, out = answer(ns, **D003)
+    assert rc == 0 and "D-003 recorded" in out, out
+    return {**decided, "D003": D003}
+
+
+def test_toggle_on_deactivates_the_siblings_so_one_decision_has_one_configuration(decided: dict):
+    """AUG-015: `--on` is a SELECTION — the siblings go off, visibly, in the same write."""
+    state = three_option_decision(decided)
+    ns = state["ns"]
+    before = option_flags(ns)
+    assert [before[f"D-003-O{i}"] for i in (1, 2, 3)] == [True, False, False], before
+
+    rc, out = run_cli(["-n", ns, "toggle", "--on", "D-003-O3"])
+    assert rc == 0, out
+    assert "D-003-O3->on (1)" in out, out
+    assert "one option per decision D-003" in out, out   # the flip is REPORTED, never silent
+
+    # The stored rows are the assertion: exactly one active option, and it is the one asked for.
+    after = option_flags(ns)
+    assert [after[f"D-003-O{i}"] for i in (1, 2, 3)] == [False, False, True], after
+    active = [o["id"] for o in rows(ns, "option", "decision_id=eq.D-003&order=id.asc") if o["active"]]
+    assert active == ["D-003-O3"], active
+    # The sibling's own decision is untouched: exclusivity is per decision, not per namespace.
+    assert after["D-001-O1"] is True and after["D-002-O1"] is True, after
+
+    # And the render agrees: one binding for D-003, with nothing to warn about.
+    rc, out = run_cli(["-n", ns, "dump"])
+    assert rc == 0, out
+    assert ("ACTIVE CONFIGURATION: D-001=single SQLite file, D-002=staging table, "
+            "D-003=in-memory cache") in out, out
+    assert "!= 1 active option" not in out, out
+
+
+def test_several_activations_in_one_call_still_leave_one_active_option(decided: dict):
+    """The flip judges siblings by THIS call's own writes, never by a snapshot taken before the
+    first PATCH: `--on A --on B` would otherwise leave both live — the same defect by another door."""
+    ns = decided["ns"]
+    rc, out = run_cli(["-n", ns, "toggle", "--on", "D-001-O2", "--on", "D-001-O1"])
+    assert rc == 0, out
+
+    flags = option_flags(ns)
+    assert [flags["D-001-O1"], flags["D-001-O2"]] == [True, False], (out, flags)
+    rc, dump = run_cli(["-n", ns, "dump"])
+    assert "!= 1 active option" not in dump, dump
+    line = next(ln for ln in dump.splitlines() if ln.startswith("ACTIVE CONFIGURATION:"))
+    assert line == "ACTIVE CONFIGURATION: D-001=single SQLite file, D-002=staging table", line
+
+
+def test_the_additive_escape_hatch_keeps_both_active_and_dump_warns(decided: dict):
+    """`--additive` keeps the old behaviour — and dump then NAMES the collision instead of
+    rendering one decision twice as THE configuration."""
+    ns = decided["ns"]
+    rc, out = run_cli(["-n", ns, "toggle", "--on", "D-002-O2", "--additive"])
+    assert rc == 0 and "D-002-O2->on (1)" in out, out
+    assert "one option per decision" not in out, out     # additive claims no exclusivity
+
+    flags = option_flags(ns)
+    assert flags["D-002-O1"] is True and flags["D-002-O2"] is True, flags
+
+    rc, out = run_cli(["-n", ns, "dump"])
+    assert rc == 0, out
+    assert "WARNING: decisions with != 1 active option" in out, out
+    assert "  - D-002: 2 of 2 options active (D-002-O1, D-002-O2)" in out, out
+    # Warned, not crashed: the render still happens.
+    assert ("ACTIVE CONFIGURATION: D-001=single SQLite file, D-002=staging table, "
+            "D-002=row locking") in out, out
+
+
+def test_status_warns_when_two_options_of_one_decision_are_active(decided: dict):
+    """`status` reports the same collision, and still prints the confidence map it is for."""
+    ns = decided["ns"]
+    rc, out = run_cli(["-n", ns, "status"])
+    assert rc == 0 and "!= 1 active option" not in out, out    # a clean record is silent
+
+    run_cli(["-n", ns, "toggle", "--on", "D-002-O2", "--additive"])
+    rc, out = run_cli(["-n", ns, "status"])
+    assert rc == 0, out
+    assert "WARNING: decisions with != 1 active option" in out, out
+    assert "  - D-002: 2 of 2 options active (D-002-O1, D-002-O2)" in out, out
+    assert "decisions 2 |" in out, out                  # warn AND continue: the map is still there
+
+
+def test_the_warning_covers_the_other_half_of_the_invariant(decided: dict):
+    """Zero active options is `!= 1` too: the decision silently leaves the configuration."""
+    ns = decided["ns"]
+    rc, out = run_cli(["-n", ns, "toggle", "--off", "D-002-O1"])
+    assert rc == 0 and option_flags(ns)["D-002-O1"] is False, out
+
+    rc, dump = run_cli(["-n", ns, "dump"])
+    assert rc == 0, dump
+    assert "WARNING: decisions with != 1 active option" in dump, dump
+    assert "  - D-002: 0 of 2 options active" in dump, dump
+    line = next(ln for ln in dump.splitlines() if ln.startswith("ACTIVE CONFIGURATION:"))
+    assert line == "ACTIVE CONFIGURATION: D-001=single SQLite file", line
+
+    rc, status = run_cli(["-n", ns, "status"])
+    assert rc == 0 and "  - D-002: 0 of 2 options active" in status, status
+
+
 # ================================================================= check (the JEV-dependent verb)
 @pytest.mark.jev
 def test_check_retrieves_the_rows_this_suite_stored_and_reaches_one_verdict(decided: dict):

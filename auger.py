@@ -1997,19 +1997,126 @@ def cmd_status(a):
         print(f"\n{len(thin)} decision(s) below {T_CONFIDENT} — these are what `auger ask` will drill:")
         for d in sorted(thin, key=lambda x: x["confidence"]):
             print(f"  {d['id']}  {d['confidence']:.2f}  {d['chosen'][:70]}")
+    # The selection invariant (AUG-015): the counts above cannot show WHICH options are active, so a
+    # decision holding zero or two-or-more of them is named here. Warned, never fatal — the map this
+    # verb exists to print is still the answer, and a record with a collision is still worth reading.
+    activation_warnings = activation_warning_lines(dec, opt)
+    if activation_warnings:
+        print()
+        print("\n".join(activation_warnings))
     return 0
 
 
+# ------------------------------------------------ one option per decision (AUG-015 selection invariant)
+# `option.active` is what makes a dump a CONFIGURATION rather than a union of everything anyone ever
+# considered: the register exists so one decision resolves to ONE option. The substrate enforces
+# nothing — `active` is a boolean column and the toggle was a raw PATCH — so the rule is kept at the
+# two places that could break it or misreport it:
+#
+#   * `toggle --on` deactivates the target's siblings (the FLIP), because that verb writes the
+#     selection. `--additive` is the deliberate escape hatch for hypotheses that need two live.
+#   * `dump` and `status` NAME a decision whose active-option count is not one — zero OR two-or-more
+#     — and carry on. A drifted record is still worth reading; a verb that refused to render would
+#     hide the very contradiction the reader needs to see.
+WARN_ACTIVATION = ("WARNING: decisions with != 1 active option "
+                   "(a configuration SELECTS one option per decision):")
+
+
+def options_by_decision(opts: list[dict]) -> dict[str, list[dict]]:
+    """Every option row grouped under the decision it belongs to."""
+    by_dec: dict[str, list[dict]] = {}
+    for o in opts:
+        by_dec.setdefault(o.get("decision_id") or "", []).append(o)
+    return by_dec
+
+
+def decision_options(by_dec: dict[str, list[dict]], oid: str) -> tuple[str, list[dict]]:
+    """The decision `oid` belongs to and that decision's option rows; ("", []) when unregistered."""
+    for did, cand in by_dec.items():
+        if any(o["id"] == oid for o in cand):
+            return did, cand
+    return "", []
+
+
+def activation_warning_lines(dec: list[dict], opts: list[dict],
+                             live_by_dec: dict[str, set[str]] | None = None) -> list[str]:
+    """The warning block for every decision whose active-option count is not exactly one.
+
+    `live_by_dec` is the selection a caller is RENDERING — a `dump --config` hypothesis. Without it
+    the stored `active` flags are the selection, which is what `status` reports. A decision with no
+    option rows registered is skipped: there is nothing to select between, so nothing can disagree.
+    """
+    by_dec = options_by_decision(opts)
+    lines = []
+    for d in dec:
+        cand = by_dec.get(d["id"], [])
+        if not cand:
+            continue
+        if live_by_dec is None:
+            live = {o["id"] for o in cand if o.get("active")}
+        else:
+            live = set(live_by_dec.get(d["id"]) or set())
+        if len(live) == 1:
+            continue
+        if not live:
+            lines.append(f"  - {d['id']}: 0 of {len(cand)} options active — this decision contributes "
+                         f"NOTHING to the configuration")
+        else:
+            lines.append(f"  - {d['id']}: {len(live)} of {len(cand)} options active "
+                         f"({', '.join(sorted(live))}) — one decision bound to contradictory choices")
+    return [WARN_ACTIVATION] + lines if lines else []
+
+
 def cmd_toggle(a):
+    """Turn options on/off — the what-if switch: ONE option per decision by default.
+
+    `--on` (and `--set ID=on`) turns the target's SIBLINGS off, so the decision keeps exactly one
+    active option — the selection `dump` renders as THE configuration. Without it, `toggle --on`
+    left the chosen option on as well and the dump printed one decision bound to two contradictory
+    choices (observed 2026-09-22, AUG-015). `--additive` preserves that old behaviour for what-if
+    work; `dump`/`status` then report the collision instead of rendering it as a configuration.
+    """
     ns = a.namespace
+    additive = bool(a.additive)
+    by_dec = {} if additive else options_by_decision(select(ns, "option", "order=id.asc"))
     took = []
+    touched: dict[str, bool] = {}   # the state THIS invocation set, per option
+
+    def write(oid: str, state: bool) -> int:
+        """PATCH one option's flag, and remember the write.
+
+        The remembered state is why a call that flips several options of one decision still ends
+        with one active option: a sibling is judged by the state this run gave it, never by the
+        snapshot read before the first PATCH (`--on A --on B` would otherwise leave both live,
+        because B was not active yet when the snapshot was taken).
+        """
+        n = patch(ns, "option", oid, {"active": state}).get("updated", 0)
+        touched[oid] = state
+        return n
+
+    def flip(oid: str, state: bool) -> str:
+        return f"{oid}->{'on' if state else 'off'} ({write(oid, state)})"
+
+    def activate(oid: str) -> str:
+        line = flip(oid, True)
+        if additive:
+            return line
+        did, cand = decision_options(by_dec, oid)
+        siblings = [o for o in cand if o["id"] != oid
+                    and touched.get(o["id"], bool(o.get("active")))]
+        if not siblings:
+            return line
+        # The flip is part of the write, so it is part of the report: the defect this fixes was a
+        # configuration change nobody could see.
+        offs = ", ".join(f"{o['id']} ({write(o['id'], False)})" for o in siblings)
+        return f"{line}  [siblings off — one option per decision {did}: {offs}]"
+
     for oid, state in a.set or []:
-        r = patch(ns, "option", oid, {"active": state})
-        took.append(f"{oid}->{'on' if state else 'off'} ({r.get('updated',0)})")
+        took.append(activate(oid) if state else flip(oid, False))
     for oid in (a.on or []):
-        took.append(f"{oid}->on ({patch(ns,'option',oid,{'active':True}).get('updated',0)})")
+        took.append(activate(oid))
     for oid in (a.off or []):
-        took.append(f"{oid}->off ({patch(ns,'option',oid,{'active':False}).get('updated',0)})")
+        took.append(flip(oid, False))
     print("toggled: " + (", ".join(took) if took else "(nothing — pass --on/--off/--set ID=on|off)"))
     return 0
 
@@ -2022,15 +2129,17 @@ def cmd_dump(a):
       dump --config D-001=O2    -> a hypothetical set (nothing is written), so you can ask
                                    "what does the system look like if we pick option 2 here
                                    and option 1 there" without disturbing the record.
+
+    In EITHER mode a decision whose active options are not exactly one is WARNED about at the foot
+    of the dump and still rendered: a record that drifted is exactly when the reader needs to see
+    it (AUG-015).
     """
     ns, pid = a.namespace, a.project_id
     p = _project(ns, pid)
     pid = p["id"]
     dec = select(ns, "decision", f"project_id=eq.{pid}&order=domain.asc,id.asc")
     opts = select(ns, "option", "order=id.asc")
-    by_dec = {}
-    for o in opts:
-        by_dec.setdefault(o["decision_id"], []).append(o)
+    by_dec = options_by_decision(opts)
 
     # --config overrides: accept "D-001=O2" (option id) or "D-001=Postgres" (label)
     overrides, bad = {}, []
@@ -2058,16 +2167,17 @@ def cmd_dump(a):
     lines.append(f"mode: {'HYPOTHETICAL (nothing written)' if hypothetical else 'current stored state'}")
     lines.append(f"seed: {p.get('seed','')[:300]}")
     lines.append("")
-    confs, unresolved, shadows = [], [], []
+    confs, shadows, live_by_dec = [], [], {}
     for d in dec:
         cand = by_dec.get(d["id"], [])
         if hypothetical:
             live_ids = overrides.get(d["id"]) or {o["id"] for o in cand if o.get("active")}
         else:
             live_ids = {o["id"] for o in cand if o.get("active")}
+        # The selection this render TREATS as the configuration. A hypothesis is as capable of
+        # binding one decision to two choices as the stored state is, so it is warned about too.
+        live_by_dec[d["id"]] = set(live_ids)
         live = [o for o in cand if o["id"] in live_ids]
-        if not live and cand:
-            unresolved.append(d["id"])
         for o in live:
             confs.append(f"{d['id']}={o['label']}")
         # a hypothesis that contradicts a recorded reason is worth naming, not hiding
@@ -2091,8 +2201,7 @@ def cmd_dump(a):
         lines.append("CONTRADICTIONS WITH THE RECORD:")
         for s in shadows:
             lines.append(f"  - {s}")
-    if unresolved:
-        lines.append(f"WARNING: decisions with options but NONE active: {', '.join(unresolved)}")
+    lines += activation_warning_lines(dec, opts, live_by_dec)
     if bad:
         lines.append(f"WARNING: unparsed --config entries ignored: {', '.join(bad)}")
     out = "\n".join(lines)
@@ -2156,6 +2265,9 @@ def main(argv=None):
     s.add_argument("--on", action="append")
     s.add_argument("--off", action="append")
     s.add_argument("--set", action="append", type=lambda v: (v.split("=")[0], v.split("=")[1].lower() in ("on", "true", "1")))
+    s.add_argument("--additive", action="store_true",
+                   help="do NOT deactivate the target's siblings: keep the old behaviour, where one "
+                        "decision can hold several active options (dump/status then WARN about it)")
     s.set_defaults(fn=cmd_toggle)
 
     s = sub.add_parser("dump", help="render a configuration: current, or a --config hypothesis")
