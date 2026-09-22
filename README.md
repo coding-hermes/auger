@@ -41,7 +41,13 @@ auger answer ...  record the decision, the rejected options, and why
 auger status      confidence map, coverage by domain, what is thin
 auger toggle      flip options — the what-if switch
 auger dump        render the system under the current set, or a --config hypothesis
+auger propagate   run the graph walks: moot, reopen, cascade — and re-gate the children
+auger feedback    turn thin decisions into the next question batch (model proposes, JEV gates)
+auger recall "Q"  semantic search over everything the project has embedded
 ```
+
+Every verb is documented — arguments, what it writes, what it must never write — in
+[docs/VERBS.md](docs/VERBS.md).
 
 ## Quick start
 
@@ -77,14 +83,29 @@ That means the spec is versioned in git, readable as plain files, queryable over
 searchable by embedding — and the dump is a *view* of it, not a separate artifact to keep in
 sync.
 
-## The nine tables
+## The tables
 
-`project` · `question` · `decision` · `option` · `break` · `escalation` · `assumption` ·
-`unknown` · `domain`
+`COLS` in `auger.py` is the source of truth for this list; this section follows its order.
+The tables are the registers of the SDM method, made addressable:
 
-They are the registers of the SDM method, made addressable. `option` is what makes the what-if
-engine possible: each decision keeps its rejected alternatives as rows, so a configuration is a
-selection across them rather than a rewrite.
+```
+project  question  decision  option  break  escalation  assumption  unknown  domain
+edge     facet     bundle    bundle_member
+```
+
+- `project` · `question` · `decision` · `option` · `break` · `escalation` · `assumption` ·
+  `unknown` · `domain` are the original registers: the project and its seed, the open
+  questions, the decisions with their rejected alternatives and confidence, the what-if
+  switches, what a choice breaks, what only a person may decide, what is assumed, what is
+  not yet known, and the domain map.
+- `edge` and `facet` are the graph (SPEC-001): `edge` holds the relationships the engine
+  reasons over (`derives_from`, `blocks`, `closes`, `breaks`, `satisfies`, ...), `facet`
+  holds one row per way of looking at every question — and, practically, each question's
+  reason for being in the state it is in.
+- `bundle` and `bundle_member` are the contracts (SPEC-002): which projects must honour
+  one contract. `option` is what makes the what-if engine possible: each decision keeps
+  its rejected alternatives as rows, so a configuration is a selection across them rather
+  than a rewrite.
 
 ## Design rules this tool is built on
 
