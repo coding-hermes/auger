@@ -28,14 +28,28 @@ Conventions every verb shares:
 
 Create (or verify) the namespace and declare the SDM tables.
 
-**Arguments:** none beyond the top-level `--namespace`.
+**Arguments:** `--seed-domains` (also seed the 44-domain grid as `domain` rows). Without it
+there is nothing beyond the top-level `--namespace`.
 
 **Writes:** the namespace itself, when it does not exist yet, and one declaration file
 per table in `COLS` — 13 today — under `~/duckbrain/namespaces/<ns>/tables/<table>.table.json`.
 Idempotent: a declaration file whose content already matches is not rewritten.
+With `--seed-domains`, a further 44 `domain` rows — one per domain of the method's grid,
+4.01-4.44 — read from the skill's own `design/02-domains/` files (the default path is the
+dogfood artifact under `~/.hermes/skills/`; `AUGER_DOMAIN_GRID` moves it) rather than copied
+into this repo, because a copy would drift while the skill's grid does not. Each row carries
+the grid's `num`, `name`, triage score, ring floor and terminating ring, and starts
+`NOT-REACHED` — owner `unassigned`, trigger `first question in domain`, containment `none`
+(the `domain` table has no `reason` column; the reason for every seeded row is the same
+sentence, so the report states it rather than the table holding 44 copies). Rows are bound to
+the project that already exists, or left unbound when `init` runs before `start`. Idempotent
+the same way: a domain number already stored is skipped, never written twice. A grid that is
+not exactly the canonical 44, or a file whose header cannot be read, is REFUSED by name — a
+seeded 43 would be the silent-domain failure the rule exists to forbid.
 
-**Never writes:** no rows in any table, nothing in the memory store. `init` shapes the
-namespace; it never puts data in it.
+**Never writes:** without `--seed-domains`, no rows in any table at all; and nothing in the
+memory store either way. `init` shapes the namespace — its declarations, plus the grid's 44
+`NOT-REACHED` rows when asked — and it never records an answer, a decision, or a question.
 
 ## start
 
@@ -98,15 +112,26 @@ Is this question already answered by what we hold?
 
 ## status
 
-The confidence map: coverage by domain, what is thin, what is contradictory.
+The confidence map: coverage by domain, what is thin, what is contradictory — and what the
+44-domain grid does not have at all.
 
 **Arguments:** none.
 
 **Writes:** nothing. Reads decisions, options, escalations, unknowns, domains, and the
-question/edge rows, and prints the report.
+question/edge rows, and prints the report. Two coverage blocks come out of that: the decisions
+grouped by the domain string they carry, and — from the stored `domain` rows — the method's
+grid walked domain by domain, one line each, with the row's state, the grid's triage score and
+ring floor, the TERMINATING RING, and how many decision/question rows carry that number
+(the evidence half of "answered vs NOT-REACHED"). A grid domain with no stored row prints
+`ABSENT` and is repeated by number in an explicit list: absence is a claim of its own, and
+"we have no row for 4.21" is not the same sentence as "4.21 does not apply". A stored number
+the grid does not define prints as off-grid. When the grid cannot be read at all, `status`
+says so and claims nothing about absence — with no expected set there is nothing to be absent
+against — instead of printing a silent zero.
 
 **Never writes:** anything. A drifted record (a decision with zero or several active
-options) is named in the output, not "fixed".
+options) is named in the output, not "fixed" — and a `domain` row still reading `NOT-REACHED`
+while a decision carries its number is reported as exactly that, not quietly promoted.
 
 ## toggle
 
