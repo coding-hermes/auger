@@ -19,7 +19,7 @@ echo "namespace: $NS"
 
 echo "== init =="
 OUT=$($AUGER init 2>&1)
-has "$OUT" "declared: 13/13" "all thirteen tables declared and visible"
+has "$OUT" "declared: 14/14" "all fourteen tables declared and visible"
 if grep -q "WARNING" <<<"$OUT"; then no "init reported a visibility warning"; else ok "no API-visibility warnings"; fi
 
 echo "== start =="
@@ -75,6 +75,19 @@ echo "== toggle writes =="
 $AUGER toggle --off D-002-O1 --on D-002-O2 >/dev/null 2>&1
 OUT=$($AUGER dump | grep "ACTIVE CONFIGURATION")
 has "$OUT" "D-002=row locking" "toggle changed the stored configuration"
+
+echo "== verdict: record + list round-trip =="
+OUT=$($AUGER verdict --good "D-001=single SQLite file" --reasons "one box, no extra services" 2>&1)
+has "$OUT" "recorded  (verdict good" "a good verdict is recorded"
+OUT=$($AUGER verdict --bad "D-001=Postgres" --reasons "needs a service the seed forbids" 2>&1)
+has "$OUT" "recorded  (verdict bad" "a bad verdict is recorded"
+OUT=$($AUGER verdict --list 2>&1)
+has "$OUT" "GOOD" "the good verdict shows in the list"
+has "$OUT" "needs a service the seed forbids" "the bad verdict's reasons show in the list"
+$AUGER verdict --good X --bad Y >/dev/null 2>&1 && no "both --good and --bad must refuse" \
+  || ok "both --good and --bad refuse"
+$AUGER verdict --list 2>/dev/null | grep -q "config: X" && no "the refused pair wrote a row" \
+  || ok "the refused pair wrote nothing"
 
 rm -f "$SEED"
 echo
