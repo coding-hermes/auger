@@ -930,6 +930,106 @@ def set_state(ns: str, project_id: str, question_id: str, status: str, reason: s
     return patch(ns, "question", question_id, {"status": status})
 
 
+def close_question(ns: str, project_id: str, decision_id: str, question_id: str,
+                   *, warnings: list | None = None) -> dict:
+    """SPEC-001 BEAT 2: record that ONE decision IS the answer to ONE question.
+
+    Both writes the spec directs, and neither is optional. The `closes` edge is what
+    PROPAGATE's walk reads to moot the questions a dead decision answered (`edge_index` indexes
+    exactly this src_kind/dst_kind pair), and the state change is what takes the question off the
+    askable surface. The reason travels THROUGH set_state, so it lands on the question's facet
+    rows before the status flips and the change cannot happen without it — a closed question
+    whose facets say nothing is one nobody can explain later.
+
+    A question that is NOT STORED is refused BY NAME, the way `facet()` and `edge()` refuse a
+    missing node. `--question-id` was accepted verbatim and never checked, so a typo used to store
+    a link to nothing; a link to nothing reads as evidence that a question was answered.
+    """
+    if not node_exists(ns, "question", question_id):
+        raise SystemExit(f"refused: question {question_id!r} does not exist — a decision cannot "
+                         f"close a question that is not stored")
+    wrote = edge(ns, project_id, "closes", "decision", decision_id, "question", question_id,
+                 source="rule",
+                 note=f"BEAT 2: decision {decision_id} is the answer to {question_id}",
+                 warnings=warnings)
+    set_state(ns, project_id, question_id, "answered", f"answered by {decision_id}",
+              closed_by=decision_id)
+    return wrote
+
+
+def declared_columns(ns: str, table: str) -> list:
+    """The columns the SERVER declares for a table — [] when it cannot answer.
+
+    Read from the API's own declaration rather than from COLS: what a reader is allowed to filter
+    on is the running server's answer. A namespace declared before a column existed keeps serving
+    the old shape (the whole reason `insert_decision` and `edge` send absent keys), and the API
+    refuses a filter on a column it does not have.
+    """
+    st, body, _ = db(f"/api/ns/{ns}/tables")
+    if st != 200 or not isinstance(body, dict):
+        return []
+    for t in body.get("tables", []):
+        if isinstance(t, dict) and t.get("name") == table:
+            return [c.get("name") for c in (t.get("columns") or []) if isinstance(c, dict)]
+    return []
+
+
+def project_questions(ns: str, project_id: str) -> list:
+    """The project's stored question rows, whatever this namespace's `question` declaration holds.
+
+    `question.project_id` is the direct filter and the one every namespace this engine declares
+    serves. A declaration that predates the column cannot be asked for it, and the fallback is a
+    real JOIN rather than a shrug: the question's own facet rows name both ids, so the project is
+    resolved through rows that carry it instead of reading every question of a shared namespace as
+    this project's.
+    """
+    cols = declared_columns(ns, "question")
+    if cols and "project_id" not in cols:
+        ids = {f.get("question_id") for f in select_or_empty(ns, "facet", f"project_id=eq.{project_id}")}
+        return [q for q in select_or_empty(ns, "question", "order=id.asc") if q.get("id") in ids]
+    return select(ns, "question", f"project_id=eq.{project_id}&order=id.asc")
+
+
+def branch_depth(questions: list, edges: list) -> int:
+    """The longest question -> question chain in a project's stored graph — 0 with no questions.
+
+    Depth follows DEPENDENCY, never arrival order (SPEC-001 section 5). A question that
+    `derives_from` another sits one level below it, and a question that `blocks` on another cannot
+    be asked until that one is answered, so it sits below it too. `opens` is deliberately NOT a
+    depth edge: a decision -> question edge makes a question the child of an ANSWER, and the
+    engine records the level it adds as a `derives_from` back to the question that answer closed
+    (see `record_followup`) — counting the `opens` edge as well would count one branch twice. A
+    question no other question derives from or blocks on is therefore a root, including one an
+    answer raised directly.
+
+    Longest-path over a topological order, so a cycle — the graph is written by several rules and
+    nothing forbids one — leaves its nodes at ONE level instead of hanging the verb or inventing a
+    length for a chain that never ends.
+    """
+    ids = {q.get("id") for q in questions if q.get("id")}
+    kids: dict = {}
+    indegree = dict.fromkeys(ids, 0)
+    for e in edges:
+        if e.get("src_kind") != "question" or e.get("dst_kind") != "question":
+            continue
+        if e.get("kind") not in ("derives_from", "blocks"):
+            continue
+        parent, child = e.get("dst_id"), e.get("src_id")
+        if parent in ids and child in ids and child not in kids.get(parent, ()):
+            kids.setdefault(parent, []).append(child)
+            indegree[child] += 1
+    depth = dict.fromkeys(ids, 1)
+    queue = [q for q, n in indegree.items() if n == 0]
+    while queue:
+        parent = queue.pop(0)
+        for child in kids.get(parent, ()):
+            depth[child] = max(depth[child], depth[parent] + 1)
+            indegree[child] -= 1
+            if indegree[child] == 0:
+                queue.append(child)
+    return max(depth.values(), default=0)
+
+
 def unresolved_blockers(idx: dict, qs: dict, question_id: str) -> list:
     """The questions this one cannot be answered until (SPEC-001: the blocks edge).
 
@@ -1929,13 +2029,26 @@ def cmd_answer(a):
     # code: a model that is down skips a member and says so, it does not undo the answer. The scope
     # read below is the scope that was STORED: a namespace that could not hold `bundle` (see
     # insert_decision) recorded a local decision, and a local decision crosses no boundary.
+    # SPEC-001 BEAT 2 — the half of ANSWER that was missing: the record NAMED the question it
+    # answers and nothing carried that claim into the graph, so the question stayed open and
+    # PROPAGATE had no `closes` edge to walk. Nothing here runs without --question-id: a decision
+    # that names no question closes no question, and this verb then behaves exactly as it did
+    # before the hook existed. The hook sits AFTER the decision is stored and BEFORE the bundle
+    # impact pass, because the refusal it can raise is about the LINK: the answer itself is never
+    # undone (the same doctrine the impact pass states below — a model that is down does not
+    # unrecord an answer).
+    closed, beat2_warnings = "", []
+    qid = (a.question_id or "").strip()
+    if qid:
+        close_question(ns, pid, did, qid, warnings=beat2_warnings)
+        closed = f", closed {qid}"
     stored_scope = DEFAULT_SCOPE if warning else decision_scope(row)
     impact = bundle_impact(ns, pid, {**row, "scope": stored_scope})
     print(f"{did} recorded  (confidence {row['confidence']}, {len(a.option or [])} options, "
-          f"embedded, scope {decision_scope(row)})")
+          f"embedded, scope {decision_scope(row)}{closed})")
     for line in impact["lines"]:
         print(line)
-    for line in impact["warnings"]:
+    for line in impact["warnings"] + beat2_warnings:
         print(line)
     if warning:
         print(warning)
@@ -2004,6 +2117,17 @@ def cmd_status(a):
     if activation_warnings:
         print()
         print("\n".join(activation_warnings))
+
+    # SPEC-001 BEAT 2, the reading half: how much branch is still open, and how deep the stored
+    # dependency chain runs. Both numbers come off the ROWS — the question statuses and the
+    # question->question edges — never off the prose in this report, so a project with no question
+    # table rows prints nothing extra at all (this verb's output for a question-less project is
+    # exactly what it always was).
+    questions = project_questions(ns, pid)
+    if questions:
+        opened = [q for q in questions if q.get("status") == "open"]
+        print(f"\nbranches: {len(opened)} open | max depth "
+              f"{branch_depth(questions, graph_edges(ns, pid))}")
     return 0
 
 
