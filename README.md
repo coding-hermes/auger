@@ -12,6 +12,24 @@ under a different set of choices.
 [docs/SUBSTRATE-VERIFICATION.md](docs/SUBSTRATE-VERIFICATION.md) for the live proof that the
 substrate does what this design assumes.
 
+## Substrate pin (read before installing)
+
+Auger is built on DuckBrain's **declared-tables HTTP API** (`/api/ns/<ns>/tables/...`).
+That API exists on the `feat/native-s3` branch of
+[wojons/duckbrain](https://github.com/wojons/duckbrain) — **not** on the public
+`main` branch (`ce936ae`), where `POST /api/ns/<ns>/tables/<table>` returns
+`404 ROUTE_NOT_FOUND`. Against default `main`, `auger init` claims success while
+declaring 0 tables and `auger start` fails with a 404.
+
+Install the working substrate:
+
+```bash
+git clone https://github.com/wojons/duckbrain ~/duckbrain
+cd ~/duckbrain && git checkout feat/native-s3   # verified working: e5fdbd3
+pnpm install && pnpm build
+node bin/duckbrain.js http
+```
+
 ## The loop
 
 ```
