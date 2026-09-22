@@ -17,6 +17,107 @@ has(){ if grep -q "$2" <<<"$1"; then ok "$3"; else no "$3 (missing: $2)"; fi; }
 
 echo "namespace: $NS"
 
+# ---------------------------------------------------------------- namespace hygiene (AUG-020)
+# DuckBrain's namespace list is a SHARED surface: the production `auger` namespace and live
+# dogfood/judge namespaces sit beside this script's throwaways. Two rules, both prefix-gated
+# to auger-smoke-*/auger-eval-* so nothing else is ever touched:
+#   * BEFORE creating its own namespace, sweep PREVIOUS throwaways older than a day (or
+#     listed with no directory — the observed leak shape). A live sibling run always has a
+#     fresh directory, so an in-flight judge or another smoke run is never a sweep target.
+#   * AT EXIT, remove THIS run's namespace. Teardown is best-effort: one line either way,
+#     429 retried ONCE inline by the transport, and a failure never flips the verdict.
+ns_helper(){  # ns_helper sweep | ns_helper teardown <ns> — all DuckBrain talk via auger's transport
+  python3 - "$HERE" "$@" <<'PY'
+import os, shutil, sys, time
+sys.path.insert(0, sys.argv[1])
+import auger
+
+THROWAWAY = ("auger-smoke-", "auger-eval-")
+ROOT = os.path.join(os.path.expanduser("~"), "duckbrain", "namespaces")
+
+def listed():
+    """The registry's names, or None when DuckBrain cannot be asked right now.
+
+    The transport's own 429 handling with a ONE-retry budget, then give up: hygiene
+    must never hang or fail a suite over a saturated limiter.
+    """
+    try:
+        st, body, _ = auger.db("/api/namespaces", retries=1)
+    except SystemExit:
+        return None
+    if st != 200 or not isinstance(body, dict):
+        return None
+    return [n.get("name") for n in body.get("namespaces", [])
+            if isinstance(n, dict) and isinstance(n.get("name"), str)]
+
+def drop(ns):
+    """Remove one throwaway namespace over both paths. Returns (gone, why).
+
+    `attempts` counts the caller's own invocations of this function: the 429 contract
+    is "retry ONCE", so the caller re-enters after a 429 and the SECOND attempt's
+    first DELETE is the third HTTP try overall — and the last.
+    """
+    try:
+        st, _body = auger.delete_namespace(ns, retries=1)
+    except SystemExit as exc:
+        return False, f"no DuckBrain token ({exc})"
+    shutil.rmtree(os.path.join(ROOT, ns), ignore_errors=True)
+    if os.path.exists(os.path.join(ROOT, ns)):
+        return False, "its directory could not be removed"
+    if st not in (200, 404):
+        return False, f"DELETE returned HTTP {st}"
+    return True, ""
+
+mode = sys.argv[2]
+if mode == "sweep":
+    names = listed()
+    if names is None:
+        print("namespace sweep skipped: DuckBrain list unavailable (unreachable or rate-limited)")
+    else:
+        cutoff = time.time() - 24 * 3600
+        stale = []
+        for n in names:
+            if not n.startswith(THROWAWAY):
+                continue
+            d = os.path.join(ROOT, n)
+            # Stale = directory gone (the observed leak shape: the registry row survives
+            # while the directory does not — no live run looks like that) or older than a day.
+            if not os.path.isdir(d) or os.path.getmtime(d) < cutoff:
+                stale.append(n)
+        if not stale:
+            print("namespace sweep: no stale auger-smoke-*/auger-eval-* older than a day")
+        else:
+            gone = [n for n in stale if drop(n)[0]]
+            stuck = sorted(n for n in stale if n not in gone)
+            if stuck:
+                print(f"namespace sweep: removed {len(gone)}, gave up on {len(stuck)}: {' '.join(stuck)}")
+            else:
+                print(f"namespace sweep: removed {len(gone)} stale throwaway(s)")
+elif mode == "teardown":
+    ns = sys.argv[3]
+    if not ns.startswith(THROWAWAY):
+        print(f"teardown skipped: {ns} lacks the auger-smoke-/auger-eval- prefix")
+    elif listed() is not None and ns not in listed() and not os.path.isdir(os.path.join(ROOT, ns)):
+        print(f"teardown skipped: {ns} was never created (nothing to remove)")
+    else:
+        ok, why = drop(ns)
+        if not ok and "HTTP 429" in why:
+            ok, why = drop(ns)   # the ONE retry the 429 contract allows
+        print(f"namespace {ns} removed" if ok else f"teardown skipped: {why}")
+else:
+    print(f"teardown skipped: unknown hygiene mode {mode!r}")
+sys.exit(0)
+PY
+}
+TEARDONE=0
+cleanup_ns(){
+  [ "$TEARDONE" = 1 ] && return 0
+  TEARDONE=1
+  ns_helper teardown "$NS"
+}
+trap cleanup_ns EXIT
+ns_helper sweep
+
 echo "== init =="
 OUT=$($AUGER init 2>&1)
 has "$OUT" "declared: 13/13" "all thirteen tables declared and visible"
@@ -78,6 +179,6 @@ has "$OUT" "D-002=row locking" "toggle changed the stored configuration"
 
 rm -f "$SEED"
 echo
-echo "passed $PASS, failed $FAIL   (namespace left behind: $NS — remove with:"
-echo "  rm -rf ~/duckbrain/namespaces/$NS)"
+cleanup_ns   # explicit final teardown of THIS run's namespace (also wired to the EXIT trap)
+echo "passed $PASS, failed $FAIL"
 [ "$FAIL" -eq 0 ]

@@ -24,6 +24,7 @@ import io
 import os
 import shutil
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -122,8 +123,11 @@ def leftovers(scope: list[str] | None = None) -> dict[str, list[str]]:
     """
     api = [n for n in api_namespaces() if n.startswith(TEST_NS_PREFIX)]
     root = Path(os.path.expanduser("~")) / "duckbrain" / "namespaces"
-    disk = sorted(p.name for p in root.iterdir() if p.name.startswith(TEST_NS_PREFIX)) \
-        if root.is_dir() else []
+    disk = (
+        sorted(p.name for p in root.iterdir() if p.name.startswith(TEST_NS_PREFIX))
+        if root.is_dir()
+        else []
+    )
     if scope is not None:
         want = set(scope)
         api = [n for n in api if n in want]
@@ -146,12 +150,16 @@ def teardown_namespace(ns: str) -> list[str]:
     "no bypass" property are all one implementation, proved in `test_auger.py`.
     """
     if not ns.startswith(TEST_NS_PREFIX):
-        raise ValueError(f"refusing to tear down a namespace that is not a test namespace: {ns!r}")
+        raise ValueError(
+            f"refusing to tear down a namespace that is not a test namespace: {ns!r}"
+        )
     problems: list[str] = []
 
     status, body = auger.delete_namespace(ns)
     if status not in (200, 404):
-        problems.append(f"DELETE /api/namespaces/{ns} returned {status}: {str(body)[:200]}")
+        problems.append(
+            f"DELETE /api/namespaces/{ns} returned {status}: {str(body)[:200]}"
+        )
 
     path = ns_path(ns)
     shutil.rmtree(path, ignore_errors=True)
@@ -186,8 +194,23 @@ def ns_created(live_service: str) -> str:
     finally:
         problems = teardown_namespace(ns)
         if problems:
-            # Raised in teardown, so a leaking namespace surfaces as an error, not as silence.
-            pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+            if any("429" in p for p in problems):
+                # The limiter beat even the transport's own budget on this one namespace.
+                # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                # saturated limiter must not error a passing test, and the leak is stated,
+                # never silent.
+                time.sleep(1)
+                problems = teardown_namespace(ns)
+                if not problems:
+                    return
+                print(
+                    f"auger: teardown of {ns} skipped after one 429 retry: "
+                    + "; ".join(problems),
+                    file=sys.stderr,
+                )
+            else:
+                # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+                pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
 
 
 @pytest.fixture
@@ -212,15 +235,39 @@ def project(ns: str, tmp_path: Path) -> dict:
     seed_file = tmp_path / "seed.txt"
     seed_file.write_text(SEED_TEXT)
     pid = "P-PYTEST"
-    rc, out = run_cli(["-n", ns, "start", "--name", "pytesttest", "--id", pid,
-                       "--seed-file", str(seed_file)])
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "start",
+            "--name",
+            "pytesttest",
+            "--id",
+            pid,
+            "--seed-file",
+            str(seed_file),
+        ]
+    )
     if rc != 0 or "seed stored" not in out:
         pytest.fail(f"auger start failed (rc={rc}):\n{out}")
-    return {"ns": ns, "pid": pid, "seed": SEED_TEXT, "seed_file": str(seed_file), "out": out}
+    return {
+        "ns": ns,
+        "pid": pid,
+        "seed": SEED_TEXT,
+        "seed_file": str(seed_file),
+        "out": out,
+    }
 
 
-def answer(ns: str, did: str, domain: str, chosen: str, options: list[str],
-           why_not: str, confidence: float) -> tuple[int, str]:
+def answer(
+    ns: str,
+    did: str,
+    domain: str,
+    chosen: str,
+    options: list[str],
+    why_not: str,
+    confidence: float,
+) -> tuple[int, str]:
     argv = ["-n", ns, "answer", "--id", did, "--domain", domain, "--chosen", chosen]
     for opt in options:
         argv += ["--option", opt]
@@ -228,12 +275,22 @@ def answer(ns: str, did: str, domain: str, chosen: str, options: list[str],
     return run_cli(argv)
 
 
-D001 = dict(did="D-001", domain="4.05", chosen="single SQLite file",
-            options=["single SQLite file", "Postgres"],
-            why_not="Postgres needs a service the seed forbids", confidence=0.82)
-D002 = dict(did="D-002", domain="4.06", chosen="staging table",
-            options=["staging table", "row locking"],
-            why_not="no concurrent writer", confidence=0.41)
+D001 = dict(
+    did="D-001",
+    domain="4.05",
+    chosen="single SQLite file",
+    options=["single SQLite file", "Postgres"],
+    why_not="Postgres needs a service the seed forbids",
+    confidence=0.82,
+)
+D002 = dict(
+    did="D-002",
+    domain="4.06",
+    chosen="staging table",
+    options=["staging table", "row locking"],
+    why_not="no concurrent writer",
+    confidence=0.41,
+)
 
 
 @pytest.fixture
