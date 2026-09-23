@@ -3433,7 +3433,9 @@ def test_the_grid_source_parses_to_exactly_the_canonical_44():
     assert [e["num"] for e in grid] == GRID_NUMBERS, [e["num"] for e in grid]
     for e in grid:
         assert e["name"] == e["name"].lower() and e["name"], e
-        assert 1 <= e["triage"] <= 27, e  # blast radius × uncertainty × irreversibility, each 1-3
+        assert 1 <= e["triage"] <= 27, (
+            e
+        )  # blast radius × uncertainty × irreversibility, each 1-3
         assert e["ring_floor"] >= 2, e
         # the grid's ring ceiling is 8; None is the "not opened" value and is not a number at all
         assert e["terminating_ring"] is None or 1 <= e["terminating_ring"] <= 8, e
@@ -3445,7 +3447,11 @@ def test_the_parser_reads_both_header_shapes_the_grid_actually_uses(tmp_path):
         write_grid_file(str(tmp_path), "4.20-concurrency", GRID_INLINE_HEADER)
     )
     assert (inline["num"], inline["name"]) == ("4.20", "concurrency")
-    assert (inline["triage"], inline["ring_floor"], inline["terminating_ring"]) == (27, 5, 5)
+    assert (inline["triage"], inline["ring_floor"], inline["terminating_ring"]) == (
+        27,
+        5,
+        5,
+    )
 
     # the ⊕ header spells the floor `unconditional floor 5` and fills the same field (4.12's shape)
     uncond = auger.parse_domain_file(
@@ -3455,14 +3461,20 @@ def test_the_parser_reads_both_header_shapes_the_grid_actually_uses(tmp_path):
             "Triage: 3×2×3=18; unconditional floor 5; status CASCADED; terminating ring 5.\n",
         )
     )
-    assert (uncond["triage"], uncond["ring_floor"], uncond["terminating_ring"]) == (18, 5, 5)
+    assert (uncond["triage"], uncond["ring_floor"], uncond["terminating_ring"]) == (
+        18,
+        5,
+        5,
+    )
 
     kv = auger.parse_domain_file(
         write_grid_file(str(tmp_path), "4.01-product-people", GRID_KV_HEADER)
     )
     assert (kv["num"], kv["name"]) == ("4.01", "product-people")
     assert kv["triage"] == 6 and kv["ring_floor"] == 2
-    assert kv["terminating_ring"] is None, "an unopened domain's ring is None, not a number"
+    assert kv["terminating_ring"] is None, (
+        "an unopened domain's ring is None, not a number"
+    )
 
 
 def test_a_header_the_parser_cannot_read_is_refused_with_the_file_name(tmp_path):
@@ -3517,12 +3529,20 @@ def test_seeding_writes_the_44_domain_rows_with_the_grids_own_numbers(ns: str):
     grid = grid_or_skip()
     seed_grid(ns)
     stored = rows(ns, "domain", "order=num.asc")
-    assert len(stored) == 44, f"expected the 44-domain grid, stored {len(stored)} row(s)"
+    assert len(stored) == 44, (
+        f"expected the 44-domain grid, stored {len(stored)} row(s)"
+    )
     assert [r["num"] for r in stored] == GRID_NUMBERS
 
     first = row(ns, "domain", "num=eq.4.01")
-    assert (first["name"], first["triage"], first["ring_floor"]) == ("product-people", 6, 2)
-    assert first.get("terminating_ring") is None, "4.01 was never opened: it has no ring"
+    assert (first["name"], first["triage"], first["ring_floor"]) == (
+        "product-people",
+        6,
+        2,
+    )
+    assert first.get("terminating_ring") is None, (
+        "4.01 was never opened: it has no ring"
+    )
     assert first["status"] == auger.DOMAIN_SEED_STATUS == "NOT-REACHED"
     assert first["owner"] == "unassigned"
     assert first["trigger"] == "first question in domain"
@@ -3559,8 +3579,12 @@ def test_reseeding_the_grid_adds_no_second_copy(ns: str):
     assert len(before) == 44
     second_out = seed_grid(ns)
     after = {r["num"]: r["id"] for r in rows(ns, "domain", "")}
-    assert len(after) == 44, f"a re-seed duplicated the grid: {len(after)} row(s) stored"
-    assert after == before, "a re-seed churned ids instead of skipping what was already stored"
+    assert len(after) == 44, (
+        f"a re-seed duplicated the grid: {len(after)} row(s) stored"
+    )
+    assert after == before, (
+        "a re-seed churned ids instead of skipping what was already stored"
+    )
     assert "44 row(s) written, 0 already present" in first_out, first_out
     assert "0 row(s) written, 44 already present" in second_out, second_out
 
@@ -3584,9 +3608,13 @@ def test_status_names_every_absent_grid_domain_when_no_row_is_stored(project: di
     assert rc == 0, out
     assert "44 in the grid | 0 seeded | 44 absent" in out, out
     reported = coverage_lines(out)
-    assert len(reported) == 44, f"{len(reported)} domain line(s) for a 44-domain grid:\n{out}"
+    assert len(reported) == 44, (
+        f"{len(reported)} domain line(s) for a 44-domain grid:\n{out}"
+    )
     for e in grid:
-        assert e["num"] in out, f"{e['num']} was silently omitted from the coverage report"
+        assert e["num"] in out, (
+            f"{e['num']} was silently omitted from the coverage report"
+        )
         line = next(ln for ln in reported if ln.strip().startswith(e["num"]))
         assert "ABSENT" in line, line
     assert "ABSENT (a grid domain with no stored" in out, out
@@ -3635,14 +3663,18 @@ def test_a_domain_whose_row_is_gone_is_reported_absent_not_skipped(project: dict
     ns = project["ns"]
     seed_grid(ns)
     [moving] = rows(ns, "domain", "num=eq.4.05")
-    auger.patch(ns, "domain", moving["id"], {"num": "9.99", "name": "moved-off-the-grid"})
+    auger.patch(
+        ns, "domain", moving["id"], {"num": "9.99", "name": "moved-off-the-grid"}
+    )
     rc, out = run_cli(["-n", ns, "status"])
     assert rc == 0, out
     assert "44 in the grid | 43 seeded | 1 absent" in out, out
     absent = next(ln for ln in coverage_lines(out) if ln.strip().startswith("4.05"))
     assert "ABSENT" in absent, absent
     assert "no stored `domain` row — absence, which is NOT" in out, out
-    assert "ABSENT (a grid domain with no stored `domain` row" in out and "4.05" in out, out
+    assert (
+        "ABSENT (a grid domain with no stored `domain` row" in out and "4.05" in out
+    ), out
     off = next(ln for ln in coverage_lines(out) if ln.strip().startswith("9.99"))
     assert "off-grid" in off, off
     assert "OFF-GRID rows" in out and "9.99" in out, out

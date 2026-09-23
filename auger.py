@@ -2265,8 +2265,12 @@ DOMAIN_GRID_DIR = os.path.join(
     "dogfood-artifact",
     "02-domains",
 )
-DOMAIN_GRID_SIZE = 44  # the method's rule, not a preference: 43 files is the named failure
-DOMAIN_GRID_HEAD_LINES = 14  # both live headers sit in the first 3 lines; 14 leaves room to move
+DOMAIN_GRID_SIZE = (
+    44  # the method's rule, not a preference: 43 files is the named failure
+)
+DOMAIN_GRID_HEAD_LINES = (
+    14  # both live headers sit in the first 3 lines; 14 leaves room to move
+)
 DOMAIN_ID_PREFIX = "DM"  # D- is the decision register; a domain row is not a decision
 # Every seeded row's state, and the ONE reason it holds it. The `domain` table has no `reason`
 # column (AUG-004 fixes COLS), and every seeded row is NOT-REACHED for the same reason — the
@@ -2371,7 +2375,9 @@ def parse_domain_file(path: str) -> dict:
             "and its slug (section 4: files are always zero-padded, 4.05-data.md)"
         )
     with open(path, errors="replace") as fh:
-        head = [line.strip() for line in fh.read().splitlines()[:DOMAIN_GRID_HEAD_LINES]]
+        head = [
+            line.strip() for line in fh.read().splitlines()[:DOMAIN_GRID_HEAD_LINES]
+        ]
     inline = None
     for line in head:
         inline = DOMAIN_INLINE_HEADER_RE.match(line)
@@ -2386,7 +2392,9 @@ def parse_domain_file(path: str) -> dict:
             path, _grid_head_match(path, head, DOMAIN_KV_TRIAGE_RE, "triage")
         )
         ring_floor = int(
-            _grid_head_match(path, head, DOMAIN_KV_FLOOR_RE, "ring_floor").group("floor")
+            _grid_head_match(path, head, DOMAIN_KV_FLOOR_RE, "ring_floor").group(
+                "floor"
+            )
         )
         word = _grid_head_match(
             path, head, DOMAIN_KV_RING_RE, "terminating_ring"
@@ -2397,7 +2405,9 @@ def parse_domain_file(path: str) -> dict:
             f"domain grid: {path} triage {triage} is outside 1-27 (3 × 3 × 3)"
         )
     if ring_floor < 1:
-        raise SystemExit(f"domain grid: {path} ring_floor {ring_floor} is not a ring number")
+        raise SystemExit(
+            f"domain grid: {path} ring_floor {ring_floor} is not a ring number"
+        )
     return {
         "num": m.group("num"),
         "name": m.group("name"),
@@ -2474,7 +2484,9 @@ def seed_domains(ns: str, project_id: str = "", grid_dir: str | None = None) -> 
     missing = [e for e in grid if e["num"] not in have]
     if not missing:
         return {"grid": len(grid), "written": 0, "present": len(grid), "ids": []}
-    start = int(re.search(r"(\d+)\s*$", next_id(ns, "domain", DOMAIN_ID_PREFIX)).group(1))
+    start = int(
+        re.search(r"(\d+)\s*$", next_id(ns, "domain", DOMAIN_ID_PREFIX)).group(1)
+    )
     rows = []
     for offset, entry in enumerate(missing):
         row = {
@@ -2582,7 +2594,9 @@ def domain_coverage(ns: str, project_id: str) -> dict:
         "nameless": nameless,
         # Rows whose STORED status is the seed's own word — the ones the default note describes.
         "seeded_status": sum(
-            1 for ln in present if str(ln["row"].get("status") or "") == DOMAIN_SEED_STATUS
+            1
+            for ln in present
+            if str(ln["row"].get("status") or "") == DOMAIN_SEED_STATUS
         ),
     }
 
