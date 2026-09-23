@@ -1578,7 +1578,11 @@ def ask_stub(choice: str, conf, noul):
 
     def _stub(state, questions, *a, **k):
         answers = {
-            "next_subject": {"type": "choice", "choice": "testability", "confidence": 0.70},
+            "next_subject": {
+                "type": "choice",
+                "choice": "testability",
+                "confidence": 0.70,
+            },
             "new_question": {"type": "choice", "choice": choice, "confidence": conf},
             "completeness": {"type": "score", "score": 2, "confidence": 0.70},
         }
@@ -1607,7 +1611,9 @@ def test_ask_stores_the_question_it_proposes_and_the_answer_then_closes_it(
     q = row(ns, "question", "id=eq.Q-000001")
     assert q["project_id"] == pid and q["text"] == Q_NEXT, q
     assert q["status"] == "open", q
-    assert q["qclass"] == auger.ASK_CLASS, q  # the source marker: this one came from ask
+    assert q["qclass"] == auger.ASK_CLASS, (
+        q
+    )  # the source marker: this one came from ask
     assert q["ring"] == 1 and q["domain"] == "", q
     # The JEV value the table declares a column for: the gate's answered-verdict, and when it was taken.
     assert q["jev_already_answered"] == pytest.approx(0.10), q
@@ -1625,7 +1631,28 @@ def test_ask_stores_the_question_it_proposes_and_the_answer_then_closes_it(
     assert row(ns, "decision", "id=eq.D-001")["question_id"] == "Q-000001"
     assert row(ns, "question", "id=eq.Q-000001")["status"] == "answered"
     facets = rows(ns, "facet", "question_id=eq.Q-000001")
-    assert all(f["status"] == "closed" and f["closed_by"] == "D-001" for f in facets), facets
+    assert all(f["status"] == "closed" and f["closed_by"] == "D-001" for f in facets), (
+        facets
+    )
+
+
+def test_ask_stores_question_below_the_which_question_confidence_threshold(
+    project: dict, monkeypatch
+):
+    """The new-question confidence ranks JEV's choice; it is not the answered-score gate."""
+    ns, pid = project["ns"], project["pid"]
+    monkeypatch.setattr(auger, "jev", ask_stub(Q_NEXT, 0.24, 0.10))
+
+    rc, out = run_cli(["-n", ns, "ask"])
+    assert rc == 0, out
+    assert "stored question: Q-000001" in out, out
+    assert "question not stored:" not in out, out
+
+    q = row(ns, "question", "id=eq.Q-000001")
+    assert q["project_id"] == pid, q
+    assert q["qclass"] == auger.ASK_CLASS and q["text"] == Q_NEXT, q
+    facets = rows(ns, "facet", "question_id=eq.Q-000001&order=id.asc")
+    assert [f["facet"] for f in facets] == list(auger.facet_set()), facets
 
 
 def test_ask_does_not_store_the_same_question_twice(project: dict, monkeypatch):
@@ -1647,10 +1674,12 @@ def test_ask_does_not_store_the_same_question_twice(project: dict, monkeypatch):
 @pytest.mark.parametrize(
     "stub, want",
     [
-        (ask_stub(Q_NEXT, 0.30, 0.10), f"the proposal is below threshold {auger.T_SUBJECT}"),
-        (ask_stub(Q_NEXT, 0.73, auger.T_ANSWERED + 0.05), "the gate scores it already answered"),
-        (ask_stub(Q_NEXT, 0.73, None), "the gate returned no answered-verdict"),
-        (ask_stub("", 0.73, 0.10), "JEV proposed no question"),
+        (ask_stub("", 0.24, 0.10), "JEV proposed no question"),
+        (
+            ask_stub(Q_NEXT, 0.24, auger.T_ANSWERED + 0.05),
+            "the gate scores it already answered",
+        ),
+        (ask_stub(Q_NEXT, 0.24, None), "the gate returned no answered-verdict"),
     ],
 )
 def test_ask_stores_nothing_when_a_gate_refuses_the_proposal(
@@ -1668,7 +1697,9 @@ def test_ask_stores_nothing_when_a_gate_refuses_the_proposal(
     assert rows(ns, "facet", f"project_id=eq.{pid}") == []
 
 
-def test_ask_stays_a_report_when_the_store_itself_is_refused(project: dict, monkeypatch):
+def test_ask_stays_a_report_when_the_store_itself_is_refused(
+    project: dict, monkeypatch
+):
     """A refused insert stores nothing, is printed with the transport's own message, and keeps rc 0."""
     ns, pid = project["ns"], project["pid"]
     monkeypatch.setattr(auger, "jev", ask_stub(Q_NEXT, 0.73, 0.10))
@@ -1683,7 +1714,9 @@ def test_ask_stays_a_report_when_the_store_itself_is_refused(project: dict, monk
     assert rows(ns, "question", f"project_id=eq.{pid}") == []
 
 
-def test_ask_reports_a_partial_store_instead_of_calling_it_clean(project: dict, monkeypatch):
+def test_ask_reports_a_partial_store_instead_of_calling_it_clean(
+    project: dict, monkeypatch
+):
     """The row and its facets are two writes. A facet that fails after the row landed is SAID OUT LOUD.
 
     Nothing here can be undone — the module has no row delete — so the contract is that a partial
@@ -1703,7 +1736,9 @@ def test_ask_reports_a_partial_store_instead_of_calling_it_clean(project: dict, 
     assert rc == 0, out
     assert "stored question: Q-000001" in out, out
     assert f"WARNING the question row landed but facet {last!r} did not" in out, out
-    assert len(rows(ns, "facet", "question_id=eq.Q-000001")) == len(auger.facet_set()) - 1
+    assert (
+        len(rows(ns, "facet", "question_id=eq.Q-000001")) == len(auger.facet_set()) - 1
+    )
 
 
 def test_ask_stores_nothing_when_jev_is_unreachable(project: dict, monkeypatch):

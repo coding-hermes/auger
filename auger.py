@@ -2872,12 +2872,14 @@ def cmd_start(a):
 ASK_CLASS = "ask_proposed"  # the `qclass` a question proposed by `ask` carries (its source marker)
 
 
-def store_proposed_question(ns: str, project_id: str, nq: dict, noul) -> tuple[str, str]:
+def store_proposed_question(
+    ns: str, project_id: str, nq: dict, noul
+) -> tuple[str, str]:
     """Persist the question `ask` proposed. Returns (qid, why); an empty qid means nothing was stored.
 
     Why this is a function and not four lines inside `cmd_ask`: every reason NOT to store has to be
-    provable on its own — a proposal below T_SUBJECT, a question the gate already answered, a question
-    already open, a refused insert — and each of them must leave the store untouched.
+    provable on its own — a question the gate already answered, a question already open, a refused
+    insert — and each of them must leave the store untouched.
 
     FAIL-CLOSED, in three parts:
       * nothing is written until every gate has passed, so a failure before the first write returns
@@ -2890,17 +2892,15 @@ def store_proposed_question(ns: str, project_id: str, nq: dict, noul) -> tuple[s
     text = str((nq or {}).get("choice") or "").strip()
     if not text:
         return "", "JEV proposed no question"
-    conf = (nq or {}).get("confidence")
-    if not isinstance(conf, (int, float)) or float(conf) < T_SUBJECT:
-        return "", f"the proposal is below threshold {T_SUBJECT} (confidence {conf})"
+    # `new_question` confidence says how sure JEV is about WHICH question to ask, not whether the
+    # question is answered. The answered-score below is the safety gate, so a useful low-confidence
+    # proposal must still reach storage rather than making this seam unreachable in live use.
     if noul is None:
         return "", "the gate returned no answered-verdict for it"
     if float(noul) >= T_ANSWERED:
         return "", f"the gate scores it already answered (noul {float(noul)})"
     try:
-        open_rows = select(
-            ns, "question", f"project_id=eq.{project_id}&status=eq.open"
-        )
+        open_rows = select(ns, "question", f"project_id=eq.{project_id}&status=eq.open")
     except SystemExit as exc:
         return "", f"the questions already open could not be read — {exc}"
     want = text.casefold()
