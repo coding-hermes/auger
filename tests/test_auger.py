@@ -1571,6 +1571,7 @@ def test_ask_never_surfaces_a_question_with_an_unresolved_blocker(
 # documented next move refused the engine's own suggestion. These cases assert the ROWS and the loop,
 # not the print.
 Q_NEXT = "how_is_it_tested"  # what JEV's new_question choice carries — the criterion it picked
+Q_NEXT_TEXT = "What test proves this works?"
 
 
 def ask_stub(choice: str, conf, noul):
@@ -1606,10 +1607,11 @@ def test_ask_stores_the_question_it_proposes_and_the_answer_then_closes_it(
     # The print contract is intact and the one line AUG-035 adds says the question is now closable.
     assert f"next question: {Q_NEXT}  (0.73)" in out, out
     assert "genuinely new, ask it" in out, out
-    assert "stored question: Q-000001" in out, out
+    assert f"stored question: Q-000001  {Q_NEXT_TEXT}" in out, out
 
     q = row(ns, "question", "id=eq.Q-000001")
-    assert q["project_id"] == pid and q["text"] == Q_NEXT, q
+    assert q["project_id"] == pid and q["text"] == Q_NEXT_TEXT, q
+    assert q["text"] != Q_NEXT and q["text"].endswith("?"), q
     assert q["status"] == "open", q
     assert q["qclass"] == auger.ASK_CLASS, (
         q
@@ -1650,9 +1652,71 @@ def test_ask_stores_question_below_the_which_question_confidence_threshold(
 
     q = row(ns, "question", "id=eq.Q-000001")
     assert q["project_id"] == pid, q
-    assert q["qclass"] == auger.ASK_CLASS and q["text"] == Q_NEXT, q
+    assert q["qclass"] == auger.ASK_CLASS and q["text"] == Q_NEXT_TEXT, q
+    assert q["text"] != Q_NEXT and q["text"].endswith("?"), q
     facets = rows(ns, "facet", "question_id=eq.Q-000001&order=id.asc")
     assert [f["facet"] for f in facets] == list(auger.facet_set()), facets
+
+
+def test_ask_sends_the_six_exact_new_question_criteria_to_jev(
+    project: dict, monkeypatch
+):
+    """The stored sentence mapping must not change the choice criteria sent over the JEV wire."""
+    ns = project["ns"]
+    seen = {}
+
+    def capture(state, questions, *args, **kwargs):
+        seen.update(questions["new_question"]["criteria"])
+        return ask_stub(Q_NEXT, 0.24, 0.10)(state, questions, *args, **kwargs)
+
+    monkeypatch.setattr(auger, "jev", capture)
+    rc, out = run_cli(["-n", ns, "ask"])
+    assert rc == 0, out
+    assert seen == {
+        "how_does_it_fail": "what happens when a component stops working",
+        "what_does_it_break": "which existing decision this next choice would invalidate",
+        "what_is_the_data": "what the data means, not where it is stored",
+        "who_owns_it": "ownership and lifecycle after delivery",
+        "how_is_it_tested": "the test that proves it works",
+        "none": "nothing left worth asking",
+    }, seen
+
+
+def test_ask_unknown_criterion_is_fail_closed_and_names_the_slug(
+    project: dict, monkeypatch
+):
+    """An unmapped JEV key cannot become a machine-readable question row."""
+    ns, pid = project["ns"], project["pid"]
+    unknown = "criterion_added_without_a_sentence"
+    monkeypatch.setattr(auger, "jev", ask_stub(unknown, 0.24, 0.10))
+    before = len(rows(ns, "question", f"project_id=eq.{pid}"))
+
+    rc, out = run_cli(["-n", ns, "ask"])
+    assert rc == 0, out
+    assert (
+        f"question not stored: JEV proposed unknown question criterion '{unknown}'"
+        in out
+    ), out
+    assert len(rows(ns, "question", f"project_id=eq.{pid}")) == before
+
+    qid, why = auger.store_proposed_question(ns, pid, {"choice": unknown}, 0.10)
+    assert qid == ""
+    assert unknown in why
+    assert len(rows(ns, "question", f"project_id=eq.{pid}")) == before
+
+
+def test_ask_none_criterion_is_not_stored(project: dict, monkeypatch):
+    """JEV's explicit no-more-questions choice remains a refusal, not a row."""
+    ns, pid = project["ns"], project["pid"]
+    monkeypatch.setattr(auger, "jev", ask_stub("none", 0.24, 0.10))
+    before = len(rows(ns, "question", f"project_id=eq.{pid}"))
+
+    rc, out = run_cli(["-n", ns, "ask"])
+    assert rc == 0, out
+    assert "question not stored: JEV proposed none: nothing left worth asking" in out, (
+        out
+    )
+    assert len(rows(ns, "question", f"project_id=eq.{pid}")) == before
 
 
 def test_ask_does_not_store_the_same_question_twice(project: dict, monkeypatch):

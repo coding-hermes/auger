@@ -2871,6 +2871,36 @@ def cmd_start(a):
 # JEV picks a SUBJECT, and which of the 44 grid domains it lands in is not something this verb knows.
 ASK_CLASS = "ask_proposed"  # the `qclass` a question proposed by `ask` carries (its source marker)
 
+# One source of truth for the JEV wire descriptions and the human-readable question that `ask`
+# records. JEV answers this `choice` question with one of these keys, so storing the key itself
+# would leave the question table with a machine identifier instead of a question a user can answer.
+ASK_NEW_QUESTION_CRITERIA = {
+    "how_does_it_fail": {
+        "description": "what happens when a component stops working",
+        "sentence": "What happens when a component stops working?",
+    },
+    "what_does_it_break": {
+        "description": "which existing decision this next choice would invalidate",
+        "sentence": "Which existing decision would this next choice invalidate?",
+    },
+    "what_is_the_data": {
+        "description": "what the data means, not where it is stored",
+        "sentence": "What does the data mean, as opposed to where it is stored?",
+    },
+    "who_owns_it": {
+        "description": "ownership and lifecycle after delivery",
+        "sentence": "Who owns this, and what is its lifecycle after delivery?",
+    },
+    "how_is_it_tested": {
+        "description": "the test that proves it works",
+        "sentence": "What test proves this works?",
+    },
+    "none": {
+        "description": "nothing left worth asking",
+        "sentence": None,
+    },
+}
+
 
 def store_proposed_question(
     ns: str, project_id: str, nq: dict, noul
@@ -2889,9 +2919,14 @@ def store_proposed_question(
       * the row and its facets are separate writes, so a failure AFTER the row landed is returned as
         a PARTIAL store (both a qid and a reason) instead of being reported as a clean one.
     """
-    text = str((nq or {}).get("choice") or "").strip()
-    if not text:
+    slug = str((nq or {}).get("choice") or "").strip()
+    if not slug:
         return "", "JEV proposed no question"
+    criterion = ASK_NEW_QUESTION_CRITERIA.get(slug)
+    if criterion is None:
+        return "", f"JEV proposed unknown question criterion {slug!r}"
+    if slug == "none":
+        return "", "JEV proposed none: nothing left worth asking"
     # `new_question` confidence says how sure JEV is about WHICH question to ask, not whether the
     # question is answered. The answered-score below is the safety gate, so a useful low-confidence
     # proposal must still reach storage rather than making this seam unreachable in live use.
@@ -2903,6 +2938,7 @@ def store_proposed_question(
         open_rows = select(ns, "question", f"project_id=eq.{project_id}&status=eq.open")
     except SystemExit as exc:
         return "", f"the questions already open could not be read — {exc}"
+    text = criterion["sentence"]
     want = text.casefold()
     for q in open_rows:
         if str(q.get("text") or "").strip().casefold() == want:
@@ -2971,12 +3007,8 @@ def cmd_ask(a):
             "type": "choice",
             "instructions": "Which single question should be asked next?",
             "criteria": {
-                "how_does_it_fail": "what happens when a component stops working",
-                "what_does_it_break": "which existing decision this next choice would invalidate",
-                "what_is_the_data": "what the data means, not where it is stored",
-                "who_owns_it": "ownership and lifecycle after delivery",
-                "how_is_it_tested": "the test that proves it works",
-                "none": "nothing left worth asking",
+                slug: criterion["description"]
+                for slug, criterion in ASK_NEW_QUESTION_CRITERIA.items()
             },
         },
         "already_answered": {
@@ -3038,7 +3070,8 @@ def cmd_ask(a):
     # reason it is not (fail-closed: no half-stored question, and no exit code of its own).
     stored_qid, store_why = store_proposed_question(ns, pid, nq, already)
     if stored_qid:
-        print(f"stored question: {stored_qid}")
+        stored_text = ASK_NEW_QUESTION_CRITERIA[nq["choice"].strip()]["sentence"]
+        print(f"stored question: {stored_qid}  {stored_text}")
         if store_why:
             print(f"  WARNING {store_why}")
     else:
