@@ -31,7 +31,10 @@ only. Public repo: `coding-hermes/auger`.
 - DuckBrain HTTP on `127.0.0.1:3000` — **on the working branch
   `feat/native-s3` of wojons/duckbrain**; the public default branch has NO
   declared-tables API and auger's happy path 404s on it (AUG-016).
-- Credentials: `DUCKBRAIN_API_KEY` env or `~/.duckbrain/foreman-status.token`;
+- Credentials: `DUCKBRAIN_API_KEY` env or `~/.duckbrain/foreman-status.token`
+  — NOTE: a fresh DuckBrain boot creates NO token file (the substrate runs
+  auth=none by default; any non-empty `DUCKBRAIN_API_KEY` value works, see
+  pitfall 5; AUG-039 tracks the README drift);
   `DUCKBRAIN_URL` overrides the base URL; JEV needs an OpenRouter key in
   `~/.hermes/.env`.
 
@@ -54,11 +57,13 @@ only. Public repo: `coding-hermes/auger`.
 ## Common pitfalls (each one bit a real run)
 
 1. **Reading an error body as data.** `init` on a 429/401 body once "succeeded"
-   with 0 tables. If `init` prints `declared: 0/13` or an odd count, STOP —
+   with 0 tables. If `init` prints `declared: 0/14` or an odd count, STOP —
    the substrate is lying or unreachable; do not proceed to `start`.
-2. **toggle has no exclusivity (AUG-015)**: turning a second option ON leaves
-   the first ON, and `dump` then renders two bindings for one decision as THE
-   configuration. Until fixed, always pair `--on X --off Y` in one call.
+2. **toggle has per-decision exclusivity now (AUG-015 fixed)**: one option ON
+   deactivates its siblings by default; `--additive` opts back out. But use
+   the FULL option id (`D-001-O2`) — a bare `O2` exits 0 with "toggled …
+   (0)" and patches NOTHING (AUG-036). If a subsequent dump shows "nothing
+   active", this no-op is why.
 3. **JEV probe shape**: a probe missing the body's `model` field 400s on every
    key and looks like a total outage. Mirror `JEV_MODEL` from auger.py.
 4. **ask/check take 5-7s**: that is the JEV network round trip. Fail-closed
@@ -76,7 +81,31 @@ python3 auger.py -n <ns> status        # instant; proves API + token + tables
 python3 auger.py -n <ns> recall "any seed phrase"   # proves embeddings
 ```
 
-## Bundles and the graph (the 2026-09-23 surface)
+- **The moot cascade has a verb now (AUG-028 merged 2026-09-23):**
+  `answer --invalidates <decision-id> --invalidates-why "…"` records the
+  LOCAL `breaks` edge that drives `propagate`'s rule walk (dst_project
+  ABSENT = local; a sibling break still routes to an escalation). The old
+  hand-POSTed edge shape below still describes the storage truth.
+- **The registers have NO write verbs (AUG-019, confirmed twice by use).**
+  `break`/`assumption`/`unknown`/`escalation` rows are declared and read
+  (status counts unknowns; ask reads them) but no CLI command creates one —
+  only `answer --invalidates` (edges, not rows) and the propagate impact
+  pass (escalations) write anything. A seed that says "X is unknown" will
+  still show `unknowns: 0` until a row is hand-POSTed.
+- **`ask` does NOT persist its proposal (AUG-035).** The question it names
+  is never stored; `answer --question-id Q-…` on it will refuse (AUG-034's
+  non-atomic shape: the DECISION is stored BEFORE the refusal — do not
+  blindly retry without `--question-id`, or you duplicate the decision id;
+  decision ids are not unique-keyed yet). Until fixed: questions enter the
+  store only via `feedback` (thin decisions) or hand-POST.
+- **`--domain` is unvalidated free text (AUG-038)** and `status`'s
+  domain-coverage display is one-index-off — do not copy a domain number
+  from `status`; look it up in the grid dir (`4.05-data.md` → `--domain
+  4.05`).
+- **`dump --config` full ids only (AUG-037):** the help's `D-001=O2`
+  shorthand is discarded as "unparsed" at rc=0; write `D-001=D-001-O2`
+  (option labels also accepted per verdict, per the note above).
+- **Bundles and the graph (the 2026-09-23 surface)**
 
 - **One namespace per member, named exactly the member** (`mccli`, `mcview`).
   This convention is code-only (`member_namespace`, auger.py ~L865); a
@@ -90,10 +119,6 @@ python3 auger.py -n <ns> recall "any seed phrase"   # proves embeddings
   did not run; check the edge table.
 - **`propagate` is cheap and mostly a no-op on feedback-born questions**
   (feedback pre-gates them); `--recheck` forces real re-examination.
-- **The moot cascade needs a hand-written LOCAL `breaks` edge** (no verb
-  writes one, AUG-028). Shape: kind=breaks, src decision, dst decision,
-  dst_project ABSENT — with dst_project set it is a sibling break and the
-  local walk ignores it by design.
 - **Verdict shapes:** `verdict --good|--bad [--judged-by NAME]
   [--confidence X]` (on-file), `--ask-jev` (JEV judges the rendered dump,
   fail-closed), `--config D-001=O2` (hypothesis; values accept option ids OR

@@ -131,3 +131,44 @@ working commands in the README quickstart path.
   canonical 44-domain grid (`4.01`–`4.44`), or skip `--seed-domains`; the loud
   refusal is right — a seeded 43 is exactly the silent-domain failure the rule
   forbids.
+
+## Registers + seam run (2026-09-23, third run — report:
+docs/dogfood/2026-09-23-registers-seam-integration.md)
+
+How the write surface actually behaves, as learned by driving a real drill
+(N100 backup policy, scratch namespace `auger-df-registers`):
+
+- **A decision insert precedes its own validation.** `cmd_answer` stores the
+  decision + options, THEN `close_question()` refuses a nonexistent
+  `--question-id`. The refusal is by design (the spec is right about why) —
+  but the order is wrong: a "refused" exit must mean nothing was stored.
+  Because decision ids are not unique-keyed, the natural retry then created a
+  duplicate id (dump rendered it twice; every derived count ×4).
+- **`ask` is a proposal, not a write.** Nothing it prints is persisted (the
+  `question` table stayed empty after a call that named a next question). The
+  only question-writer is `feedback` (thin decisions only), so the README's
+  own loop — ask, then answer `--question-id` — cannot complete for a
+  not-yet-stored question. Anyone reading `ask`'s output as "the engine
+  recorded the next question" is being set up for the non-atomic refusal
+  above.
+- **Two CLI contracts lie in their own help text.** `toggle --on O2` (bare
+  id) exits 0 with "toggled … (0)" and patches zero rows; `dump --config
+  D-001=O2` (the form `--help` shows) is discarded as unparsed. The full
+  id forms work; the discrepancy is discoverable only by diffing behavior
+  against the help string.
+- **`--domain` is free text.** `4.99` was accepted silently; a real decision
+  landed on 4.27 (audio) because the verb never maps the 44 grid names to
+  numbers and `status`'s domain-coverage display is one-index-off, so the
+  number a user copies is wrong twice.
+- **The substrate token the README names does not exist on a fresh box.**
+  `~/.duckbrain/foreman-status.token` is a host-convention artifact (this
+  control host has one because a previous deployment created it); a fresh
+  boot creates no `~/.duckbrain/` at all and runs auth=none.
+  `DUCKBRAIN_API_KEY=<any value>` satisfies auger's env-var read — the
+  README just never says so.
+- **Verified good, unchanged from run 2:** JEV's fail-closed behavior (fresh
+  box without a key: check exits rc=1 with "UNKNOWN, not 'already
+  answered'" — exactly the documented stance), the what-if hypothesis
+  (nothing written, contradictions quoted from the record), verdict's
+  record-then-judge flow, and the smoke suite's own hygiene (namespace
+  sweep/teardown ran clean on the bunker).
