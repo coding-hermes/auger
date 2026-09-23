@@ -2375,6 +2375,110 @@ def test_a_bundle_scoped_answer_that_leaves_a_sibling_unchanged_writes_nothing(
     assert rows(ns, "escalation", "") == []
 
 
+def test_the_impact_walk_prints_a_line_for_a_member_it_left_unchanged(
+    ns: str, sibling_ns: str, monkeypatch
+):
+    """AUG-027(a): the walk PRINTS — one line per walked member, verdict word and score included.
+
+    Silence is ambiguous: a reader cannot tell "the pass is not wired" from "the pass asked and
+    decided nothing". The line is the pass's footprint, so it is printed for the outcome that
+    writes nothing (and no longer only for the two that do).
+    """
+    _home, sib = bundled_pair(
+        ns,
+        sibling_ns,
+        monkeypatch,
+        decision=("D-007", "the envelope is one JSON object per message"),
+    )
+    monkeypatch.setattr(auger, "jev", impact_stub(0.0, [], confidence=0.8))  # unchanged
+
+    rc, out = record_decision(ns, "D-016", "the envelope is NDJSON", scope="bundle")
+    assert rc == 0, out
+    assert f"impact: {sib} D-007 unchanged (score 0.00)" in out, out
+
+
+def test_the_impact_walk_reports_a_member_it_walked_with_nothing_to_compare(
+    ns: str, sibling_ns: str, monkeypatch
+):
+    """AUG-027(a), the other silence: the member WAS walked and holds no bundle-scoped decision."""
+    _home, sib = bundled_pair(ns, sibling_ns, monkeypatch)  # sibling holds no decision
+    calls: list = []
+    monkeypatch.setattr(auger, "jev", impact_stub(0.0, calls, confidence=0.8))
+
+    rc, out = record_decision(ns, "D-017", "the envelope is NDJSON", scope="bundle")
+    assert rc == 0, out
+    assert calls == [], "the model was asked about a decision the member does not hold"
+    assert f"impact: {sib} walked, no bundle-scoped decision to compare" in out, out
+
+
+def test_a_verdict_below_the_confidence_floor_is_unknown_and_fails_closed(
+    ns: str, sibling_ns: str, monkeypatch
+):
+    """AUG-027(b): a low-confidence verdict is UNKNOWN — skipped, warned, and NOT honored.
+
+    The module's own doctrine: an uncertain verdict is surfaced the way a transport error is
+    surfaced. A model that answers "unchanged" at 0.24 confidence is saying it does not know, and
+    an unknown verdict writes nothing — it never becomes a silent, final "unchanged".
+    """
+    _home, sib = bundled_pair(
+        ns,
+        sibling_ns,
+        monkeypatch,
+        decision=(
+            "D-001",
+            "the envelope hash is validated before a message is trusted",
+        ),
+    )
+    calls: list = []
+    monkeypatch.setattr(auger, "jev", impact_stub(0.24, calls, confidence=0.24))
+
+    rc, out = record_decision(
+        ns, "D-002", "the envelope hash is blake3, not sha256", scope="bundle"
+    )
+    assert rc == 0, out
+    assert len(calls) == 1, f"the walk did not ask the model: {calls}"
+    assert "WARNING" in out and str(auger.T_IMPACT_FLOOR) in out, out
+    assert sib in out and "D-001" in out and "unknown" in out, out
+    assert rows(ns, "edge", "") == [], (
+        "an unknown verdict was honored: an edge was written"
+    )
+    assert rows(ns, "escalation", "") == []
+    assert (
+        row(sibling_ns, "decision", "id=eq.D-001")["chosen"]
+        == "the envelope hash is validated before a message is trusted"
+    )
+
+
+def test_the_dogfood_d003_vs_d001_walk_prints_the_score_it_saw(
+    ns: str, sibling_ns: str, monkeypatch
+):
+    """AUG-027(c): the dogfood pair — D-003 vs a sibling's D-001 at 0.24 — PRINTS the score.
+
+    The live run this regression comes from returned in ~1s with no line at all, so the score the
+    model gave for the walk was unrecoverable from the verb's own output. The score is the evidence
+    a reader needs to see that the pass ran and what it read.
+    """
+    _home, sib = bundled_pair(
+        ns,
+        sibling_ns,
+        monkeypatch,
+        decision=(
+            "D-001",
+            "mcview validates the hash of an envelope before it trusts it",
+        ),
+    )
+    monkeypatch.setattr(auger, "jev", impact_stub(0.24, [], confidence=0.24))
+
+    rc, out = record_decision(
+        ns,
+        "D-003",
+        "mccli swaps the envelope hash from sha256 to blake3",
+        scope="bundle",
+    )
+    assert rc == 0, out
+    assert f"impact: {sib} D-001 unknown (score 0.24)" in out, out
+
+
 def test_a_project_scoped_answer_crosses_no_boundary_at_all(
     ns: str, sibling_ns: str, monkeypatch
 ):
@@ -2426,6 +2530,9 @@ def test_an_unreachable_model_in_the_impact_pass_skips_the_member_and_still_reco
     assert rc == 0, out
     assert "D-014 recorded" in out, out
     assert "WARNING" in out and sib in out and "JEV" in out, out
+    # AUG-027(a): an unanswered member is still a walked member — the run shows it, and says there
+    # is no score to show (the warning right below carries WHY).
+    assert f"impact: {sib} D-007 unknown (no score)" in out, out
     assert rows(ns, "edge", "") == [], (
         "an edge was written on a verdict the model never gave"
     )
