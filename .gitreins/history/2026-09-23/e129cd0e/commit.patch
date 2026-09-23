@@ -1,0 +1,204 @@
+commit 58a1427f10068901da7935fef53afb4f03dabab8
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Wed Sep 23 09:11:57 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Wed Sep 23 09:11:57 2026 -0500
+
+    fix(ask): store a question sentence, not the JEV criterion slug. Addresses AUG-042.
+---
+ auger.py            | 51 +++++++++++++++++++++++++++++++-------
+ tests/test_auger.py | 70 ++++++++++++++++++++++++++++++++++++++++++++++++++---
+ 2 files changed, 109 insertions(+), 12 deletions(-)
+
+diff --git a/auger.py b/auger.py
+index 73c20f1..b26f7cf 100755
+--- a/auger.py
++++ b/auger.py
+@@ -2871,6 +2871,36 @@ def cmd_start(a):
+ # JEV picks a SUBJECT, and which of the 44 grid domains it lands in is not something this verb knows.
+ ASK_CLASS = "ask_proposed"  # the `qclass` a question proposed by `ask` carries (its source marker)
+ 
++# One source of truth for the JEV wire descriptions and the human-readable question that `ask`
++# records. JEV answers this `choice` question with one of these keys, so storing the key itself
++# would leave the question table with a machine identifier instead of a question a user can answer.
++ASK_NEW_QUESTION_CRITERIA = {
++    "how_does_it_fail": {
++        "description": "what happens when a component stops working",
++        "sentence": "What happens when a component stops working?",
++    },
++    "what_does_it_break": {
++        "description": "which existing decision this next choice would invalidate",
++        "sentence": "Which existing decision would this next choice invalidate?",
++    },
++    "what_is_the_data": {
++        "description": "what the data means, not where it is stored",
++        "sentence": "What does the data mean, as opposed to where it is stored?",
++    },
++    "who_owns_it": {
++        "description": "ownership and lifecycle after delivery",
++        "sentence": "Who owns this, and what is its lifecycle after delivery?",
++    },
++    "how_is_it_tested": {
++        "description": "the test that proves it works",
++        "sentence": "What test proves this works?",
++    },
++    "none": {
++        "description": "nothing left worth asking",
++        "sentence": None,
++    },
++}
++
+ 
+ def store_proposed_question(
+     ns: str, project_id: str, nq: dict, noul
+@@ -2889,9 +2919,14 @@ def store_proposed_question(
+       * the row and its facets are separate writes, so a failure AFTER the row landed is returned as
+         a PARTIAL store (both a qid and a reason) instead of being reported as a clean one.
+     """
+-    text = str((nq or {}).get("choice") or "").strip()
+-    if not text:
++    slug = str((nq or {}).get("choice") or "").strip()
++    if not slug:
+         return "", "JEV proposed no question"
++    criterion = ASK_NEW_QUESTION_CRITERIA.get(slug)
++    if criterion is None:
++        return "", f"JEV proposed unknown question criterion {slug!r}"
++    if slug == "none":
++        return "", "JEV proposed none: nothing left worth asking"
+     # `new_question` confidence says how sure JEV is about WHICH question to ask, not whether the
+     # question is answered. The answered-score below is the safety gate, so a useful low-confidence
+     # proposal must still reach storage rather than making this seam unreachable in live use.
+@@ -2903,6 +2938,7 @@ def store_proposed_question(
+         open_rows = select(ns, "question", f"project_id=eq.{project_id}&status=eq.open")
+     except SystemExit as exc:
+         return "", f"the questions already open could not be read — {exc}"
++    text = criterion["sentence"]
+     want = text.casefold()
+     for q in open_rows:
+         if str(q.get("text") or "").strip().casefold() == want:
+@@ -2971,12 +3007,8 @@ def cmd_ask(a):
+             "type": "choice",
+             "instructions": "Which single question should be asked next?",
+             "criteria": {
+-                "how_does_it_fail": "what happens when a component stops working",
+-                "what_does_it_break": "which existing decision this next choice would invalidate",
+-                "what_is_the_data": "what the data means, not where it is stored",
+-                "who_owns_it": "ownership and lifecycle after delivery",
+-                "how_is_it_tested": "the test that proves it works",
+-                "none": "nothing left worth asking",
++                slug: criterion["description"]
++                for slug, criterion in ASK_NEW_QUESTION_CRITERIA.items()
+             },
+         },
+         "already_answered": {
+@@ -3038,7 +3070,8 @@ def cmd_ask(a):
+     # reason it is not (fail-closed: no half-stored question, and no exit code of its own).
+     stored_qid, store_why = store_proposed_question(ns, pid, nq, already)
+     if stored_qid:
+-        print(f"stored question: {stored_qid}")
++        stored_text = ASK_NEW_QUESTION_CRITERIA[nq["choice"].strip()]["sentence"]
++        print(f"stored question: {stored_qid}  {stored_text}")
+         if store_why:
+             print(f"  WARNING {store_why}")
+     else:
+diff --git a/tests/test_auger.py b/tests/test_auger.py
+index 332e38c..4418078 100644
+--- a/tests/test_auger.py
++++ b/tests/test_auger.py
+@@ -1571,6 +1571,7 @@ def test_ask_never_surfaces_a_question_with_an_unresolved_blocker(
+ # documented next move refused the engine's own suggestion. These cases assert the ROWS and the loop,
+ # not the print.
+ Q_NEXT = "how_is_it_tested"  # what JEV's new_question choice carries — the criterion it picked
++Q_NEXT_TEXT = "What test proves this works?"
+ 
+ 
+ def ask_stub(choice: str, conf, noul):
+@@ -1606,10 +1607,11 @@ def test_ask_stores_the_question_it_proposes_and_the_answer_then_closes_it(
+     # The print contract is intact and the one line AUG-035 adds says the question is now closable.
+     assert f"next question: {Q_NEXT}  (0.73)" in out, out
+     assert "genuinely new, ask it" in out, out
+-    assert "stored question: Q-000001" in out, out
++    assert f"stored question: Q-000001  {Q_NEXT_TEXT}" in out, out
+ 
+     q = row(ns, "question", "id=eq.Q-000001")
+-    assert q["project_id"] == pid and q["text"] == Q_NEXT, q
++    assert q["project_id"] == pid and q["text"] == Q_NEXT_TEXT, q
++    assert q["text"] != Q_NEXT and q["text"].endswith("?"), q
+     assert q["status"] == "open", q
+     assert q["qclass"] == auger.ASK_CLASS, (
+         q
+@@ -1650,11 +1652,73 @@ def test_ask_stores_question_below_the_which_question_confidence_threshold(
+ 
+     q = row(ns, "question", "id=eq.Q-000001")
+     assert q["project_id"] == pid, q
+-    assert q["qclass"] == auger.ASK_CLASS and q["text"] == Q_NEXT, q
++    assert q["qclass"] == auger.ASK_CLASS and q["text"] == Q_NEXT_TEXT, q
++    assert q["text"] != Q_NEXT and q["text"].endswith("?"), q
+     facets = rows(ns, "facet", "question_id=eq.Q-000001&order=id.asc")
+     assert [f["facet"] for f in facets] == list(auger.facet_set()), facets
+ 
+ 
++def test_ask_sends_the_six_exact_new_question_criteria_to_jev(
++    project: dict, monkeypatch
++):
++    """The stored sentence mapping must not change the choice criteria sent over the JEV wire."""
++    ns = project["ns"]
++    seen = {}
++
++    def capture(state, questions, *args, **kwargs):
++        seen.update(questions["new_question"]["criteria"])
++        return ask_stub(Q_NEXT, 0.24, 0.10)(state, questions, *args, **kwargs)
++
++    monkeypatch.setattr(auger, "jev", capture)
++    rc, out = run_cli(["-n", ns, "ask"])
++    assert rc == 0, out
++    assert seen == {
++        "how_does_it_fail": "what happens when a component stops working",
++        "what_does_it_break": "which existing decision this next choice would invalidate",
++        "what_is_the_data": "what the data means, not where it is stored",
++        "who_owns_it": "ownership and lifecycle after delivery",
++        "how_is_it_tested": "the test that proves it works",
++        "none": "nothing left worth asking",
++    }, seen
++
++
++def test_ask_unknown_criterion_is_fail_closed_and_names_the_slug(
++    project: dict, monkeypatch
++):
++    """An unmapped JEV key cannot become a machine-readable question row."""
++    ns, pid = project["ns"], project["pid"]
++    unknown = "criterion_added_without_a_sentence"
++    monkeypatch.setattr(auger, "jev", ask_stub(unknown, 0.24, 0.10))
++    before = len(rows(ns, "question", f"project_id=eq.{pid}"))
++
++    rc, out = run_cli(["-n", ns, "ask"])
++    assert rc == 0, out
++    assert (
++        f"question not stored: JEV proposed unknown question criterion '{unknown}'"
++        in out
++    ), out
++    assert len(rows(ns, "question", f"project_id=eq.{pid}")) == before
++
++    qid, why = auger.store_proposed_question(ns, pid, {"choice": unknown}, 0.10)
++    assert qid == ""
++    assert unknown in why
++    assert len(rows(ns, "question", f"project_id=eq.{pid}")) == before
++
++
++def test_ask_none_criterion_is_not_stored(project: dict, monkeypatch):
++    """JEV's explicit no-more-questions choice remains a refusal, not a row."""
++    ns, pid = project["ns"], project["pid"]
++    monkeypatch.setattr(auger, "jev", ask_stub("none", 0.24, 0.10))
++    before = len(rows(ns, "question", f"project_id=eq.{pid}"))
++
++    rc, out = run_cli(["-n", ns, "ask"])
++    assert rc == 0, out
++    assert "question not stored: JEV proposed none: nothing left worth asking" in out, (
++        out
++    )
++    assert len(rows(ns, "question", f"project_id=eq.{pid}")) == before
++
++
+ def test_ask_does_not_store_the_same_question_twice(project: dict, monkeypatch):
+     """A second ask naming the same question says it is already open instead of storing it again."""
+     ns, pid = project["ns"], project["pid"]

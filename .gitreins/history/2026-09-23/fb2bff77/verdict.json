@@ -1,0 +1,112 @@
+{
+  "task_id": "AUG-035",
+  "task_title": "ask persists the question it proposes",
+  "task_criteria": [
+    "ask stores the JEV-proposed question as a question row (open, with confidence and facet rows) so answer --question-id can close it; README loop works end-to-end; existing pytest + smoke battery green"
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "3d984fb1fc3c1438b269954f83acdc1e488e48f0",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": false,
+      "any_failed": true,
+      "summary": "  \u2717 lint: E401 [*] Multiple imports on one line\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": false,
+          "output": "E401 [*] Multiple imports on one line\n --> .tmp_tick_board.py:1:1\n  |\n1 | import json, glob\n  | ^^^^^^^^^^^^^^^^^\n2 |\n3 | for d in sorted(glob.glob('/home/kara/auger/.gitreins/history/2026-09-23/*/')):\n  |\nhelp: Split imports\n\nE401 [*] Multiple imports on one line\n --> .tmp_tick_worker_probe.py:1:1\n  |\n1 | import sqlite3, time\n  | ^^^^^^^^^^^^^^^^^^^^\n2 |\n3 | db = '/home/kara/.hermes/state.db'\n  |\nhelp: Split imports\n\n",
+          "error": "",
+          "data": {
+            "exit_code": 1,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260923T105413.073124Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: scanners=gitleaks+builtin cross-check\n6:13AM INF scanned ~560438 bytes (560.44 KB) in 400ms\n6:13AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 40 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260923T105413.073124Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [ 60%]\n...............................................                          [100%]\n119 passed in 492.82s (0:08:12)\n== end-to-end smoke ==\nnamespace: auger-smoke-1793526\nnamespace sweep: no stale auger-smoke-*/auger-eval-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n  PASS toggle changed the stored configuration\n== verdict: record + list round-trip ==\n  PASS a good verdict is recorded\n  PASS a bad verdict is recorded\n  PASS the good verdict shows in the list\n  PASS the bad verdict's reasons show in the list\n  PASS both --good and --bad refuse\n  PASS the refused pair wrote nothing\n\nnamespace auger-smoke-1793526 removed\npassed 21, failed 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260923T105413.073124Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 ask stores the JEV-proposed question as a question row (open, with confidence and facet rows) so answer --question-id can close it; README loop works end-to-end; existing pytest + smoke battery green: auger.py:2874 store_proposed_question() inserts a question row {id, project_id, domain:'', text, ring:1, qclass:ASK_CLASS='ask_proposed', status:'open', jev_already_answered:float(noul), jev_checked_at} then calls facet(ns, project_id, qid, name) for every facet_set() entry; cmd_ask (auger.py:3036) invokes it and prints 'stored question: <id>'. The loop closes: cmd_answer (auger.py:3421) validates node_exists(ns,'question',qid) then close_question() (auger.py:1251) writes the 'closes' edge, set_state -> answered, and closes the facets. tests/test_auger.py:1592-1628 (test_ask_stores_the_question_it_proposes_and_the_answer_then_closes_it) asserts the stored text/status/qclass/ring/jev_already_answered/jev_checked_at, all facet rows open, then runs answer_cli(qid='Q-000001') and asserts 'closed Q-000001', question status 'answered', and facets closed_by D-001. Refusal paths (below T_SUBJECT, gate-answered, no verdict, empty proposal, duplicate open text, refused insert, partial facet store) each assert an empty question table. README.md:60,97 documents the ask->answer loop and docs/VERBS.md was updated to document ask's write. Test evidence (fresh run, cache-defeating): `bash tests/gate.sh` -> '== syntax ==' py_compile ok; '== lint ==' ruff 'All checks passed!'; '== pytest ==' '119 passed in 535.56s (0:08:55)'; '== end-to-end smoke ==' 'passed 21, failed 0'; 'GATE PASS'. The 9 AUG-035 tests are collected (pytest --collect-only: 9/119) and included in the 119 passed. LSP diagnostics: 0 findings.\nask now persists the JEV-proposed question as an open question row with facets so answer --question-id closes it, and the full gate (py_compile + ruff + 119 pytest + 21-assertion smoke) passes.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 ask stores the JEV-proposed question as a question row (open, with confidence and facet rows) so answer --question-id can close it; README loop works end-to-end; existing pytest + smoke battery green: auger.py:2874 store_proposed_question() inserts a question row {id, project_id, domain:'', text, ring:1, qclass:ASK_CLASS='ask_proposed', status:'open', jev_already_answered:float(noul), jev_checked_at} then calls facet(ns, project_id, qid, name) for every facet_set() entry; cmd_ask (auger.py:3036) invokes it and prints 'stored question: <id>'. The loop closes: cmd_answer (auger.py:3421) validates node_exists(ns,'question',qid) then close_question() (auger.py:1251) writes the 'closes' edge, set_state -> answered, and closes the facets. tests/test_auger.py:1592-1628 (test_ask_stores_the_question_it_proposes_and_the_answer_then_closes_it) asserts the stored text/status/qclass/ring/jev_already_answered/jev_checked_at, all facet rows open, then runs answer_cli(qid='Q-000001') and asserts 'closed Q-000001', question status 'answered', and facets closed_by D-001. Refusal paths (below T_SUBJECT, gate-answered, no verdict, empty proposal, duplicate open text, refused insert, partial facet store) each assert an empty question table. README.md:60,97 documents the ask->answer loop and docs/VERBS.md was updated to document ask's write. Test evidence (fresh run, cache-defeating): `bash tests/gate.sh` -> '== syntax ==' py_compile ok; '== lint ==' ruff 'All checks passed!'; '== pytest ==' '119 passed in 535.56s (0:08:55)'; '== end-to-end smoke ==' 'passed 21, failed 0'; 'GATE PASS'. The 9 AUG-035 tests are collected (pytest --collect-only: 9/119) and included in the 119 passed. LSP diagnostics: 0 findings.\nask now persists the JEV-proposed question as an open question row with facets so answer --question-id closes it, and the full gate (py_compile + ruff + 119 pytest + 21-assertion smoke) passes.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "ask stores the JEV-proposed question as a question row (open, with confidence and facet rows) so answer --question-id can close it; README loop works end-to-end; existing pytest + smoke battery green",
+                "status": "PASS",
+                "detail": "auger.py:2874 store_proposed_question() inserts a question row {id, project_id, domain:'', text, ring:1, qclass:ASK_CLASS='ask_proposed', status:'open', jev_already_answered:float(noul), jev_checked_at} then calls facet(ns, project_id, qid, name) for every facet_set() entry; cmd_ask (auger.py:3036) invokes it and prints 'stored question: <id>'. The loop closes: cmd_answer (auger.py:3421) validates node_exists(ns,'question',qid) then close_question() (auger.py:1251) writes the 'closes' edge, set_state -> answered, and closes the facets. tests/test_auger.py:1592-1628 (test_ask_stores_the_question_it_proposes_and_the_answer_then_closes_it) asserts the stored text/status/qclass/ring/jev_already_answered/jev_checked_at, all facet rows open, then runs answer_cli(qid='Q-000001') and asserts 'closed Q-000001', question status 'answered', and facets closed_by D-001. Refusal paths (below T_SUBJECT, gate-answered, no verdict, empty proposal, duplicate open text, refused insert, partial facet store) each assert an empty question table. README.md:60,97 documents the ask->answer loop and docs/VERBS.md was updated to document ask's write. Test evidence (fresh run, cache-defeating): `bash tests/gate.sh` -> '== syntax ==' py_compile ok; '== lint ==' ruff 'All checks passed!'; '== pytest ==' '119 passed in 535.56s (0:08:55)'; '== end-to-end smoke ==' 'passed 21, failed 0'; 'GATE PASS'. The 9 AUG-035 tests are collected (pytest --collect-only: 9/119) and included in the 119 passed. LSP diagnostics: 0 findings."
+              }
+            ],
+            "summary": "ask now persists the JEV-proposed question as an open question row with facets so answer --question-id closes it, and the full gate (py_compile + ruff + 119 pytest + 21-assertion smoke) passes."
+          }
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: AUG-035\n\nStage tier1: FAIL\n    \u2717 lint: E401 [*] Multiple imports on one line\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 ask stores the JEV-proposed question as a question row (open, with confidence and facet rows) so answer --question-id can close it; README loop works end-to-end; existing pytest + smoke battery green: auger.py:2874 store_proposed_question() inserts a question row {id, project_id, domain:'', text, ring:1, qclass:ASK_CLASS='ask_proposed', status:'open', jev_already_answered:float(noul), jev_checked_at} then calls facet(ns, project_id, qid, name) for every facet_set() entry; cmd_ask (auger.py:3036) invokes it and prints 'stored question: <id>'. The loop closes: cmd_answer (auger.py:3421) validates node_exists(ns,'question',qid) then close_question() (auger.py:1251) writes the 'closes' edge, set_state -> answered, and closes the facets. tests/test_auger.py:1592-1628 (test_ask_stores_the_question_it_proposes_and_the_answer_then_closes_it) asserts the stored text/status/qclass/ring/jev_already_answered/jev_checked_at, all facet rows open, then runs answer_cli(qid='Q-000001') and asserts 'closed Q-000001', question status 'answered', and facets closed_by D-001. Refusal paths (below T_SUBJECT, gate-answered, no verdict, empty proposal, duplicate open text, refused insert, partial facet store) each assert an empty question table. README.md:60,97 documents the ask->answer loop and docs/VERBS.md was updated to document ask's write. Test evidence (fresh run, cache-defeating): `bash tests/gate.sh` -> '== syntax ==' py_compile ok; '== lint ==' ruff 'All checks passed!'; '== pytest ==' '119 passed in 535.56s (0:08:55)'; '== end-to-end smoke ==' 'passed 21, failed 0'; 'GATE PASS'. The 9 AUG-035 tests are collected (pytest --collect-only: 9/119) and included in the 119 passed. LSP diagnostics: 0 findings.\nask now persists the JEV-proposed question as an open question row with facets so answer --question-id closes it, and the full gate (py_compile + ruff + 119 pytest + 21-assertion smoke) passes.\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-09-23T11:36:45.620208",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-09-23T11:36:45.640223+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 17766,
+        "truncated": false,
+        "source": "git show 3d984fb1fc3c"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 35601,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-035"
+  }
+}

@@ -1,0 +1,112 @@
+{
+  "task_id": "AUG-036",
+  "task_title": "toggle refuses an unresolved option token instead of exiting 0 on a zero-row patch, and dump --config parses the help-advertised shorthand",
+  "task_criteria": [
+    "An option token that names no row, or more than one row, is refused by name with a non-zero exit and zero rows written; every target is resolved before any write so a bad token aborts the whole command; a PATCH reporting updated!=1 is a hard error instead of the '(0)' success line; 'dump --config D-001=O2' (the form --help advertises) parses and renders the HYPOTHETICAL mode, and any unparsable --config entry is a hard error raised before any render; toggle/dump --help and docs/VERBS.md state the accepted forms; regression tests cover refusal, atomicity, the bare-index shorthand, and the zero-row failure; bash tests/gate.sh ends GATE PASS"
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "08368e5ad799ec3edda57d9446cfc4ea3577d36f",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": false,
+      "any_failed": true,
+      "summary": "  \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2717 tests: FAIL (tests/test_auger.py::test_init_creates_a_namespace_the_api_then_lists [first failing id])",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260923T213617.852254Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: scanners=gitleaks+builtin cross-check\n4:41PM INF scanned ~582562 bytes (582.56 KB) in 598ms\n4:41PM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 38 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260923T213617.852254Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": false,
+          "output": "== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\nEFEEEEFEEEEEEEEE.EEEEEEEEEEEEEEEEEEEE.EEEEEEEEEEEEEEEEEEEEEEEEEEEEE..EEF [ 57%]\nE.....EEEEEEEEEEEEEEEEEEEEEEEE..EEEEEEEEEE......EEEEEE                   [100%]\n==================================== ERRORS ====================================\n_____ ERROR at setup of test_init_declares_every_table_the_module_defines ______\n\nns_created = 'auger-pytest-5d32bf218e5e'\n\n    @pytest.fixture\n    def ns(ns_created: str) -> str:\n        \"\"\"An ephemeral namespace with its SDM tables declared (`auger init`).\"\"\"\n>       rc, out = run_cli([\"-n\", ns_created, \"init\"])\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\ntests/conftest.py:219: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \ntests/conftest.py:57: in run_cli\n    rc = auger.main(argv)\n         ^^^^^^^^^^^^^^^^\nauger.py:4401: in main\n    return a.fn(a)\n           ^^^^^^^\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\na = Namespace(namespace='auger-pytest-5d32bf218e5e', project_id=None, cmd='init', seed_domains=False, fn=<function cmd_init at 0x7329bde728e0>)\n\n    def cmd_init(a):\n        ns = a.namespace\n        st, body, _ = db(\"/api/namespaces\")\n        # An error body is not a namespace list. Reading an error dict as a list used to\n        # crash with `'str' object has no attribute 'get'` and, worse, made `init` report\n        # success while nothing was declared (proven when a 429 landed here). Fail loudly\n        # instead: the caller asked for a namespace that is now known NOT to exist.\n        if st != 200:\n            raise SystemExit(f\"could not list namespaces ({st}): {body}\")\n        if isinstance(body, dict):\n            body = body.get(\"namespaces\", [])\n        names = (\n            [n.get(\"name\") for n in body if isinstance(n, dict)]\n            if isinstance(body, list)\n            else []\n        )\n        created = False\n        if ns not in names:\n            st, body, _ = db(\"/api/namespaces\", \"POST\", {\"name\": ns})\n            if st not in (200, 201):\n>               raise SystemExit(f\"could not create namespace {ns} ({st}): {body}\")\n\n\u2026 [784091 chars omitted \u2014 14318 line(s)] \u2026\nFAILED tests/test_auger.py::test_init_creates_a_namespace_the_api_then_lists\nFAILED tests/test_auger.py::test_answer_without_a_project_is_refused - System...\n\u2026\n\u2026 [89 further FAILED/ERROR line(s) not hoisted] \u2026\nERROR tests/test_auger.py::test_feedback_does_not_ask_a_question_it_cannot_link\nERROR tests/test_auger.py::test_feedback_live_proposes_gates_and_asks_a_real_question\nERROR tests/test_auger.py::test_feedback_with_nothing_thin_asks_nothing - Ass...\nERROR tests/test_auger.py::test_a_good_verdict_round_trips_with_its_reasons\nERROR tests/test_auger.py::test_a_bad_verdict_records_the_word_the_command_gave\nERROR tests/test_auger.py::test_mutually_exclusive_flags_refuse_and_write_nothing\nERROR tests/test_auger.py::test_status_counts_verdicts_when_any_exist - Asser...\nERROR tests/test_auger.py::test_ask_jev_judges_the_real_dump_and_records_the_model_verdict\nERROR tests/test_auger.py::test_ask_jev_judges_a_hypothesis_from_config_specs\nERROR tests/test_auger.py::test_ask_jev_records_nothing_when_the_judge_is_unreachable\nERROR tests/test_auger.py::test_ask_jev_records_a_real_verdict_on_a_live_key\nERROR tests/test_auger.py::test_render_dump_matches_the_dump_verb_structure\nERROR tests/test_auger.py::test_seeding_writes_the_44_domain_rows_with_the_grids_own_numbers\nERROR tests/test_auger.py::test_reseeding_the_grid_adds_no_second_copy - Asse...\nERROR tests/test_auger.py::test_the_grid_is_bound_to_the_project_that_already_exists\nERROR tests/test_auger.py::test_status_names_every_absent_grid_domain_when_no_row_is_stored\nERROR tests/test_auger.py::test_status_reports_coverage_and_the_terminating_ring_per_domain\nERROR tests/test_auger.py::test_a_domain_whose_row_is_gone_is_reported_absent_not_skipped\n3 failed, 17 passed, 106 errors in 25.47s\n",
+          "error": "",
+          "data": {
+            "exit_code": 1,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260923T213617.852254Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": false,
+      "any_failed": true,
+      "summary": "INCOMPLETE\n  \u2717 An option token that names no row, or more than one row, is refused by name with a non-zero exit and zero rows written; every target is resolved before any write so a bad token aborts the whole command; a PATCH reporting updated!=1 is a hard error instead of the '(0)' success line; 'dump --config D-001=O2' (the form --help advertises) parses and renders the HYPOTHETICAL mode, and any unparsable --config entry is a hard error raised before any render; toggle/dump --help and docs/VERBS.md state the accepted forms; regression tests cover refusal, atomicity, the bare-index shorthand, and the zero-row failure; bash tests/gate.sh ends GATE PASS: All code/doc/test sub-requirements PASS, but the final requirement fails: `bash tests/gate.sh` does NOT end GATE PASS. Actual output: '3 failed, 17 passed, 106 errors in 27.02s' (exit non-zero, no GATE PASS line). Root cause is the pre-existing, separately-filed AUG-051 defect: /api/namespaces returns a truncated list (133 entries vs 165 dirs on disk), so cmd_init (auger.py:2764, last changed in initial commit d40dad1, NOT by the AUG-036 commit ea1e80c) re-POSTs a namespace the conftest fixture already created -> 409 CONFLICT -> every ns fixture errors at setup. Verified sub-requirements: resolve_option (auger.py:3800) refuses no-match/multi-match by name with SystemExit non-zero ('nothing was written'); cmd_toggle (auger.py:3854) resolves ALL targets into `targets` before the write loop (atomic); write() (auger.py:3873) raises SystemExit when patch updated!=1 (zero-row is a hard error, not '(0)'); cmd_dump (auger.py:3924) refuses unparsable/unknown-decision/unknown-option --config before render and renders HYPOTHETICAL. Live probe (with an AUG-051 workaround): bare index 'O2' -> rc1 'ambiguous option ... matches D-001-O2, D-002-O2', no writes; bad token 'NOPE' -> rc1, no writes; 'dump --config D-001=O2' -> rc0, 'mode: HYPOTHETICAL (nothing written)', 'ACTIVE CONFIGURATION: D-001=Postgres, D-002=staging table'; '--config garbage' -> rc1 'is not a decision=option pair ... nothing rendered', empty stdout; zero-row patch -> rc1 'patched 0 rows (expected 1)'. `toggle --help`/`dump --help` advertise the accepted forms (full id, label, bare index; refusal on unresolvable/ambiguous). docs/VERBS.md:151-176 state the accepted forms. Regression tests exist: test_dump_config_bare_index_renders_hypothetical_without_mutating (tests/test_auger.py:661), test_dump_config_refuses_an_unknown_option_without_rendering (692), test_dump_config_refuses_an_unknown_decision_without_rendering (702), test_toggle_bare_index_refuses_ambiguous_matches_without_writing (752), test_toggle_resolves_all_targets_before_writing (763), test_patch_reporting_zero_updates_is_a_loud_failure (2150). With the AUG-051 workaround all 12 AUG-036 tests pass and the full suite is '1 failed, 125 passed in 397.51s' (the single failure is the child-suite meta-test also hitting the 409). The gate failure is not caused by the AUG-036 change, but the criterion explicitly requires GATE PASS and the gate fails deterministically on this host.\nThe AUG-036 code, help text, docs, and regression tests are all correct and verified, but `bash tests/gate.sh` fails with '3 failed, 17 passed, 106 errors' (pre-existing AUG-051 409 setup defect) and never prints GATE PASS, so the criterion is not met.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": false,
+          "output": "INCOMPLETE\n  \u2717 An option token that names no row, or more than one row, is refused by name with a non-zero exit and zero rows written; every target is resolved before any write so a bad token aborts the whole command; a PATCH reporting updated!=1 is a hard error instead of the '(0)' success line; 'dump --config D-001=O2' (the form --help advertises) parses and renders the HYPOTHETICAL mode, and any unparsable --config entry is a hard error raised before any render; toggle/dump --help and docs/VERBS.md state the accepted forms; regression tests cover refusal, atomicity, the bare-index shorthand, and the zero-row failure; bash tests/gate.sh ends GATE PASS: All code/doc/test sub-requirements PASS, but the final requirement fails: `bash tests/gate.sh` does NOT end GATE PASS. Actual output: '3 failed, 17 passed, 106 errors in 27.02s' (exit non-zero, no GATE PASS line). Root cause is the pre-existing, separately-filed AUG-051 defect: /api/namespaces returns a truncated list (133 entries vs 165 dirs on disk), so cmd_init (auger.py:2764, last changed in initial commit d40dad1, NOT by the AUG-036 commit ea1e80c) re-POSTs a namespace the conftest fixture already created -> 409 CONFLICT -> every ns fixture errors at setup. Verified sub-requirements: resolve_option (auger.py:3800) refuses no-match/multi-match by name with SystemExit non-zero ('nothing was written'); cmd_toggle (auger.py:3854) resolves ALL targets into `targets` before the write loop (atomic); write() (auger.py:3873) raises SystemExit when patch updated!=1 (zero-row is a hard error, not '(0)'); cmd_dump (auger.py:3924) refuses unparsable/unknown-decision/unknown-option --config before render and renders HYPOTHETICAL. Live probe (with an AUG-051 workaround): bare index 'O2' -> rc1 'ambiguous option ... matches D-001-O2, D-002-O2', no writes; bad token 'NOPE' -> rc1, no writes; 'dump --config D-001=O2' -> rc0, 'mode: HYPOTHETICAL (nothing written)', 'ACTIVE CONFIGURATION: D-001=Postgres, D-002=staging table'; '--config garbage' -> rc1 'is not a decision=option pair ... nothing rendered', empty stdout; zero-row patch -> rc1 'patched 0 rows (expected 1)'. `toggle --help`/`dump --help` advertise the accepted forms (full id, label, bare index; refusal on unresolvable/ambiguous). docs/VERBS.md:151-176 state the accepted forms. Regression tests exist: test_dump_config_bare_index_renders_hypothetical_without_mutating (tests/test_auger.py:661), test_dump_config_refuses_an_unknown_option_without_rendering (692), test_dump_config_refuses_an_unknown_decision_without_rendering (702), test_toggle_bare_index_refuses_ambiguous_matches_without_writing (752), test_toggle_resolves_all_targets_before_writing (763), test_patch_reporting_zero_updates_is_a_loud_failure (2150). With the AUG-051 workaround all 12 AUG-036 tests pass and the full suite is '1 failed, 125 passed in 397.51s' (the single failure is the child-suite meta-test also hitting the 409). The gate failure is not caused by the AUG-036 change, but the criterion explicitly requires GATE PASS and the gate fails deterministically on this host.\nThe AUG-036 code, help text, docs, and regression tests are all correct and verified, but `bash tests/gate.sh` fails with '3 failed, 17 passed, 106 errors' (pre-existing AUG-051 409 setup defect) and never prints GATE PASS, so the criterion is not met.",
+          "error": "",
+          "data": {
+            "verdict": "INCOMPLETE",
+            "items": [
+              {
+                "criterion": "An option token that names no row, or more than one row, is refused by name with a non-zero exit and zero rows written; every target is resolved before any write so a bad token aborts the whole command; a PATCH reporting updated!=1 is a hard error instead of the '(0)' success line; 'dump --config D-001=O2' (the form --help advertises) parses and renders the HYPOTHETICAL mode, and any unparsable --config entry is a hard error raised before any render; toggle/dump --help and docs/VERBS.md state the accepted forms; regression tests cover refusal, atomicity, the bare-index shorthand, and the zero-row failure; bash tests/gate.sh ends GATE PASS",
+                "status": "FAIL",
+                "detail": "All code/doc/test sub-requirements PASS, but the final requirement fails: `bash tests/gate.sh` does NOT end GATE PASS. Actual output: '3 failed, 17 passed, 106 errors in 27.02s' (exit non-zero, no GATE PASS line). Root cause is the pre-existing, separately-filed AUG-051 defect: /api/namespaces returns a truncated list (133 entries vs 165 dirs on disk), so cmd_init (auger.py:2764, last changed in initial commit d40dad1, NOT by the AUG-036 commit ea1e80c) re-POSTs a namespace the conftest fixture already created -> 409 CONFLICT -> every ns fixture errors at setup. Verified sub-requirements: resolve_option (auger.py:3800) refuses no-match/multi-match by name with SystemExit non-zero ('nothing was written'); cmd_toggle (auger.py:3854) resolves ALL targets into `targets` before the write loop (atomic); write() (auger.py:3873) raises SystemExit when patch updated!=1 (zero-row is a hard error, not '(0)'); cmd_dump (auger.py:3924) refuses unparsable/unknown-decision/unknown-option --config before render and renders HYPOTHETICAL. Live probe (with an AUG-051 workaround): bare index 'O2' -> rc1 'ambiguous option ... matches D-001-O2, D-002-O2', no writes; bad token 'NOPE' -> rc1, no writes; 'dump --config D-001=O2' -> rc0, 'mode: HYPOTHETICAL (nothing written)', 'ACTIVE CONFIGURATION: D-001=Postgres, D-002=staging table'; '--config garbage' -> rc1 'is not a decision=option pair ... nothing rendered', empty stdout; zero-row patch -> rc1 'patched 0 rows (expected 1)'. `toggle --help`/`dump --help` advertise the accepted forms (full id, label, bare index; refusal on unresolvable/ambiguous). docs/VERBS.md:151-176 state the accepted forms. Regression tests exist: test_dump_config_bare_index_renders_hypothetical_without_mutating (tests/test_auger.py:661), test_dump_config_refuses_an_unknown_option_without_rendering (692), test_dump_config_refuses_an_unknown_decision_without_rendering (702), test_toggle_bare_index_refuses_ambiguous_matches_without_writing (752), test_toggle_resolves_all_targets_before_writing (763), test_patch_reporting_zero_updates_is_a_loud_failure (2150). With the AUG-051 workaround all 12 AUG-036 tests pass and the full suite is '1 failed, 125 passed in 397.51s' (the single failure is the child-suite meta-test also hitting the 409). The gate failure is not caused by the AUG-036 change, but the criterion explicitly requires GATE PASS and the gate fails deterministically on this host."
+              }
+            ],
+            "summary": "The AUG-036 code, help text, docs, and regression tests are all correct and verified, but `bash tests/gate.sh` fails with '3 failed, 17 passed, 106 errors' (pre-existing AUG-051 409 setup defect) and never prints GATE PASS, so the criterion is not met."
+          }
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: AUG-036\n\nStage tier1: FAIL\n    \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2717 tests: FAIL (tests/test_auger.py::test_init_creates_a_namespace_the_api_then_lists [first failing id])\n\nStage tier2: FAIL\n  INCOMPLETE\n  \u2717 An option token that names no row, or more than one row, is refused by name with a non-zero exit and zero rows written; every target is resolved before any write so a bad token aborts the whole command; a PATCH reporting updated!=1 is a hard error instead of the '(0)' success line; 'dump --config D-001=O2' (the form --help advertises) parses and renders the HYPOTHETICAL mode, and any unparsable --config entry is a hard error raised before any render; toggle/dump --help and docs/VERBS.md state the accepted forms; regression tests cover refusal, atomicity, the bare-index shorthand, and the zero-row failure; bash tests/gate.sh ends GATE PASS: All code/doc/test sub-requirements PASS, but the final requirement fails: `bash tests/gate.sh` does NOT end GATE PASS. Actual output: '3 failed, 17 passed, 106 errors in 27.02s' (exit non-zero, no GATE PASS line). Root cause is the pre-existing, separately-filed AUG-051 defect: /api/namespaces returns a truncated list (133 entries vs 165 dirs on disk), so cmd_init (auger.py:2764, last changed in initial commit d40dad1, NOT by the AUG-036 commit ea1e80c) re-POSTs a namespace the conftest fixture already created -> 409 CONFLICT -> every ns fixture errors at setup. Verified sub-requirements: resolve_option (auger.py:3800) refuses no-match/multi-match by name with SystemExit non-zero ('nothing was written'); cmd_toggle (auger.py:3854) resolves ALL targets into `targets` before the write loop (atomic); write() (auger.py:3873) raises SystemExit when patch updated!=1 (zero-row is a hard error, not '(0)'); cmd_dump (auger.py:3924) refuses unparsable/unknown-decision/unknown-option --config before render and renders HYPOTHETICAL. Live probe (with an AUG-051 workaround): bare index 'O2' -> rc1 'ambiguous option ... matches D-001-O2, D-002-O2', no writes; bad token 'NOPE' -> rc1, no writes; 'dump --config D-001=O2' -> rc0, 'mode: HYPOTHETICAL (nothing written)', 'ACTIVE CONFIGURATION: D-001=Postgres, D-002=staging table'; '--config garbage' -> rc1 'is not a decision=option pair ... nothing rendered', empty stdout; zero-row patch -> rc1 'patched 0 rows (expected 1)'. `toggle --help`/`dump --help` advertise the accepted forms (full id, label, bare index; refusal on unresolvable/ambiguous). docs/VERBS.md:151-176 state the accepted forms. Regression tests exist: test_dump_config_bare_index_renders_hypothetical_without_mutating (tests/test_auger.py:661), test_dump_config_refuses_an_unknown_option_without_rendering (692), test_dump_config_refuses_an_unknown_decision_without_rendering (702), test_toggle_bare_index_refuses_ambiguous_matches_without_writing (752), test_toggle_resolves_all_targets_before_writing (763), test_patch_reporting_zero_updates_is_a_loud_failure (2150). With the AUG-051 workaround all 12 AUG-036 tests pass and the full suite is '1 failed, 125 passed in 397.51s' (the single failure is the child-suite meta-test also hitting the 409). The gate failure is not caused by the AUG-036 change, but the criterion explicitly requires GATE PASS and the gate fails deterministically on this host.\nThe AUG-036 code, help text, docs, and regression tests are all correct and verified, but `bash tests/gate.sh` fails with '3 failed, 17 passed, 106 errors' (pre-existing AUG-051 409 setup defect) and never prints GATE PASS, so the criterion is not met.\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-09-23T21:56:45.997270",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-09-23T21:56:46.015971+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 13748,
+        "truncated": false,
+        "source": "git show 08368e5ad799"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 1915,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-036"
+  }
+}
