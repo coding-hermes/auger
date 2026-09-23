@@ -54,6 +54,45 @@ duckbrain main, every fresh-user doc must pin the branch. The 2026-09-22
 fresh-machine proof (bunker): default branch → init claims success, API sees
 0/13 tables, start 404s; branch → full loop green.
 
+## The bundle layer (2026-09-23 run — where the design meets the road)
+
+The bundle model (SPEC-002) is careful on paper and the weakest layer in
+practice. How the pieces actually connect — none of this is in docs/:
+
+- **Membership is a table, populated by nobody.** `bundle`/`bundle_member`
+  rows must be hand-POSTed to the table API; `bundle_member()` in code has
+  three refusals (role closed-set, bundle exists, project in the FLEET
+  scheduler DB) but no verb calls it (AUG-029).
+- **A member's rows live in the namespace NAMED AFTER the member.**
+  `member_namespace()` is the identity function (auger.py ~L865). Put two
+  projects in one namespace and every cross-project walk silently sees
+  nothing — no error, no warning. This cost the run a do-over.
+- **The impact pass is silent by default.** `answer --scope bundle` walks
+  siblings via JEV but prints nothing unless an AFFECTS/BREAKS edge is
+  written; an "unchanged" verdict at ANY confidence is accepted. Proven by
+  shim: a 0.24-confidence "unchanged" on an obvious algorithm swap (AUG-027).
+  Function-level probe (importing auger.py, calling bundle_impact directly)
+  DID write the edge at 0.50 on a re-run — the walk works; the thresholds
+  and the report are the problem.
+- **The moot cascade's trigger edge exists in no verb.** `propagate`'s rule
+  walk fires on LOCAL `breaks` edges (dst_project absent). The impact pass
+  always sets dst_project. Therefore only hand-POSTs or tests can trigger
+  moot (AUG-028). The walk itself works: E-900001 (D-010 "the bench meter
+  was mis-wired" breaks D-008) → `propagate` mooted Q-000001 with reason.
+- **The gate walk needs an OPEN child of a CLOSED parent.** feedback always
+  gates its own questions at ask time (stamps jev_checked_at), so plain
+  `propagate` mostly skips; use `--recheck` for a real re-examination. The
+  walk was verified live: Q-000006 (child of closed Q-000002) re-gated at
+  noul 0.12, kept open, stamp updated honestly.
+- **Parentless follow-ups are normal.** A decision recorded without
+  `--question-id` produces follow-ups with NO derives_from parent — they are
+  reachable but never gated by propagate. Only decisions that ANSWERED a
+  question produce parented branches. Design consequence, not a bug.
+- **No supersession.** Re-answering a contract area leaves the old decision
+  active; five contradictory envelope decisions rendered as THE config.
+  `verdict --ask-jev` called it BAD at noul 0.36/0.14 — the external model
+  caught what the engine does not flag (AUG-030).
+
 ## How to verify claims about this tool (the 10-minute ladder)
 
 1. `python3 auger.py --help` — the verb surface is the contract; diff it

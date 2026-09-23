@@ -16,12 +16,13 @@ only. Public repo: `coding-hermes/auger`.
 
 ## Entry points
 
-- CLI: `python3 auger.py -n <namespace> <verb> ...` — 11 verbs: `init start
-  ask answer check status toggle dump propagate feedback recall`. The verb
-  surface is a PUBLIC CONTRACT; renames are breaking.
-- Storage: DuckBrain declared tables in namespace `<ns>` — 13 tables
+- CLI: `python3 auger.py -n <namespace> <verb> ...` — 12 verbs: `init start
+  ask answer check status toggle dump propagate feedback recall verdict`. The
+  verb surface is a PUBLIC CONTRACT; renames are breaking.
+- Storage: DuckBrain declared tables in namespace `<ns>` — 14 tables
   (project question decision option break escalation assumption unknown domain
-  edge facet bundle bundle_member). Files: `~/duckbrain/namespaces/<ns>/tables/`.
+  edge facet bundle bundle_member verdict). Files:
+  `~/duckbrain/namespaces/<ns>/tables/`.
 - Tests: `bash tests/smoke.sh` (15 assertions, ~21s, leaves a namespace
   behind on purpose) · `AUGER_CI=1 pytest` (68 tests, ~5.5 min).
 
@@ -74,3 +75,26 @@ only. Public repo: `coding-hermes/auger`.
 python3 auger.py -n <ns> status        # instant; proves API + token + tables
 python3 auger.py -n <ns> recall "any seed phrase"   # proves embeddings
 ```
+
+## Bundles and the graph (the 2026-09-23 surface)
+
+- **One namespace per member, named exactly the member** (`mccli`, `mcview`).
+  This convention is code-only (`member_namespace`, auger.py ~L865); a
+  different pairing silently disables every cross-project walk.
+- **Bundle rows have no verb.** Create them via the table API (POST
+  `/api/ns/<ns>/tables/bundle` and `/tables/bundle_member`) — see
+  docs/dogfood/2026-09-23-graph-bundles-integration.md for the working
+  recipe. AUG-029 tracks the missing verbs.
+- **`answer --scope bundle` may be silent.** If the sibling walk found
+  nothing to flag, the verb prints nothing (AUG-027). Do not assume the pass
+  did not run; check the edge table.
+- **`propagate` is cheap and mostly a no-op on feedback-born questions**
+  (feedback pre-gates them); `--recheck` forces real re-examination.
+- **The moot cascade needs a hand-written LOCAL `breaks` edge** (no verb
+  writes one, AUG-028). Shape: kind=breaks, src decision, dst decision,
+  dst_project ABSENT — with dst_project set it is a sibling break and the
+  local walk ignores it by design.
+- **Verdict shapes:** `verdict --good|--bad [--judged-by NAME]
+  [--confidence X]` (on-file), `--ask-jev` (JEV judges the rendered dump,
+  fail-closed), `--config D-001=O2` (hypothesis; values accept option ids OR
+  labels; requires --ask-jev), `--list`. Cost ~$0.0001/call.
