@@ -1,0 +1,112 @@
+{
+  "task_id": "AUG-050",
+  "task_title": "Prevent AUGER_CI from downgrading the dev gate",
+  "task_criteria": [
+    "A non-runner host with AUGER_CI=1 exported still runs live arms or fails loudly naming the downgrade; a dev-host gate reports the live arm count actually run."
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "446568820ed64f0049e4b3dde5fc1b79997c5dd2",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": false,
+      "any_failed": true,
+      "summary": "  \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2717 tests: FAIL (tests/test_auger.py::test_init_creates_a_namespace_the_api_then_lists [first failing id])",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260923T233125.592066Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: scanners=gitleaks+builtin cross-check\n6:34PM INF scanned ~596275 bytes (596.28 KB) in 368ms\n6:34PM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 38 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260923T233125.592066Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": false,
+          "output": "== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\nEFEEEEFEEEEEEEEE.EEEEEEEEEEEEEEEEEEEE.EEEEEEEEEEEEEEEEEEEEEEEEEEEEE..EEF [ 57%]\nE.....EEEEEEEEEEEEEEEEEEEEEEEE..EEEEEEEEEE......EEEEEE                   [100%]\n==================================== ERRORS ====================================\n_____ ERROR at setup of test_init_declares_every_table_the_module_defines ______\n\nns_created = 'auger-pytest-50ed4d066bbe'\n\n    @pytest.fixture\n    def ns(ns_created: str) -> str:\n        \"\"\"An ephemeral namespace with its SDM tables declared (`auger init`).\"\"\"\n>       rc, out = run_cli([\"-n\", ns_created, \"init\"])\n                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\ntests/conftest.py:219: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \ntests/conftest.py:57: in run_cli\n    rc = auger.main(argv)\n         ^^^^^^^^^^^^^^^^\nauger.py:4401: in main\n    return a.fn(a)\n           ^^^^^^^\n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\na = Namespace(namespace='auger-pytest-50ed4d066bbe', project_id=None, cmd='init', seed_domains=False, fn=<function cmd_init at 0x7dcc1b14e8e0>)\n\n    def cmd_init(a):\n        ns = a.namespace\n        st, body, _ = db(\"/api/namespaces\")\n        # An error body is not a namespace list. Reading an error dict as a list used to\n        # crash with `'str' object has no attribute 'get'` and, worse, made `init` report\n        # success while nothing was declared (proven when a 429 landed here). Fail loudly\n        # instead: the caller asked for a namespace that is now known NOT to exist.\n        if st != 200:\n            raise SystemExit(f\"could not list namespaces ({st}): {body}\")\n        if isinstance(body, dict):\n            body = body.get(\"namespaces\", [])\n        names = (\n            [n.get(\"name\") for n in body if isinstance(n, dict)]\n            if isinstance(body, list)\n            else []\n        )\n        created = False\n        if ns not in names:\n            st, body, _ = db(\"/api/namespaces\", \"POST\", {\"name\": ns})\n            if st not in (200, 201):\n>               raise SystemExit(f\"could not create namespace {ns} ({st}): {body}\")\n\n\u2026 [784091 chars omitted \u2014 14318 line(s)] \u2026\nFAILED tests/test_auger.py::test_init_creates_a_namespace_the_api_then_lists\nFAILED tests/test_auger.py::test_answer_without_a_project_is_refused - System...\n\u2026\n\u2026 [89 further FAILED/ERROR line(s) not hoisted] \u2026\nERROR tests/test_auger.py::test_feedback_does_not_ask_a_question_it_cannot_link\nERROR tests/test_auger.py::test_feedback_live_proposes_gates_and_asks_a_real_question\nERROR tests/test_auger.py::test_feedback_with_nothing_thin_asks_nothing - Ass...\nERROR tests/test_auger.py::test_a_good_verdict_round_trips_with_its_reasons\nERROR tests/test_auger.py::test_a_bad_verdict_records_the_word_the_command_gave\nERROR tests/test_auger.py::test_mutually_exclusive_flags_refuse_and_write_nothing\nERROR tests/test_auger.py::test_status_counts_verdicts_when_any_exist - Asser...\nERROR tests/test_auger.py::test_ask_jev_judges_the_real_dump_and_records_the_model_verdict\nERROR tests/test_auger.py::test_ask_jev_judges_a_hypothesis_from_config_specs\nERROR tests/test_auger.py::test_ask_jev_records_nothing_when_the_judge_is_unreachable\nERROR tests/test_auger.py::test_ask_jev_records_a_real_verdict_on_a_live_key\nERROR tests/test_auger.py::test_render_dump_matches_the_dump_verb_structure\nERROR tests/test_auger.py::test_seeding_writes_the_44_domain_rows_with_the_grids_own_numbers\nERROR tests/test_auger.py::test_reseeding_the_grid_adds_no_second_copy - Asse...\nERROR tests/test_auger.py::test_the_grid_is_bound_to_the_project_that_already_exists\nERROR tests/test_auger.py::test_status_names_every_absent_grid_domain_when_no_row_is_stored\nERROR tests/test_auger.py::test_status_reports_coverage_and_the_terminating_ring_per_domain\nERROR tests/test_auger.py::test_a_domain_whose_row_is_gone_is_reported_absent_not_skipped\n3 failed, 17 passed, 106 errors in 19.96s\n",
+          "error": "",
+          "data": {
+            "exit_code": 1,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260923T233125.592066Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 A non-runner host with AUGER_CI=1 exported still runs live arms or fails loudly naming the downgrade; a dev-host gate reports the live arm count actually run.: Both halves verified by execution. (1) Non-runner host + AUGER_CI=1 fails loudly naming the downgrade: `env -u GITHUB_ACTIONS -u CI AUGER_CI=1 bash tests/gate.sh` -> exit_code 2, stderr 'ERROR: refusing AUGER_CI=1 downgrade on a non-runner host; require GITHUB_ACTIONS=true or CI=1/true.' (tests/gate.sh:26-31 select_gate_mode, invoked at :41 `GATE_MODE=\"$(select_gate_mode)\" || exit $?`). It aborts BEFORE any arm \u2014 output contains no '== syntax ==' line. Bogus values also rejected: AUGER_CI=yes -> exit 2 'AUGER_CI must be 0 or 1 (got yes)'. (2) Dev-host gate reports the live arm count actually run: `env -u GITHUB_ACTIONS -u CI -u AUGER_CI bash tests/gate.sh` (arms stubbed for speed) -> 'LIVE ARMS: ran 2; skipped 0' + 'GATE PASS', exit_code 0; counters at tests/gate.sh:53-59, run_live_arm at :83/:91, summary printed at :95. Hosted-ci-skip mode prints 'LIVE ARMS: ran 0; skipped 2' and names pytest-live, e2e-smoke. Regression suite: `bash tests/test_gate_mode.sh` -> exit_code 0, 'gate mode regression: PASS' (tests/test_gate_mode.sh:20-33 asserts non-zero exit + 'non-runner' + 'downgrade' + absence of '== syntax =='; :36-44 assert GITHUB_ACTIONS=true and CI=1 both select hosted-ci-skip). CI wiring consistent: .github/workflows/ci.yml:42 sets AUGER_CI=1 (runner supplies GITHUB_ACTIONS/CI) and the opt-in live step at :79-81 sets AUGER_CI=0 so real arms run on a self-hosted runner. Note: the full unstubbed gate cannot complete on this eval host (no live DuckBrain/JEV) \u2014 the documented, expected condition, not a defect.\nAUGER_CI=1 on a non-runner host is rejected loudly before any arm runs, and the dev-host gate reports the live arm count actually run; regression test passes.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 A non-runner host with AUGER_CI=1 exported still runs live arms or fails loudly naming the downgrade; a dev-host gate reports the live arm count actually run.: Both halves verified by execution. (1) Non-runner host + AUGER_CI=1 fails loudly naming the downgrade: `env -u GITHUB_ACTIONS -u CI AUGER_CI=1 bash tests/gate.sh` -> exit_code 2, stderr 'ERROR: refusing AUGER_CI=1 downgrade on a non-runner host; require GITHUB_ACTIONS=true or CI=1/true.' (tests/gate.sh:26-31 select_gate_mode, invoked at :41 `GATE_MODE=\"$(select_gate_mode)\" || exit $?`). It aborts BEFORE any arm \u2014 output contains no '== syntax ==' line. Bogus values also rejected: AUGER_CI=yes -> exit 2 'AUGER_CI must be 0 or 1 (got yes)'. (2) Dev-host gate reports the live arm count actually run: `env -u GITHUB_ACTIONS -u CI -u AUGER_CI bash tests/gate.sh` (arms stubbed for speed) -> 'LIVE ARMS: ran 2; skipped 0' + 'GATE PASS', exit_code 0; counters at tests/gate.sh:53-59, run_live_arm at :83/:91, summary printed at :95. Hosted-ci-skip mode prints 'LIVE ARMS: ran 0; skipped 2' and names pytest-live, e2e-smoke. Regression suite: `bash tests/test_gate_mode.sh` -> exit_code 0, 'gate mode regression: PASS' (tests/test_gate_mode.sh:20-33 asserts non-zero exit + 'non-runner' + 'downgrade' + absence of '== syntax =='; :36-44 assert GITHUB_ACTIONS=true and CI=1 both select hosted-ci-skip). CI wiring consistent: .github/workflows/ci.yml:42 sets AUGER_CI=1 (runner supplies GITHUB_ACTIONS/CI) and the opt-in live step at :79-81 sets AUGER_CI=0 so real arms run on a self-hosted runner. Note: the full unstubbed gate cannot complete on this eval host (no live DuckBrain/JEV) \u2014 the documented, expected condition, not a defect.\nAUGER_CI=1 on a non-runner host is rejected loudly before any arm runs, and the dev-host gate reports the live arm count actually run; regression test passes.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "A non-runner host with AUGER_CI=1 exported still runs live arms or fails loudly naming the downgrade; a dev-host gate reports the live arm count actually run.",
+                "status": "PASS",
+                "detail": "Both halves verified by execution. (1) Non-runner host + AUGER_CI=1 fails loudly naming the downgrade: `env -u GITHUB_ACTIONS -u CI AUGER_CI=1 bash tests/gate.sh` -> exit_code 2, stderr 'ERROR: refusing AUGER_CI=1 downgrade on a non-runner host; require GITHUB_ACTIONS=true or CI=1/true.' (tests/gate.sh:26-31 select_gate_mode, invoked at :41 `GATE_MODE=\"$(select_gate_mode)\" || exit $?`). It aborts BEFORE any arm \u2014 output contains no '== syntax ==' line. Bogus values also rejected: AUGER_CI=yes -> exit 2 'AUGER_CI must be 0 or 1 (got yes)'. (2) Dev-host gate reports the live arm count actually run: `env -u GITHUB_ACTIONS -u CI -u AUGER_CI bash tests/gate.sh` (arms stubbed for speed) -> 'LIVE ARMS: ran 2; skipped 0' + 'GATE PASS', exit_code 0; counters at tests/gate.sh:53-59, run_live_arm at :83/:91, summary printed at :95. Hosted-ci-skip mode prints 'LIVE ARMS: ran 0; skipped 2' and names pytest-live, e2e-smoke. Regression suite: `bash tests/test_gate_mode.sh` -> exit_code 0, 'gate mode regression: PASS' (tests/test_gate_mode.sh:20-33 asserts non-zero exit + 'non-runner' + 'downgrade' + absence of '== syntax =='; :36-44 assert GITHUB_ACTIONS=true and CI=1 both select hosted-ci-skip). CI wiring consistent: .github/workflows/ci.yml:42 sets AUGER_CI=1 (runner supplies GITHUB_ACTIONS/CI) and the opt-in live step at :79-81 sets AUGER_CI=0 so real arms run on a self-hosted runner. Note: the full unstubbed gate cannot complete on this eval host (no live DuckBrain/JEV) \u2014 the documented, expected condition, not a defect."
+              }
+            ],
+            "summary": "AUGER_CI=1 on a non-runner host is rejected loudly before any arm runs, and the dev-host gate reports the live arm count actually run; regression test passes."
+          }
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: AUG-050\n\nStage tier1: FAIL\n    \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2717 tests: FAIL (tests/test_auger.py::test_init_creates_a_namespace_the_api_then_lists [first failing id])\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 A non-runner host with AUGER_CI=1 exported still runs live arms or fails loudly naming the downgrade; a dev-host gate reports the live arm count actually run.: Both halves verified by execution. (1) Non-runner host + AUGER_CI=1 fails loudly naming the downgrade: `env -u GITHUB_ACTIONS -u CI AUGER_CI=1 bash tests/gate.sh` -> exit_code 2, stderr 'ERROR: refusing AUGER_CI=1 downgrade on a non-runner host; require GITHUB_ACTIONS=true or CI=1/true.' (tests/gate.sh:26-31 select_gate_mode, invoked at :41 `GATE_MODE=\"$(select_gate_mode)\" || exit $?`). It aborts BEFORE any arm \u2014 output contains no '== syntax ==' line. Bogus values also rejected: AUGER_CI=yes -> exit 2 'AUGER_CI must be 0 or 1 (got yes)'. (2) Dev-host gate reports the live arm count actually run: `env -u GITHUB_ACTIONS -u CI -u AUGER_CI bash tests/gate.sh` (arms stubbed for speed) -> 'LIVE ARMS: ran 2; skipped 0' + 'GATE PASS', exit_code 0; counters at tests/gate.sh:53-59, run_live_arm at :83/:91, summary printed at :95. Hosted-ci-skip mode prints 'LIVE ARMS: ran 0; skipped 2' and names pytest-live, e2e-smoke. Regression suite: `bash tests/test_gate_mode.sh` -> exit_code 0, 'gate mode regression: PASS' (tests/test_gate_mode.sh:20-33 asserts non-zero exit + 'non-runner' + 'downgrade' + absence of '== syntax =='; :36-44 assert GITHUB_ACTIONS=true and CI=1 both select hosted-ci-skip). CI wiring consistent: .github/workflows/ci.yml:42 sets AUGER_CI=1 (runner supplies GITHUB_ACTIONS/CI) and the opt-in live step at :79-81 sets AUGER_CI=0 so real arms run on a self-hosted runner. Note: the full unstubbed gate cannot complete on this eval host (no live DuckBrain/JEV) \u2014 the documented, expected condition, not a defect.\nAUGER_CI=1 on a non-runner host is rejected loudly before any arm runs, and the dev-host gate reports the live arm count actually run; regression test passes.\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-09-23T23:35:53.958357",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-09-23T23:35:53.972751+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 8226,
+        "truncated": false,
+        "source": "git show 446568820ed6"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 21109,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-050"
+  }
+}
