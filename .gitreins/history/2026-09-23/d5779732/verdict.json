@@ -1,0 +1,112 @@
+{
+  "task_id": "AUG-028",
+  "task_title": "wire the moot/reopen cascade to a verb",
+  "task_criteria": [
+    "A CLI verb writes a local breaks edge (dst_project absent) with source=user, and triggering it through the verb moots the questions the dead decision answered; regression tests proven red-then-green, full suite green; commit on wt/AUG-028"
+  ],
+  "passed": true,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "a6bf929fd8ddcbbd551d579986504030b091658b",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260923T074405.434871Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: scanners=gitleaks+builtin cross-check\n3:14AM INF scanned ~522325 bytes (522.33 KB) in 940ms\n3:14AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 38 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260923T074405.434871Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [ 66%]\n....................................                                     [100%]\n108 passed in 589.46s (0:09:49)\n== end-to-end smoke ==\nnamespace: auger-smoke-2000730\nnamespace sweep: no stale auger-smoke-*/auger-eval-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n  PASS toggle changed the stored configuration\n== verdict: record + list round-trip ==\n  PASS a good verdict is recorded\n  PASS a bad verdict is recorded\n  PASS the good verdict shows in the list\n  PASS the bad verdict's reasons show in the list\n  PASS both --good and --bad refuse\n  PASS the refused pair wrote nothing\n\nnamespace auger-smoke-2000730 removed\npassed 21, failed 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260923T074405.434871Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 A CLI verb writes a local breaks edge (dst_project absent) with source=user, and triggering it through the verb moots the questions the dead decision answered; regression tests proven red-then-green, full suite green; commit on wt/AUG-028: (1) Verb writes the local break: auger.py `answer --invalidates D-00X` (+ `--invalidates-why`/`--why`) -> cmd_answer calls local_break_targets() then record_local_breaks(), which calls edge(ns, pid, \"breaks\", \"decision\", did, \"decision\", target, source=\"human\", note=...) and NEVER passes dst_project; edge() travels empty project keys as ABSENT KEYS (auger.py:546-549). edge_index() indexes breaks only when dst_kind==\"decision\" and not e.get(\"dst_project\") (auger.py:1169-1174), so the verb-written row IS the local trigger. Test test_answer_invalidates_writes_a_local_breaks_edge captures the raw POST body and asserts `\"dst_project\" not in posted[0]`, kind=breaks, src/dst decision, confidence==-1.0, and that edge_index reads it as the only local break. NOTE on the literal token: the code writes source=\"human\", not \"user\" \u2014 EDGE_SOURCES = (\"gate\",\"impact\",\"human\",\"rule\") (auger.py:246) and docs/SPEC-001-graph.md:58 declare `human`; \"user\" is not a legal value and edge() would refuse it by name. The board's own acceptance text says \"e.g. ... source='user'\" (an example), and the intent (a person's direct assertion, not a model score) is met by source=\"human\" + confidence=-1.0. (2) Verb trigger moots the answered questions: propagate()'s rule walk (auger.py:1538-1569) reads idx[\"breaks\"], moots closed_by[dead] with reason \"D-001 was invalidated by <edge id>\", then BFS-reopens SETTLED_STATES children. Tests test_a_verb_written_local_break_moots_the_questions_the_dead_decision_answered (asserts \"moot: 1   reopened: 0\", Q-000001 status moot, exact reason, no auger.edge call, idempotent second pass) and test_a_verb_written_local_break_reopens_the_settled_children (asserts \"moot: 1   reopened: 2   linked: 0\", grandchild Q-000003 reopened, reasons name the verb-written edge id). (3) Red-then-green proven live: with parent auger.py (git show 81ef81c^:auger.py) the new tests gave `4 failed, 1 passed, 103 deselected in 20.24s` on `auger: error: unrecognized arguments: --invalidates D-001 --invalidates-why the meter was mis-wired` (SystemExit: 2); with HEAD they gave `5 passed, 103 deselected in 46.00s`. (4) Full suite green: `bash tests/gate.sh` (guards.test_command from .gitreins/config.yaml) => \"== syntax ==\" ok, \"== lint == All checks passed!\", \"== pytest == 108 passed in 534.82s (0:08:54)\", \"== end-to-end smoke == passed 21, failed 0\", \"GATE PASS\". (5) Commit on wt/AUG-028: 81ef81c \"feat(graph): wire the moot/reopen cascade to a verb. Addresses AUG-028.\" (auger.py +138, tests/test_auger.py +247); `git branch --contains 81ef81c` => main, wt/AUG-028; merged to main as 8210d38 \"Merge branch 'wt/AUG-028'\". Minor gap noted but not part of this criterion's text: docs/VERBS.md's propagate entry still does not name what writes the trigger (the commit message itself defers it to \"the merge fold\", which did not add it); the flag is documented only in skills/auger-usage/SKILL.md:84-88.\nThe `answer --invalidates` verb writes the local breaks edge (no dst_project, source=\"human\" per the codebase's closed EDGE_SOURCES set rather than the literal \"user\"), the verb-triggered propagate walk moots the dead decision's answered questions and reopens settled children, tests are proven red-then-green (4 failed on parent, 5 passed on HEAD), the full gate is green (108 passed + 21/21 smoke + GATE PASS), and the commit sits on wt/AUG-028.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 A CLI verb writes a local breaks edge (dst_project absent) with source=user, and triggering it through the verb moots the questions the dead decision answered; regression tests proven red-then-green, full suite green; commit on wt/AUG-028: (1) Verb writes the local break: auger.py `answer --invalidates D-00X` (+ `--invalidates-why`/`--why`) -> cmd_answer calls local_break_targets() then record_local_breaks(), which calls edge(ns, pid, \"breaks\", \"decision\", did, \"decision\", target, source=\"human\", note=...) and NEVER passes dst_project; edge() travels empty project keys as ABSENT KEYS (auger.py:546-549). edge_index() indexes breaks only when dst_kind==\"decision\" and not e.get(\"dst_project\") (auger.py:1169-1174), so the verb-written row IS the local trigger. Test test_answer_invalidates_writes_a_local_breaks_edge captures the raw POST body and asserts `\"dst_project\" not in posted[0]`, kind=breaks, src/dst decision, confidence==-1.0, and that edge_index reads it as the only local break. NOTE on the literal token: the code writes source=\"human\", not \"user\" \u2014 EDGE_SOURCES = (\"gate\",\"impact\",\"human\",\"rule\") (auger.py:246) and docs/SPEC-001-graph.md:58 declare `human`; \"user\" is not a legal value and edge() would refuse it by name. The board's own acceptance text says \"e.g. ... source='user'\" (an example), and the intent (a person's direct assertion, not a model score) is met by source=\"human\" + confidence=-1.0. (2) Verb trigger moots the answered questions: propagate()'s rule walk (auger.py:1538-1569) reads idx[\"breaks\"], moots closed_by[dead] with reason \"D-001 was invalidated by <edge id>\", then BFS-reopens SETTLED_STATES children. Tests test_a_verb_written_local_break_moots_the_questions_the_dead_decision_answered (asserts \"moot: 1   reopened: 0\", Q-000001 status moot, exact reason, no auger.edge call, idempotent second pass) and test_a_verb_written_local_break_reopens_the_settled_children (asserts \"moot: 1   reopened: 2   linked: 0\", grandchild Q-000003 reopened, reasons name the verb-written edge id). (3) Red-then-green proven live: with parent auger.py (git show 81ef81c^:auger.py) the new tests gave `4 failed, 1 passed, 103 deselected in 20.24s` on `auger: error: unrecognized arguments: --invalidates D-001 --invalidates-why the meter was mis-wired` (SystemExit: 2); with HEAD they gave `5 passed, 103 deselected in 46.00s`. (4) Full suite green: `bash tests/gate.sh` (guards.test_command from .gitreins/config.yaml) => \"== syntax ==\" ok, \"== lint == All checks passed!\", \"== pytest == 108 passed in 534.82s (0:08:54)\", \"== end-to-end smoke == passed 21, failed 0\", \"GATE PASS\". (5) Commit on wt/AUG-028: 81ef81c \"feat(graph): wire the moot/reopen cascade to a verb. Addresses AUG-028.\" (auger.py +138, tests/test_auger.py +247); `git branch --contains 81ef81c` => main, wt/AUG-028; merged to main as 8210d38 \"Merge branch 'wt/AUG-028'\". Minor gap noted but not part of this criterion's text: docs/VERBS.md's propagate entry still does not name what writes the trigger (the commit message itself defers it to \"the merge fold\", which did not add it); the flag is documented only in skills/auger-usage/SKILL.md:84-88.\nThe `answer --invalidates` verb writes the local breaks edge (no dst_project, source=\"human\" per the codebase's closed EDGE_SOURCES set rather than the literal \"user\"), the verb-triggered propagate walk moots the dead decision's answered questions and reopens settled children, tests are proven red-then-green (4 failed on parent, 5 passed on HEAD), the full gate is green (108 passed + 21/21 smoke + GATE PASS), and the commit sits on wt/AUG-028.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "A CLI verb writes a local breaks edge (dst_project absent) with source=user, and triggering it through the verb moots the questions the dead decision answered; regression tests proven red-then-green, full suite green; commit on wt/AUG-028",
+                "status": "PASS",
+                "detail": "(1) Verb writes the local break: auger.py `answer --invalidates D-00X` (+ `--invalidates-why`/`--why`) -> cmd_answer calls local_break_targets() then record_local_breaks(), which calls edge(ns, pid, \"breaks\", \"decision\", did, \"decision\", target, source=\"human\", note=...) and NEVER passes dst_project; edge() travels empty project keys as ABSENT KEYS (auger.py:546-549). edge_index() indexes breaks only when dst_kind==\"decision\" and not e.get(\"dst_project\") (auger.py:1169-1174), so the verb-written row IS the local trigger. Test test_answer_invalidates_writes_a_local_breaks_edge captures the raw POST body and asserts `\"dst_project\" not in posted[0]`, kind=breaks, src/dst decision, confidence==-1.0, and that edge_index reads it as the only local break. NOTE on the literal token: the code writes source=\"human\", not \"user\" \u2014 EDGE_SOURCES = (\"gate\",\"impact\",\"human\",\"rule\") (auger.py:246) and docs/SPEC-001-graph.md:58 declare `human`; \"user\" is not a legal value and edge() would refuse it by name. The board's own acceptance text says \"e.g. ... source='user'\" (an example), and the intent (a person's direct assertion, not a model score) is met by source=\"human\" + confidence=-1.0. (2) Verb trigger moots the answered questions: propagate()'s rule walk (auger.py:1538-1569) reads idx[\"breaks\"], moots closed_by[dead] with reason \"D-001 was invalidated by <edge id>\", then BFS-reopens SETTLED_STATES children. Tests test_a_verb_written_local_break_moots_the_questions_the_dead_decision_answered (asserts \"moot: 1   reopened: 0\", Q-000001 status moot, exact reason, no auger.edge call, idempotent second pass) and test_a_verb_written_local_break_reopens_the_settled_children (asserts \"moot: 1   reopened: 2   linked: 0\", grandchild Q-000003 reopened, reasons name the verb-written edge id). (3) Red-then-green proven live: with parent auger.py (git show 81ef81c^:auger.py) the new tests gave `4 failed, 1 passed, 103 deselected in 20.24s` on `auger: error: unrecognized arguments: --invalidates D-001 --invalidates-why the meter was mis-wired` (SystemExit: 2); with HEAD they gave `5 passed, 103 deselected in 46.00s`. (4) Full suite green: `bash tests/gate.sh` (guards.test_command from .gitreins/config.yaml) => \"== syntax ==\" ok, \"== lint == All checks passed!\", \"== pytest == 108 passed in 534.82s (0:08:54)\", \"== end-to-end smoke == passed 21, failed 0\", \"GATE PASS\". (5) Commit on wt/AUG-028: 81ef81c \"feat(graph): wire the moot/reopen cascade to a verb. Addresses AUG-028.\" (auger.py +138, tests/test_auger.py +247); `git branch --contains 81ef81c` => main, wt/AUG-028; merged to main as 8210d38 \"Merge branch 'wt/AUG-028'\". Minor gap noted but not part of this criterion's text: docs/VERBS.md's propagate entry still does not name what writes the trigger (the commit message itself defers it to \"the merge fold\", which did not add it); the flag is documented only in skills/auger-usage/SKILL.md:84-88."
+              }
+            ],
+            "summary": "The `answer --invalidates` verb writes the local breaks edge (no dst_project, source=\"human\" per the codebase's closed EDGE_SOURCES set rather than the literal \"user\"), the verb-triggered propagate walk moots the dead decision's answered questions and reopens settled children, tests are proven red-then-green (4 failed on parent, 5 passed on HEAD), the full gate is green (108 passed + 21/21 smoke + GATE PASS), and the commit sits on wt/AUG-028."
+          }
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: AUG-028\n\nStage tier1: PASS\n    \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 A CLI verb writes a local breaks edge (dst_project absent) with source=user, and triggering it through the verb moots the questions the dead decision answered; regression tests proven red-then-green, full suite green; commit on wt/AUG-028: (1) Verb writes the local break: auger.py `answer --invalidates D-00X` (+ `--invalidates-why`/`--why`) -> cmd_answer calls local_break_targets() then record_local_breaks(), which calls edge(ns, pid, \"breaks\", \"decision\", did, \"decision\", target, source=\"human\", note=...) and NEVER passes dst_project; edge() travels empty project keys as ABSENT KEYS (auger.py:546-549). edge_index() indexes breaks only when dst_kind==\"decision\" and not e.get(\"dst_project\") (auger.py:1169-1174), so the verb-written row IS the local trigger. Test test_answer_invalidates_writes_a_local_breaks_edge captures the raw POST body and asserts `\"dst_project\" not in posted[0]`, kind=breaks, src/dst decision, confidence==-1.0, and that edge_index reads it as the only local break. NOTE on the literal token: the code writes source=\"human\", not \"user\" \u2014 EDGE_SOURCES = (\"gate\",\"impact\",\"human\",\"rule\") (auger.py:246) and docs/SPEC-001-graph.md:58 declare `human`; \"user\" is not a legal value and edge() would refuse it by name. The board's own acceptance text says \"e.g. ... source='user'\" (an example), and the intent (a person's direct assertion, not a model score) is met by source=\"human\" + confidence=-1.0. (2) Verb trigger moots the answered questions: propagate()'s rule walk (auger.py:1538-1569) reads idx[\"breaks\"], moots closed_by[dead] with reason \"D-001 was invalidated by <edge id>\", then BFS-reopens SETTLED_STATES children. Tests test_a_verb_written_local_break_moots_the_questions_the_dead_decision_answered (asserts \"moot: 1   reopened: 0\", Q-000001 status moot, exact reason, no auger.edge call, idempotent second pass) and test_a_verb_written_local_break_reopens_the_settled_children (asserts \"moot: 1   reopened: 2   linked: 0\", grandchild Q-000003 reopened, reasons name the verb-written edge id). (3) Red-then-green proven live: with parent auger.py (git show 81ef81c^:auger.py) the new tests gave `4 failed, 1 passed, 103 deselected in 20.24s` on `auger: error: unrecognized arguments: --invalidates D-001 --invalidates-why the meter was mis-wired` (SystemExit: 2); with HEAD they gave `5 passed, 103 deselected in 46.00s`. (4) Full suite green: `bash tests/gate.sh` (guards.test_command from .gitreins/config.yaml) => \"== syntax ==\" ok, \"== lint == All checks passed!\", \"== pytest == 108 passed in 534.82s (0:08:54)\", \"== end-to-end smoke == passed 21, failed 0\", \"GATE PASS\". (5) Commit on wt/AUG-028: 81ef81c \"feat(graph): wire the moot/reopen cascade to a verb. Addresses AUG-028.\" (auger.py +138, tests/test_auger.py +247); `git branch --contains 81ef81c` => main, wt/AUG-028; merged to main as 8210d38 \"Merge branch 'wt/AUG-028'\". Minor gap noted but not part of this criterion's text: docs/VERBS.md's propagate entry still does not name what writes the trigger (the commit message itself defers it to \"the merge fold\", which did not add it); the flag is documented only in skills/auger-usage/SKILL.md:84-88.\nThe `answer --invalidates` verb writes the local breaks edge (no dst_project, source=\"human\" per the codebase's closed EDGE_SOURCES set rather than the literal \"user\"), the verb-triggered propagate walk moots the dead decision's answered questions and reopens settled children, tests are proven red-then-green (4 failed on parent, 5 passed on HEAD), the full gate is green (108 passed + 21/21 smoke + GATE PASS), and the commit sits on wt/AUG-028.\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-09-23T08:38:32.913133",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-09-23T08:38:32.936943+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 262176,
+        "truncated": true,
+        "source": "git show a6bf929fd8dd"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 46153,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-028"
+  }
+}
