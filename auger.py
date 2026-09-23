@@ -1688,6 +1688,103 @@ def cmd_propagate(a):
     return 0
 
 
+# ------------------------------------------------- AUG-028: writing the walk's TRIGGER (BEAT 4)
+# The rule walk above fires on exactly ONE shape: a `breaks` edge whose dst is a DECISION with no
+# `dst_project` (edge_index). That shape had no writer. The impact pass always sets `dst_project` — a
+# break reaching a sibling is an escalation for THAT sibling (SPEC-002 2.2), never this project's own
+# decision dying — and `option.breaks` is free text that no walk reads. So the cascade SPEC-001 BEAT 4
+# describes was reachable only by whoever hand-POSTed an edge row, which is exactly what this project's
+# own tests did, and what the dogfood run had to do to prove the walk itself works.
+#
+# `answer --invalidates D-00X` is that writer, and the claim it records is a PERSON'S: "the decision I
+# am recording now invalidates one already on the record" — the same assertion BEAT 3's impact pass
+# makes through a model, made here by someone reading the record. It writes the local form and only
+# that: no project endpoint is invented, no decision is rewritten, and resolution stays where the spec
+# puts it (`propagate`). The write surfaces the trigger; it does not run the walk.
+def local_break_targets(
+    ns: str, project_id: str, decision_id: str, raw: list | None, why: str = ""
+) -> list:
+    """The decisions `--invalidates` names — refused by name when one of them cannot be one.
+
+    Three refusals, all of them about the ONE claim this flag makes, that the decision is ALREADY
+    STORED IN THIS PROJECT:
+
+      * a decision that is not stored is the invented endpoint `edge` refuses — and "I invalidate a
+        decision that has not been recorded yet" is not a claim the walk can act on;
+      * a decision recorded by a SIBLING is not reachable from here at all (ids are per namespace), and
+        writing it without `dst_project` would read as THIS project's D-007 dying;
+      * an answer cannot invalidate ITSELF: the walk moots the questions the dead decision answered, so
+        a self-break would withdraw the very question this answer just closed.
+
+    A reason with no target is refused too. `--invalidates-why` describes a break; a reason that lands
+    nowhere leaves the user believing something is on the record when nothing was written.
+
+    Called before anything is stored, so a refusal costs no bundle-impact model call and leaves the
+    whole invocation — the answer included — unwritten rather than half-applied.
+    """
+    targets, seen = [], set()
+    for raw_id in raw or []:
+        target = (raw_id or "").strip()
+        if target and target not in seen:
+            seen.add(target)
+            targets.append(target)
+    if why and not targets:
+        raise SystemExit(
+            "--invalidates-why names no --invalidates target — the reason belongs on a break "
+            "edge, and no break was named"
+        )
+    for target in targets:
+        if target == decision_id:
+            raise SystemExit(
+                f"refused: {decision_id} cannot invalidate itself — the rule walk would moot the "
+                f"questions {decision_id} just answered"
+            )
+        if not select(
+            ns,
+            "decision",
+            f"id=eq.{target}&project_id=eq.{project_id}&select=id&limit=1",
+        ):
+            raise SystemExit(
+                f"refused: decision {target!r} does not exist in project {project_id} — a LOCAL "
+                f"break names a decision this project already recorded. A break reaching a "
+                f"sibling's decision is the bundle impact pass's edge, which carries dst_project "
+                f"(SPEC-002 2.2)"
+            )
+    return targets
+
+
+def record_local_breaks(
+    ns: str, project_id: str, decision_id: str, targets: list, why: str = ""
+) -> list:
+    """Write one LOCAL `breaks` edge per target. Returns [(edge id, target)].
+
+    Called after the answer is stored, because `edge` verifies BOTH of its endpoints are rows and the
+    answer is one of them. `source="human"` and the default confidence (-1, "asserted directly, not
+    scored by a model") are the same pair the impact pass's edges do NOT use: this one is a person's
+    read of the record, not a model's. `dst_project` is deliberately never passed — that absent
+    endpoint is what makes the edge local, and therefore what makes the rule walk read it as a
+    decision of THIS project dying rather than a sibling's.
+    """
+    written = []
+    for target in targets:
+        note = f"{decision_id} invalidates {target}"
+        if why:
+            note += f": {why}"
+        wrote = edge(
+            ns,
+            project_id,
+            "breaks",
+            "decision",
+            decision_id,
+            "decision",
+            target,
+            source="human",
+            note=note,
+        )
+        written.append((wrote["id"], target))
+    return written
+
+
 # ---------------------------------------------------------------- the FEEDBACK ENGINE (R12 / AUG-001)
 # docs/DESIGN.md R12 and open decision 4, built over the graph AUG-007..AUG-011 landed. The engine
 # proper: a low-confidence decision stops being a status line and becomes the NEXT QUESTION BATCH,
@@ -3218,6 +3315,12 @@ def cmd_answer(a):
             f"unknown decision scope {a.scope!r}: expected one of {', '.join(DECISION_SCOPES)}"
         )
     did = a.id or f"D-{len(select(ns, 'decision', f'project_id=eq.{pid}')) + 1:03d}"
+    # AUG-028: the LOCAL break this answer records (SPEC-001 BEAT 4's rule-walk trigger). Validated
+    # here, before anything is stored: the flag's claim is that the target is ALREADY on the record,
+    # and a refusal must leave no half-applied invocation behind.
+    break_targets = local_break_targets(
+        ns, pid, did, a.invalidates, a.invalidates_why or ""
+    )
     row = {
         "id": did,
         "project_id": pid,
@@ -3284,12 +3387,30 @@ def cmd_answer(a):
     if qid:
         close_question(ns, pid, did, qid, warnings=beat2_warnings)
         closed = f", closed {qid}"
+    # AUG-028: the trigger, written now that the answer is a row — `edge` verifies BOTH endpoints, and
+    # the answer is one of them. It sits BEFORE the bundle impact pass for the same reason the BEAT 2
+    # hook does: the impact pass is the one step here that spends a model call, and a refusal must not
+    # be discovered after it.
+    breaks = record_local_breaks(ns, pid, did, break_targets, a.invalidates_why or "")
     stored_scope = DEFAULT_SCOPE if warning else decision_scope(row)
     impact = bundle_impact(ns, pid, {**row, "scope": stored_scope})
     print(
         f"{did} recorded  (confidence {row['confidence']}, {len(a.option or [])} options, "
         f"embedded, scope {decision_scope(row)}{closed})"
     )
+    # The local break, surfaced in the same grammar `propagate` reports its walk in (AUG-028): the
+    # trigger is a claim about a decision that is now DEAD, and the user needs to see both that it is
+    # on the record and what reads it. Without a line here the flag would be silent about the one
+    # thing it exists for — the same defect AUG-027 fixed for the bundle impact pass.
+    for eid, target in breaks:
+        print(
+            f"  breaks     {eid}  {did} invalidates {target} — local (no project endpoint)"
+        )
+    if breaks:
+        print(
+            f"  trigger    `auger propagate` is the walk this edge fires: it moots the questions "
+            f"{'/'.join(b for _, b in breaks)} answered and reopens their stale children"
+        )
     # The walk's own report (AUG-027): `impact["lines"]` carries one line per member the pass
     # WALKED — its decision, the verdict word and the score — so that an 'unchanged' member and a
     # skipped one are both visible in the verb's output. Without that the answer to a run where
@@ -3935,6 +4056,23 @@ def main(argv=None):
         "--scope",
         help=f"what this decision BINDS: {' | '.join(DECISION_SCOPES)} "
         f"(default {DEFAULT_SCOPE})",
+    )
+    s.add_argument(
+        "--invalidates",
+        action="append",
+        metavar="D-00X",
+        help="record a LOCAL breaks edge — SPEC-001 BEAT 4's rule-walk trigger: the answer being "
+        "recorded invalidates that decision, which must already be on this project's record. "
+        "Nothing is rewritten; `propagate` then moots the questions the invalidated decision "
+        "answered and reopens their stale children. Repeatable.",
+    )
+    s.add_argument(
+        "--invalidates-why",
+        "--why",
+        dest="invalidates_why",
+        metavar="WHY",
+        help="why the invalidated decision is dead; recorded on the break edge's note "
+        "(`--why` is the same option). Only with --invalidates.",
     )
     s.set_defaults(fn=cmd_answer)
 

@@ -1187,6 +1187,253 @@ def test_propagate_reopens_the_stale_branch_and_reaches_the_grandchild(
     )
 
 
+# ---------------------------------------------------------------- the walk's TRIGGER (AUG-028)
+# The rule walk fires on a `breaks` edge whose dst is a DECISION with NO dst_project — a LOCAL
+# invalidation. Every case above HAND-WRITES that edge with `auger.edge`, which is precisely what the
+# dogfood run had to do (hand-POST edge E-900001) because no command could write one: the impact pass
+# always sets dst_project (a sibling's contract breaking is an escalation for the SIBLING, SPEC-002
+# 2.2). The three cases below drive the same cascade through the CLI ALONE — `answer --invalidates` is
+# the write surface — and the first one asserts the shape the walk keys on rather than the walk.
+def break_cli(
+    ns: str, did: str, bad: str, *, why: str = "", chosen: str = ""
+) -> tuple[int, str]:
+    """`auger answer --invalidates` — the local break, written by the verb under test."""
+    argv = [
+        "-n",
+        ns,
+        "answer",
+        "--id",
+        did,
+        "--domain",
+        "9.02",
+        "--chosen",
+        chosen or f"the meter that produced {bad} was mis-wired",
+        "--option",
+        "keep what the old meter read",
+        "--option",
+        "re-measure against a known source",
+        "--why-not",
+        "the old reading came off a mis-wired meter",
+        "--confidence",
+        "0.7",
+        "--invalidates",
+        bad,
+    ]
+    if why:
+        argv += ["--invalidates-why", why]
+    return run_cli(argv)
+
+
+def test_answer_invalidates_writes_a_local_breaks_edge(project: dict, monkeypatch):
+    """Criterion (a): the CLI puts an invalidation ON THE RECORD as the ONE edge kind the rule walk
+    reads — `breaks`, dst a DECISION, and no `dst_project`.
+
+    That absent project endpoint is the whole point (`edge_index`): an edge that names a project
+    points at a SIBLING's decision, which is an escalation for that sibling and never this project's
+    decision dying. The impact pass always sets it, which is why the cascade was unreachable by any
+    verb until this flag existed.
+    """
+    ns, pid = project["ns"], project["pid"]
+    assert record_decision(ns, "D-008", "the July bench meter read the peak")[0] == 0
+    assert rows(ns, "edge", "") == [], "the control: no verb had written an edge yet"
+
+    # The PAYLOAD, not only the served row: the declared `edge` table has the project columns, so a
+    # read normalizes a row that never carried one to null. "No invented endpoint" is a claim about
+    # the write, and this is where it can be checked.
+    posted: list = []
+    real_db = auger.db
+
+    def capture(path, method="GET", body=None, *a, **k):
+        if method == "POST" and path.endswith("/tables/edge"):
+            posted.extend(body if isinstance(body, list) else [body])
+        return real_db(path, method, body, *a, **k)
+
+    monkeypatch.setattr(auger, "db", capture)
+    rc, out = break_cli(
+        ns,
+        "D-009",
+        "D-008",
+        why="the bench meter was mis-wired, so D-008 measured nothing",
+    )
+    assert rc == 0, out
+
+    # Exactly one edge: this answer named no question, so it wrote no `closes`.
+    e = row(ns, "edge", "")
+    assert len(posted) == 1, posted
+    assert "dst_project" not in posted[0], (
+        f"the write invented a project endpoint: {posted[0]!r}"
+    )
+    assert e["kind"] == "breaks", e
+    assert (e["src_kind"], e["src_id"]) == ("decision", "D-009"), e
+    assert (e["dst_kind"], e["dst_id"]) == ("decision", "D-008"), e
+    # A person read the record and said so; no model gate is in this path, and the confidence is the
+    # module's "asserted directly, not scored" value rather than a score nobody produced.
+    assert e["source"] == "human", e
+    assert e["confidence"] == -1.0, e
+    assert not e.get("dst_project"), (
+        f"a local break names a project endpoint ({e['dst_project']!r}) — the walk reads that as a "
+        "SIBLING's decision breaking, so the cascade can never fire"
+    )
+    assert e["note"] == (
+        "D-009 invalidates D-008: the bench meter was mis-wired, so D-008 measured nothing"
+    ), e
+    # The walk's OWN index — the call `propagate` makes — reads this edge as the local trigger.
+    local = auger.edge_index(auger.graph_edges(ns, pid))["breaks"]
+    assert [b["id"] for b in local] == [e["id"]]
+    # A break RECORDS a claim: the invalidated decision keeps its row, its answer and its status.
+    dead = row(ns, "decision", "id=eq.D-008")
+    assert dead["chosen"] == "the July bench meter read the peak"
+    assert dead["status"] == "decided"
+    assert e["id"] in out, out
+
+
+def test_answer_invalidates_refuses_a_target_it_cannot_record_locally(project: dict):
+    """The flag's claim is that the DECISION IS ALREADY STORED. A break into nothing is the invented
+    endpoint `edge` refuses by name, and naming the answer itself would moot the very question that
+    answer just closed. Every refusal leaves the invocation UNWRITTEN — not even the answer lands —
+    because the targets are known from the arguments and a half-applied invocation is not a refusal.
+    """
+    ns, pid = project["ns"], project["pid"]
+    assert record_decision(ns, "D-008", "the July bench meter read the peak")[0] == 0
+    before = rows(ns, "decision", f"project_id=eq.{pid}")
+    base = ["-n", ns, "answer", "--id", "D-009", "--chosen", "re-measure"]
+
+    rc, msg, _ = run_cli_exit(base + ["--invalidates", "D-099"])
+    assert rc != 0 and "D-099" in msg and "does not exist" in msg, msg
+
+    rc, msg, _ = run_cli_exit(base + ["--invalidates", "D-009"])
+    assert rc != 0 and "itself" in msg, msg
+
+    rc, msg, _ = run_cli_exit(base + ["--invalidates-why", "because it was mis-wired"])
+    assert rc != 0 and "--invalidates" in msg, msg
+
+    assert rows(ns, "decision", f"project_id=eq.{pid}") == before, (
+        "a refused invocation stored a decision"
+    )
+    assert rows(ns, "edge", "") == [], "a refused invocation wrote an edge"
+
+
+def test_a_verb_written_local_break_moots_the_questions_the_dead_decision_answered(
+    project: dict, monkeypatch
+):
+    """Criterion (b): the documented loop is reachable from the CLI ALONE. Every edge here is written
+    by a VERB — BEAT 2's `closes` edge by `answer --question-id`, the local break by the flag above —
+    where the dogfood run had to hand-POST an edge row to make the cascade fire."""
+    ns, pid = project["ns"], project["pid"]
+    calls: list = []
+    monkeypatch.setattr(auger, "jev", gate_stub(0.05, calls))
+    store_questions(ns, pid, ("Q-000001", Q_WATCH, "open"))
+    assert answer_cli(ns, "D-001", "4.05", "single SQLite file", qid="Q-000001")[0] == 0
+    assert row(ns, "question", "id=eq.Q-000001")["status"] == "answered"
+
+    # CONTROL: the question is settled and no local break is on the record, so the walk moves nothing.
+    rc, out = run_cli(["-n", ns, "propagate", "--no-gate"])
+    assert rc == 0, out
+    assert "moot: 0   reopened: 0" in out, out
+    assert row(ns, "question", "id=eq.Q-000001")["status"] == "answered", out
+
+    rc, out = break_cli(ns, "D-002", "D-001", why="the meter was mis-wired")
+    assert rc == 0, out
+    eid = row(ns, "edge", "kind=eq.breaks")["id"]
+
+    rc, out = run_cli(["-n", ns, "propagate"])
+    assert rc == 0, out
+    assert "moot: 1   reopened: 0" in out, out
+
+    q = row(ns, "question", "id=eq.Q-000001")
+    assert q["status"] == "moot", out
+    assert q["text"] == Q_WATCH, "a moot question keeps its row — it is never deleted"
+    reason = f"D-001 was invalidated by {eid}"
+    assert auger.q_reason(ns, "Q-000001") == reason
+    assert reason in out, out
+
+    # The dead decision is not rewritten, a withdrawn question is not re-asked, and the rule walk
+    # needs no model: this cascade is stored edges all the way down.
+    assert row(ns, "decision", "id=eq.D-001")["chosen"] == "single SQLite file"
+    assert auger.askable_questions(ns, pid) == []
+    assert calls == [], f"the rule walk called JEV: {calls}"
+
+    rc, out2 = run_cli(["-n", ns, "propagate", "--no-gate"])
+    assert rc == 0 and "moot: 0" in out2, out2
+    assert auger.q_reason(ns, "Q-000001") == reason, (
+        "a second pass rewrote the reason a moot question already had"
+    )
+
+
+def test_a_verb_written_local_break_reopens_the_settled_children(
+    project: dict, monkeypatch
+):
+    """The cascade the flag triggers is the WHOLE BEAT 4 walk, not its first hop: the questions the
+    dead decision answered go moot, the settled questions below them REOPEN with the reason recorded
+    (Q4), the walk reaches the grandchild, and a second pass changes nothing."""
+    ns, pid = project["ns"], project["pid"]
+    calls: list = []
+    monkeypatch.setattr(auger, "jev", gate_stub(0.05, calls))
+    store_questions(
+        ns,
+        pid,
+        ("Q-000001", Q_WATCH, "open"),
+        ("Q-000002", Q_STORE, "linked"),
+        ("Q-000003", Q_CRASH, "linked"),
+    )
+    assert answer_cli(ns, "D-001", "4.05", "single SQLite file", qid="Q-000001")[0] == 0
+    # No verb writes `derives_from` yet (that is BEAT 1), so the TREE is hand-built and only the
+    # TRIGGER comes from the CLI — which is the property under test.
+    auger.edge(
+        ns,
+        pid,
+        "derives_from",
+        "question",
+        "Q-000002",
+        "question",
+        "Q-000001",
+        source="rule",
+        note="the storage question only exists once the record question is asked",
+    )
+    auger.edge(
+        ns,
+        pid,
+        "derives_from",
+        "question",
+        "Q-000003",
+        "question",
+        "Q-000002",
+        source="rule",
+        note="the crash question descends from the storage question",
+    )
+
+    rc, out = break_cli(ns, "D-002", "D-001", why="the meter was mis-wired")
+    assert rc == 0, out
+    cause = f"D-001 was invalidated by {row(ns, 'edge', 'kind=eq.breaks')['id']}"
+
+    rc, out = run_cli(["-n", ns, "propagate"])
+    assert rc == 0, out
+    assert "moot: 1   reopened: 2   linked: 0" in out, out
+
+    assert row(ns, "question", "id=eq.Q-000001")["status"] == "moot"
+    assert row(ns, "question", "id=eq.Q-000002")["status"] == "open", (
+        "the stale branch did not reopen"
+    )
+    assert row(ns, "question", "id=eq.Q-000003")["status"] == "open", (
+        "the cascade stopped one hop short"
+    )
+
+    # Both reasons name the BREAKING EDGE — the one the VERB wrote, read off the stored row.
+    child, grandchild = auger.q_reason(ns, "Q-000002"), auger.q_reason(ns, "Q-000003")
+    assert "reopened" in child and "Q-000001" in child and cause in child, child
+    assert (
+        "reopened" in grandchild and "Q-000002" in grandchild and cause in grandchild
+    ), grandchild
+    assert child in out and grandchild in out, out
+    # Both reopened children are askable again and neither was asked: the gate re-examined each once.
+    askable = [q["id"] for q in auger.askable_questions(ns, pid)]
+    assert askable == ["Q-000002", "Q-000003"], askable
+    assert len(calls) == 1, calls
+
+    rc, out2 = run_cli(["-n", ns, "propagate"])
+    assert rc == 0 and "moot: 0   reopened: 0" in out2, out2
+
+
 def test_ask_never_surfaces_a_question_with_an_unresolved_blocker(
     project: dict, monkeypatch
 ):
