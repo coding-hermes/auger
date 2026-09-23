@@ -2850,6 +2850,87 @@ def cmd_start(a):
     return 0
 
 
+# ---------------------------------------------------------------- the ask -> store seam (AUG-035)
+# The README's loop is `ask` -> `answer --question-id`: ask names the question worth drilling and the
+# user records the decision that answers it. Until this seam existed the proposal lived ONLY as a
+# printed line — the `question` table stayed empty after a call that named a next question, so the
+# loop's central move (`answer --question-id Q-...`) refused the engine's own suggestion, and no verb
+# a README reader can run could store a question at all. `feedback` was the only writer of question
+# rows, and it drills THIN DECISIONS (< T_CONFIDENT): a project whose decisions are all confident
+# could not put one question on the record.
+#
+# What is stored is the proposal the user just read, plus the two JEV values the `question` table
+# DECLARES columns for:
+#   * `jev_already_answered` — the gate's noul for exactly this question, which is the field's own
+#     meaning and the reason `propagate` does not re-gate a row carrying it. NOT the new_question
+#     choice's confidence: that number answers "how sure is JEV about WHICH question to ask", and a
+#     reader taking it for an answered-score would see a 0.73 proposal as an answered question.
+#   * `jev_checked_at` — when that verdict was taken.
+# Nothing else is invented. No `opens` edge: the proposal names no decision it came from, and `edge`
+# refuses a claim about a node that is not stored rather than storing an orphan. No `domain` either:
+# JEV picks a SUBJECT, and which of the 44 grid domains it lands in is not something this verb knows.
+ASK_CLASS = "ask_proposed"  # the `qclass` a question proposed by `ask` carries (its source marker)
+
+
+def store_proposed_question(ns: str, project_id: str, nq: dict, noul) -> tuple[str, str]:
+    """Persist the question `ask` proposed. Returns (qid, why); an empty qid means nothing was stored.
+
+    Why this is a function and not four lines inside `cmd_ask`: every reason NOT to store has to be
+    provable on its own — a proposal below T_SUBJECT, a question the gate already answered, a question
+    already open, a refused insert — and each of them must leave the store untouched.
+
+    FAIL-CLOSED, in three parts:
+      * nothing is written until every gate has passed, so a failure before the first write returns
+        "" with the reason and the `question` table keeps exactly the rows it had;
+      * an absent verdict is NOT a "genuinely new" one: a noul the model did not return refuses the
+        store, because a question whose answered-score nobody knows is a question nobody scored;
+      * the row and its facets are separate writes, so a failure AFTER the row landed is returned as
+        a PARTIAL store (both a qid and a reason) instead of being reported as a clean one.
+    """
+    text = str((nq or {}).get("choice") or "").strip()
+    if not text:
+        return "", "JEV proposed no question"
+    conf = (nq or {}).get("confidence")
+    if not isinstance(conf, (int, float)) or float(conf) < T_SUBJECT:
+        return "", f"the proposal is below threshold {T_SUBJECT} (confidence {conf})"
+    if noul is None:
+        return "", "the gate returned no answered-verdict for it"
+    if float(noul) >= T_ANSWERED:
+        return "", f"the gate scores it already answered (noul {float(noul)})"
+    try:
+        open_rows = select(
+            ns, "question", f"project_id=eq.{project_id}&status=eq.open"
+        )
+    except SystemExit as exc:
+        return "", f"the questions already open could not be read — {exc}"
+    want = text.casefold()
+    for q in open_rows:
+        if str(q.get("text") or "").strip().casefold() == want:
+            return "", f"already open as {q.get('id')}"
+    qid = next_id(ns, "question", "Q")
+    row = {
+        "id": qid,
+        "project_id": project_id,
+        "domain": "",
+        "text": text,
+        "ring": 1,
+        "qclass": ASK_CLASS,
+        "status": "open",
+        "jev_already_answered": float(noul),
+        "jev_checked_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        insert(ns, "question", row)
+    except SystemExit as exc:
+        return "", f"the question row was refused — {exc}"
+    for name in facet_set():
+        try:
+            facet(ns, project_id, qid, name)
+        except SystemExit as exc:
+            return qid, f"the question row landed but facet {name!r} did not — {exc}"
+    return qid, ""
+
+
 def cmd_ask(a):
     """Surface the next questions: JEV's pick, plus every low-confidence decision."""
     ns, pid = a.namespace, a.project_id
@@ -2952,6 +3033,16 @@ def cmd_ask(a):
         if (already or 0) >= T_ANSWERED
         else "genuinely new, ask it",
     )
+    # AUG-035: the proposal becomes a ROW here, which is the whole difference between a report and a
+    # question a reader can close. One added line either way — the question is on the record, or the
+    # reason it is not (fail-closed: no half-stored question, and no exit code of its own).
+    stored_qid, store_why = store_proposed_question(ns, pid, nq, already)
+    if stored_qid:
+        print(f"stored question: {stored_qid}")
+        if store_why:
+            print(f"  WARNING {store_why}")
+    else:
+        print(f"question not stored: {store_why}")
     print(f"\njev cost: {ans.get('usage', {}).get('cost')}  build: {ans.get('model')}")
     return 0
 

@@ -73,11 +73,23 @@ Surface the next questions: JEV's pick, plus every low-confidence decision.
 
 **Arguments:** none.
 
-**Writes:** nothing. It reads the project's decisions, unknowns, and open questions,
-retrieves related evidence, makes one JEV call, and prints the report.
+**Writes:** one `question` row for the question JEV picks — `status=open`,
+`qclass=ask_proposed`, `ring=1`, the proposal's text, and the two JEV values the table
+declares columns for: `jev_already_answered` (the gate's noul for exactly that question)
+and `jev_checked_at` — plus a full set of `facet` rows for it. Its id follows the table's
+own convention (`next_id`: `Q-000001`), and it is printed as `stored question: <id>`. That
+row is what makes the next move in the README's loop (`answer --question-id Q-...`) a real
+one: before it, ask named a question no verb could store.
 
-**Never writes:** anything, anywhere — including on a JEV failure (fail-closed; it
-prints and exits non-zero). `ask` is a report, not a write.
+**Never writes:** a question when the proposal is below `T_SUBJECT`, when the gate scores
+it already answered (`noul >= T_ANSWERED`), when the gate returns no verdict for it
+(unknown is not "genuinely new"), or when the same text is already open in this project
+(said out loud, not stored twice). No decision, no option, no edge, no memory entry: an
+`opens` edge would name a decision the proposal does not come from. A refused row insert
+stores nothing (fail-closed); a failure after the row landed is reported as a partial
+store instead of being printed as a clean one. `ask` stays a report — exit 0 for every
+storage outcome, and exit non-zero only when JEV itself is unreachable (`JEV unavailable`,
+nothing stored).
 
 ## answer
 
