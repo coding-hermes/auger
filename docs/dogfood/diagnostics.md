@@ -144,13 +144,16 @@ How the write surface actually behaves, as learned by driving a real drill
   but the order is wrong: a "refused" exit must mean nothing was stored.
   Because decision ids are not unique-keyed, the natural retry then created a
   duplicate id (dump rendered it twice; every derived count ×4).
-- **`ask` is a proposal, not a write.** Nothing it prints is persisted (the
-  `question` table stayed empty after a call that named a next question). The
-  only question-writer is `feedback` (thin decisions only), so the README's
-  own loop — ask, then answer `--question-id` — cannot complete for a
-  not-yet-stored question. Anyone reading `ask`'s output as "the engine
-  recorded the next question" is being set up for the non-atomic refusal
-  above.
+- **`ask` was a proposal, not a write (AUG-035; run 2026-09-23).** Nothing it
+  printed was persisted (the `question` table stayed empty after a call that
+  named a next question). The only question-writer was `feedback` (thin
+  decisions only), so the README's own loop — ask, then answer
+  `--question-id` — could not complete for a not-yet-stored question. Anyone
+  reading `ask`'s output as "the engine recorded the next question" was being
+  set up for the non-atomic refusal above. Closed by AUG-035: `ask` now stores
+  the question it proposes (one `question` row with `qclass=ask_proposed` plus
+  its `facet` rows, printed as `stored question: <id>`), and `answer` checks
+  `--question-id` before it writes anything.
 - **Two CLI contracts lie in their own help text.** `toggle --on O2` (bare
   id) exits 0 with "toggled … (0)" and patches zero rows; `dump --config
   D-001=O2` (the form `--help` shows) is discarded as unparsed. The full
@@ -172,3 +175,41 @@ How the write surface actually behaves, as learned by driving a real drill
   (nothing written, contradictions quoted from the record), verdict's
   record-then-judge flow, and the smoke suite's own hygiene (namespace
   sweep/teardown ran clean on the bunker).
+
+## The HTTP data layer + the seam in live use (2026-09-23, fourth run —
+report: docs/dogfood/2026-09-23-seam-http-integration.md)
+
+The substrate's declared-table API, driven by a plain urllib integrator
+(auger's own client code untouched), is mostly excellent and sharp in exactly
+four places:
+
+- **A 200 is not a write.** `PATCH ?pk=eq.D-002` returned 200 and the row was
+  byte-identical afterward (confidence stayed 0.82); the disk JSONL never
+  changed. This is AUG-036's silent-no-op class one layer BELOW auger — any
+  integrator (and `toggle`'s PATCH path) must read the row back after a
+  PATCH, never trust the status code (AUG-043).
+- **The primary key is not enforced on POST.** A row POSTed without `id` is
+  accepted 201 and stored with `id: null` — permanently unreachable (every
+  PATCH/DELETE requires `pk=eq.<value>`, and there is no value). Removed by
+  hand-editing the JSONL, which is the exact thing auger's own rules forbid
+  (AUG-045).
+- **"Versioned in git" is currently false.** duckbrain root-gitignores
+  `/namespaces/` — the storage of record is untracked local files, no
+  snapshot/commit machinery runs (the `_audit/current.jsonl` append log is an
+  audit trail, not versioning). README + DESIGN both claim git versioning
+  (AUG-044). Related: `count`/pagination params 200 with no Content-Range,
+  and a bad-typed filter value 500s instead of 400 (same row).
+- **The embedding store has no HTTP route.** `/memories` → 404 and it is not
+  one of the 14 declared tables; "searchable by embedding" is true only
+  through auger's verbs (AUG-046).
+
+The AUG-035 seam itself, driven live five times: **it never fired.** Every
+JEV proposal scored 0.15-0.24 against T_SUBJECT=0.45 (fail-closed refusals,
+each printed with its reason — correct behavior), and the proposal text is
+the criterion slug (`how_does_it_fail`), not a question sentence (AUG-041/
+AUG-042). The loop the seam unblocks DOES complete end to end by the other
+path, proven live: `feedback` proposed a question from a thin decision
+(recorded as Q-000001 even when JEV refused it, qclass follow_up) →
+`answer --question-id Q-000001` → `closed Q-000001`, status coverage updated,
+propagate clean. Practical rule until AUG-041 is fixed: the question path is
+feedback → answer, not ask → answer.

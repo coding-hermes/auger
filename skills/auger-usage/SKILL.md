@@ -74,6 +74,27 @@ only. Public repo: `coding-hermes/auger`.
 6. **Shared-host pidfile clash**: `EACCES /tmp/duckbrain-http.pid` = another
    user's daemon; use a different port and `DUCKBRAIN_DATA_DIR`.
 
+## The HTTP data layer (integrator surface, probed 2026-09-23)
+
+Auger's rows are reachable WITHOUT auger: `GET/POST /api/ns/<ns>/tables/<t>`,
+`PATCH/DELETE /api/ns/<ns>/tables/<t>?pk=eq.<id>`, filters `eq/neq/gt/gte/like`,
+`order=<col>.asc|.desc`, `limit=`. Auth = `x-api-key`. Working recipes and the
+sharp edges (all hit live, see docs/dogfood/2026-09-23-seam-http-integration.md):
+
+- ✅ eq/gt/order/limit/LIKE reads, POST (201), DELETE by pk — all clean; a
+  missing `pk` on PATCH/DELETE 400s with a precise message.
+- ⚠️ PATCH can 200 WITHOUT writing (AUG-043): read the row back after any
+  PATCH; never trust the status code.
+- ⚠️ POST with no `id` is ACCEPTED (201) and stores `id: null` — unreachable
+  afterward (AUG-045). Always send a full row.
+- ⚠️ `count`/pagination params are silently ignored (no Content-Range);
+  filter+count client-side (AUG-042/046 family).
+- ⚠️ A bad-typed filter value (`confidence=gt.banana`) 500s (AUG-044).
+- ⚠️ The embedding store (`memories`) has NO HTTP route — semantic search is
+  only reachable through auger's `recall`/`check` verbs.
+- ⚠️ "Versioned in git" (README/DESIGN) is currently FALSE: duckbrain
+  gitignores `/namespaces/` (AUG-044). Treat the JSONL as local files.
+
 ## Quick sanity check (30 seconds)
 
 ```bash
@@ -92,12 +113,26 @@ python3 auger.py -n <ns> recall "any seed phrase"   # proves embeddings
   only `answer --invalidates` (edges, not rows) and the propagate impact
   pass (escalations) write anything. A seed that says "X is unknown" will
   still show `unknowns: 0` until a row is hand-POSTed.
-- **`ask` does NOT persist its proposal (AUG-035).** The question it names
-  is never stored; `answer --question-id Q-…` on it will refuse (AUG-034's
-  non-atomic shape: the DECISION is stored BEFORE the refusal — do not
-  blindly retry without `--question-id`, or you duplicate the decision id;
-  decision ids are not unique-keyed yet). Until fixed: questions enter the
-  store only via `feedback` (thin decisions) or hand-POST.
+- **`ask` persists the question it proposes now (AUG-035 merged 2026-09-23).**
+  When JEV proposes a question above `T_SUBJECT` that the gate scores NEW,
+  `ask` stores it — one `question` row (`status=open`, `qclass=ask_proposed`,
+  the gate's noul in `jev_already_answered`) plus its `facet` rows — and
+  prints `stored question: <id>`. `answer --question-id Q-…` on the line ask
+  just printed therefore works, as the README's loop says. The store is
+  fail-closed: a proposal below `T_SUBJECT`, one the gate scores answered, one
+  with no verdict at all, and one whose text is already open all store NOTHING
+  and print why. Questions still enter the store via `feedback` (thin
+  decisions) when ask proposes no new one.
+  FIELD REALITY (2026-09-23 4th dogfood): across five live `ask` calls every
+  JEV proposal landed below T_SUBJECT (0.15-0.24 vs 0.45) — the seam did not
+  fire once (AUG-041), and the proposal text is the criterion SLUG
+  (`how_does_it_fail`), not a sentence (AUG-042). Do not build on `ask`
+  storing anything yet; the proven question path is `feedback` → question row
+  → `answer --question-id` (verified live: `closed Q-000001`).
+- **`answer` validates its preconditions BEFORE it writes (AUG-034 merged
+  2026-09-23).** A nonexistent `--question-id` (and a duplicate `--id`) now
+  refuses with nothing stored, so the retry that used to duplicate a decision
+  id is gone; decision ids are still not unique-keyed in the store itself.
 - **`--domain` is unvalidated free text (AUG-038)** and `status`'s
   domain-coverage display is one-index-off — do not copy a domain number
   from `status`; look it up in the grid dir (`4.05-data.md` → `--domain
