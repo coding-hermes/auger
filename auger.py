@@ -3315,6 +3315,21 @@ def cmd_answer(a):
             f"unknown decision scope {a.scope!r}: expected one of {', '.join(DECISION_SCOPES)}"
         )
     did = a.id or f"D-{len(select(ns, 'decision', f'project_id=eq.{pid}')) + 1:03d}"
+    # Refuse every precondition that can be decided from the requested IDs before inserting the
+    # decision or any of its options. `close_question` still defends its own public contract below,
+    # but discovering a missing question there is too late for `answer`: the answer rows already
+    # exist by then. The same ordering makes an explicit retry idempotently loud instead of allowing
+    # duplicate decision and option IDs into stores that do not enforce primary-key uniqueness.
+    qid = (a.question_id or "").strip()
+    if node_exists(ns, "decision", did):
+        raise SystemExit(
+            f"refused: decision {did!r} already exists — answer decision IDs must be unique"
+        )
+    if qid and not node_exists(ns, "question", qid):
+        raise SystemExit(
+            f"refused: question {qid!r} does not exist — a decision cannot "
+            f"close a question that is not stored"
+        )
     # AUG-028: the LOCAL break this answer records (SPEC-001 BEAT 4's rule-walk trigger). Validated
     # here, before anything is stored: the flag's claim is that the target is ALREADY on the record,
     # and a refusal must leave no half-applied invocation behind.
@@ -3383,7 +3398,6 @@ def cmd_answer(a):
     # undone (the same doctrine the impact pass states below — a model that is down does not
     # unrecord an answer).
     closed, beat2_warnings = "", []
-    qid = (a.question_id or "").strip()
     if qid:
         close_question(ns, pid, did, qid, warnings=beat2_warnings)
         closed = f", closed {qid}"

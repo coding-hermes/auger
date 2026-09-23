@@ -1313,6 +1313,83 @@ def test_answer_invalidates_refuses_a_target_it_cannot_record_locally(project: d
     assert rows(ns, "edge", "") == [], "a refused invocation wrote an edge"
 
 
+def test_answer_refuses_a_missing_question_before_decision_or_option_writes(
+    project: dict, monkeypatch
+):
+    """A bad --question-id refuses the whole answer before either answer table is touched."""
+    ns, pid = project["ns"], project["pid"]
+    before_decisions = rows(ns, "decision", f"project_id=eq.{pid}&order=id.asc")
+    before_options = rows(ns, "option", "order=id.asc")
+    writes: list[tuple[str, object]] = []
+    real_db = auger.db
+
+    def capture(path, method="GET", body=None, *args, **kwargs):
+        if method == "POST" and path.endswith(("/tables/decision", "/tables/option")):
+            writes.append((path, body))
+        return real_db(path, method, body, *args, **kwargs)
+
+    monkeypatch.setattr(auger, "db", capture)
+    rc, msg, _ = run_cli_exit(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-034",
+            "--question-id",
+            "Q-999999",
+            "--chosen",
+            "do not persist",
+            "--option",
+            "do not persist",
+        ]
+    )
+
+    assert rc != 0 and "Q-999999" in msg and "does not exist" in msg, msg
+    assert writes == [], (
+        f"a refused missing question attempted answer writes: {writes!r}"
+    )
+    assert rows(ns, "decision", f"project_id=eq.{pid}&order=id.asc") == before_decisions
+    assert rows(ns, "option", "order=id.asc") == before_options
+
+
+def test_answer_refuses_a_duplicate_decision_id_before_any_writes(
+    project: dict, monkeypatch
+):
+    """A retry with an existing decision ID refuses before rewriting either answer table."""
+    ns, pid = project["ns"], project["pid"]
+    assert answer_cli(ns, "D-034", "4.05", "the recorded answer")[0] == 0
+    before_decisions = rows(ns, "decision", f"project_id=eq.{pid}&order=id.asc")
+    before_options = rows(ns, "option", "order=id.asc")
+    writes: list[tuple[str, object]] = []
+    real_db = auger.db
+
+    def capture(path, method="GET", body=None, *args, **kwargs):
+        if method == "POST" and path.endswith(("/tables/decision", "/tables/option")):
+            writes.append((path, body))
+        return real_db(path, method, body, *args, **kwargs)
+
+    monkeypatch.setattr(auger, "db", capture)
+    rc, msg, _ = run_cli_exit(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-034",
+            "--chosen",
+            "a retry must not land",
+            "--option",
+            "a retry must not land",
+        ]
+    )
+
+    assert rc != 0 and "D-034" in msg and "already exists" in msg, msg
+    assert writes == [], f"a duplicate decision attempted answer writes: {writes!r}"
+    assert rows(ns, "decision", f"project_id=eq.{pid}&order=id.asc") == before_decisions
+    assert rows(ns, "option", "order=id.asc") == before_options
+
+
 def test_a_verb_written_local_break_moots_the_questions_the_dead_decision_answered(
     project: dict, monkeypatch
 ):
@@ -1633,9 +1710,8 @@ def test_answer_refuses_a_question_id_that_is_not_stored(project: dict):
     assert "refused" in msg and "Q-000404" in msg, msg
     assert rows(ns, "edge", "kind=eq.closes") == []
     assert rows(ns, "facet", "") == []
-    # The refusal is about the LINK, not about the answer: the decision the call recorded first
-    # stands, the same way a model that is down does not unrecord an answer (BEAT 3's doctrine).
-    assert row(ns, "decision", "id=eq.D-001")["question_id"] == "Q-000404"
+    # The refusal is atomic: validating the named question happens before the answer rows are stored.
+    assert rows(ns, "decision", "id=eq.D-001") == []
 
 
 def test_status_reports_the_open_branches_and_their_depth(project: dict):
