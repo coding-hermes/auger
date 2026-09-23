@@ -658,6 +658,17 @@ def test_dump_config_does_not_mutate_the_stored_rows(decided: dict):
     assert len(rows(ns, "option", "")) == len(before)
 
 
+def test_dump_config_bare_index_renders_hypothetical_without_mutating(decided: dict):
+    """The documented bare option index binds the intended decision in the projection only."""
+    ns = decided["ns"]
+    before = option_flags(ns)
+
+    rc, out = run_cli(["-n", ns, "dump", "--config", "D-001=O2"])
+    assert rc == 0 and "mode: HYPOTHETICAL (nothing written)" in out, out
+    assert "ACTIVE CONFIGURATION: D-001=Postgres, D-002=staging table" in out, out
+    assert option_flags(ns) == before
+
+
 def test_dump_config_names_the_contradiction_with_the_recorded_reason(decided: dict):
     """A hypothesis contradicting the record is named, quoting the reason actually on file."""
     ns = decided["ns"]
@@ -678,13 +689,24 @@ def test_dump_config_names_the_contradiction_with_the_recorded_reason(decided: d
     assert "CONTRADICTIONS WITH THE RECORD" not in current, current
 
 
-def test_dump_config_warns_on_an_option_that_does_not_exist(decided: dict):
-    rc, out = run_cli(
+def test_dump_config_refuses_an_unknown_option_without_rendering(decided: dict):
+    rc, message, out = run_cli_exit(
         ["-n", decided["ns"], "dump", "--config", "D-002=nonexistent option"]
     )
-    assert rc == 0
-    assert "WARNING: unparsed --config entries ignored" in out, out
-    assert "no such option for D-002" in out, out
+    assert rc != 0
+    assert "nonexistent option" in message
+    assert out == ""
+    assert "ACTIVE CONFIGURATION" not in out
+
+
+def test_dump_config_refuses_an_unknown_decision_without_rendering(decided: dict):
+    rc, message, out = run_cli_exit(
+        ["-n", decided["ns"], "dump", "--config", "D-999=O2"]
+    )
+    assert rc != 0
+    assert "D-999" in message
+    assert out == ""
+    assert "ACTIVE CONFIGURATION" not in out
 
 
 def test_dump_out_writes_the_file_it_reports(decided: dict, tmp_path):
@@ -725,6 +747,29 @@ def test_toggle_flips_the_stored_active_flags(decided: dict):
     assert f"ACTIVE CONFIGURATION: D-001={D001['chosen']}, D-002=row locking" in out, (
         out
     )
+
+
+def test_toggle_bare_index_refuses_ambiguous_matches_without_writing(decided: dict):
+    ns = decided["ns"]
+    before = option_flags(ns)
+    rc, message, out = run_cli_exit(["-n", ns, "toggle", "--on", "O2"])
+    assert rc != 0
+    assert "ambiguous option" in message
+    assert "D-001-O2" in message and "D-002-O2" in message
+    assert "toggled:" not in out
+    assert option_flags(ns) == before
+
+
+def test_toggle_resolves_all_targets_before_writing(decided: dict):
+    ns = decided["ns"]
+    before = option_flags(ns)
+    rc, message, out = run_cli_exit(
+        ["-n", ns, "toggle", "--on", "NOPE", "--on", "D-001-O2"]
+    )
+    assert rc != 0
+    assert "NOPE" in message
+    assert "toggled:" not in out
+    assert option_flags(ns) == before
 
 
 def test_toggle_set_parses_on_and_off(decided: dict):
@@ -2102,25 +2147,24 @@ def test_a_successful_verb_exits_zero_in_a_subprocess(project: dict):
 
 
 # ================================================================= the broken-verb trap
-def test_patch_reporting_zero_updates_leaves_the_flag_unchanged(
-    decided: dict, monkeypatch
-):
-    """Break the write path; prove the consequence is observable on the stored ROW.
-
-    `auger.patch` returning `{"updated": 0}` is exactly what a silently-broken toggle looks
-    like: the verb still exits 0, so only the stored row can tell you nothing was written.
-    """
+def test_patch_reporting_zero_updates_is_a_loud_failure(decided: dict, monkeypatch):
+    """A zero-row PATCH is a refusal, and the stored flag remains unchanged."""
     ns = decided["ns"]
+    before = option_flags(ns)
     monkeypatch.setattr(auger, "patch", lambda *a, **k: {"updated": 0})
-    rc, out = run_cli(["-n", ns, "toggle", "--off", "D-001-O1", "--on", "D-001-O2"])
-    assert rc == 0
-    assert "D-001-O1->off (0)" in out, out  # the verb reports zero rows updated
-    assert option_flags(ns)["D-001-O1"] is True  # and nothing actually flipped
+    rc, message, out = run_cli_exit(
+        ["-n", ns, "toggle", "--off", "D-001-O1", "--on", "D-001-O2"]
+    )
+    assert rc != 0
+    assert "patched 0 rows" in message
+    assert "nothing changed" in message
+    assert out == ""
+    assert option_flags(ns) == before
 
     monkeypatch.undo()
     rc, out = run_cli(["-n", ns, "toggle", "--off", "D-001-O1", "--on", "D-001-O2"])
     assert rc == 0 and "D-001-O1->off (1)" in out, out
-    assert option_flags(ns)["D-001-O1"] is False  # a working toggle does flip it
+    assert option_flags(ns)["D-001-O1"] is False
 
 
 #: The child suite: one test per verb, with the toggle verb's write deliberately broken.
@@ -2210,7 +2254,7 @@ def test_a_broken_verb_fails_exactly_one_named_test(tmp_path, live_service):
         f"expected exactly one FAILED line, got {failed}:\n{report}"
     )
     assert "test_alpha_toggle_flips_the_stored_flag" in failed[0], failed
-    assert "wrote nothing" in report, report  # the failure names the broken behaviour
+    assert "nothing changed" in report, report  # the failure names the broken behaviour
     assert "3 passed" in report, report
 
 

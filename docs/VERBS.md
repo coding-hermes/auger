@@ -152,8 +152,11 @@ while a decision carries its number is reported as exactly that, not quietly pro
 
 Turn options on/off — the what-if switch, one active option per decision by default.
 
-**Arguments:** `--on ID` (repeatable), `--off ID` (repeatable),
-`--set ID=on|off` (repeatable), `--additive` (do NOT deactivate the target's siblings).
+**Arguments:** `--on OPTION` (repeatable), `--off OPTION` (repeatable),
+`--set OPTION=on|off` (repeatable), `--additive` (do NOT deactivate the target's siblings).
+`OPTION` is a full option id such as `D-001-O2`, a label such as `Postgres`,
+or a bare index such as `O2`. An unresolvable or ambiguous token is refused by name
+before any PATCH is attempted; it is never reported as a successful zero-row toggle.
 
 **Writes:** `option.active` flags only, via PATCH. By default turning an option on
 turns its siblings off, so the decision keeps exactly one active option — and the flips
@@ -166,13 +169,11 @@ existing options; it cannot create or remove one.
 
 Render the system as it looks with the current set — or a `--config` hypothesis.
 
-**Arguments:** `--config D-001=Postgres` (repeatable; the value is the option's full id,
-`D-001-O2`, or its label, matched case-insensitively), `--out FILE` (write the markdown there
-instead of stdout). A spec that names no option for its decision is IGNORED — that decision
-keeps its stored active option — and the ignored specs are listed at the foot of the render
-(`WARNING: unparsed --config entries ignored: D-001=O2 (no such option for D-001)`); when no
-spec parses at all the mode line still reads `mode: current stored state`, so a typo'd
-hypothesis renders the record instead of the what-if.
+**Arguments:** `--config D-001=OPTION` (repeatable; the value may be the option's full id,
+`D-001-O2`, its label matched case-insensitively, or its bare index `O2`), `--out FILE` (write the markdown there
+instead of stdout). Every `--config` entry must name an existing decision and exactly one
+option. An unresolvable or ambiguous entry is refused by name before anything is rendered;
+there is no ignored-entry warning and a typo can never fall back to the current stored state.
 
 **Writes:** nothing in the namespace — not in the current mode, not in hypothesis mode.
 With `--out`, a local file. That is the whole write surface.
@@ -239,8 +240,8 @@ as `dump` renders it, so the model judges the real artifact, not a summary strin
 **Arguments:** exactly one of `--good [CONFIG]` / `--bad [CONFIG]` (the configuration
 string that was judged); `--reasons TEXT` (why); `--ask-jev` (JEV judges the dump first);
 `--config D-001=Postgres` (repeatable — judge a hypothetical option set instead of the active
-one, requires `--ask-jev`; the value is the option's full id, `D-001-O2`, or its label,
-case-insensitive); `--judged-by NAME` (default `human`; `--ask-jev` forces
+one, requires `--ask-jev`; the value is the option's full id, `D-001-O2`, its bare index
+`O2`, or its label, case-insensitive); `--judged-by NAME` (default `human`; `--ask-jev` forces
 `jev`); `--confidence X`; `--note TEXT`; `--list` (show every recorded verdict, newest
 first).
 

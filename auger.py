@@ -3772,6 +3772,51 @@ def decision_options(by_dec: dict[str, list[dict]], oid: str) -> tuple[str, list
     return "", []
 
 
+def option_matches(
+    opts: list[dict], token: str, decision_id: str | None = None
+) -> list[dict]:
+    """Every option row a token could name, best form first.
+
+    A token may be a full option id, a label, or the bare index at the end of an id. When
+    a decision is supplied, matching is scoped to that decision so a short index cannot
+    accidentally select a sibling from another decision.
+    """
+    tok = token.strip()
+    low = tok.lower()
+    cand = [
+        o for o in opts if decision_id is None or o.get("decision_id") == decision_id
+    ]
+    for test in (
+        lambda o: o.get("id") == tok,
+        lambda o: (o.get("label") or "").lower() == low,
+        lambda o: (o.get("id") or "").rsplit("-", 1)[-1].lower() == low,
+    ):
+        hits = [o for o in cand if test(o)]
+        if hits:
+            return hits
+    return []
+
+
+def resolve_option(
+    opts: list[dict], token: str, decision_id: str | None = None
+) -> dict:
+    """Resolve to exactly one option row, or refuse by name before any write/render."""
+    hits = option_matches(opts, token, decision_id)
+    if len(hits) == 1:
+        return hits[0]
+    where = f" for {decision_id}" if decision_id else ""
+    if not hits:
+        raise SystemExit(
+            f"no such option{where}: {token!r} — use the full option id "
+            f"(like D-00X-OY) or a label; nothing was written"
+        )
+    ids = ", ".join(sorted(o["id"] for o in hits))
+    raise SystemExit(
+        f"ambiguous option{where}: {token!r} matches {ids} — use the full "
+        f"option id; nothing was written"
+    )
+
+
 def activation_warning_lines(
     dec: list[dict], opts: list[dict], live_by_dec: dict[str, set[str]] | None = None
 ) -> list[str]:
@@ -3817,9 +3862,8 @@ def cmd_toggle(a):
     """
     ns = a.namespace
     additive = bool(a.additive)
-    by_dec = (
-        {} if additive else options_by_decision(select(ns, "option", "order=id.asc"))
-    )
+    opts = select(ns, "option", "order=id.asc")
+    by_dec = options_by_decision(opts)
     took = []
     touched: dict[str, bool] = {}  # the state THIS invocation set, per option
 
@@ -3829,9 +3873,15 @@ def cmd_toggle(a):
         The remembered state is why a call that flips several options of one decision still ends
         with one active option: a sibling is judged by the state this run gave it, never by the
         snapshot read before the first PATCH (`--on A --on B` would otherwise leave both live,
-        because B was not active yet when the snapshot was taken).
+        because B was not active yet when the snapshot was taken). A zero-row patch is a hard
+        failure: a successful-looking toggle must never be a silent no-op.
         """
         n = patch(ns, "option", oid, {"active": state}).get("updated", 0)
+        if n != 1:
+            raise SystemExit(
+                f"toggle {oid}: patched {n} rows (expected 1) — nothing changed; "
+                f"the option id named no row"
+            )
         touched[oid] = state
         return n
 
@@ -3855,12 +3905,15 @@ def cmd_toggle(a):
         offs = ", ".join(f"{o['id']} ({write(o['id'], False)})" for o in siblings)
         return f"{line}  [siblings off — one option per decision {did}: {offs}]"
 
+    targets = []
     for oid, state in a.set or []:
-        took.append(activate(oid) if state else flip(oid, False))
+        targets.append((resolve_option(opts, oid)["id"], state))
     for oid in a.on or []:
-        took.append(activate(oid))
+        targets.append((resolve_option(opts, oid)["id"], True))
     for oid in a.off or []:
-        took.append(flip(oid, False))
+        targets.append((resolve_option(opts, oid)["id"], False))
+    for oid, state in targets:
+        took.append(activate(oid) if state else flip(oid, False))
     print(
         "toggled: "
         + (", ".join(took) if took else "(nothing — pass --on/--off/--set ID=on|off)")
@@ -3888,22 +3941,26 @@ def cmd_dump(a):
     opts = select(ns, "option", "order=id.asc")
     by_dec = options_by_decision(opts)
 
-    # --config overrides: accept "D-001=O2" (option id) or "D-001=Postgres" (label)
-    overrides, bad = {}, []
+    # --config overrides: accept a full option id, label, or bare index, but refuse every
+    # malformed/unknown/ambiguous entry before rendering so a current dump cannot masquerade as a
+    # hypothesis.
+    dec_ids = {d["id"] for d in dec}
+    overrides = {}
     for spec in a.config or []:
         if "=" not in spec:
-            bad.append(spec)
-            continue
-        d_id, val = spec.split("=", 1)
-        d_id, val = d_id.strip(), val.strip()
-        cand = by_dec.get(d_id, [])
-        hit = next((o for o in cand if o["id"] == val), None) or next(
-            (o for o in cand if o["label"].lower() == val.lower()), None
+            raise SystemExit(
+                f"--config {spec!r} is not a decision=option pair (expected e.g. "
+                f"D-001=O2); nothing rendered"
+            )
+        d_id, val = (part.strip() for part in spec.split("=", 1))
+        if d_id not in dec_ids:
+            raise SystemExit(
+                f"no such decision for --config: {d_id!r} — use a decision id "
+                f"shown by 'dump'; nothing rendered"
+            )
+        overrides.setdefault(d_id, set()).add(
+            resolve_option(by_dec.get(d_id, []), val, d_id)["id"]
         )
-        if hit:
-            overrides.setdefault(d_id, set()).add(hit["id"])
-        else:
-            bad.append(f"{spec} (no such option for {d_id})")
     override_ids = set()
     for _s in overrides.values():
         override_ids |= _s
@@ -3964,8 +4021,6 @@ def cmd_dump(a):
         for s in shadows:
             lines.append(f"  - {s}")
     lines += activation_warning_lines(dec, opts, live_by_dec)
-    if bad:
-        lines.append(f"WARNING: unparsed --config entries ignored: {', '.join(bad)}")
     out = "\n".join(lines)
     if a.out:
         with open(a.out, "w") as f:
@@ -4225,14 +4280,23 @@ def main(argv=None):
     s.set_defaults(fn=cmd_status)
 
     s = sub.add_parser("toggle", help="turn options on/off (the what-if switch)")
-    s.add_argument("--on", action="append")
-    s.add_argument("--off", action="append")
+    option_token_help = (
+        "option token: full id (D-001-O2), label, or bare index (O2); "
+        "unresolvable or ambiguous tokens are refused without writing"
+    )
+    s.add_argument("--on", action="append", metavar="OPTION", help=option_token_help)
+    s.add_argument("--off", action="append", metavar="OPTION", help=option_token_help)
     s.add_argument(
         "--set",
         action="append",
+        metavar="OPTION=STATE",
         type=lambda v: (
             v.split("=")[0],
             v.split("=")[1].lower() in ("on", "true", "1"),
+        ),
+        help=(
+            "set an option token (full id, label, or bare index) on/off; "
+            "unresolvable or ambiguous tokens are refused without writing"
         ),
     )
     s.add_argument(
@@ -4250,8 +4314,11 @@ def main(argv=None):
     s.add_argument(
         "--config",
         action="append",
-        metavar="D-001=O2",
-        help="hypothetical option set; repeatable. Nothing is written.",
+        metavar="D-001=OPTION",
+        help=(
+            "hypothetical decision=option set; OPTION is a full id, label, or bare index; "
+            "unresolvable or ambiguous entries are refused before anything is rendered"
+        ),
     )
     s.set_defaults(fn=cmd_dump)
 
