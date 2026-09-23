@@ -135,12 +135,21 @@ sync.
 
 ## The tables
 
-`COLS` in `auger.py` is the source of truth for this list; this section follows its order.
+Fourteen, and `COLS` in `auger.py` is the source of truth for this list; this section follows
+its order. The count is not asserted on trust here — `init` declares the tables and prints the
+tally, so one command checks this section against the code:
+
+```bash
+python3 auger.py -n myproject init
+# declared: 14/14 tables -> assumption, break, bundle, bundle_member, decision, domain,
+# edge, escalation, facet, option, project, question, unknown, verdict
+```
+
 The tables are the registers of the SDM method, made addressable:
 
 ```
 project  question  decision  option  break  escalation  assumption  unknown  domain
-edge     facet     bundle    bundle_member
+edge     facet     bundle    bundle_member  verdict
 ```
 
 - `project` · `question` · `decision` · `option` · `break` · `escalation` · `assumption` ·
@@ -156,6 +165,11 @@ edge     facet     bundle    bundle_member
   one contract. `option` is what makes the what-if engine possible: each decision keeps
   its rejected alternatives as rows, so a configuration is a selection across them rather
   than a rewrite.
+- `verdict` is the judgment register (DESIGN R11): what a human or a model SAID about a
+  rendered configuration — the word, the reasons, the judge, and the `config_summary` that
+  names the artifact judged — so a judgment is evidence on file instead of a sentence in a
+  transcript. `dump` renders the configuration; with `--ask-jev` the model renders its own
+  verdict on that same render.
 
 ## Design rules this tool is built on
 

@@ -5,10 +5,11 @@ write. This is the contract — the verb names are public, and every argument li
 exists in the verb's `add_parser` definition in `auger.py`. If the code and this file
 disagree, the code wins and this file is a bug.
 
-The verbs, in the order `auger --help` lists them:
+The 12 verbs — one `add_parser` registration each in `auger.py`, and the count here is the
+registry's own, not a hand-kept tally — in the order `auger --help` lists them:
 
 ```
-init  start  ask  answer  check  status  toggle  dump  propagate  feedback  recall
+init  start  ask  answer  check  status  toggle  dump  propagate  feedback  recall  verdict
 ```
 
 Conventions every verb shares:
@@ -32,8 +33,10 @@ Create (or verify) the namespace and declare the SDM tables.
 there is nothing beyond the top-level `--namespace`.
 
 **Writes:** the namespace itself, when it does not exist yet, and one declaration file
-per table in `COLS` — 13 today — under `~/duckbrain/namespaces/<ns>/tables/<table>.table.json`.
-Idempotent: a declaration file whose content already matches is not rewritten.
+per table in `COLS` — 14 today — under `~/duckbrain/namespaces/<ns>/tables/<table>.table.json`.
+Idempotent: a declaration file whose content already matches is not rewritten. The run states
+the tally itself (`declared: 14/14 tables -> ...`), which is how the count the README repeats is
+checked against the code rather than trusted.
 With `--seed-domains`, a further 44 `domain` rows — one per domain of the method's grid,
 4.01-4.44 — read from the skill's own `design/02-domains/` files (the default path is the
 dogfood artifact under `~/.hermes/skills/`; `AUGER_DOMAIN_GRID` moves it) rather than copied
@@ -151,8 +154,13 @@ existing options; it cannot create or remove one.
 
 Render the system as it looks with the current set — or a `--config` hypothesis.
 
-**Arguments:** `--config D-001=O2` (repeatable; the value may be an option id or its
-label), `--out FILE` (write the markdown there instead of stdout).
+**Arguments:** `--config D-001=Postgres` (repeatable; the value is the option's full id,
+`D-001-O2`, or its label, matched case-insensitively), `--out FILE` (write the markdown there
+instead of stdout). A spec that names no option for its decision is IGNORED — that decision
+keeps its stored active option — and the ignored specs are listed at the foot of the render
+(`WARNING: unparsed --config entries ignored: D-001=O2 (no such option for D-001)`); when no
+spec parses at all the mode line still reads `mode: current stored state`, so a typo'd
+hypothesis renders the record instead of the what-if.
 
 **Writes:** nothing in the namespace — not in the current mode, not in hypothesis mode.
 With `--out`, a local file. That is the whole write surface.
@@ -218,14 +226,35 @@ as `dump` renders it, so the model judges the real artifact, not a summary strin
 
 **Arguments:** exactly one of `--good [CONFIG]` / `--bad [CONFIG]` (the configuration
 string that was judged); `--reasons TEXT` (why); `--ask-jev` (JEV judges the dump first);
-`--config D-001=O2` (repeatable — judge a hypothetical option set instead of the active
-one, requires `--ask-jev`); `--judged-by NAME` (default `human`; `--ask-jev` forces
+`--config D-001=Postgres` (repeatable — judge a hypothetical option set instead of the active
+one, requires `--ask-jev`; the value is the option's full id, `D-001-O2`, or its label,
+case-insensitive); `--judged-by NAME` (default `human`; `--ask-jev` forces
 `jev`); `--confidence X`; `--note TEXT`; `--list` (show every recorded verdict, newest
 first).
 
 **Writes:** one `verdict` row per call (`id` V-prefixed, `config_summary`, the word,
 `reasons`, `judged_by`, `confidence` when given). `--ask-jev` is fail-closed: no key, no
 score, NO row. `status` reads verdicts to tally good/bad per project.
+
+**What `config_summary` holds — the `--config` semantics.** The row names the artifact that
+was judged, and the two arms name it differently:
+
+- With `--ask-jev`, `config_summary` is the `ACTIVE CONFIGURATION:` line of the render JEV
+  judged — the first line of the dump that starts with those words, read back off the rendered
+  artifact, never off the flags. A HYPOTHETICAL render still summarizes the ACTIVE
+  CONFIGURATION line. `verdict --ask-jev --config D-001=Postgres` renders
+  `mode: HYPOTHETICAL (nothing written)` and closes with
+  `ACTIVE CONFIGURATION: D-001=Postgres, D-002=staging table` — the decisions you overrode
+  carry the option you named, every other decision keeps its stored active option — and that
+  whole line, prefix included, is what the row stores. The line names options by LABEL, so a
+  hypothesis given as an option id (`--config D-001=D-001-O2`) is recorded as
+  `ACTIVE CONFIGURATION: D-001=Postgres`: the verdict reads as evidence about a configuration
+  even when the caller quoted an id, and even after that configuration is toggled away.
+- Without `--ask-jev` (a verdict ON FILE) there is no render at all, so `config_summary` is
+  the CONFIG string passed to `--good`/`--bad`, verbatim; a bare `--good` with no string and
+  no `--ask-jev` therefore records an empty summary. That is also why `--config` without
+  `--ask-jev` is refused by name: a hypothesis is a render, and only the rendering arm can
+  name it.
 
 **Never writes:** anything when both or neither of `--good`/`--bad` is given; anything
 when an invalid word is named (the word set is closed in code — `good`, `bad`); a verdict
