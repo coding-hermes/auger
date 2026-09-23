@@ -2265,8 +2265,12 @@ DOMAIN_GRID_DIR = os.path.join(
     "dogfood-artifact",
     "02-domains",
 )
-DOMAIN_GRID_SIZE = 44  # the method's rule, not a preference: 43 files is the named failure
-DOMAIN_GRID_HEAD_LINES = 14  # both live headers sit in the first 3 lines; 14 leaves room to move
+DOMAIN_GRID_SIZE = (
+    44  # the method's rule, not a preference: 43 files is the named failure
+)
+DOMAIN_GRID_HEAD_LINES = (
+    14  # both live headers sit in the first 3 lines; 14 leaves room to move
+)
 DOMAIN_ID_PREFIX = "DM"  # D- is the decision register; a domain row is not a decision
 # Every seeded row's state, and the ONE reason it holds it. The `domain` table has no `reason`
 # column (AUG-004 fixes COLS), and every seeded row is NOT-REACHED for the same reason — the
@@ -2371,7 +2375,9 @@ def parse_domain_file(path: str) -> dict:
             "and its slug (section 4: files are always zero-padded, 4.05-data.md)"
         )
     with open(path, errors="replace") as fh:
-        head = [line.strip() for line in fh.read().splitlines()[:DOMAIN_GRID_HEAD_LINES]]
+        head = [
+            line.strip() for line in fh.read().splitlines()[:DOMAIN_GRID_HEAD_LINES]
+        ]
     inline = None
     for line in head:
         inline = DOMAIN_INLINE_HEADER_RE.match(line)
@@ -2386,7 +2392,9 @@ def parse_domain_file(path: str) -> dict:
             path, _grid_head_match(path, head, DOMAIN_KV_TRIAGE_RE, "triage")
         )
         ring_floor = int(
-            _grid_head_match(path, head, DOMAIN_KV_FLOOR_RE, "ring_floor").group("floor")
+            _grid_head_match(path, head, DOMAIN_KV_FLOOR_RE, "ring_floor").group(
+                "floor"
+            )
         )
         word = _grid_head_match(
             path, head, DOMAIN_KV_RING_RE, "terminating_ring"
@@ -2397,7 +2405,9 @@ def parse_domain_file(path: str) -> dict:
             f"domain grid: {path} triage {triage} is outside 1-27 (3 × 3 × 3)"
         )
     if ring_floor < 1:
-        raise SystemExit(f"domain grid: {path} ring_floor {ring_floor} is not a ring number")
+        raise SystemExit(
+            f"domain grid: {path} ring_floor {ring_floor} is not a ring number"
+        )
     return {
         "num": m.group("num"),
         "name": m.group("name"),
@@ -2474,7 +2484,9 @@ def seed_domains(ns: str, project_id: str = "", grid_dir: str | None = None) -> 
     missing = [e for e in grid if e["num"] not in have]
     if not missing:
         return {"grid": len(grid), "written": 0, "present": len(grid), "ids": []}
-    start = int(re.search(r"(\d+)\s*$", next_id(ns, "domain", DOMAIN_ID_PREFIX)).group(1))
+    start = int(
+        re.search(r"(\d+)\s*$", next_id(ns, "domain", DOMAIN_ID_PREFIX)).group(1)
+    )
     rows = []
     for offset, entry in enumerate(missing):
         row = {
@@ -2582,7 +2594,9 @@ def domain_coverage(ns: str, project_id: str) -> dict:
         "nameless": nameless,
         # Rows whose STORED status is the seed's own word — the ones the default note describes.
         "seeded_status": sum(
-            1 for ln in present if str(ln["row"].get("status") or "") == DOMAIN_SEED_STATUS
+            1
+            for ln in present
+            if str(ln["row"].get("status") or "") == DOMAIN_SEED_STATUS
         ),
     }
 
@@ -2921,6 +2935,16 @@ def insert_decision(ns: str, row: dict) -> str:
 IMPACT_OUTCOMES = ("unchanged", "change", "invalidate")
 T_IMPACT_CHANGE = 0.5  # score below this    -> the sibling's decision is untouched
 T_IMPACT_INVALIDATE = 1.5  # score at/above this -> the sibling's contract is BROKEN
+# The floor the first version of this pass did not have: a SCORE is the model's read, and the
+# CONFIDENCE beside it is how much that read is worth. A verdict the model states at 0.24 confidence
+# is the model saying it does not know, and honoring that as "unchanged" is the one outcome nobody
+# can re-read later — nothing is written and nothing is said (the dogfood that found this: a
+# bundle-scoped answer "unchanged" at 0.24 left the walk invisible AND the decision unexamined).
+# 0.4 sits between T_IMPACT_CHANGE and that observed 0.24: this pass may only conclude something the
+# model is more sure of than the change threshold it is being compared against.
+T_IMPACT_FLOOR = (
+    0.4  # confidence below this -> the verdict is UNKNOWN (skipped + WARNING)
+)
 
 
 def escalate(
@@ -2977,8 +3001,13 @@ def bundle_impact_verdict(answer: dict, other: dict, project: str) -> tuple:
 
     Returns (kind, score, err) with kind in IMPACT_OUTCOMES — and "" on ANY error, because a
     malformed or unreachable model answer is UNKNOWN and never "unchanged": the caller must write no
-    edge on a verdict it did not get. The thresholds are here, in code, like every other threshold in
-    this module; the model supplies the score, never the meaning.
+    edge on a verdict it did not get. A verdict stated BELOW `T_IMPACT_FLOOR` confidence is the same
+    refusal — the model saying it does not know is not a decision, so it is returned as an error and
+    skipped rather than honored silently (SPEC-002 2.2 fail-closed). `score` is the model's own score
+    whenever there was one — INCLUDING on a refusal, because the caller still has to say what it saw
+    — and -1.0 when the model gave no score at all (the module's "nobody stated it" value, as an
+    unrecorded decision's confidence is -1). The thresholds are here, in code, like every other
+    threshold in this module; the model supplies the score, never the meaning.
     """
     state = (
         f"AN ANSWER RECORDED IN PROJECT {answer.get('project_id')}:\n"
@@ -3008,16 +3037,33 @@ def bundle_impact_verdict(answer: dict, other: dict, project: str) -> tuple:
         },
     )
     if err:
-        return "", 0.0, err
+        return "", -1.0, err
     scored = (ans.get("answers") or {}).get("impact") or {}
     value = scored.get("score")
     if not isinstance(value, (int, float)):
         return (
             "",
-            0.0,
+            -1.0,
             f"JEV returned no score for {other.get('id')} ({str(scored)[:120]})",
         )
     score = float(value)
+    # THE FLOOR (T_IMPACT_FLOOR). Below it the model is telling us it does not know, and "does not
+    # know" must never be read as "unchanged" — that is the one verdict which writes nothing and says
+    # nothing, so it is indistinguishable from a pass that never ran. It is refused the way an
+    # unreachable model is refused: skipped, warned, no edge. A confidence the model did not state at
+    # all is refused too — a verdict of unknown strength is not a verdict, and the fail-closed side
+    # is the only side that can be corrected later.
+    conf = scored.get("confidence")
+    if not isinstance(conf, (int, float)) or float(conf) < T_IMPACT_FLOOR:
+        conf_txt = (
+            f"{float(conf):.2f}" if isinstance(conf, (int, float)) else "not stated"
+        )
+        return (
+            "",
+            score,
+            f"JEV's verdict on {other.get('id')} is score {score:.2f} at confidence {conf_txt}, "
+            f"below the {T_IMPACT_FLOOR} confidence floor — UNKNOWN, not {IMPACT_OUTCOMES[0]}",
+        )
     if score < T_IMPACT_CHANGE:
         return IMPACT_OUTCOMES[0], score, ""
     if score < T_IMPACT_INVALIDATE:
@@ -3036,7 +3082,9 @@ def bundle_impact(ns: str, project_id: str, dec_row: dict) -> dict:
       breaks      [(project, decision)]  a break, recorded as a `breaks` edge + an escalation
       edges       [edge id]              what the pass wrote
       escalations [escalation id]        the breaks recorded
-      lines       [str]                  the one-line surfacings to print
+      lines       [str]                  the one-line surfacings: one per walked member (its
+                                         decision, the verdict word and the score), plus each edge
+                                         written when the verdict was change or invalidate
       warnings    [str]                  the model's failures and any degraded write
       skipped     [(project, reason)]    members left alone BECAUSE the verdict was unknown
     """
@@ -3067,6 +3115,12 @@ def bundle_impact(ns: str, project_id: str, dec_row: dict) -> dict:
             if d.get("id") != dec_row.get("id")
         ]
         rep["walked"].append(project)
+        if not others:
+            # A member holding no bundle-scoped decision was still WALKED, and the run says so:
+            # "nothing here to compare" and "the pass never ran" must not read the same to a user.
+            rep["lines"].append(
+                f"impact: {project} walked, no bundle-scoped decision to compare"
+            )
         for other in others:
             kind, score, err = bundle_impact_verdict(dec_row, other, project)
             if err:
@@ -3078,7 +3132,21 @@ def bundle_impact(ns: str, project_id: str, dec_row: dict) -> dict:
                     f"{dec_row.get('id')} — {err}. No edge is written on a verdict the model did "
                     f"not give (fail-closed)."
                 )
+                # The line is printed even here: the walk DID ask about this decision, and the score
+                # the model gave is what the reader needs to judge the skip. -1.0 is "no score"
+                # (the model answered nothing to score), never "score 0".
+                got = f"score {score:.2f}" if score >= 0 else "no score"
+                rep["lines"].append(
+                    f"impact: {project} {other.get('id')} unknown ({got})"
+                )
                 continue
+            # The footprint of the walk itself: which member, which decision, the verdict word and
+            # the score it was read from. Printed for EVERY outcome — the two that write an edge
+            # get their own line right below, and the one that writes nothing (unchanged) is
+            # exactly the outcome that used to leave no trace at all.
+            rep["lines"].append(
+                f"impact: {project} {other['id']} {kind} (score {score:.2f})"
+            )
             if kind == IMPACT_OUTCOMES[0]:
                 rep["unchanged"].append(project)
                 continue
@@ -3222,6 +3290,15 @@ def cmd_answer(a):
         f"{did} recorded  (confidence {row['confidence']}, {len(a.option or [])} options, "
         f"embedded, scope {decision_scope(row)}{closed})"
     )
+    # The walk's own report (AUG-027): `impact["lines"]` carries one line per member the pass
+    # WALKED — its decision, the verdict word and the score — so that an 'unchanged' member and a
+    # skipped one are both visible in the verb's output. Without that the answer to a run where
+    # nothing was affected is indistinguishable from a run where the pass is not wired at all.
+    if impact["scoped"] and not impact["walked"]:
+        print(
+            f"impact: nothing walked — no other project shares an active bundle with "
+            f"{p.get('name') or pid}"
+        )
     for line in impact["lines"]:
         print(line)
     for line in impact["warnings"] + beat2_warnings:

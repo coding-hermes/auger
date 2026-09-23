@@ -2375,6 +2375,110 @@ def test_a_bundle_scoped_answer_that_leaves_a_sibling_unchanged_writes_nothing(
     assert rows(ns, "escalation", "") == []
 
 
+def test_the_impact_walk_prints_a_line_for_a_member_it_left_unchanged(
+    ns: str, sibling_ns: str, monkeypatch
+):
+    """AUG-027(a): the walk PRINTS — one line per walked member, verdict word and score included.
+
+    Silence is ambiguous: a reader cannot tell "the pass is not wired" from "the pass asked and
+    decided nothing". The line is the pass's footprint, so it is printed for the outcome that
+    writes nothing (and no longer only for the two that do).
+    """
+    _home, sib = bundled_pair(
+        ns,
+        sibling_ns,
+        monkeypatch,
+        decision=("D-007", "the envelope is one JSON object per message"),
+    )
+    monkeypatch.setattr(auger, "jev", impact_stub(0.0, [], confidence=0.8))  # unchanged
+
+    rc, out = record_decision(ns, "D-016", "the envelope is NDJSON", scope="bundle")
+    assert rc == 0, out
+    assert f"impact: {sib} D-007 unchanged (score 0.00)" in out, out
+
+
+def test_the_impact_walk_reports_a_member_it_walked_with_nothing_to_compare(
+    ns: str, sibling_ns: str, monkeypatch
+):
+    """AUG-027(a), the other silence: the member WAS walked and holds no bundle-scoped decision."""
+    _home, sib = bundled_pair(ns, sibling_ns, monkeypatch)  # sibling holds no decision
+    calls: list = []
+    monkeypatch.setattr(auger, "jev", impact_stub(0.0, calls, confidence=0.8))
+
+    rc, out = record_decision(ns, "D-017", "the envelope is NDJSON", scope="bundle")
+    assert rc == 0, out
+    assert calls == [], "the model was asked about a decision the member does not hold"
+    assert f"impact: {sib} walked, no bundle-scoped decision to compare" in out, out
+
+
+def test_a_verdict_below_the_confidence_floor_is_unknown_and_fails_closed(
+    ns: str, sibling_ns: str, monkeypatch
+):
+    """AUG-027(b): a low-confidence verdict is UNKNOWN — skipped, warned, and NOT honored.
+
+    The module's own doctrine: an uncertain verdict is surfaced the way a transport error is
+    surfaced. A model that answers "unchanged" at 0.24 confidence is saying it does not know, and
+    an unknown verdict writes nothing — it never becomes a silent, final "unchanged".
+    """
+    _home, sib = bundled_pair(
+        ns,
+        sibling_ns,
+        monkeypatch,
+        decision=(
+            "D-001",
+            "the envelope hash is validated before a message is trusted",
+        ),
+    )
+    calls: list = []
+    monkeypatch.setattr(auger, "jev", impact_stub(0.24, calls, confidence=0.24))
+
+    rc, out = record_decision(
+        ns, "D-002", "the envelope hash is blake3, not sha256", scope="bundle"
+    )
+    assert rc == 0, out
+    assert len(calls) == 1, f"the walk did not ask the model: {calls}"
+    assert "WARNING" in out and str(auger.T_IMPACT_FLOOR) in out, out
+    assert sib in out and "D-001" in out and "unknown" in out, out
+    assert rows(ns, "edge", "") == [], (
+        "an unknown verdict was honored: an edge was written"
+    )
+    assert rows(ns, "escalation", "") == []
+    assert (
+        row(sibling_ns, "decision", "id=eq.D-001")["chosen"]
+        == "the envelope hash is validated before a message is trusted"
+    )
+
+
+def test_the_dogfood_d003_vs_d001_walk_prints_the_score_it_saw(
+    ns: str, sibling_ns: str, monkeypatch
+):
+    """AUG-027(c): the dogfood pair — D-003 vs a sibling's D-001 at 0.24 — PRINTS the score.
+
+    The live run this regression comes from returned in ~1s with no line at all, so the score the
+    model gave for the walk was unrecoverable from the verb's own output. The score is the evidence
+    a reader needs to see that the pass ran and what it read.
+    """
+    _home, sib = bundled_pair(
+        ns,
+        sibling_ns,
+        monkeypatch,
+        decision=(
+            "D-001",
+            "mcview validates the hash of an envelope before it trusts it",
+        ),
+    )
+    monkeypatch.setattr(auger, "jev", impact_stub(0.24, [], confidence=0.24))
+
+    rc, out = record_decision(
+        ns,
+        "D-003",
+        "mccli swaps the envelope hash from sha256 to blake3",
+        scope="bundle",
+    )
+    assert rc == 0, out
+    assert f"impact: {sib} D-001 unknown (score 0.24)" in out, out
+
+
 def test_a_project_scoped_answer_crosses_no_boundary_at_all(
     ns: str, sibling_ns: str, monkeypatch
 ):
@@ -2426,6 +2530,9 @@ def test_an_unreachable_model_in_the_impact_pass_skips_the_member_and_still_reco
     assert rc == 0, out
     assert "D-014 recorded" in out, out
     assert "WARNING" in out and sib in out and "JEV" in out, out
+    # AUG-027(a): an unanswered member is still a walked member — the run shows it, and says there
+    # is no score to show (the warning right below carries WHY).
+    assert f"impact: {sib} D-007 unknown (no score)" in out, out
     assert rows(ns, "edge", "") == [], (
         "an edge was written on a verdict the model never gave"
     )
@@ -3433,7 +3540,9 @@ def test_the_grid_source_parses_to_exactly_the_canonical_44():
     assert [e["num"] for e in grid] == GRID_NUMBERS, [e["num"] for e in grid]
     for e in grid:
         assert e["name"] == e["name"].lower() and e["name"], e
-        assert 1 <= e["triage"] <= 27, e  # blast radius × uncertainty × irreversibility, each 1-3
+        assert 1 <= e["triage"] <= 27, (
+            e
+        )  # blast radius × uncertainty × irreversibility, each 1-3
         assert e["ring_floor"] >= 2, e
         # the grid's ring ceiling is 8; None is the "not opened" value and is not a number at all
         assert e["terminating_ring"] is None or 1 <= e["terminating_ring"] <= 8, e
@@ -3445,7 +3554,11 @@ def test_the_parser_reads_both_header_shapes_the_grid_actually_uses(tmp_path):
         write_grid_file(str(tmp_path), "4.20-concurrency", GRID_INLINE_HEADER)
     )
     assert (inline["num"], inline["name"]) == ("4.20", "concurrency")
-    assert (inline["triage"], inline["ring_floor"], inline["terminating_ring"]) == (27, 5, 5)
+    assert (inline["triage"], inline["ring_floor"], inline["terminating_ring"]) == (
+        27,
+        5,
+        5,
+    )
 
     # the ⊕ header spells the floor `unconditional floor 5` and fills the same field (4.12's shape)
     uncond = auger.parse_domain_file(
@@ -3455,14 +3568,20 @@ def test_the_parser_reads_both_header_shapes_the_grid_actually_uses(tmp_path):
             "Triage: 3×2×3=18; unconditional floor 5; status CASCADED; terminating ring 5.\n",
         )
     )
-    assert (uncond["triage"], uncond["ring_floor"], uncond["terminating_ring"]) == (18, 5, 5)
+    assert (uncond["triage"], uncond["ring_floor"], uncond["terminating_ring"]) == (
+        18,
+        5,
+        5,
+    )
 
     kv = auger.parse_domain_file(
         write_grid_file(str(tmp_path), "4.01-product-people", GRID_KV_HEADER)
     )
     assert (kv["num"], kv["name"]) == ("4.01", "product-people")
     assert kv["triage"] == 6 and kv["ring_floor"] == 2
-    assert kv["terminating_ring"] is None, "an unopened domain's ring is None, not a number"
+    assert kv["terminating_ring"] is None, (
+        "an unopened domain's ring is None, not a number"
+    )
 
 
 def test_a_header_the_parser_cannot_read_is_refused_with_the_file_name(tmp_path):
@@ -3517,12 +3636,20 @@ def test_seeding_writes_the_44_domain_rows_with_the_grids_own_numbers(ns: str):
     grid = grid_or_skip()
     seed_grid(ns)
     stored = rows(ns, "domain", "order=num.asc")
-    assert len(stored) == 44, f"expected the 44-domain grid, stored {len(stored)} row(s)"
+    assert len(stored) == 44, (
+        f"expected the 44-domain grid, stored {len(stored)} row(s)"
+    )
     assert [r["num"] for r in stored] == GRID_NUMBERS
 
     first = row(ns, "domain", "num=eq.4.01")
-    assert (first["name"], first["triage"], first["ring_floor"]) == ("product-people", 6, 2)
-    assert first.get("terminating_ring") is None, "4.01 was never opened: it has no ring"
+    assert (first["name"], first["triage"], first["ring_floor"]) == (
+        "product-people",
+        6,
+        2,
+    )
+    assert first.get("terminating_ring") is None, (
+        "4.01 was never opened: it has no ring"
+    )
     assert first["status"] == auger.DOMAIN_SEED_STATUS == "NOT-REACHED"
     assert first["owner"] == "unassigned"
     assert first["trigger"] == "first question in domain"
@@ -3559,8 +3686,12 @@ def test_reseeding_the_grid_adds_no_second_copy(ns: str):
     assert len(before) == 44
     second_out = seed_grid(ns)
     after = {r["num"]: r["id"] for r in rows(ns, "domain", "")}
-    assert len(after) == 44, f"a re-seed duplicated the grid: {len(after)} row(s) stored"
-    assert after == before, "a re-seed churned ids instead of skipping what was already stored"
+    assert len(after) == 44, (
+        f"a re-seed duplicated the grid: {len(after)} row(s) stored"
+    )
+    assert after == before, (
+        "a re-seed churned ids instead of skipping what was already stored"
+    )
     assert "44 row(s) written, 0 already present" in first_out, first_out
     assert "0 row(s) written, 44 already present" in second_out, second_out
 
@@ -3584,9 +3715,13 @@ def test_status_names_every_absent_grid_domain_when_no_row_is_stored(project: di
     assert rc == 0, out
     assert "44 in the grid | 0 seeded | 44 absent" in out, out
     reported = coverage_lines(out)
-    assert len(reported) == 44, f"{len(reported)} domain line(s) for a 44-domain grid:\n{out}"
+    assert len(reported) == 44, (
+        f"{len(reported)} domain line(s) for a 44-domain grid:\n{out}"
+    )
     for e in grid:
-        assert e["num"] in out, f"{e['num']} was silently omitted from the coverage report"
+        assert e["num"] in out, (
+            f"{e['num']} was silently omitted from the coverage report"
+        )
         line = next(ln for ln in reported if ln.strip().startswith(e["num"]))
         assert "ABSENT" in line, line
     assert "ABSENT (a grid domain with no stored" in out, out
@@ -3635,14 +3770,18 @@ def test_a_domain_whose_row_is_gone_is_reported_absent_not_skipped(project: dict
     ns = project["ns"]
     seed_grid(ns)
     [moving] = rows(ns, "domain", "num=eq.4.05")
-    auger.patch(ns, "domain", moving["id"], {"num": "9.99", "name": "moved-off-the-grid"})
+    auger.patch(
+        ns, "domain", moving["id"], {"num": "9.99", "name": "moved-off-the-grid"}
+    )
     rc, out = run_cli(["-n", ns, "status"])
     assert rc == 0, out
     assert "44 in the grid | 43 seeded | 1 absent" in out, out
     absent = next(ln for ln in coverage_lines(out) if ln.strip().startswith("4.05"))
     assert "ABSENT" in absent, absent
     assert "no stored `domain` row — absence, which is NOT" in out, out
-    assert "ABSENT (a grid domain with no stored `domain` row" in out and "4.05" in out, out
+    assert (
+        "ABSENT (a grid domain with no stored `domain` row" in out and "4.05" in out
+    ), out
     off = next(ln for ln in coverage_lines(out) if ln.strip().startswith("9.99"))
     assert "off-grid" in off, off
     assert "OFF-GRID rows" in out and "9.99" in out, out
