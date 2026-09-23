@@ -30,6 +30,28 @@ pnpm install && pnpm build
 node bin/duckbrain.js http
 ```
 
+**First, on a bare box (no `pnpm`; node already installed).** The two standard routes both die
+`EACCES` for a plain user — `corepack enable pnpm` symlinks into `/usr/bin`, `npm i -g pnpm`
+writes `/usr/lib`. Install into a user prefix instead (~5s, pnpm 12.4.2, measured on the
+2026-09-23 bunker leg):
+
+```bash
+npm config set prefix ~/.npm-global
+export PATH=~/.npm-global/bin:$PATH
+npm i -g pnpm
+pnpm install && pnpm build          # ~76s from a cold checkout on the same leg
+```
+
+**And give the daemon a data directory that already exists.** The boot line above assumes the
+default data dir is there; when you point `DUCKBRAIN_DATA_DIR` somewhere new, create it first —
+the daemon writes its pidfile into it, and an absent directory surfaces as a pidfile `ENOENT`
+that names the pidfile rather than the missing directory:
+
+```bash
+mkdir -p ~/dd-data
+DUCKBRAIN_DATA_DIR=~/dd-data node bin/duckbrain.js http
+```
+
 ## The loop
 
 ```
@@ -52,6 +74,17 @@ Every verb is documented — arguments, what it writes, what it must never write
 
 ## Quick start
 
+First get the substrate up — the three commands that block a bare Debian box (no `pnpm`, no
+data dir, no skill tree) are spelled out with their failure modes in **Substrate pin** above:
+
+```bash
+npm config set prefix ~/.npm-global && export PATH=~/.npm-global/bin:$PATH && npm i -g pnpm
+mkdir -p ~/dd-data && DUCKBRAIN_DATA_DIR=~/dd-data node bin/duckbrain.js http
+# and for `init --seed-domains`: export AUGER_DOMAIN_GRID=<a canonical 44-domain grid>
+```
+
+Then the loop:
+
 ```bash
 python3 auger.py -n myproject init
 python3 auger.py -n myproject start --name myproject --seed-file seed.txt
@@ -65,6 +98,22 @@ python3 auger.py -n myproject ask
 python3 auger.py -n myproject check "How should we store the record of files we have seen?"
 python3 auger.py -n myproject dump --config D-001=Postgres
 ```
+
+`init --seed-domains` also seats the method's 44-domain grid as `domain` rows — but the grid
+lives with the `spec-decomposition-matrix-tradeoff` skill, **not in this repo**, because a copy
+here would drift the moment the skill's grid changes. On a box without that skill tree the
+default path does not exist and the flag refuses (loudly, and correctly — a seeded 43 would be
+the silent-domain failure the rule exists to forbid):
+
+```
+domain grid not found: ~/.hermes/skills/software-development/spec-decomposition-matrix-tradeoff/references/dogfood-artifact/02-domains — point AUGER_DOMAIN_GRID at the skill's references/dogfood-artifact/02-domains directory
+```
+
+Point `AUGER_DOMAIN_GRID` at any canonical 44-domain grid, or run `init` without
+`--seed-domains`: the domain rows are the coverage map, not a prerequisite for the loop. The
+grid's shape is exact — one `4.NN-<slug>.md` file per domain (`4.05-data.md`; the file name IS
+the number and the name), all 44 of `4.01`–`4.44` and nothing else; anything short of that is
+refused by name rather than seeded partially.
 
 Requirements: a running DuckBrain on `127.0.0.1:3000` (`~/duckbrain`, `node bin/duckbrain.js http`)
 with its token at `~/.duckbrain/foreman-status.token`, and an OpenRouter key in `~/.hermes/.env`

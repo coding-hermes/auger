@@ -64,3 +64,31 @@ fresh-machine proof (bunker): default branch → init claims success, API sees
 4. For any "the data is wrong" claim: query the namespace directly
    (`GET /api/ns/<ns>/tables/<t>?select=...`) — auger is a thin client; the
    rows are the truth, the dump is a view.
+
+## Fresh-install leg (2026-09-23, bare Debian 13 user, node 22 preinstalled)
+
+Three undocumented steps sat between a fresh user and a green loop. The substrate
+itself was fine once they were taken (install + build ~76s, `auger`'s full loop
+green in ~7s with zero pip/npm installs; the daemon boots in its
+degraded-no-embeddings mode on an airgapped box, which is the correct state there,
+not a failure). The gap was documentation, not code — so the three now have their
+working commands in the README quickstart path.
+
+- **`pnpm` missing, and both standard routes are EACCES for a plain user.**
+  `corepack enable pnpm` fails `EACCES` (it symlinks into `/usr/bin`); `npm i -g
+  pnpm` fails `EACCES` (it writes `/usr/lib`). Working: `npm config set prefix
+  ~/.npm-global && export PATH=~/.npm-global/bin:$PATH && npm i -g pnpm` — ~5s,
+  pnpm 12.4.2.
+- **`DUCKBRAIN_DATA_DIR` must already exist, and the error lies about why.**
+  `DUCKBRAIN_DATA_DIR=~/dd-data node bin/duckbrain.js http` dies `ENOENT` on the
+  pidfile write; the message names the pidfile, not the absent directory. Working:
+  `mkdir -p ~/dd-data` first.
+- **`AUGER_DOMAIN_GRID` is the only way through `init --seed-domains` on a box
+  without the skill tree.** The default grid path is the skill's dogfood artifact
+  under `~/.hermes/skills/`, and the refusal is loud and correct — `domain grid
+  not found: <default path> — point AUGER_DOMAIN_GRID at the skill's
+  references/dogfood-artifact/02-domains directory`. A fresh user without
+  `spec-decomposition-matrix-tradeoff` must point `AUGER_DOMAIN_GRID` at any
+  canonical 44-domain grid (`4.01`–`4.44`), or skip `--seed-domains`; the loud
+  refusal is right — a seeded 43 is exactly the silent-domain failure the rule
+  forbids.
