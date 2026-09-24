@@ -213,3 +213,112 @@ path, proven live: `feedback` proposed a question from a thin decision
 `answer --question-id Q-000001` → `closed Q-000001`, status coverage updated,
 propagate clean. Practical rule until AUG-041 is fixed: the question path is
 feedback → answer, not ask → answer.
+
+
+---
+
+## 5th run (2026-09-24) — the real drill, and the write that reports success over nothing
+
+This run stopped testing verbs and used the product on a real decision (where the
+fleet's heavy multiarch docker builds should run — a decision the rethinkdb
+2026-08-31 incident forced). It is the first run to judge the OUTPUT rather than
+the mechanism, and the first to exercise `answer` at length.
+
+### How the thing is built, and why the last step is silent
+
+`answer` is the only verb that writes a CONFIGURATION rather than a record, and it
+does so through one line:
+
+```python
+"active": opt == a.chosen,          # auger.py, cmd_answer's option insert
+```
+
+The `option` rows' `active` flag decides everything downstream — what `dump` calls
+the ACTIVE CONFIGURATION, what `dump --config` diffs a hypothesis against, what
+`toggle` flips, what `verdict` judges. It is set by a byte-for-byte string
+comparison between `--chosen` and each `--option`.
+
+That is the defect (AUG-055): `--chosen` is naturally a short name and `--option`
+is naturally the full sentence, so the natural invocation stores ZERO active
+options — and the verb prints `D-001 recorded (confidence -1.0, 1 options,
+embedded, scope project)` with exit 0. Nothing downstream complains until you
+render:
+
+```
+ACTIVE CONFIGURATION: (nothing active)
+WARNING: decisions with != 1 active option (a configuration SELECTS one option per decision):
+  - D-001: 0 of 1 options active — this decision contributes NOTHING to the configuration
+```
+
+The warning mechanism itself is good and was already hardened (AUG-015). It is the
+WRITE that is the problem: it stores a state the API's own renderer calls broken
+and reports it as success.
+
+Workaround until fixed: **pass the chosen text verbatim as one of the --option
+values.** Compare the two:
+
+```
+# stores an EMPTY configuration (exit 0, "recorded")
+answer --chosen "The CI box smoke test" --option "CI smoke battery: bunker3 runs ..."
+
+# stores a working configuration
+answer --chosen "bunker for heavy builds" --option "bunker for heavy builds" --option "primary host, qemu locally"
+```
+
+If you already have a broken record, `toggle --on <option-id>` activates explicitly
+and repairs it — the toggle path is sound and refuses ambiguity by name.
+
+### The already-answered gate, and the duplicate it costs
+
+`ask`'s gate is a similarity score (noul) of the proposed question against embedded
+evidence. It has no notion of "this question was CLOSED one round ago", so after
+answering Q-000001 the very next `ask` stored Q-000002 with the IDENTICAL text
+("What test proves this works?"). Closing it required a second, duplicate decision
+(D-002). The round after that, JEV correctly said "nothing left worth asking" — so
+the loop does terminate; it just pays one wasted round first (AUG-056).
+
+Note the compounding: a mismatched `--chosen` (AUG-055) writes evidence whose chosen
+text is not the option text, which is part of what the gate scores. Fixing AUG-055
+improves the gate's input but does not remove AUG-056 — the gate still needs the
+closed-question identity, not a better score.
+
+### Where the 500 came from on a fresh machine
+
+The install leg's worst moment was not an auger error. On the shared CI box a fresh
+agent's first write returned:
+
+```
+could not list namespaces (500): {'error': "Cannot determine the duckbrain root:
+no duckbrain.config.json was found walking up from /home/bunker-864a37ab/duckbrain/..."}
+```
+
+`/home/bunker-864a37ab` is a DIFFERENT dogfood agent, already destroyed. The box was
+holding four duckbrain daemons at once — `kara`'s on :3000 and orphans from
+destroyed agents 4b004b7a and 864a37ab on :3100/:3210/:3311, still answering. A
+fixed `127.0.0.1:3000` therefore reaches whoever owns the port, and you get a 500
+whose message names a path that does not exist. The fix is addressing, not code: run
+your own substrate on a port you verified is free and pin `DUCKBRAIN_URL`:
+
+```bash
+for p in 3901; do (echo >/dev/tcp/127.0.0.1/$p) 2>/dev/null && echo "$p BUSY" || echo "$p FREE"; done
+cd ~/duckbrain && nohup env DUCKBRAIN_DATA_DIR=~/dd-data node bin/duckbrain.js http --port 3901 &
+export DUCKBRAIN_URL=http://127.0.0.1:3901 DUCKBRAIN_API_KEY=$(node bin/duckbrain.js token --name=me | sed -n 2p)
+```
+
+With that isolation the documented loop passed in 1 second (AUG-060). Never kill the
+other daemon: on a multi-tenant box it may not be yours.
+
+### What held up under real use
+
+- `dump --config` named a CONTRADICTION WITH THE RECORD, quoting the on-file reason,
+  for a hypothesis that differed from the stored choice. Unprompted, correct, and
+  genuinely useful — no test asserts it.
+- `toggle` refused an ambiguous bare token by name (`matches D-001-O1, D-002-O1,
+  D-003-O1 — use the full option id; nothing was written`) and wrote nothing.
+- `init --seed-domains` still reads the grid from the skill dir rather than copying
+  it (42 NOT-REACHED rows after 3 decisions, 2 answered).
+- `verdict --good <config> --reasons ...` recorded human judgement on the record.
+- Costs, measured (`hyperfine`, 3-decision namespace): `status` 199 ms ± 12 ms,
+  `dump` 111 ms ± 9 ms; `recall` 3.9 s; `ask` 5.0–6.4 s (a JEV call, ~$0.00004).
+  `status` is ~10x faster than the 2.2 s ± 1.3 s reported in run 3 (evidence for
+  AUG-047, not a new row).

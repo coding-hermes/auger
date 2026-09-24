@@ -158,3 +158,47 @@ python3 auger.py -n <ns> recall "any seed phrase"   # proves embeddings
   [--confidence X]` (on-file), `--ask-jev` (JEV judges the rendered dump,
   fail-closed), `--config D-001=O2` (hypothesis; values accept option ids OR
   labels; requires --ask-jev), `--list`. Cost ~$0.0001/call.
+
+
+## Pitfalls proven in real use (5th run, 2026-09-24 — the drill on a real decision)
+
+- **`--chosen` must be byte-identical to one of the `--option` values, or you store
+  an EMPTY configuration and get a success line (AUG-055).** The natural mistake:
+  `--chosen` as a short name, `--option` as the full sentence. It exits 0 and prints
+  `D-001 recorded`; only `dump` reveals `ACTIVE CONFIGURATION: (nothing active)`.
+  Make the chosen text one of the options verbatim, or repair afterwards with
+  `toggle --on <option-id>`. This also removes the spurious
+  `CONTRADICTIONS WITH THE RECORD` line that `dump --config` prints when the
+  recorded chosen text matches no option.
+- **`--why-not` does NOT repeat (AUG-057).** Unlike `--option` (repeatable), passing
+  `--why-not` twice silently keeps only the last reason — exit 0 either way. To keep
+  two rejected reasons today, put them in one `--why-not` string; the schema has no
+  per-option reason slot yet.
+- **`ask` can re-propose the question your last `answer` just closed (AUG-056).**
+  The gate scores similarity, not identity. If it happens, answering it creates a
+  DUPLICATE decision with different id — prefer `check "<the question text>"` first,
+  and treat a repeat as the gate's miss rather than a real new question.
+- **On a shared host, never assume `127.0.0.1:3000` is yours (AUG-060).** Another
+  user's daemon (or an orphan from a destroyed agent) can hold the port and will
+  answer you — the tell is a 500 whose message names a home directory that is not
+  your own. Boot your own substrate on a verified-free port and export
+  `DUCKBRAIN_URL`; check with
+  `(echo >/dev/tcp/127.0.0.1/<port>) 2>/dev/null && echo BUSY || echo FREE`.
+- **A fresh substrate boot creates NO token file (AUG-039).** `~/.duckbrain/` may not
+  exist at all and auger fails closed with `no DuckBrain token`. Mint one:
+  `node bin/duckbrain.js token --name=<you>` prints the 64-hex token on line 2; also
+  pass a non-empty `DUCKBRAIN_API_KEY` (the substrate runs auth=none by default).
+- **`option.costs` / `option.breaks` are always empty (AUG-058).** `dump` prints
+  `costs=— breaks=—` for every option and no verb can populate them — do not read
+  «—» as "no cost", read it as "not recorded".
+- **`status`'s domain lines can contradict themselves (AUG-059).** A domain leading
+  with "answered" can still end "(row status NOT-REACHED)"; trust the leading word
+  and the decisions/questions count, not the parenthetical.
+- **Confirmed FIXED in the current tree** (rows still pending on the board — check
+  the code before believing them): `toggle --on O1` now resolves a unique bare index
+  and writes it; an ambiguous token is refused rc=1 naming every candidate; a token
+  matching nothing prints `no such option` rc=1 (AUG-036). `dump --config D-001=O1`
+  now accepts the bare-index shorthand the help advertises (AUG-037). `status` now
+  measures 199 ms, not the 2.2 s of AUG-047.
+- **Still live:** `answer --domain` accepts any string (4.99, and even `notanumber`,
+  both recorded exit 0) — AUG-038.
