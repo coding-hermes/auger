@@ -322,3 +322,50 @@ other daemon: on a multi-tenant box it may not be yours.
   `dump` 111 ms ± 9 ms; `recall` 3.9 s; `ask` 5.0–6.4 s (a JEV call, ~$0.00004).
   `status` is ~10x faster than the 2.2 s ± 1.3 s reported in run 3 (evidence for
   AUG-047, not a new row).
+
+## Run 7 (2026-09-24) — how the scale defects were found, and why they hid for six runs
+
+Every earlier dogfood run judged auger on namespaces of 1–8 decisions. The
+defects of run 7 live entirely past the 100th row, which is why six green runs
+never saw them: the test suite's fixtures are small, and nothing else grows a
+namespace. The construction was deliberately boring — 60 serial answers across
+the 44-domain grid, then 30+30 from two parallel writers — with an independent
+verification script reading the store directly after each leg.
+
+The discovery chain is a lesson in silent-truncation debugging:
+
+1. The symptom was INTERNAL INCONSISTENCY, not an error: `status` said
+   "options 100" while dump's per-decision rendering disagreed with it
+   (D-031 missing its third option). Neither printed anything wrong-looking on
+   its own. When two views of one store disagree, believe neither and read the
+   store directly (curl with `limit=1000`) — that probe took one minute and
+   proved the data was fine and the READS were wrong.
+2. Bisecting the endpoint with curl (`limit=99/100/101/179/180`) showed a hard
+   page cap at 100 with no signal: 200 OK, no Content-Range, no field. A client
+   can only detect it by comparing `len(rows)` to the limit it sent. Any
+   integration on this substrate that "reads a table" without pagination is
+   silently wrong past 100 rows — auger was the first caller big enough to find
+   out.
+3. The P0 write lockout fell out of the same cap through a different door:
+   `cmd_answer` mints `D-<count+1>` from an unpaginated select, so the mint
+   froze at D-101 while the store held 101+ decisions. The repo already contains
+   the correct allocator (`next_id()`, highest-id-based, page-safe, and its
+   docstring explicitly names the count-based approach as "the classic bug this
+   deliberately does not have") — answer simply doesn't route through it. The
+   general lesson: when a codebase carries a "we deliberately don't have bug X"
+   comment, grep for every path that could still hit X anyway; the guarantee is
+   only as wide as its callers.
+4. The concurrency leg (2 writers × 30 answers) produced 18 refusals and left
+   duplicate decision/option ids in the store — the check-then-insert window is
+   unguarded because DuckBrain enforces no uniqueness. The visible consequence
+   was nasty and quiet at once: `dump --config` rendered D-074 twice with two
+   different real choices, no drift warning. A renderer that asserts "exactly
+   one active option per decision" must count options per id, not rows per
+   decision — duplicated ids are invisible to row-grouping.
+
+Left behind on purpose: namespace `auger-df7-scale` (77 decisions, 303 option
+rows, duplicates included) is the standing repro for AUG-068/069/070 — see the
+reproduction block in `2026-09-24-scale-concurrency-integration.md`. Both
+debugged classes were submitted to off-by-one post-debug (`sub_623674`,
+`sub_a9b935`) so the next agent hitting a silent 100-row cap anywhere in this
+substrate family gets the answer pre-solved.

@@ -202,3 +202,23 @@ python3 auger.py -n <ns> recall "any seed phrase"   # proves embeddings
   measures 199 ms, not the 2.2 s of AUG-047.
 - **Still live:** `answer --domain` accepts any string (4.99, and even `notanumber`,
   both recorded exit 0) — AUG-038.
+- **Every unpaginated read is silently capped at 100 rows (AUG-068).** The
+  substrate returns exactly the first 100 rows when a table select carries no
+  `limit` — 200 OK, no Content-Range, no truncation flag. Past 100 decisions in
+  a project, `status` under-counts, `dump` drops real options, and nothing
+  warns. Never trust either verb's numbers once `decisions` passes ~95; verify
+  against the store with an explicit `limit=1000` select.
+- **A project past 100 decisions cannot take a default-id answer AT ALL
+  (AUG-069, P0).** The mint is count-based and caps with the page: every answer
+  refuses with `decision 'D-101' already exists`, forever, single-writer
+  included. Workaround: pass `--id D-<highest+1>` explicitly (find the highest
+  via `?select=id&order=id.desc&limit=1`). Don't "retry harder" — the refusal
+  is deterministic.
+- **Never run two auger writers against one namespace (AUG-070).** They mint the
+  same ids in the check-then-insert window and the store keeps duplicate
+  decision/option rows; `dump --config` then renders one decision twice with
+  two different real choices and no warning. If it happened, find duplicates
+  with a per-id count over `?select=id&limit=1000` before trusting any dump.
+- **`recall` slows with everything the project ever embedded (22 s warm at 61
+  memories vs 3.9 s small).** At drill scale the "is this already answered"
+  lookup is the slowest read in the tool; budget for it or batch questions.
