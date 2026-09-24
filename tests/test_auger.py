@@ -23,6 +23,7 @@ must pass every run.
 
 from __future__ import annotations
 
+import http.client
 import io
 import json
 import os
@@ -42,6 +43,7 @@ from conftest import (
     D001,
     D002,
     REPO_ROOT,
+    SEED_TEXT,
     TEST_NS_PREFIX,
     answer,
     api_namespaces,
@@ -2679,6 +2681,210 @@ def test_a_broken_verb_fails_exactly_one_named_test(tmp_path, live_service):
     assert "test_alpha_toggle_flips_the_stored_flag" in failed[0], failed
     assert "nothing changed" in report, report  # the failure names the broken behaviour
     assert "3 passed" in report, report
+
+
+# ================================================================= url encoding (AUG-061)
+# A name with a space in it used to kill the whole verb BEFORE a request was sent: `http.client`
+# validates the request line and raises `InvalidURL` for a raw space, so the traceback came from the
+# client, not from DuckBrain. These cases pin the boundary where every URL is built — the path
+# segments, the query VALUES (a spaced `project_id` is a first-class name here, not a filter to
+# quote by hand), and the fact that the shapes the rest of this suite relies on did not move.
+def validate_like_the_transport_does(path: str) -> None:
+    """Put `path` through the SAME check that raised InvalidURL: `http.client.putrequest`.
+
+    No socket is opened — `putrequest` validates the request line and nothing else, which is
+    exactly the step the defect died in. Using the real validator (rather than, say, asserting
+    "no space in the string") means a URL that our encoder lets through in a shape the client
+    would still refuse cannot pass this test.
+    """
+    conn = http.client.HTTPConnection("127.0.0.1", 1)
+    try:
+        conn.putrequest("GET", path)
+    finally:
+        conn.close()
+
+
+def test_the_validator_catches_the_pre_fix_shape_it_replaced():
+    """The control: this is the URL the CLI built before the fix, and the client still refuses it.
+
+    Without this, a `validate_like_the_transport_does` that silently did nothing would make every
+    case below vacuous. The exact string is the one in the reported traceback.
+    """
+    with pytest.raises(http.client.InvalidURL):
+        validate_like_the_transport_does(
+            "/api/ns/ns with space/tables/project?order=created_at.desc&limit=1"
+        )
+
+
+def test_tbl_percent_encodes_spaced_path_segments():
+    path = auger.tbl("ns with space", "Test Table")
+    assert path == "/api/ns/ns%20with%20space/tables/Test%20Table", path
+    validate_like_the_transport_does(path)
+
+
+def test_tbl_encodes_a_spaced_filter_value_and_keeps_its_operator():
+    path = auger.tbl("auger", "decision", "project_id=eq.Test Project&order=id.asc")
+    assert (
+        path
+        == "/api/ns/auger/tables/decision?project_id=eq.Test%20Project&order=id.asc"
+    ), path
+    validate_like_the_transport_does(path)
+
+
+def test_tbl_encodes_both_halves_at_once():
+    """The reported case: a spaced namespace AND a spaced filter value in one URL."""
+    path = auger.tbl("ns with space", "project", "id=eq.Test Project&limit=1")
+    assert (
+        path == "/api/ns/ns%20with%20space/tables/project?id=eq.Test%20Project&limit=1"
+    ), path
+    validate_like_the_transport_does(path)
+
+
+def test_the_query_shapes_this_suite_depends_on_do_not_move():
+    """Structural characters stay literal — an encoder that broke them would break every read.
+
+    `,` is the one exception kept readable on purpose: postgrest uses it as a LIST separator, so
+    `select=id,name` and `order=domain.asc,id.asc` must survive as written.
+    """
+    assert auger.tbl("auger", "project") == "/api/ns/auger/tables/project"
+    assert auger.tbl("auger", "option", "") == "/api/ns/auger/tables/option"
+    for query in (
+        "order=id.asc",
+        "select=id&order=id.desc&limit=1",
+        "pk=eq.D-001",
+        "project_id=eq.P-PYTEST&order=domain.asc,id.asc",
+        "confidence=lt.0.6",
+        "kind=eq.opens&src_id=eq.D-001",
+        "order=created_at.desc,id.desc",
+    ):
+        assert (
+            auger.tbl("auger", "decision", query)
+            == f"/api/ns/auger/tables/decision?{query}"
+        )
+
+
+def test_reserved_characters_inside_a_value_cannot_reframe_the_url():
+    """`?` and `#` in a value are DATA, not URL structure — a raw `#` would truncate the request.
+
+    This is the same class of defect as the raw space, one step further along: the client would
+    happily send a `#` and the server would see a different query than the caller wrote.
+    """
+    path = auger.tbl("auger", "decision", "id=eq.a?b#c")
+    assert path == "/api/ns/auger/tables/decision?id=eq.a%3Fb%23c", path
+    assert path.count("?") == 1 and "#" not in path, path
+    validate_like_the_transport_does(path)
+
+
+def test_the_ampersand_separator_is_still_structure():
+    """`&` stays the parameter SEPARATOR: encoding it would fold every multi-parameter query into one.
+
+    The honest limit of a query STRING as this module's interface: a value's own `&` has to be
+    encoded by the caller, because by the time `tbl()` sees the string the two meanings are
+    indistinguishable. No caller here builds such a value — every filter is an id, a status or a
+    confidence — and this case pins the behaviour deliberately rather than by accident.
+    """
+    path = auger.tbl("auger", "decision", "id=eq.a&b")
+    assert path == "/api/ns/auger/tables/decision?id=eq.a&b", path
+    assert path.count("&") == 1, path
+
+
+def test_ns_tables_path_encodes_the_namespace_it_names():
+    assert auger.ns_tables_path("ns with space") == "/api/ns/ns%20with%20space/tables"
+    assert auger.ns_tables_path("auger") == "/api/ns/auger/tables"
+
+
+def test_a_spaced_namespace_path_is_answered_by_the_live_service(live_service: str):
+    """The path half, live: the request REACHES DuckBrain, and the space comes back decoded.
+
+    A name that exists and one that does not travel through the same decoder, so this case needs no
+    namespace of its own — and it could not have one anyway: the API refuses to CREATE a name with a
+    space (`VALIDATION_ERROR`, verified live), which is exactly why the reported defect was a
+    read-side failure in the first place. 200 and 404 are both ANSWERS; `InvalidURL` never was.
+    """
+    name = "auger 061 does not exist"
+    st, body, _ = auger.db(auger.ns_tables_path(name))
+    assert st in (200, 404), body
+    if st == 200:
+        # The service resolved the request line back to a namespace NAME: `%20` was decoded.
+        assert body["namespace"] == name, body
+
+
+def test_recall_sends_an_encoded_namespace(monkeypatch):
+    """The memories search quotes both halves of the query now; capture the URL it sends."""
+    seen: dict = {}
+
+    def fake_db(path, *a, **kw):
+        seen["path"] = path
+        return 200, {"items": []}, {}
+
+    monkeypatch.setattr(auger, "db", fake_db)
+    assert auger.recall("ns with space", "one query", limit=3) == []
+    assert seen["path"] == (
+        "/api/memories?namespace=ns%20with%20space&q=one%20query&limit=3"
+    ), seen["path"]
+    validate_like_the_transport_does(seen["path"])
+
+
+def test_teardown_deletes_an_encoded_namespace(monkeypatch):
+    """`delete_namespace` was the fifth hand-interpolated call site; it is encoded too."""
+    seen: dict = {}
+
+    def fake_db(path, *a, **kw):
+        seen["path"] = path
+        return 404, {"error": "gone"}, {}
+
+    monkeypatch.setattr(auger, "db", fake_db)
+    assert auger.delete_namespace("ns with space") == (404, {"error": "gone"})
+    assert seen["path"] == "/api/namespaces/ns%20with%20space", seen["path"]
+    validate_like_the_transport_does(seen["path"])
+
+
+def test_a_spaced_project_id_round_trips_through_a_live_verb(ns: str, tmp_path):
+    """The acceptance criterion, as a case: a project named with a space is ADDRESSABLE, not a crash.
+
+    Both halves are live against DuckBrain: the WRITE stores the row under the spaced id, and the
+    READ finds it by `id=eq.<spaced id>` — which only works because the encoded value is decoded by
+    the server. `status` is deliberately not the feedback verb: the point is that ordinary verbs work.
+    """
+    pid = "Test Project"
+    seed = tmp_path / "seed.txt"
+    seed.write_text(SEED_TEXT)
+
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "start",
+            "--name",
+            "spacedtest",
+            "--id",
+            pid,
+            "--seed-file",
+            str(seed),
+        ]
+    )
+    assert rc == 0 and f"project {pid} in namespace {ns}" in out, out
+
+    rc, status_out = run_cli(["-n", ns, "--project-id", pid, "status"])
+    assert rc == 0, status_out
+    assert f"project {pid} — spacedtest" in status_out, status_out
+
+    # The stored row is the assertion: the spaced filter found THIS project, not the default one.
+    stored = row(ns, "project", f"id=eq.{pid}")
+    assert stored["name"] == "spacedtest", stored
+
+
+def test_an_unknown_spaced_namespace_is_an_answer_not_a_traceback(live_service: str):
+    """The reported command line, verbatim: it may not find a namespace, but it may not crash."""
+    code, message, _out = run_cli_exit(
+        ["--namespace", "ns with space", "--project-id", "Test Project", "feedback"]
+    )
+    assert code != 0, message
+    assert "InvalidURL" not in message, message
+    assert "control characters" not in message, message
+    # A substrate answer either names the namespace it could not read, or says no project is stored.
+    assert message.strip(), message
+    assert "ns with space" in message or "no project row" in message, message
 
 
 # ================================================================= teardown

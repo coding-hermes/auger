@@ -44,6 +44,7 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 DB_URL = os.environ.get("DUCKBRAIN_URL", "http://127.0.0.1:3000")
 JEV_URL = "https://openrouter.ai/api/alpha/decisions"
@@ -385,8 +386,60 @@ def db(
     )
 
 
+# ---------------------------------------------------------------- url building (AUG-061)
+# EVERY request URL is built here, at one boundary, and every piece of caller text that reaches one
+# is percent-encoded at that boundary. This is not cosmetic: `http.client` validates the finished
+# URL and raises `InvalidURL` on a raw space (or any other control character) BEFORE the request is
+# sent, so an unencoded name is not a wrong answer — it is a traceback that kills the whole verb.
+# It kills it wherever the text lands: a path segment, a table name, or a filter VALUE.
+#
+# `quote`'s default `safe="/"` is wrong for BOTH halves of a URL. In a path it would let a namespace
+# named `a/b` become two segments (a different table), so PATH segments and query KEYS use
+# `safe=""`. In a query value a stray `&` or `=` would be read as STRUCTURE instead of data; only
+# `,` stays readable, because postgrest uses it as a LIST separator (`select=id,name`,
+# `order=a.asc,b.asc`, `in=(a,b)`) rather than as data.
+_QUERY_VALUE_SAFE = ","
+
+
+def url_seg(seg: object) -> str:
+    """One URL PATH SEGMENT, percent-encoded — `safe=""` so `/` cannot split a segment."""
+    return quote(str(seg), safe="")
+
+
+def ns_tables_path(ns: str) -> str:
+    """`/api/ns/<ns>/tables` — a namespace's own declaration endpoint.
+
+    One function for the four call sites that used to interpolate `{ns}` by hand: a name that
+    needs encoding needs it in all of them, and a fifth site added later should have nothing to
+    copy by f-string.
+    """
+    return f"/api/ns/{url_seg(ns)}/tables"
+
+
+def encode_query(query: str) -> str:
+    """Percent-encode a PostgREST query string's keys and values, structure intact.
+
+    The structure IS the data: `col=op.value&col2=op2.value2`. So the `&` separators and the FIRST
+    `=` of each pair stay literal, the operator stays untouched (`.` is unreserved, so `eq.` /
+    `lt.` survive `quote` unchanged), and only the value text is encoded. Choosing `safe=""` for
+    the keys matters for the same reason as the path: a `&` smuggled into a key would invent a
+    parameter.
+    """
+    if not query:
+        return ""
+    parts = []
+    for part in query.split("&"):
+        key, eq, value = part.partition("=")
+        if not eq:
+            parts.append(quote(part, safe=_QUERY_VALUE_SAFE))
+            continue
+        parts.append(f"{quote(key, safe='')}={quote(value, safe=_QUERY_VALUE_SAFE)}")
+    return "&".join(parts)
+
+
 def tbl(ns: str, table: str, query: str = "") -> str:
-    return f"/api/ns/{ns}/tables/{table}{('?' + query) if query else ''}"
+    base = f"/api/ns/{url_seg(ns)}/tables/{url_seg(table)}"
+    return f"{base}?{encode_query(query)}" if query else base
 
 
 def select(ns: str, table: str, query: str = "") -> list:
@@ -454,7 +507,7 @@ def delete_namespace(ns: str, retries: int = TEARDOWN_RETRIES) -> tuple[int, obj
     a read that gives up costs one retry, a delete that gives up leaks a row.
     """
     st, body, _ = db(
-        f"/api/namespaces/{ns}", "DELETE", {"confirm": True}, retries=retries
+        f"/api/namespaces/{url_seg(ns)}", "DELETE", {"confirm": True}, retries=retries
     )
     return st, body
 
@@ -852,10 +905,8 @@ def bundle_member(
 
 
 def recall(ns: str, q: str, limit: int = 5) -> list:
-    from urllib.parse import quote
-
     st, body, _ = db(
-        f"/api/memories?namespace={ns}&q={quote(q)}&limit={limit}", timeout=60
+        f"/api/memories?namespace={url_seg(ns)}&q={quote(q)}&limit={limit}", timeout=60
     )
     if st != 200:
         return []
@@ -1316,7 +1367,7 @@ def declared_columns(ns: str, table: str) -> list:
     the old shape (the whole reason `insert_decision` and `edge` send absent keys), and the API
     refuses a filter on a column it does not have.
     """
-    st, body, _ = db(f"/api/ns/{ns}/tables")
+    st, body, _ = db(ns_tables_path(ns))
     if st != 200 or not isinstance(body, dict):
         return []
     for t in body.get("tables", []):
@@ -2862,7 +2913,7 @@ def cmd_init(a):
     if existing:
         # The registry list is a fast path, not the existence authority. A stale row can
         # name a namespace whose directory is gone, so confirm the namespace resource itself.
-        verify_st, verify_body, _ = db(f"/api/ns/{ns}/tables")
+        verify_st, verify_body, _ = db(ns_tables_path(ns))
         if verify_st == 200:
             existing = True
         elif verify_st == 404:
@@ -2880,7 +2931,7 @@ def cmd_init(a):
         ):
             # The create response is authoritative when the list is stale. Verify the
             # conflict names a namespace that is actually readable before continuing.
-            verify_st, verify_body, _ = db(f"/api/ns/{ns}/tables")
+            verify_st, verify_body, _ = db(ns_tables_path(ns))
             if verify_st != 200:
                 raise SystemExit(
                     f"could not create namespace {ns} ({st}): {body}; "
@@ -2911,7 +2962,7 @@ def cmd_init(a):
             with open(p, "w") as f:
                 f.write(text)
             wrote.append(name)
-    st, live, _ = db(f"/api/ns/{ns}/tables")
+    st, live, _ = db(ns_tables_path(ns))
     have = sorted(
         t["name"] for t in (live.get("tables", []) if isinstance(live, dict) else [])
     )
