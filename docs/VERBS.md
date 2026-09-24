@@ -123,11 +123,18 @@ nothing stored).
 
 Record a decision with its rejected alternatives.
 
-**Arguments:** `--chosen` (required), `--id` (defaults to the next `D-` number),
-`--option` (repeatable — every alternative, chosen ones included), `--why-not`,
+**Arguments:** `--chosen` (required; when `--option` is supplied it must resolve to exactly
+one supplied option by full option id, option label, or bare option suffix such as `O2`),
+`--id` (defaults to the next `D-` number), `--option` (repeatable — every alternative,
+chosen ones included), `--why-not`,
 `--domain`, `--question-id`, `--reversal-cost`, `--confidence` (float), `--status`
 (defaults `decided`), `--scope` (`project` | `bundle`, default `project`), `--supersedes`
 (repeatable decision id), `--supersedes-why`.
+
+A supplied `--chosen` that matches no option, or matches more than one option label, is
+refused before any decision or option row is written. The resolver does not guess between
+ambiguous values. Omitting `--option` remains valid and records a decision with no option
+rows; its success report states `0 of 0 active`.
 
 **Writes:** one `decision` row; one `option` row per `--option` (id `<D-###>-O<n>`,
 `active` on exactly the chosen one); one embedded memory under

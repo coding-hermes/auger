@@ -3608,12 +3608,30 @@ def cmd_answer(a):
     supersede_target_ids = supersede_targets(
         ns, pid, did, a.supersedes, a.supersedes_why or ""
     )
+    # Resolve --chosen against the supplied options before the decision write. Reuse the same
+    # token grammar as dump/toggle (full id, label, or bare suffix), but resolve provisional rows so
+    # a refusal cannot leave a decision with zero active options. The stored choice is canonicalized
+    # to the option label; otherwise a token such as O2 would look contradictory in dump --config.
+    option_rows = [
+        {
+            "id": f"{did}-O{i + 1}",
+            "decision_id": did,
+            "label": opt,
+            "costs": "",
+            "breaks": "",
+        }
+        for i, opt in enumerate(a.option or [])
+    ]
+    resolved_option = (
+        resolve_option(option_rows, a.chosen, did) if option_rows else None
+    )
+    chosen = resolved_option["label"] if resolved_option else a.chosen
     row = {
         "id": did,
         "project_id": pid,
         "domain": a.domain or "",
         "question_id": a.question_id or "",
-        "chosen": a.chosen,
+        "chosen": chosen,
         "why_not": a.why_not or "",
         "reversal_cost": a.reversal_cost or "",
         "confidence": float(a.confidence if a.confidence is not None else -1),
@@ -3625,29 +3643,25 @@ def cmd_answer(a):
     if scope and scope != DEFAULT_SCOPE:
         row["scope"] = scope
     warning = insert_decision(ns, row)
-    for i, opt in enumerate(a.option or []):
-        insert(
-            ns,
-            "option",
-            {
-                "id": f"{did}-O{i + 1}",
-                "decision_id": did,
-                "label": opt,
-                "costs": "",
-                "breaks": "",
-                "active": opt == a.chosen,
-            },
+    for option in option_rows:
+        option["active"] = bool(
+            resolved_option and option["id"] == resolved_option["id"]
         )
+        insert(ns, "option", option)
     # The embedded evidence must not contradict itself: the chosen option is CHOSEN, and the
     # rejected list is the other options. Writing all options as "rejected" (the first version
     # of this) produced evidence reading "chose X. Rejected: X, Y, Z" — which made the
     # already-answered check score a genuinely-answered question as unanswered.
-    others = [o for o in (a.option or []) if o != a.chosen]
+    others = [
+        option["label"]
+        for option in option_rows
+        if not resolved_option or option["id"] != resolved_option["id"]
+    ]
     remember(
         ns,
         row["evidence_key"],
         f"Question: {a.domain or ''} {a.question_id or ''}".strip()
-        + f". Decision {did}: we chose {a.chosen}. "
+        + f". Decision {did}: we chose {row['chosen']}. "
         + (
             f"Rejected alternatives: {'; '.join(others)}. "
             if others
@@ -3683,8 +3697,9 @@ def cmd_answer(a):
     )
     stored_scope = DEFAULT_SCOPE if warning else decision_scope(row)
     impact = bundle_impact(ns, pid, {**row, "scope": stored_scope})
+    active_count = 1 if resolved_option else 0
     print(
-        f"{did} recorded  (confidence {row['confidence']}, {len(a.option or [])} options, "
+        f"{did} recorded  (confidence {row['confidence']}, {active_count} of {len(option_rows)} active, "
         f"embedded, scope {decision_scope(row)}{closed})"
     )
     # The local break, surfaced in the same grammar `propagate` reports its walk in (AUG-028): the

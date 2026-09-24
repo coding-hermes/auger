@@ -219,6 +219,108 @@ def test_answer_makes_the_chosen_option_the_only_active_one(decided: dict):
     ]
 
 
+def test_answer_refuses_a_chosen_sentence_not_supplied_as_an_option(project: dict):
+    """A mismatched chosen value is refused before either decision or option rows are written."""
+    ns, pid = project["ns"], project["pid"]
+    before = {
+        "decision": rows(ns, "decision", f"project_id=eq.{pid}&order=id.asc"),
+        "option": rows(ns, "option", "order=id.asc"),
+    }
+    rc, message, out = run_cli_exit(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-055",
+            "--chosen",
+            "enable local caching",
+            "--option",
+            "enable local caching for every request",
+            "--option",
+            "write every request to disk",
+            "--confidence",
+            "0.8",
+        ]
+    )
+    assert rc != 0
+    assert "no such option" in message and "enable local caching" in message, message
+    assert out == ""
+    assert (
+        rows(ns, "decision", f"project_id=eq.{pid}&order=id.asc") == before["decision"]
+    )
+    assert rows(ns, "option", "order=id.asc") == before["option"]
+
+
+def test_answer_resolves_option_token_and_dump_has_one_active_configuration(
+    project: dict,
+):
+    """A bare option suffix is canonicalized before writes and remains consistent in both dumps."""
+    ns = project["ns"]
+    options = [
+        "the system should cache requests in memory",
+        "the system should write every request to disk",
+        "the system should use a remote cache",
+    ]
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-055",
+            "--chosen",
+            "O2",
+            "--option",
+            options[0],
+            "--option",
+            options[1],
+            "--option",
+            options[2],
+            "--confidence",
+            "0.8",
+        ]
+    )
+    assert rc == 0 and "1 of 3 active" in out, out
+
+    decision = row(ns, "decision", "id=eq.D-055")
+    assert decision["chosen"] == options[1]
+    stored = rows(ns, "option", "decision_id=eq.D-055&order=id.asc")
+    assert [o["label"] for o in stored] == options
+    assert [o["active"] for o in stored] == [False, True, False], stored
+
+    rc, current = run_cli(["-n", ns, "dump"])
+    assert rc == 0
+    assert f"ACTIVE CONFIGURATION: D-055={options[1]}" in current, current
+    assert "CONTRADICTIONS WITH THE RECORD" not in current, current
+
+    rc, hypothetical = run_cli(["-n", ns, "dump", "--config", "D-055=O2"])
+    assert rc == 0
+    assert f"ACTIVE CONFIGURATION: D-055={options[1]}" in hypothetical, hypothetical
+    assert "CONTRADICTIONS WITH THE RECORD" not in hypothetical, hypothetical
+
+
+def test_answer_without_options_remains_valid_and_reports_zero_active(project: dict):
+    """The legacy no-option answer remains valid, but its success count is explicit."""
+    ns = project["ns"]
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-056",
+            "--chosen",
+            "an unenumerated decision",
+            "--confidence",
+            "0.5",
+        ]
+    )
+    assert rc == 0 and "0 of 0 active" in out, out
+    assert row(ns, "decision", "id=eq.D-056")["chosen"] == "an unenumerated decision"
+    assert rows(ns, "option", "decision_id=eq.D-056") == []
+
+
 def test_answer_tolerates_an_apostrophe_in_the_reason(decided: dict):
     """The module's headline rule: payloads reach the API as bytes, never shell-quoted."""
     tricky = "Postgres's service is what the seed's rule forbids"
@@ -1527,7 +1629,7 @@ def break_cli(
         "--domain",
         "9.02",
         "--chosen",
-        chosen or f"the meter that produced {bad} was mis-wired",
+        chosen or "keep what the old meter read",
         "--option",
         "keep what the old meter read",
         "--option",
