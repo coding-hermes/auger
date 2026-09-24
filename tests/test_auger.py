@@ -1626,7 +1626,9 @@ def test_propagate_reopens_the_stale_branch_and_reaches_the_grandchild(
 
 #: The stand-in's page cap — AUG-068: a declared-table read returns at most this many rows.
 API_PAGE = 100
-MINT_NS = "auger-mint-unit"  # never created: every call below is answered by the stand-in
+MINT_NS = (
+    "auger-mint-unit"  # never created: every call below is answered by the stand-in
+)
 MINT_PID = "P-MINT"
 
 
@@ -1681,13 +1683,20 @@ def drive_answer(
     monkeypatch.setattr(
         auger, "_project", lambda ns, pid=None: {"id": MINT_PID, "name": "mint"}
     )
-    monkeypatch.setattr(auger, "insert_decision", lambda ns, row: written.append(row) or "")
+    monkeypatch.setattr(
+        auger, "insert_decision", lambda ns, row: written.append(row) or ""
+    )
     monkeypatch.setattr(auger, "insert", lambda ns, table, rows: {})
     monkeypatch.setattr(auger, "remember", lambda *a, **k: {})
     monkeypatch.setattr(
         auger,
         "bundle_impact",
-        lambda ns, pid, row: {"scoped": False, "walked": [], "lines": [], "warnings": []},
+        lambda ns, pid, row: {
+            "scoped": False,
+            "walked": [],
+            "lines": [],
+            "warnings": [],
+        },
     )
     rc, out = run_cli(["-n", MINT_NS, "answer", "--chosen", "one option", *extra])
     assert rc == 0, out
@@ -1704,7 +1713,9 @@ def test_answer_past_a_hundred_decisions_mints_from_the_highest_id(monkeypatch):
     out, written, queries = drive_answer(monkeypatch, ids)
 
     # The stand-in is not a polite fiction: it CAPS, which is the property that froze the mint.
-    assert len(auger.select(MINT_NS, "decision", f"project_id=eq.{MINT_PID}")) == API_PAGE
+    assert (
+        len(auger.select(MINT_NS, "decision", f"project_id=eq.{MINT_PID}")) == API_PAGE
+    )
     # ... so the expression this replaced (`len(...) + 1`) yields an id the store already holds, and
     # the guard below then refused the answer. Named here so the regression cannot return silently.
     assert f"D-{API_PAGE + 1:03d}" == "D-101" and "D-101" in ids
@@ -1788,7 +1799,9 @@ def test_the_decision_id_width_is_read_from_the_highest_id(monkeypatch):
         assert auger.decision_id_width(MINT_NS) == want, ids
 
 
-def test_a_live_namespace_holding_a_hundred_and_one_decisions_keeps_answering(project: dict):
+def test_a_live_namespace_holding_a_hundred_and_one_decisions_keeps_answering(
+    project: dict,
+):
     """AUG-069 criterion 2, end to end against the real store: 101 stored decisions, then TWO answers
     with no --id. The mint ADVANCES (D-102, then D-103) at the three-digit width, where the count
     mint would have refused both with "refused: decision 'D-101' already exists".
@@ -1817,14 +1830,34 @@ def test_a_live_namespace_holding_a_hundred_and_one_decisions_keeps_answering(pr
     assert len(rows(ns, "decision", f"project_id=eq.{pid}")) == API_PAGE
 
     rc, out = run_cli(
-        ["-n", ns, "answer", "--chosen", "minted one", "--why-not", "n/a", "--confidence", "0.5"]
+        [
+            "-n",
+            ns,
+            "answer",
+            "--chosen",
+            "minted one",
+            "--why-not",
+            "n/a",
+            "--confidence",
+            "0.5",
+        ]
     )
     assert rc == 0 and out.startswith("D-102 recorded"), out
     assert row(ns, "decision", "id=eq.D-102&limit=1")["chosen"] == "minted one"
 
     # and it is not a one-shot: the NEXT answer reads D-102 and mints D-103
     rc, out = run_cli(
-        ["-n", ns, "answer", "--chosen", "minted two", "--why-not", "n/a", "--confidence", "0.5"]
+        [
+            "-n",
+            ns,
+            "answer",
+            "--chosen",
+            "minted two",
+            "--why-not",
+            "n/a",
+            "--confidence",
+            "0.5",
+        ]
     )
     assert rc == 0 and out.startswith("D-103 recorded"), out
     assert row(ns, "decision", "id=eq.D-103&limit=1")["chosen"] == "minted two"
