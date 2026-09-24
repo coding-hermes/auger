@@ -1,0 +1,415 @@
+commit 6bd4945ea68c0d00c1068e8922d44738be9363b4
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Wed Sep 23 23:10:19 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Wed Sep 23 23:10:19 2026 -0500
+
+    dogfood: auger PROMISING-BUT-ROUGH (5th run) — a REAL drill judged as a product: the loop produces a genuinely useful configuration, but `answer` reports success over a configuration that selects NOTHING, and the ask gate re-proposes the question it just closed
+    
+    Fifth dogfood run, and the first to change the ANGLE rather than repeat the entry
+    surface. Runs 1-4 proved the machinery (core loop; graph/bundles/verdict;
+    ask->answer seam + registers; raw HTTP layer). Every one asked "does the verb
+    work". This run asked the user's question: does drilling a REAL decision set
+    produce something worth reading?
+    
+    The drill: a real fleet decision (where heavy multiarch docker builds run, forced
+    by the 2026-08-31 rethinkdb qemu incident), real alternatives, real rejected
+    reasons. Empty namespace -> rendered configuration in ~90s.
+    
+    Findings (rows AUG-055..AUG-060):
+    
+    - AUG-055 (P1) `answer` sets option.active by a byte-for-byte `--chosen ==
+      --option` comparison (auger.py cmd_answer). A chosen short name vs a full-sentence
+      option stores ZERO active options, prints "D-001 recorded" and exits 0; only
+      `dump` reveals "ACTIVE CONFIGURATION: (nothing active)". It also makes
+      `dump --config` print a spurious CONTRADICTIONS WITH THE RECORD line.
+    - AUG-056 (P1) the already-answered gate scores similarity, not identity: after
+      `answer --question-id Q-000001` closed Q-000001, the next `ask` stored Q-000002
+      with the IDENTICAL text, costing a duplicate decision before JEV said "nothing
+      left worth asking".
+    - AUG-057 (P2) `--why-not` does not repeat while `--option` does — a second
+      reason is silently dropped at exit 0.
+    - AUG-058 (P2) `option.costs`/`option.breaks` are declared and rendered but no
+      verb can ever set them; `dump` prints `costs=— breaks=—` forever.
+    - AUG-059 (P2) `status` self-contradicts: a domain leads with "answered" and ends
+      "(row status NOT-REACHED)".
+    - AUG-060 (P2) the documented fixed substrate port is unsafe on a shared host: on
+      the CI box a fresh agent got a 500 whose message named a DESTROYED agent's home,
+      answered by another owner's/orphaned daemon on :3000. Port isolation +
+      DUCKBRAIN_URL made the documented loop pass in 1s.
+    
+    Also verified and reported: AUG-036 and AUG-037 are FIXED in the current tree
+    (bare option index resolves; ambiguity refused rc=1; dump --config shorthand
+    parsed); AUG-038 still live (`--domain` accepts any string); `status` now measures
+    199ms vs the 2.2s of AUG-047.
+    
+    What held up under real use: `dump --config` named a contradiction against the
+    record unprompted; `toggle` refused an ambiguous token by name and wrote nothing;
+    `init --seed-domains` still reads the grid rather than copying it.
+    
+    Install leg PASSED (unlike run 4's explicit skip): substrate 142s + documented
+    loop 1s on a bare agent (bunker-las-03, agent d1a530b6, destroyed).
+    
+    Evidence: docs/dogfood/2026-09-24-real-drill-integration.md (report),
+    docs/dogfood/diagnostics.md (root causes + failure signatures),
+    skills/auger-usage/SKILL.md (pitfalls for the next agent),
+    .coding-hermes/dogfood-log.md (verdict + install_seconds).
+---
+ .coding-hermes/board/tasks.jsonl                  |   6 +
+ .coding-hermes/dogfood-log.md                     |   1 +
+ docs/dogfood/2026-09-24-real-drill-integration.md | 153 ++++++++++++++++++++++
+ docs/dogfood/diagnostics.md                       | 109 +++++++++++++++
+ skills/auger-usage/SKILL.md                       |  44 +++++++
+ 5 files changed, 313 insertions(+)
+
+diff --git a/.coding-hermes/board/tasks.jsonl b/.coding-hermes/board/tasks.jsonl
+index cdaccfa..e8e8332 100644
+--- a/.coding-hermes/board/tasks.jsonl
++++ b/.coding-hermes/board/tasks.jsonl
+@@ -57,3 +57,9 @@
+ {"attempts": 0, "blocks": [], "capability_tags": ["+method", "+engine"], "ci_result": null, "commit_hash": null, "complexity": 3, "created_at": "2026-09-23T23:26:02.631396+00:00", "depends_on": [], "detail": {"fingerprint": "da60981a595d94af1b13219bc4341c9e617646879a550968a9868fe3a993c8a5"}, "files_changed": [], "foreman_note": null, "guard_result": null, "id": "AUG-052", "perpetual": null, "priority": "P2", "reasoning": "WHY (found 2026-09-23 while mapping the 'what is missing' list against the board;\nthis is the ONE substantive gap the board did not already carry)\n\ndocs/DESIGN.md section 4, open decision 3 states the intended v0.2 shape:\n\"JEV gives calibrated choice, which is what we want for confidence, but a\nlarge-context model may propose better questions. Proposal for v0.2: a strong model\nproposes candidate questions, JEV scores them (dedupe via already_answered, rank via\nchoice, completeness via score). That splits generation from judgement, which is also\nwhat the skill's own doctrine demands.\"\n\nToday `ask` does not split the two roles. Measured on a live scratch namespace\n(auger-probe-1790205758, 2026-09-23): `ask` returns `next_subject` as a single JEV\n`choice` value (testability, 0.31 \u2014 correctly flagged below the 0.45 threshold),\none `next question` (what_is_the_data, 0.71), and stores ONE question row. There is\nno candidate SET and no generator: the question text comes from the criterion\nsentence map added by AUG-042, not from a model that reasoned about the project.\n\nSo the engine can say WHAT to drill (JEV is good at that) but cannot propose a\nBETTER question than the fixed sentence attached to the criterion \u2014 which is the\nwhole point of splitting generation from judgement.\n\nDELIVERABLE\n- a generation step that takes the thin decisions + the seed + stored context and\n  proposes N candidate questions\n- JEV as the JUDGE over that set: dedupe with `already_answered`, rank with `choice`,\n  score completeness with `score`\n- the stored question row records WHICH model proposed and WHICH scored (provenance,\n  so a weak proposal is visible rather than blamed on JEV)\n- the budget ceiling from AUG-001 still binds the batch size\n\nACCEPTANCE CRITERIA\n- `ask` can return more than one candidate question, each with its provenance\n- an already-answered candidate is dropped by the JEV gate, not by string match\n- the run ceiling still holds and still emits the budget-thin marker\n- the current single-subject path still works when the generator is unavailable\n  (degrades, never refuses)\n\nCOST NOTE: `ask` today costs 3.36e-05 (JEV only). A generator adds one\nlarge-context model call per ask; the row must state the measured delta before\nlanding, not after.", "status": "pending", "title": "DESIGN 4.3 open decision: `ask` takes JEV's single `next_subject` choice \u2014 split generation from judgement so a large-context model proposes candidate questions and JEV dedupes/ranks/scores them", "updated_at": "2026-09-23T23:26:02.631396+00:00"}
+ {"attempts": 0, "blocks": [], "capability_tags": ["+decision", "+ops"], "ci_result": null, "commit_hash": null, "complexity": 1, "created_at": "2026-09-23T23:26:02.637825+00:00", "depends_on": [], "detail": {"fingerprint": "22c97e1afafa701005b665f79616747d61b10b30e8d3c7bd4b220408d3e5c114"}, "files_changed": [], "foreman_note": null, "guard_result": null, "id": "AUG-053", "perpetual": null, "priority": "P3", "reasoning": "WHY (same sweep as AUG-052 \u2014 the decision currently lives only in a doc)\n\ndocs/DESIGN.md section 4, open decision 2: \"v0.1 is Python (stdlib only) so the loop\ncould be proven the same day. The fleet convention for durable daemons is a single Go\nbinary + systemd + a loopback port. Recommend: keep Python while the shape is moving,\nport once the verbs stop changing.\"\n\nMeasured facts that make this decidable rather than theoretical:\n- auger is 4,200+ lines of stdlib-only Python and `auger` is NOT on PATH; it runs as\n  `python3 auger.py` from the clone.\n- 13 verbs and 14 tables are now stable; several verbs are still moving (AUG-019\n  write paths, AUG-029 bundles, AUG-005 export).\n- everything auger needs at runtime is a CLI invocation, not a resident process \u2014\n  so the systemd/daemon argument applies only if the feedback loop is ever run\n  unattended (which is exactly the AUG-001 governor question).\n\nDELIVERABLE: a recorded decision with its TRIGGER, not a code change. Either\n(a) stay Python \u2014 and say what would force the port, or (b) scope the port as its own\nrow with the verbs frozen and the substrate HTTP API as the boundary.\nDo NOT start a port before the verb surface stops changing; DESIGN says so explicitly.\n\nACCEPTANCE CRITERIA\n- the decision and its trigger condition are on the board (this row closes with the\n  decision text, not a commit)\n- if the answer is \"port\", a follow-up row exists naming the frozen verb list\n- no code change ships under this row", "status": "pending", "title": "DESIGN 4.2 open decision on the record: v0.1 is Python stdlib-only \u2014 decide whether 'v1 proper' ports to a single Go binary (the fleet daemon convention) or stays Python", "updated_at": "2026-09-23T23:26:02.637825+00:00"}
+ {"attempts": 0, "blocks": [], "capability_tags": ["+ops", "+release"], "ci_result": null, "commit_hash": null, "complexity": 2, "created_at": "2026-09-23T23:26:02.644154+00:00", "depends_on": ["RELEASE-001"], "detail": {"fingerprint": "e0da7c1227be70bf4d58926aa31f342d1a1d7cdac041acaac57b5d3bff521a0f"}, "files_changed": [], "foreman_note": null, "guard_result": null, "id": "AUG-054", "perpetual": null, "priority": "P2", "reasoning": "WHY (same sweep)\n\nAUG-048 (pending) records that the 4th dogfood run \"exercised install-independent\nsurfaces\" \u2014 i.e. the install leg was SKIPPED. AUG-033 (complete) fixed three\nundocumented quickstart steps found on a bare box; RELEASE-001 (pending) covers the\nrelease surface (tags/releases/CHANGELOG/pyproject). What no row covers is the\nend-to-end proof that a stranger can follow the README from a clean machine and reach\na working loop.\n\nThis matters most for the operator's goal of starting to USE this: the loop works\ntoday (proven live 2026-09-23 \u2014 init/start/answer/status/ask/recall/dump/check all\ngreen on a fresh namespace), but only for someone who already has the clone, the\nsubstrate on :3000, the DuckBrain token, an OpenRouter key and a 44-domain grid path.\n\nDELIVERABLE: one clean-box run of the documented path (README Quick start verbatim),\nrecording every deviation, every silent assumption, and the measured time. The README\nmust end up matching what actually happens \u2014 Substrate pin already documents three\nbare-Debian blockers; the question is what the FOURTH and fifth are.\n\nACCEPTANCE CRITERIA\n- a fresh box reaches a stored decision via the documented commands only\n- every deviation is either fixed in the docs or filed as its own row\n- the measured wall-clock to first decision is recorded\n- the run names which prerequisite was hardest to satisfy (substrate branch pin,\n  pnpm bootstrap, token, JEV key, or the domain grid) \u2014 that is the one to remove next\n\nSEQUENCING: depends on RELEASE-001 for a real artifact to install; until then this\nrow may run against the clone and its findings stand.", "status": "pending", "title": "The documented install path has never been exercised end-to-end on a clean box (AUG-048 records the dogfood install leg as SKIPPED) \u2014 verify install -> init -> start -> ask on a bare machine and file what breaks", "updated_at": "2026-09-23T23:26:02.644154+00:00"}
++{"id": "AUG-055", "title": "answer accepts a --chosen that matches no --option: a success line over a configuration that selects NOTHING", "priority": "P1", "complexity": 2, "status": "pending", "reasoning": "WHY (found live 2026-09-24, 5th dogfood run, namespace df5-real)\n\nThe single most damaging defect a user hits, because it is silent and it defeats\nthe loop's last step.\n\n`answer` inserts its option rows with `active = (opt == a.chosen)` \u2014 a VERBATIM\nSTRING EQUALITY between the --chosen text and the --option text (auger.py\ncmd_answer, the option insert). Nothing validates the pair, nothing warns, and\nthe pair is easy to miss because `--option` is naturally a full sentence while\n--chosen is naturally a short name for it.\n\nReproduced verbatim:\n  answer --question-id Q-000001 --chosen \"The CI box smoke test\" \\\n         --option \"CI smoke battery: bunker3 runs the project's own documented\n                   smoke check ...\" --why-not \"...\"\n  -> D-001 recorded  (confidence -1.0, 1 options, embedded, scope project)\n     closed Q-000001\n  dump\n  -> ACTIVE CONFIGURATION: (nothing active)\n     WARNING: decisions with != 1 active option:\n       - D-001: 0 of 1 options active \u2014 this decision contributes NOTHING\n\nEvery subsequent verb inherits the damage: `dump --config` then compares the\nhypothesis against a record whose chosen text is not any option, so it reports a\nspurious CONTRADICTION (\"choosing <option label> contradicts the recorded choice\n(<the different sentence>)\") for a hypothesis that actually agrees with it.\n\nThe documentation invites this: docs/VERBS.md says `--option` is \"repeatable \u2014\nevery alternative, chosen ones included\" and `--chosen` is \"the choice\", with no\nstatement that the two must be byte-identical.\n\nDELIVERABLE (pick one, but the first two are the fix)\n- validate that --chosen resolves to exactly one of the supplied --option values\n  before anything is stored, refusing by name otherwise (the resolve_option\n  machinery already exists and already refuses loudly); OR\n- make --chosen accept an option token (D-001-O3 / O3 / a label) and derive the\n  chosen label from the option row, so the two can never disagree; AND\n- whatever the mechanism, the success line must state the resulting active-option\n  count (\"D-001 recorded (1 of 3 options active)\"), so an empty configuration can\n  never be printed as a clean success.\n\nACCEPTANCE CRITERIA\n- `answer --chosen <text not among --option>` exits non-zero naming the mismatch,\n  OR is accepted with the chosen option auto-activated \u2014 and in either case stores\n  exactly one active option\n- the recorded decision renders in `dump` with exactly one active option and NO\n  spurious contradiction line in `dump --config` for a hypothesis that matches it\n- the success line reports the active-option count\n- a regression test covers the mismatched-wording case (chosen a sentence, option\n  a longer sentence, real use)\n- ruff check auger.py clean", "capability_tags": ["+engine", "+decision"], "attempts": 0, "blocks": [], "depends_on": [], "detail": {}, "files_changed": [], "foreman_note": null, "guard_result": null, "ci_result": null, "commit_hash": null, "perpetual": null, "created_at": "2026-09-24T03:55:24.297805+00:00", "updated_at": "2026-09-24T03:55:24.297805+00:00"}
++{"id": "AUG-056", "title": "ask re-proposes the question it just closed: the already-answered gate does not see a closed question and wastes a full round", "priority": "P1", "complexity": 2, "status": "pending", "reasoning": "WHY (found live 2026-09-24, 5th dogfood run, namespace df5-real)\n\n`ask` proposed the IDENTICAL question text in the round immediately after the\nuser answered exactly that question.\n\nObserved sequence:\n  ask                                  -> stored Q-000001  What test proves this works?\n  answer --question-id Q-000001 ...    -> D-001 recorded, closed Q-000001\n  ask                                  -> already answered? 0.3 -> genuinely new\n                                          stored Q-000002  What test proves this works?\n  answer --question-id Q-000002 ...    -> D-002 recorded  (a DUPLICATE decision)\n  ask                                  -> question not stored: JEV proposed none:\n                                          nothing left worth asking\n\nSo the drill burned one ask (5.0s + a model call), one answer, and one duplicate\ndecision to close a question the previous answer had already closed. The loop\nself-heals only AFTER the waste.\n\nRoot cause is in the gate, not in JEV: the already-answered check scores the\nproposed question text against embedded evidence, and the evidence for D-001 was\nwritten with a chosen sentence that differs from the option label \u2014 so the noul\nscore came back 0.24-0.30 against a threshold above it. Note this is COMPOUNDED\nby AUG-055 (a mismatched --chosen also degrades the evidence text the gate reads),\nbut is not caused by it: the gate has no signal for \"the question this text came\nfrom was closed one round ago\" even when the evidence is clean.\n\nDELIVERABLE\n- carry the closed-question identity: when `answer --question-id Q` closes Q, the\n  gate must exclude Q (and the proposal text it carried) from the next round's\n  askable set \u2014 for at least one round \u2014 rather than relying on a similarity score\n  over evidence prose\n- OR record the closed question id on the decision's evidence entry and have the\n  already-answered pass treat an exact closed-question-text match as answered\n  regardless of the noul score\n\nACCEPTANCE CRITERIA\n- the documented loop (ask -> answer -> ask) never re-proposes the question text\n  that the previous answer closed, on a fresh namespace, reproduced as a test\n- a duplicate decision is NOT created to close a re-proposed twin\n- the second ask still works normally when the closed question was a DIFFERENT\n  text (the gate must not simply suppress the next question)\n- ruff check auger.py clean", "capability_tags": ["+engine", "+method"], "attempts": 0, "blocks": [], "depends_on": [], "detail": {}, "files_changed": [], "foreman_note": null, "guard_result": null, "ci_result": null, "commit_hash": null, "perpetual": null, "created_at": "2026-09-24T03:55:24.297805+00:00", "updated_at": "2026-09-24T03:55:24.297805+00:00"}
++{"id": "AUG-057", "title": "--why-not silently keeps only its LAST value while --option repeats: a decision records one rejected reason and drops the rest", "priority": "P2", "complexity": 1, "status": "pending", "reasoning": "WHY (found live 2026-09-24, 5th dogfood run)\n\n`answer --option` is `action=\"append\"` (repeatable) but `--why-not` is a plain\nstring (auger.py, answer's add_argument block). Passing --why-not twice \u2014\nthe natural thing to do, since a decision rejects more than one alternative and\ndocs/VERBS.md lists `--why-not` beside the repeatable `--option` \u2014 silently keeps\nonly the last one. Exit 0.\n\nReproduced: an answer supplied two distinct rejected reasons (one per rejected\nalternative); `dump` rendered exactly one of them, the second.\n\nTwo harms: (a) the record loses reasoning the user believed they had stored \u2014\nwhich is the product's whole value proposition (\"remembers every choice and the\nreason the alternatives lost\"); (b) there is no shape in the schema to hold one\nreason PER OPTION, so recording it truthfully is not currently possible.\n\nDELIVERABLE\n- make the reason\u2192alternative relationship explicit rather than positional: either\n  --why-not repeats in lockstep with the rejected options (documented as such and\n  refused when the counts differ), or add a per-option reason form\n  (--why-not-for D-001-O2=\"...\") so each rejected option carries its own reason\n- whatever the shape, `dump` must render every recorded reason against the option\n  it belongs to\n- docs/VERBS.md must state the arity (this file is the contract; today it is\n  silent on whether --why-not repeats)\n\nACCEPTANCE CRITERIA\n- a decision rejecting two alternatives can record two reasons, both rendered by\n  `dump` against the right option\n- passing --why-not twice is either honoured or refused by name \u2014 never silently\n  truncated\n- docs/VERBS.md documents the arity of --why-not\n- regression test on the two-reason case", "capability_tags": ["+engine", "+docs"], "attempts": 0, "blocks": [], "depends_on": [], "detail": {}, "files_changed": [], "foreman_note": null, "guard_result": null, "ci_result": null, "commit_hash": null, "perpetual": null, "created_at": "2026-09-24T03:55:24.297805+00:00", "updated_at": "2026-09-24T03:55:24.297805+00:00"}
++{"id": "AUG-058", "title": "option.costs and option.breaks are declared columns no verb can ever set: dump prints costs=\u2014 breaks=\u2014 forever", "priority": "P2", "complexity": 1, "status": "pending", "reasoning": "WHY (found live 2026-09-24, 5th dogfood run)\n\nThe `option` table declares `costs` (varchar) and `breaks` (varchar) columns\n(auger.py COLS). `answer` inserts every option row with those fields as EMPTY\nSTRINGS and no verb anywhere in the CLI sets them:\n\n  grep for an add_argument covering costs/breaks across the whole\n  subparser registry -> zero hits.\n\nMeanwhile `dump` renders them for every option:\n\n  [ ] D-003-O1  <label>  costs=\u2014  breaks=\u2014\n\nSo the rendered configuration carries two fields that are structurally always\nempty. That is worse than omitting them: a reader of the dump sees \"costs=\u2014\" and\ncannot tell whether the option has no cost or auger simply cannot record one.\n\nThis is the option-level analogue of AUG-019 (registers break/assumption/unknown\nhave no CLI write path) and should probably be resolved with it \u2014 the same\nquestion, one table over.\n\nDELIVERABLE (decide, then make the code and the contract agree)\n- either give the fields a write path (`answer --option-cost` / `--option-breaks`,\n  or the per-option reason form AUG-057 proposes), and document them; OR\n- drop them from the declared table and from `dump`'s rendering, and say in\n  docs/VERBS.md why they were removed\n\nNeither answer is wrong; shipping a column no verb can fill and printing '\u2014' for\nit is.\n\nACCEPTANCE CRITERIA\n- `dump` never renders a field that no verb can populate\n- if the fields stay, a user can set them from the CLI and a test proves the value\n  round-trips into `dump`\n- docs/VERBS.md's `option` description matches whichever choice was made\n- the resolution is recorded on AUG-019 so the two register/option gaps close\n  consistently", "capability_tags": ["+decision", "+docs"], "attempts": 0, "blocks": [], "depends_on": [], "detail": {}, "files_changed": [], "foreman_note": null, "guard_result": null, "ci_result": null, "commit_hash": null, "perpetual": null, "created_at": "2026-09-24T03:55:24.297805+00:00", "updated_at": "2026-09-24T03:55:24.297805+00:00"}
++{"id": "AUG-059", "title": "status contradicts itself on one line: a domain is reported 'answered' while the same line says '(row status NOT-REACHED)'", "priority": "P2", "complexity": 1, "status": "pending", "reasoning": "WHY (found live 2026-09-24, 5th dogfood run, namespace df5-real, 3 decisions)\n\n`status` renders each domain of the 44-grid on one line, and for a domain that\ncarries decisions that line says two contradictory things:\n\n  4.09  layout   answered   triage 4  floor 2  terminating ring none (not opened)\n                 decisions/questions 2  (row status NOT-REACHED)\n\n  4.10  build    answered   ...  decisions/questions 1  (row status NOT-REACHED)\n\nThe line leads with \"answered\" and ends with \"(row status NOT-REACHED)\". The two\nlabels are computed from different sources \u2014 the leading word from the presence\nof decision/question rows carrying that domain number, the parenthetical from the\nseeded `domain` row's own `status` column \u2014 and nothing reconciles them.\n\nA reader cannot tell which is true, and the parenthetical is the misleading half:\nafter two decisions in 4.09 the domain is emphatically not \"not reached\". Note the\nseeded rows start NOT-REACHED and no verb appears to advance that column when a\ndecision lands in the domain, so the coverage map \u2014 the single most useful thing\n`status` produces \u2014 under-reports what has been decided.\n\nDELIVERABLE\n- make the domain row's own status advance when a decision/question lands in that\n  domain (the same transition `propagate` performs for its ring logic, if that\n  logic exists), so the parenthetical stops lying; OR\n- if the two are deliberately different axes, label them so a reader can tell \u2014\n  the line must not carry an apparent contradiction\n- either way, a domain with decisions must not render as NOT-REACHED\n\nACCEPTANCE CRITERIA\n- after a decision is recorded in domain 4.NN, `status` never prints\n  \"answered ... (row status NOT-REACHED)\" on that domain's line\n- the seeded NOT-REACHED rows for untouched domains still read NOT-REACHED\n- a test asserts the domain line's two labels agree after a decision lands\n- ruff check auger.py clean", "capability_tags": ["+engine", "+ops"], "attempts": 0, "blocks": [], "depends_on": [], "detail": {}, "files_changed": [], "foreman_note": null, "guard_result": null, "ci_result": null, "commit_hash": null, "perpetual": null, "created_at": "2026-09-24T03:55:24.297805+00:00", "updated_at": "2026-09-24T03:55:24.297805+00:00"}
++{"id": "AUG-060", "title": "the documented fixed substrate port is unsafe on a shared host: a fresh agent on the CI box got 500s answered by OTHER agents' orphaned daemons", "priority": "P2", "complexity": 2, "status": "pending", "reasoning": "WHY (found live 2026-09-24, 5th dogfood run's ephemeral-bunker install leg)\n\nThe README's Quick start requires \"a running DuckBrain on 127.0.0.1:3000\" and the\nSubstrate pin section gives the boot line with no --port. On the CI box\n(bunker-las-03, a multi-user rootless-Docker host) that assumption silently\nbreaks, in a way that produces a WRONG ERROR rather than a clear one.\n\nObserved on a fresh agent (d1a530b6), following the docs verbatim:\n  init -> could not list namespaces (500): {'error': \"Cannot determine the\n          duckbrain root: no duckbrain.config.json was found walking up from\n          /home/bunker-864a37ab/duckbrain/src/config, ...\"}\n\n/home/bunker-864a37ab is a DIFFERENT, already-DESTROYED dogfood agent's home\ndirectory. The box was holding four daemons at once: `kara`'s on :3000, and\norphans from destroyed agents 4b004b7a (started 00:48) and 864a37ab (Sep 22)\nstill bound to :3100/:3210/:3311 and still answering requests. Because the fresh\nagent's own boot had silently failed to win a port (or the request simply reached\na stranger's listener), auger reported a 500 whose error text names a path that\nno longer exists \u2014 the worst possible diagnostic.\n\nIsolating on a verified-free port and pinning DUCKBRAIN_URL made the same\ndocumented loop pass in 1 SECOND, so this is purely a port/addressing problem,\nnot an auger or substrate correctness problem.\n\nDELIVERABLE\n- README Substrate pin: give the boot line a non-default port for shared hosts\n  (`node bin/duckbrain.js http --port 39xx`) and say WHY (a fixed 127.0.0.1:3000\n  collides on any multi-user box, and another user's daemon will answer you);\n  add the one-line port-free check (`ss -tlnp | grep <port>` or a connect probe)\n  before starting, and the DUCKBRAIN_URL export that points auger at it\n- diagnostics.md: record the failure signature \u2014 a 500 whose message names a\n  home directory that is not yours means you reached someone else's substrate;\n  the fix is domain separation by port, never killing the other daemon (you may\n  not own it)\n- optionally, auger itself should treat an unexpected 500 at init as this class\n  and say so (a foreign-substrate hint when the error text names a path outside\n  $HOME)\n\nACCEPTANCE CRITERIA\n- the README documents a port-explicit boot line for shared hosts plus the\n  DUCKBRAIN_URL pin, and a fresh agent following ONLY the docs reaches a stored\n  decision (this run needed the undocumented isolation step)\n- docs/dogfood/diagnostics.md carries the foreign-substrate failure signature\n- no change requires touching another user's process, or any repo\n  visibility/permission/clone setting", "capability_tags": ["+ops", "+docs"], "attempts": 0, "blocks": [], "depends_on": [], "detail": {}, "files_changed": [], "foreman_note": null, "guard_result": null, "ci_result": null, "commit_hash": null, "perpetual": null, "created_at": "2026-09-24T03:55:24.297805+00:00", "updated_at": "2026-09-24T03:55:24.297805+00:00"}
+diff --git a/.coding-hermes/dogfood-log.md b/.coding-hermes/dogfood-log.md
+index 541af89..dbc978e 100644
+--- a/.coding-hermes/dogfood-log.md
++++ b/.coding-hermes/dogfood-log.md
+@@ -6,3 +6,4 @@
+ | 2026-09-23 | 🟡 PROMISING-BUT-ROUGH (graph/bundles/verdict surface) | "A user can run the graph walks (propagate), the feedback engine, bundles (SPEC-002) and the verdict record" — the graph engine, feedback/gate loop and verdict verb WORK and are excellent; the bundle layer is invisible when it runs (silent 0.24-confidence 'unchanged' honored, AUG-027) and half-unreachable (no verb writes the moot trigger, AUG-028; no verb creates membership, AUG-029). | AUG-027 (P1 bundle impact pass silent + no confidence floor) · AUG-028 (P1 moot cascade reachable only by hand-written edges) · AUG-029 (P2 no bundle verbs + scheduler-DB-gated membership + namespace convention documented nowhere) · AUG-030 (P2 no supersession; JEV itself judged the contradictory active config BAD 0.36) · AUG-031 (P2 docs drift: 13-table/11-verb lists miss verdict) · AUG-032 (P3 recall cold 25s vs warm 2s) · AUG-033 (P2 fresh-install: 3 undocumented steps) | first real success (feedback → real question) 17s after setup; setup cost ~10 min incl. a namespace-convention mis-pair the docs caused | fresh leg re-run: auger loop 7s zero-install; substrate 3 undocumented steps then ~85s (bunker las-bunker-03, agent 864a37ab, destroyed; smoke=ok) |
+ | 2026-09-23 | 🟡 PROMISING-BUT-ROUGH (registers + ask→answer seam) | "A user can record breaks/assumptions/unknowns and complete the README's own ask→answer loop" — read/derive verbs (check/status/dump/verdict/recall/propagate/feedback) are excellent and fast; the WRITE surface breaks the loop: ask persists nothing (AUG-035), answer's refusal leaves half a write behind and the retry duplicates the decision id (AUG-034), toggle/dump help-text contracts lie (AUG-036/037), --domain unvalidated (AUG-038); registers remain verb-less (AUG-019, confirmed twice by use). Fresh-install leg re-run post-AUG-033: README bootstrap accurate, one token gap remains (AUG-039). | AUG-034 (P1 non-atomic refusal + duplicate id) · AUG-035 (P1 ask→answer seam broken) · AUG-036/037/038/039 (P2 contract drifts) | ~12 min to first real verdict (verdict --ask-jev judged my what-if BAD, noul 0.07); setup 3s init + 1s start | fresh leg 72s substrate build + 6s smoke 19/21 (fails=missing OR key); bunker las-bunker-03, agent 4b004b7a, destroyed; smoke=ok |
+ | 2026-09-23 (4th) | 🟡 PROMISING-BUT-ROUGH (seam live + HTTP layer) | "The documented ask→answer loop completes, and the spec is queryable over HTTP, searchable by embedding, versioned in git" — the loop NOW COMPLETES via feedback→answer (Q-000001 closed live, propagate clean); the AUG-035 ask-store seam itself never fired (5/5 JEV proposals below T_SUBJECT, AUG-041) and stores a criterion slug not a sentence (AUG-042); HTTP reads/POST/DELETE are clean but PATCH can 200-and-write-nothing (AUG-043), keyless POST is accepted (AUG-045), count is ignored, bad filters 500; "versioned in git" is false (AUG-044); embedding store has no HTTP route (AUG-046). | AUG-041 (P1 seam unsatisfiable in practice) · AUG-043 (P2 substrate PATCH 200-noop) · AUG-044 (P2 git-versioning claim false) | loop completion ~12 min from empty namespace; HTTP probe suite ~10 min | control host, no bunker leg this run — explicit SKIPPED row AUG-048 on the board (install path re-proven 3× in 24h by runs 2-3; this run's surfaces were install-independent: CLI verbs + raw HTTP) |
++| 2026-09-24 (5th) | 🟡 PROMISING-BUT-ROUGH (real drill judged as a product) | "A user can point auger at a real decision, let it ask what is missing, answer with the alternatives that lost, and get back a configuration another person can read" — the drill WORKS and the output is genuinely useful (`dump --config` even names a contradiction against the record, unprompted); the WRITE surface breaks the last step: `answer` accepts a --chosen that matches no --option and stores a configuration selecting NOTHING while printing success (AUG-055), and the already-answered gate re-proposes the question it just closed, costing a duplicate decision (AUG-056). | AUG-055 (P1 silent empty configuration on mismatched chosen/option) · AUG-056 (P1 gate re-proposes the closed question) · AUG-057 (P2 --why-not keeps only its last value) · AUG-058 (P2 costs/breaks unfillable but rendered) · AUG-059 (P2 status self-contradicts) · AUG-060 (P2 fixed :3000 unsafe on a shared host; got 500s from strangers' daemons) | ~90s empty namespace -> rendered configuration (~17s of it model calls); status 199ms± 12ms, dump 111ms ± 9ms, recall 3.9s, ask 5-6.4s | fresh leg PASSED: substrate 142s + loop 1s on a bare agent (bunker las-bunker-03, agent d1a530b6, destroyed; smoke=ok) |
+diff --git a/docs/dogfood/2026-09-24-real-drill-integration.md b/docs/dogfood/2026-09-24-real-drill-integration.md
+new file mode 100644
+index 0000000..6e6a57e
+--- /dev/null
++++ b/docs/dogfood/2026-09-24-real-drill-integration.md
+@@ -0,0 +1,153 @@
++# auger dogfood integration report — 2026-09-24 (5th run: a REAL drill, judged as a product)
++
++Four prior runs proved the machinery: the core loop (run 1), the graph + bundles +
++verdict (run 2), the ask→answer seam and the registers (run 3), and the raw HTTP
++data layer (run 4). Every one of them asked *does the verb work*. None asked the
++question a user asks first: **does drilling a real decision set through auger
++produce something worth reading?**
++
++This run is that. One real, non-toy problem was drilled end to end and the output
++was judged as a product: a decision the fleet actually had to make.
++
++## The promise under test
++
++> "A user can point auger at a real decision, let it ask what is missing, answer
++> with the alternatives that lost, and get back a configuration (and a coverage
++> map) that another person can read and act on."
++
++## The run
++
++Namespace `df5-real` on the control host, live DuckBrain (`feat/native-s3`) + live
++JEV (`typesafe/jev-1.13-20260917`). The real problem:
++
++> *Where should the fleet's heavy multiarch docker builds run?* The 2026-08-31
++> rethinkdb image build pegged 4+ cores for hours under qemu-aarch64 emulation and
++> starved every other lane; the fleet has a provisioned CI box (`bunker-las-03`)
++> with qemu binfmt and a buildx container builder.
++
++Real alternatives, real rejected reasons — not placeholders.
++
++### What happened, in order
++
++| step | command | result | cost |
++|---|---|---|---|
++| init | `init --seed-domains` | 14/14 tables declared, 44/44 domain rows, grid read from the skill dir | 0.4s |
++| start | `start --name ... --seed ...` | project `P-20260924032050`, seed stored + embedded (431 ch) | 0.08s |
++| ask #1 | `ask` | JEV picked `concurrency_and_scaling` (0.75) → stored `Q-000001  What test proves this works?` | 6.4s |
++| answer | `answer --question-id Q-000001 --chosen "The CI box smoke test" --option "CI smoke battery: ..." --why-not ... --why-not ...` | `D-001 recorded … closed Q-000001` — **and the configuration came back EMPTY** | 0.1s |
++| ask #2 | `ask` | re-proposed the **same question text** → `Q-000002  What test proves this works?` | 5.0s |
++| answer | `answer --question-id Q-000002 …` | `D-002 recorded` — the duplicate the gate should have prevented | 0.1s |
++| ask #3 | `ask` | `question not stored: JEV proposed none: nothing left worth asking` — self-heals after the waste | 5.0s |
++| answer | the real placement decision, `--confidence 0.9 --reversal-cost 2` | `D-003 recorded` | 0.1s |
++| dump | `dump` | `ACTIVE CONFIGURATION: (nothing active)` + a warning that D-001/D-002/D-003 each contribute nothing | 0.11s |
++| toggle | `toggle --on D-003-O1` | `toggled: D-003-O1->on (1)` — repair works | 0.1s |
++| dump --config | `dump --config D-003=O1` | hypothesis renders **and** names the contradiction against the record | 0.1s |
++| verdict | `verdict --good "D-001=O1;D-002=O1;D-003=O1" --reasons ...` | `V-000001 recorded (verdict good, judged_by human)` | 0.1s |
++| status | `status` | coverage map: 44 seeded, 2 answered, 42 NOT-REACHED | 0.20s |
++
++### The user-visible outcome
++
++The good news is real and worth stating plainly: **the product concept works.** A
++blank namespace became a structured, readable record of a genuine decision in about
++90 seconds of wall clock, and `dump` renders it as a document a colleague could
++read — chosen option, the alternatives that lost, the reason each lost, the
++confidence, the reversal cost. `status` then shows what is *still undecided* across
++44 domains, which is the part that is hard to get any other way. `dump --config`
++(what-if) is the standout: it rendered the hypothesis **and** flagged that the
++hypothesis contradicts the recorded choice, quoting the on-file reason. That is a
++genuinely useful behaviour and no test asserts it.
++
++The bad news is that the loop's *last* step silently does not do the thing it
++appears to do — see AUG-055 — and the gate that decides "is this already answered"
++wasted a full round — see AUG-056.
++
++## Cost of using it (measured)
++
++`hyperfine --warmup 2 --runs 10` on the same 3-decision namespace:
++
++| verb | mean ± σ | note |
++|---|---|---|
++| `status` | **199 ms ± 12 ms** | run 3 measured 2.2s ± 1.3s on a 4-decision namespace — see AUG-047 note |
++| `dump` | **111 ms ± 9 ms** | |
++| `recall` | **3.9 s** | run 3 measured cold 25s / warm 2s (AUG-032) |
++| `ask` | 5.0–6.4 s | dominated by the JEV call; ~$0.00004 |
++
++Nothing here is slow enough to be worth a new perf row: the local verbs are
++sub-second, and `ask`'s 5–6s is a model call a user expects to wait for. The one
++number worth carrying forward is that `status` now measures **~10x faster than run 3
++reported** on a comparable namespace, which is evidence on AUG-047 rather than a
++new row.
++
++## Time to first success
++
++~90 seconds from empty namespace to a rendered configuration, of which ~17s was
++model calls. That is fast — faster than the prior runs' ~12 min, because the
++substrate was already up and no write path refused.
++
++## Fresh-machine install leg (ephemeral bunker, required)
++
++Host `bunker-las-03` (100.69.3.13), agent `d1a530b6`, destroyed at the end.
++
++| leg | measured | result |
++|---|---|---|
++| host reachable, `bunkerd` active, docker 26.1.5 | — | ok |
++| substrate clone `feat/native-s3` (`680568f`) + user-prefix pnpm + `pnpm install && pnpm build` | **142 s** | ok |
++| auger clone from the documented origin | ok | ok |
++| **documented loop on the fresh box** (`init` → `start` → `answer` → `dump`) | **1 s** | **ok — `ACTIVE CONFIGURATION: D-001=bunker for heavy builds`** |
++
++Two things the fresh box taught us that the docs do not say:
++
++1. **The README's fixed port assumption is unsafe on a shared host.** The quickstart
++   says "a running DuckBrain on `127.0.0.1:3000`". On the bunker, `:3000` was already
++   held by *another user's* daemon (`kara`), and the box additionally had three
++   orphaned daemons belonging to **already-destroyed** dogfood agents
++   (`4b004b7a`, `864a37ab`) still bound to `:3100`/`:3210`/`:3311` and still answering.
++   Following the docs verbatim, auger's first write returned
++   `could not list namespaces (500): Cannot determine the duckbrain root … walking up
++   from /home/bunker-864a37ab/duckbrain/…` — a **500 naming a deleted home directory**,
++   with nothing telling the user they had reached a stranger's substrate. Isolating on
++   a verified-free port and pointing the substrate explicitly (`DUCKBRAIN_URL`) made the
++   loop pass in 1s. Filed as AUG-060.
++
++2. **`~/.duckbrain/foreman-status.token` is never created by a fresh boot.** The README
++   requires it; the fresh box had no `~/.duckbrain` at all, and auger failed closed with
++   `no DuckBrain token: set DUCKBRAIN_API_KEY or ~/.duckbrain/foreman-status.token`. The
++   working move — undocumented in the README — is to mint one:
++   `node bin/duckbrain.js token --name=<you>` (prints a 64-hex token on line 2). This is
++   live confirmation of the existing row **AUG-039**, not a new finding.
++
++Neither of these needed a repo visibility or permission change: the clone used existing
++access and the agent was destroyed at the end of the leg.
++
++## Findings, judged
++
++- **Does it work?** Yes — with one silent hole. Every verb ran; the drill produced a
++  correct, readable record. But `answer` accepts a `--chosen` that matches no `--option`
++  and stores a configuration that selects *nothing*, exiting 0 and printing success
++  (AUG-055). A user who words the choice differently from the option — the natural thing
++  to do, since `--option` is a sentence — gets a silent empty configuration until they
++  happen to render it.
++- **Is it useful?** Yes, and more than the prior runs suggested. `dump --config` naming
++  a contradiction against the record is the single most valuable behaviour seen in five
++  runs; `status`'s 44-domain coverage map answers "what have we not decided" directly.
++- **Is it usable?** Mostly, with one costly defect and several dead controls. The
++  `--why-not` flag silently keeps only its last value while `--option` repeats
++  (AUG-057); the declared `option.costs` / `option.breaks` columns are written empty by
++  `answer` and no verb can ever set them, so `dump` prints `costs=— breaks=—` forever
++  (AUG-058); `status` contradicts itself on its own line (AUG-059).
++- **Is it trustworthy?** Mixed at the edges, solid in the core. No data was lost and
++  nothing corrupted; `toggle` correctly refused an ambiguous token by name. But two
++  verbs reported success over a state that did not match the report (AUG-055, AUG-056),
++  and the fresh-box failure mode was a 500 from a *foreign* server (AUG-060).
++- **Is it fast enough?** Yes. Local verbs 111–200 ms, `ask` 5–6 s for a model call.
++
++**Verdict: 🟡 PROMISING-BUT-ROUGH** — the value is real and the output is genuinely
++useful; the trust surface (a write that reports success and stores an empty
++configuration) is the blocker, and it is a small, well-localised fix.
++
++## What this run did NOT do
++
++- No code was changed: the dogfood lane files findings, the project's foreman fixes them.
++- Run 5's own install leg **passed** (unlike run 4's explicit skip AUG-048), so no
++  SKIPPED-install-bunker row is filed for this run.
++- No repo visibility, permission or clone setting was touched.
+diff --git a/docs/dogfood/diagnostics.md b/docs/dogfood/diagnostics.md
+index 2bf40a7..5efce6a 100644
+--- a/docs/dogfood/diagnostics.md
++++ b/docs/dogfood/diagnostics.md
+@@ -213,3 +213,112 @@ path, proven live: `feedback` proposed a question from a thin decision
+ `answer --question-id Q-000001` → `closed Q-000001`, status coverage updated,
+ propagate clean. Practical rule until AUG-041 is fixed: the question path is
+ feedback → answer, not ask → answer.
++
++
++---
++
++## 5th run (2026-09-24) — the real drill, and the write that reports success over nothing
++
++This run stopped testing verbs and used the product on a real decision (where the
++fleet's heavy multiarch docker builds should run — a decision the rethinkdb
++2026-08-31 incident forced). It is the first run to judge the OUTPUT rather than
++the mechanism, and the first to exercise `answer` at length.
++
++### How the thing is built, and why the last step is silent
++
++`answer` is the only verb that writes a CONFIGURATION rather than a record, and it
++does so through one line:
++
++```python
++"active": opt == a.chosen,          # auger.py, cmd_answer's option insert
++```
++
++The `option` rows' `active` flag decides everything downstream — what `dump` calls
++the ACTIVE CONFIGURATION, what `dump --config` diffs a hypothesis against, what
++`toggle` flips, what `verdict` judges. It is set by a byte-for-byte string
++comparison between `--chosen` and each `--option`.
++
++That is the defect (AUG-055): `--chosen` is naturally a short name and `--option`
++is naturally the full sentence, so the natural invocation stores ZERO active
++options — and the verb prints `D-001 recorded (confidence -1.0, 1 options,
++embedded, scope project)` with exit 0. Nothing downstream complains until you
++render:
++
++```
++ACTIVE CONFIGURATION: (nothing active)
++WARNING: decisions with != 1 active option (a configuration SELECTS one option per decision):
++  - D-001: 0 of 1 options active — this decision contributes NOTHING to the configuration
++```
++
++The warning mechanism itself is good and was already hardened (AUG-015). It is the
++WRITE that is the problem: it stores a state the API's own renderer calls broken
++and reports it as success.
++
++Workaround until fixed: **pass the chosen text verbatim as one of the --option
++values.** Compare the two:
++
++```
++# stores an EMPTY configuration (exit 0, "recorded")
++answer --chosen "The CI box smoke test" --option "CI smoke battery: bunker3 runs ..."
++
++# stores a working configuration
++answer --chosen "bunker for heavy builds" --option "bunker for heavy builds" --option "primary host, qemu locally"
++```
++
++If you already have a broken record, `toggle --on <option-id>` activates explicitly
++and repairs it — the toggle path is sound and refuses ambiguity by name.
++
++### The already-answered gate, and the duplicate it costs
++
++`ask`'s gate is a similarity score (noul) of the proposed question against embedded
++evidence. It has no notion of "this question was CLOSED one round ago", so after
++answering Q-000001 the very next `ask` stored Q-000002 with the IDENTICAL text
++("What test proves this works?"). Closing it required a second, duplicate decision
++(D-002). The round after that, JEV correctly said "nothing left worth asking" — so
++the loop does terminate; it just pays one wasted round first (AUG-056).
++
++Note the compounding: a mismatched `--chosen` (AUG-055) writes evidence whose chosen
++text is not the option text, which is part of what the gate scores. Fixing AUG-055
++improves the gate's input but does not remove AUG-056 — the gate still needs the
++closed-question identity, not a better score.
++
++### Where the 500 came from on a fresh machine
++
++The install leg's worst moment was not an auger error. On the shared CI box a fresh
++agent's first write returned:
++
++```
++could not list namespaces (500): {'error': "Cannot determine the duckbrain root:
++no duckbrain.config.json was found walking up from /home/bunker-864a37ab/duckbrain/..."}
++```
++
++`/home/bunker-864a37ab` is a DIFFERENT dogfood agent, already destroyed. The box was
++holding four duckbrain daemons at once — `kara`'s on :3000 and orphans from
++destroyed agents 4b004b7a and 864a37ab on :3100/:3210/:3311, still answering. A
++fixed `127.0.0.1:3000` therefore reaches whoever owns the port, and you get a 500
++whose message names a path that does not exist. The fix is addressing, not code: run
++your own substrate on a port you verified is free and pin `DUCKBRAIN_URL`:
++
++```bash
++for p in 3901; do (echo >/dev/tcp/127.0.0.1/$p) 2>/dev/null && echo "$p BUSY" || echo "$p FREE"; done
++cd ~/duckbrain && nohup env DUCKBRAIN_DATA_DIR=~/dd-data node bin/duckbrain.js http --port 3901 &
++export DUCKBRAIN_URL=http://127.0.0.1:3901 DUCKBRAIN_API_KEY=$(node bin/duckbrain.js token --name=me | sed -n 2p)
++```
++
++With that isolation the documented loop passed in 1 second (AUG-060). Never kill the
++other daemon: on a multi-tenant box it may not be yours.
++
++### What held up under real use
++
++- `dump --config` named a CONTRADICTION WITH THE RECORD, quoting the on-file reason,
++  for a hypothesis that differed from the stored choice. Unprompted, correct, and
++  genuinely useful — no test asserts it.
++- `toggle` refused an ambiguous bare token by name (`matches D-001-O1, D-002-O1,
++  D-003-O1 — use the full option id; nothing was written`) and wrote nothing.
++- `init --seed-domains` still reads the grid from the skill dir rather than copying
++  it (42 NOT-REACHED rows after 3 decisions, 2 answered).
++- `verdict --good <config> --reasons ...` recorded human judgement on the record.
++- Costs, measured (`hyperfine`, 3-decision namespace): `status` 199 ms ± 12 ms,
++  `dump` 111 ms ± 9 ms; `recall` 3.9 s; `ask` 5.0–6.4 s (a JEV call, ~$0.00004).
++  `status` is ~10x faster than the 2.2 s ± 1.3 s reported in run 3 (evidence for
++  AUG-047, not a new row).
+diff --git a/skills/auger-usage/SKILL.md b/skills/auger-usage/SKILL.md
+index 3771063..47d3a6a 100644
+--- a/skills/auger-usage/SKILL.md
++++ b/skills/auger-usage/SKILL.md
+@@ -158,3 +158,47 @@ python3 auger.py -n <ns> recall "any seed phrase"   # proves embeddings
+   [--confidence X]` (on-file), `--ask-jev` (JEV judges the rendered dump,
+   fail-closed), `--config D-001=O2` (hypothesis; values accept option ids OR
+   labels; requires --ask-jev), `--list`. Cost ~$0.0001/call.
++
++
++## Pitfalls proven in real use (5th run, 2026-09-24 — the drill on a real decision)
++
++- **`--chosen` must be byte-identical to one of the `--option` values, or you store
++  an EMPTY configuration and get a success line (AUG-055).** The natural mistake:
++  `--chosen` as a short name, `--option` as the full sentence. It exits 0 and prints
++  `D-001 recorded`; only `dump` reveals `ACTIVE CONFIGURATION: (nothing active)`.
++  Make the chosen text one of the options verbatim, or repair afterwards with
++  `toggle --on <option-id>`. This also removes the spurious
++  `CONTRADICTIONS WITH THE RECORD` line that `dump --config` prints when the
++  recorded chosen text matches no option.
++- **`--why-not` does NOT repeat (AUG-057).** Unlike `--option` (repeatable), passing
++  `--why-not` twice silently keeps only the last reason — exit 0 either way. To keep
++  two rejected reasons today, put them in one `--why-not` string; the schema has no
++  per-option reason slot yet.
++- **`ask` can re-propose the question your last `answer` just closed (AUG-056).**
++  The gate scores similarity, not identity. If it happens, answering it creates a
++  DUPLICATE decision with different id — prefer `check "<the question text>"` first,
++  and treat a repeat as the gate's miss rather than a real new question.
++- **On a shared host, never assume `127.0.0.1:3000` is yours (AUG-060).** Another
++  user's daemon (or an orphan from a destroyed agent) can hold the port and will
++  answer you — the tell is a 500 whose message names a home directory that is not
++  your own. Boot your own substrate on a verified-free port and export
++  `DUCKBRAIN_URL`; check with
++  `(echo >/dev/tcp/127.0.0.1/<port>) 2>/dev/null && echo BUSY || echo FREE`.
++- **A fresh substrate boot creates NO token file (AUG-039).** `~/.duckbrain/` may not
++  exist at all and auger fails closed with `no DuckBrain token`. Mint one:
++  `node bin/duckbrain.js token --name=<you>` prints the 64-hex token on line 2; also
++  pass a non-empty `DUCKBRAIN_API_KEY` (the substrate runs auth=none by default).
++- **`option.costs` / `option.breaks` are always empty (AUG-058).** `dump` prints
++  `costs=— breaks=—` for every option and no verb can populate them — do not read
++  «—» as "no cost", read it as "not recorded".
++- **`status`'s domain lines can contradict themselves (AUG-059).** A domain leading
++  with "answered" can still end "(row status NOT-REACHED)"; trust the leading word
++  and the decisions/questions count, not the parenthetical.
++- **Confirmed FIXED in the current tree** (rows still pending on the board — check
++  the code before believing them): `toggle --on O1` now resolves a unique bare index
++  and writes it; an ambiguous token is refused rc=1 naming every candidate; a token
++  matching nothing prints `no such option` rc=1 (AUG-036). `dump --config D-001=O1`
++  now accepts the bare-index shorthand the help advertises (AUG-037). `status` now
++  measures 199 ms, not the 2.2 s of AUG-047.
++- **Still live:** `answer --domain` accepts any string (4.99, and even `notanumber`,
++  both recorded exit 0) — AUG-038.
