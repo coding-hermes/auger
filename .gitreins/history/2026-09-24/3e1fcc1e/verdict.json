@@ -1,0 +1,112 @@
+{
+  "task_id": "AUG-068",
+  "task_title": "DuckBrain declared-table selects silently cap at 100 rows \u2014 paginate select() past the page cap",
+  "task_criteria": [
+    "select() and select_or_empty() paginate with explicit limit+offset until a short page; a >100-row store returns the FULL set (regression test proves 130 rows); status/dump report full counts and render all rows on a >100-row namespace; AUG-069's next_id() mint stays page-safe; focused pytest + ruff clean + gate.sh GATE PASS"
+  ],
+  "passed": true,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "e49e74588d696728117c9c73952d97a7a9cf712a",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260924T195222.253152Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: scanners=gitleaks+builtin cross-check\n4:16PM INF scanned ~733063 bytes (733.06 KB) in 501ms\n4:16PM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 42 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260924T195222.253152Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [ 41%]\n........................................................................ [ 83%]\n............................                                             [100%]\n172 passed in 455.90s (0:07:35)\n== end-to-end smoke ==\nnamespace: auger-smoke-2383370\nnamespace sweep: no stale auger-smoke-*/auger-eval-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n  PASS toggle changed the stored configuration\n== verdict: record + list round-trip ==\n  PASS a good verdict is recorded\n  PASS a bad verdict is recorded\n  PASS the good verdict shows in the list\n  PASS the bad verdict's reasons show in the list\n  PASS both --good and --bad refuse\n  PASS the refused pair wrote nothing\n\nnamespace auger-smoke-2383370 removed\npassed 21, failed 0\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260924T195222.253152Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 select() and select_or_empty() paginate with explicit limit+offset until a short page; a >100-row store returns the FULL set (regression test proves 130 rows); status/dump report full counts and render all rows on a >100-row namespace; AUG-069's next_id() mint stays page-safe; focused pytest + ruff clean + gate.sh GATE PASS: Pagination: auger.py:495-556 `_select_paged` loops with explicit `limit`+`offset` (via `_page_query`, auger.py:466-492) and stops when `len(page) < want` (short page); `select` (auger.py:552) and `select_or_empty` (auger.py:566) both delegate to it; MAX_PAGES=1000 bounds a server ignoring offset. 130-row regression: tests/test_auger.py:1954 `test_select_reads_every_row_of_a_table_past_one_page` asserts `len(got) == 130 == len(stored)` plus id-order equality, and asserts a bare GET returns exactly API_PAGE=100 \u2014 PASSED. status/dump: cmd_status (auger.py:4017-4028) counts `len(select(...))` and cmd_dump (auger.py:4388-4390) reads all options; live test tests/test_auger.py:2085 `test_status_and_dump_report_a_namespace_holding_more_than_a_page` stores 60 decisions x 3 options = 180 and asserts `decisions 60 | options 180 |` in status output and all of D-031-O1..O3 in the dump block \u2014 PASSED against the live DuckBrain (127.0.0.1:3000 returned 200). next_id page-safe: auger.py:638 reads `select=id&order=id.desc&limit=1`; ceiling=1 -> `want=min(100,1)=1`, one request; tests `test_a_caller_limit_stays_a_ceiling_and_still_costs_one_request` (1 request, `limit=1`), `test_the_page_safe_mint_reads_the_highest_id_through_the_real_paged_select` (101 rows -> D-102, 1 request) and `test_answer_past_a_hundred_decisions_mints_from_the_highest_id` all PASSED. Commands: focused `pytest -k \"page or paged or select or mint or status_and_dump or API_PAGE\"` -> `14 passed, 158 deselected in 1.08s`; `ruff check auger.py tests/test_auger.py` -> `All checks passed!` rc 0; `bash tests/gate.sh` -> `172 passed in 440.29s`, smoke `passed 21, failed 0`, `LIVE ARMS: ran 2; skipped 0`, `GATE PASS` (rc 0).\nAll AUG-068 sub-claims verified: paged select/select_or_empty with short-page stop, 130-row regression, live 180-row status/dump counts, page-safe next_id mint, and a clean focused pytest + ruff + gate.sh GATE PASS.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 select() and select_or_empty() paginate with explicit limit+offset until a short page; a >100-row store returns the FULL set (regression test proves 130 rows); status/dump report full counts and render all rows on a >100-row namespace; AUG-069's next_id() mint stays page-safe; focused pytest + ruff clean + gate.sh GATE PASS: Pagination: auger.py:495-556 `_select_paged` loops with explicit `limit`+`offset` (via `_page_query`, auger.py:466-492) and stops when `len(page) < want` (short page); `select` (auger.py:552) and `select_or_empty` (auger.py:566) both delegate to it; MAX_PAGES=1000 bounds a server ignoring offset. 130-row regression: tests/test_auger.py:1954 `test_select_reads_every_row_of_a_table_past_one_page` asserts `len(got) == 130 == len(stored)` plus id-order equality, and asserts a bare GET returns exactly API_PAGE=100 \u2014 PASSED. status/dump: cmd_status (auger.py:4017-4028) counts `len(select(...))` and cmd_dump (auger.py:4388-4390) reads all options; live test tests/test_auger.py:2085 `test_status_and_dump_report_a_namespace_holding_more_than_a_page` stores 60 decisions x 3 options = 180 and asserts `decisions 60 | options 180 |` in status output and all of D-031-O1..O3 in the dump block \u2014 PASSED against the live DuckBrain (127.0.0.1:3000 returned 200). next_id page-safe: auger.py:638 reads `select=id&order=id.desc&limit=1`; ceiling=1 -> `want=min(100,1)=1`, one request; tests `test_a_caller_limit_stays_a_ceiling_and_still_costs_one_request` (1 request, `limit=1`), `test_the_page_safe_mint_reads_the_highest_id_through_the_real_paged_select` (101 rows -> D-102, 1 request) and `test_answer_past_a_hundred_decisions_mints_from_the_highest_id` all PASSED. Commands: focused `pytest -k \"page or paged or select or mint or status_and_dump or API_PAGE\"` -> `14 passed, 158 deselected in 1.08s`; `ruff check auger.py tests/test_auger.py` -> `All checks passed!` rc 0; `bash tests/gate.sh` -> `172 passed in 440.29s`, smoke `passed 21, failed 0`, `LIVE ARMS: ran 2; skipped 0`, `GATE PASS` (rc 0).\nAll AUG-068 sub-claims verified: paged select/select_or_empty with short-page stop, 130-row regression, live 180-row status/dump counts, page-safe next_id mint, and a clean focused pytest + ruff + gate.sh GATE PASS.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "select() and select_or_empty() paginate with explicit limit+offset until a short page; a >100-row store returns the FULL set (regression test proves 130 rows); status/dump report full counts and render all rows on a >100-row namespace; AUG-069's next_id() mint stays page-safe; focused pytest + ruff clean + gate.sh GATE PASS",
+                "status": "PASS",
+                "detail": "Pagination: auger.py:495-556 `_select_paged` loops with explicit `limit`+`offset` (via `_page_query`, auger.py:466-492) and stops when `len(page) < want` (short page); `select` (auger.py:552) and `select_or_empty` (auger.py:566) both delegate to it; MAX_PAGES=1000 bounds a server ignoring offset. 130-row regression: tests/test_auger.py:1954 `test_select_reads_every_row_of_a_table_past_one_page` asserts `len(got) == 130 == len(stored)` plus id-order equality, and asserts a bare GET returns exactly API_PAGE=100 \u2014 PASSED. status/dump: cmd_status (auger.py:4017-4028) counts `len(select(...))` and cmd_dump (auger.py:4388-4390) reads all options; live test tests/test_auger.py:2085 `test_status_and_dump_report_a_namespace_holding_more_than_a_page` stores 60 decisions x 3 options = 180 and asserts `decisions 60 | options 180 |` in status output and all of D-031-O1..O3 in the dump block \u2014 PASSED against the live DuckBrain (127.0.0.1:3000 returned 200). next_id page-safe: auger.py:638 reads `select=id&order=id.desc&limit=1`; ceiling=1 -> `want=min(100,1)=1`, one request; tests `test_a_caller_limit_stays_a_ceiling_and_still_costs_one_request` (1 request, `limit=1`), `test_the_page_safe_mint_reads_the_highest_id_through_the_real_paged_select` (101 rows -> D-102, 1 request) and `test_answer_past_a_hundred_decisions_mints_from_the_highest_id` all PASSED. Commands: focused `pytest -k \"page or paged or select or mint or status_and_dump or API_PAGE\"` -> `14 passed, 158 deselected in 1.08s`; `ruff check auger.py tests/test_auger.py` -> `All checks passed!` rc 0; `bash tests/gate.sh` -> `172 passed in 440.29s`, smoke `passed 21, failed 0`, `LIVE ARMS: ran 2; skipped 0`, `GATE PASS` (rc 0)."
+              }
+            ],
+            "summary": "All AUG-068 sub-claims verified: paged select/select_or_empty with short-page stop, 130-row regression, live 180-row status/dump counts, page-safe next_id mint, and a clean focused pytest + ruff + gate.sh GATE PASS."
+          }
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: AUG-068\n\nStage tier1: PASS\n    \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 select() and select_or_empty() paginate with explicit limit+offset until a short page; a >100-row store returns the FULL set (regression test proves 130 rows); status/dump report full counts and render all rows on a >100-row namespace; AUG-069's next_id() mint stays page-safe; focused pytest + ruff clean + gate.sh GATE PASS: Pagination: auger.py:495-556 `_select_paged` loops with explicit `limit`+`offset` (via `_page_query`, auger.py:466-492) and stops when `len(page) < want` (short page); `select` (auger.py:552) and `select_or_empty` (auger.py:566) both delegate to it; MAX_PAGES=1000 bounds a server ignoring offset. 130-row regression: tests/test_auger.py:1954 `test_select_reads_every_row_of_a_table_past_one_page` asserts `len(got) == 130 == len(stored)` plus id-order equality, and asserts a bare GET returns exactly API_PAGE=100 \u2014 PASSED. status/dump: cmd_status (auger.py:4017-4028) counts `len(select(...))` and cmd_dump (auger.py:4388-4390) reads all options; live test tests/test_auger.py:2085 `test_status_and_dump_report_a_namespace_holding_more_than_a_page` stores 60 decisions x 3 options = 180 and asserts `decisions 60 | options 180 |` in status output and all of D-031-O1..O3 in the dump block \u2014 PASSED against the live DuckBrain (127.0.0.1:3000 returned 200). next_id page-safe: auger.py:638 reads `select=id&order=id.desc&limit=1`; ceiling=1 -> `want=min(100,1)=1`, one request; tests `test_a_caller_limit_stays_a_ceiling_and_still_costs_one_request` (1 request, `limit=1`), `test_the_page_safe_mint_reads_the_highest_id_through_the_real_paged_select` (101 rows -> D-102, 1 request) and `test_answer_past_a_hundred_decisions_mints_from_the_highest_id` all PASSED. Commands: focused `pytest -k \"page or paged or select or mint or status_and_dump or API_PAGE\"` -> `14 passed, 158 deselected in 1.08s`; `ruff check auger.py tests/test_auger.py` -> `All checks passed!` rc 0; `bash tests/gate.sh` -> `172 passed in 440.29s`, smoke `passed 21, failed 0`, `LIVE ARMS: ran 2; skipped 0`, `GATE PASS` (rc 0).\nAll AUG-068 sub-claims verified: paged select/select_or_empty with short-page stop, 130-row regression, live 180-row status/dump counts, page-safe next_id mint, and a clean focused pytest + ruff + gate.sh GATE PASS.\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-09-24T21:32:39.282232",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-09-24T21:32:39.301140+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 26439,
+        "truncated": false,
+        "source": "git show e49e74588d69"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 21352,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-068"
+  }
+}
