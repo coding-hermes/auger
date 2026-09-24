@@ -1,0 +1,248 @@
+commit 391f0eaccb9f7f8952abeab511707e3b1150d3bc
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Thu Sep 24 01:43:41 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Thu Sep 24 01:43:41 2026 -0500
+
+    fix: resolve answer choice before writes. Addresses AUG-055.
+---
+ auger.py            |  47 ++++++++++++++++--------
+ docs/VERBS.md       |  11 +++++-
+ tests/test_auger.py | 104 +++++++++++++++++++++++++++++++++++++++++++++++++++-
+ 3 files changed, 143 insertions(+), 19 deletions(-)
+
+diff --git a/auger.py b/auger.py
+index 7639174..1412184 100755
+--- a/auger.py
++++ b/auger.py
+@@ -3608,12 +3608,30 @@ def cmd_answer(a):
+     supersede_target_ids = supersede_targets(
+         ns, pid, did, a.supersedes, a.supersedes_why or ""
+     )
++    # Resolve --chosen against the supplied options before the decision write. Reuse the same
++    # token grammar as dump/toggle (full id, label, or bare suffix), but resolve provisional rows so
++    # a refusal cannot leave a decision with zero active options. The stored choice is canonicalized
++    # to the option label; otherwise a token such as O2 would look contradictory in dump --config.
++    option_rows = [
++        {
++            "id": f"{did}-O{i + 1}",
++            "decision_id": did,
++            "label": opt,
++            "costs": "",
++            "breaks": "",
++        }
++        for i, opt in enumerate(a.option or [])
++    ]
++    resolved_option = (
++        resolve_option(option_rows, a.chosen, did) if option_rows else None
++    )
++    chosen = resolved_option["label"] if resolved_option else a.chosen
+     row = {
+         "id": did,
+         "project_id": pid,
+         "domain": a.domain or "",
+         "question_id": a.question_id or "",
+-        "chosen": a.chosen,
++        "chosen": chosen,
+         "why_not": a.why_not or "",
+         "reversal_cost": a.reversal_cost or "",
+         "confidence": float(a.confidence if a.confidence is not None else -1),
+@@ -3625,29 +3643,25 @@ def cmd_answer(a):
+     if scope and scope != DEFAULT_SCOPE:
+         row["scope"] = scope
+     warning = insert_decision(ns, row)
+-    for i, opt in enumerate(a.option or []):
+-        insert(
+-            ns,
+-            "option",
+-            {
+-                "id": f"{did}-O{i + 1}",
+-                "decision_id": did,
+-                "label": opt,
+-                "costs": "",
+-                "breaks": "",
+-                "active": opt == a.chosen,
+-            },
++    for option in option_rows:
++        option["active"] = bool(
++            resolved_option and option["id"] == resolved_option["id"]
+         )
++        insert(ns, "option", option)
+     # The embedded evidence must not contradict itself: the chosen option is CHOSEN, and the
+     # rejected list is the other options. Writing all options as "rejected" (the first version
+     # of this) produced evidence reading "chose X. Rejected: X, Y, Z" — which made the
+     # already-answered check score a genuinely-answered question as unanswered.
+-    others = [o for o in (a.option or []) if o != a.chosen]
++    others = [
++        option["label"]
++        for option in option_rows
++        if not resolved_option or option["id"] != resolved_option["id"]
++    ]
+     remember(
+         ns,
+         row["evidence_key"],
+         f"Question: {a.domain or ''} {a.question_id or ''}".strip()
+-        + f". Decision {did}: we chose {a.chosen}. "
++        + f". Decision {did}: we chose {row['chosen']}. "
+         + (
+             f"Rejected alternatives: {'; '.join(others)}. "
+             if others
+@@ -3683,8 +3697,9 @@ def cmd_answer(a):
+     )
+     stored_scope = DEFAULT_SCOPE if warning else decision_scope(row)
+     impact = bundle_impact(ns, pid, {**row, "scope": stored_scope})
++    active_count = 1 if resolved_option else 0
+     print(
+-        f"{did} recorded  (confidence {row['confidence']}, {len(a.option or [])} options, "
++        f"{did} recorded  (confidence {row['confidence']}, {active_count} of {len(option_rows)} active, "
+         f"embedded, scope {decision_scope(row)}{closed})"
+     )
+     # The local break, surfaced in the same grammar `propagate` reports its walk in (AUG-028): the
+diff --git a/docs/VERBS.md b/docs/VERBS.md
+index da948eb..52959df 100644
+--- a/docs/VERBS.md
++++ b/docs/VERBS.md
+@@ -123,12 +123,19 @@ nothing stored).
+ 
+ Record a decision with its rejected alternatives.
+ 
+-**Arguments:** `--chosen` (required), `--id` (defaults to the next `D-` number),
+-`--option` (repeatable — every alternative, chosen ones included), `--why-not`,
++**Arguments:** `--chosen` (required; when `--option` is supplied it must resolve to exactly
++one supplied option by full option id, option label, or bare option suffix such as `O2`),
++`--id` (defaults to the next `D-` number), `--option` (repeatable — every alternative,
++chosen ones included), `--why-not`,
+ `--domain`, `--question-id`, `--reversal-cost`, `--confidence` (float), `--status`
+ (defaults `decided`), `--scope` (`project` | `bundle`, default `project`), `--supersedes`
+ (repeatable decision id), `--supersedes-why`.
+ 
++A supplied `--chosen` that matches no option, or matches more than one option label, is
++refused before any decision or option row is written. The resolver does not guess between
++ambiguous values. Omitting `--option` remains valid and records a decision with no option
++rows; its success report states `0 of 0 active`.
++
+ **Writes:** one `decision` row; one `option` row per `--option` (id `<D-###>-O<n>`,
+ `active` on exactly the chosen one); one embedded memory under
+ `/auger/<pid>/<did>` stating the choice, the rejected alternatives, and the reason —
+diff --git a/tests/test_auger.py b/tests/test_auger.py
+index 1cdc154..b646163 100644
+--- a/tests/test_auger.py
++++ b/tests/test_auger.py
+@@ -219,6 +219,108 @@ def test_answer_makes_the_chosen_option_the_only_active_one(decided: dict):
+     ]
+ 
+ 
++def test_answer_refuses_a_chosen_sentence_not_supplied_as_an_option(project: dict):
++    """A mismatched chosen value is refused before either decision or option rows are written."""
++    ns, pid = project["ns"], project["pid"]
++    before = {
++        "decision": rows(ns, "decision", f"project_id=eq.{pid}&order=id.asc"),
++        "option": rows(ns, "option", "order=id.asc"),
++    }
++    rc, message, out = run_cli_exit(
++        [
++            "-n",
++            ns,
++            "answer",
++            "--id",
++            "D-055",
++            "--chosen",
++            "enable local caching",
++            "--option",
++            "enable local caching for every request",
++            "--option",
++            "write every request to disk",
++            "--confidence",
++            "0.8",
++        ]
++    )
++    assert rc != 0
++    assert "no such option" in message and "enable local caching" in message, message
++    assert out == ""
++    assert (
++        rows(ns, "decision", f"project_id=eq.{pid}&order=id.asc") == before["decision"]
++    )
++    assert rows(ns, "option", "order=id.asc") == before["option"]
++
++
++def test_answer_resolves_option_token_and_dump_has_one_active_configuration(
++    project: dict,
++):
++    """A bare option suffix is canonicalized before writes and remains consistent in both dumps."""
++    ns = project["ns"]
++    options = [
++        "the system should cache requests in memory",
++        "the system should write every request to disk",
++        "the system should use a remote cache",
++    ]
++    rc, out = run_cli(
++        [
++            "-n",
++            ns,
++            "answer",
++            "--id",
++            "D-055",
++            "--chosen",
++            "O2",
++            "--option",
++            options[0],
++            "--option",
++            options[1],
++            "--option",
++            options[2],
++            "--confidence",
++            "0.8",
++        ]
++    )
++    assert rc == 0 and "1 of 3 active" in out, out
++
++    decision = row(ns, "decision", "id=eq.D-055")
++    assert decision["chosen"] == options[1]
++    stored = rows(ns, "option", "decision_id=eq.D-055&order=id.asc")
++    assert [o["label"] for o in stored] == options
++    assert [o["active"] for o in stored] == [False, True, False], stored
++
++    rc, current = run_cli(["-n", ns, "dump"])
++    assert rc == 0
++    assert f"ACTIVE CONFIGURATION: D-055={options[1]}" in current, current
++    assert "CONTRADICTIONS WITH THE RECORD" not in current, current
++
++    rc, hypothetical = run_cli(["-n", ns, "dump", "--config", "D-055=O2"])
++    assert rc == 0
++    assert f"ACTIVE CONFIGURATION: D-055={options[1]}" in hypothetical, hypothetical
++    assert "CONTRADICTIONS WITH THE RECORD" not in hypothetical, hypothetical
++
++
++def test_answer_without_options_remains_valid_and_reports_zero_active(project: dict):
++    """The legacy no-option answer remains valid, but its success count is explicit."""
++    ns = project["ns"]
++    rc, out = run_cli(
++        [
++            "-n",
++            ns,
++            "answer",
++            "--id",
++            "D-056",
++            "--chosen",
++            "an unenumerated decision",
++            "--confidence",
++            "0.5",
++        ]
++    )
++    assert rc == 0 and "0 of 0 active" in out, out
++    assert row(ns, "decision", "id=eq.D-056")["chosen"] == "an unenumerated decision"
++    assert rows(ns, "option", "decision_id=eq.D-056") == []
++
++
+ def test_answer_tolerates_an_apostrophe_in_the_reason(decided: dict):
+     """The module's headline rule: payloads reach the API as bytes, never shell-quoted."""
+     tricky = "Postgres's service is what the seed's rule forbids"
+@@ -1527,7 +1629,7 @@ def break_cli(
+         "--domain",
+         "9.02",
+         "--chosen",
+-        chosen or f"the meter that produced {bad} was mis-wired",
++        chosen or "keep what the old meter read",
+         "--option",
+         "keep what the old meter read",
+         "--option",
