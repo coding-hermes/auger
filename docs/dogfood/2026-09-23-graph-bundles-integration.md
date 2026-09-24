@@ -23,6 +23,23 @@ Everything below ran with real verbs against the production DuckBrain
 (`feat/native-s3`), JEV live over OpenRouter. Scratch namespaces `mccli` and
 `mcview` (the member-namespace convention — see finding AUG-029).
 
+### Bundle setup recipe (after AUG-029)
+
+The pairing now uses auger's CLI; no raw table POSTs or `curl` are needed. Because these are
+standalone scratch projects rather than scheduler rows, the explicit escape is set on each member
+write and each call prints a warning:
+
+```
+python3 auger.py -n mccli bundle add event-envelope --contract specs/event-envelope.md
+AUGER_ALLOW_SCRATCH_MEMBERS=1 python3 auger.py -n mccli bundle member B-000001 mccli owner
+AUGER_ALLOW_SCRATCH_MEMBERS=1 python3 auger.py -n mccli bundle member B-000001 mcview consumer
+```
+
+**A member's rows live in the namespace named after the member:** the `mccli` member is read from
+namespace `mccli`, and `mcview` from namespace `mcview`. The `bundle` and `bundle_member` rows live
+in the owner namespace selected above (`mccli`); putting both projects' decision rows there would
+again make the cross-project walk a no-op.
+
 ## What WORKS (all proven live, quoted from the run)
 
 - **The graph is real and honest.** `feedback` turned decision D-007

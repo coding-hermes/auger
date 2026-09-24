@@ -5,11 +5,11 @@ write. This is the contract — the verb names are public, and every argument li
 exists in the verb's `add_parser` definition in `auger.py`. If the code and this file
 disagree, the code wins and this file is a bug.
 
-The 12 verbs — one `add_parser` registration each in `auger.py`, and the count here is the
-registry's own, not a hand-kept tally — in the order `auger --help` lists them:
+The 13 top-level verbs — one `add_parser` registration each in `auger.py`, and the count here is
+the registry's own, not a hand-kept tally — in the order `auger --help` lists them:
 
 ```
-init  start  ask  answer  check  status  toggle  dump  propagate  feedback  recall  verdict
+init  start  bundle  ask  answer  check  status  toggle  dump  propagate  feedback  recall  verdict
 ```
 
 Conventions every verb shares:
@@ -68,6 +68,32 @@ under `/auger/<pid>/seed`.
 
 **Never writes:** nothing else — no question, decision, or edge rows. A project that has
 only run `start` has exactly one table row and one memory.
+
+## bundle
+
+Create a bundle or add one of its project members. This top-level verb has two subcommands:
+
+- `auger bundle add <name> [--contract PATH]`
+- `auger bundle member <bundle-id> <project> <role>` where role is `owner`, `consumer`, or
+  `test-target`.
+
+**Namespace convention:** a member's rows live in the namespace named after the member. A member
+whose project value is `bunker` is read from namespace `bunker`, even when the `bundle` and
+`bundle_member` rows themselves live in another namespace selected by `-n`.
+
+**Writes:** `bundle add` writes one proposed `bundle` row and prints its generated id.
+`bundle member` writes one `bundle_member` row after confirming that the bundle exists, the role is
+valid, the membership is not duplicated, and — by default — the project exists in the fleet
+scheduler's read-only `projects` table.
+
+**Scratch escape:** `AUGER_ALLOW_SCRATCH_MEMBERS=1 auger ... bundle member ...` skips only the
+scheduler project check. It prints a visible warning naming the skipped validation and the member's
+same-named namespace. This is for standalone/scratch projects; fleet membership remains validated
+by default.
+
+**Never writes:** a member for a missing bundle, an unknown role, a duplicate membership, or an
+unknown/unverifiable scheduler project without the explicit scratch escape. Neither subcommand
+writes project decisions, evidence, edges, or memories.
 
 ## ask
 

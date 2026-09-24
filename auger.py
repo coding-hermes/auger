@@ -673,6 +673,7 @@ def facet(
 # NOT required to run auger — on a host without one (a CI runner) membership cannot be verified,
 # so it is refused with a message that says exactly that, never a raw sqlite3 exception.
 SCHEDULER_DB_ENV = "AUGER_SCHEDULER_DB"
+ALLOW_SCRATCH_MEMBERS_ENV = "AUGER_ALLOW_SCRATCH_MEMBERS"
 SCHEDULER_DB_CANDIDATES = (
     os.path.expanduser("~/coding-hermes-scheduler/coding-herms-scheduler/scheduler.db"),
     os.path.expanduser("~/.hermes/coding-hermes/scheduler.db"),
@@ -784,7 +785,8 @@ def bundle_member(
       * the bundle must already exist;
       * the project must be one the FLEET has (the scheduler's `projects` table, read-only). Where
         no scheduler DB can be read at all, membership cannot be verified and is refused rather
-        than guessed.
+        than guessed. `AUGER_ALLOW_SCRATCH_MEMBERS=1` is the explicit standalone escape: it skips
+        only this scheduler check and prints a warning naming the member namespace convention.
 
     A second row for the same (bundle, project) is the same membership written twice, so it is
     refused too: the walk in SPEC-002 section 2 counts members, and a doubled member is a doubled
@@ -799,26 +801,33 @@ def bundle_member(
             f"refused: bundle {bundle_id!r} does not exist — a member row for a "
             f"missing bundle is not stored"
         )
-    projects = known_projects()
-    if projects is None:
-        override = os.environ.get(SCHEDULER_DB_ENV)
-        looked = (
-            [os.path.expanduser(override)]
-            if override
-            else list(SCHEDULER_DB_CANDIDATES)
+    allow_scratch = os.environ.get(ALLOW_SCRATCH_MEMBERS_ENV) == "1"
+    if allow_scratch:
+        print(
+            f"WARNING: {ALLOW_SCRATCH_MEMBERS_ENV}=1 skips scheduler project validation for "
+            f"{project!r}; this member's rows must live in namespace {member_namespace(project)!r}."
         )
-        raise SystemExit(
-            f"refused: cannot verify project {project!r} — no readable scheduler DB "
-            f"(looked in {', '.join(looked)}). A bundle member names a project the "
-            f"fleet has, so membership is refused rather than guessed; point "
-            f"{SCHEDULER_DB_ENV} at a scheduler.db with a `projects` table."
-        )
-    if project not in projects:
-        raise SystemExit(
-            f"refused: project {project!r} has no row in the fleet's scheduler "
-            f"projects table ({scheduler_db_path()}) — a bundle member names a "
-            f"project the fleet has, and this name is not one"
-        )
+    else:
+        projects = known_projects()
+        if projects is None:
+            override = os.environ.get(SCHEDULER_DB_ENV)
+            looked = (
+                [os.path.expanduser(override)]
+                if override
+                else list(SCHEDULER_DB_CANDIDATES)
+            )
+            raise SystemExit(
+                f"refused: cannot verify project {project!r} — no readable scheduler DB "
+                f"(looked in {', '.join(looked)}). A bundle member names a project the "
+                f"fleet has, so membership is refused rather than guessed; point "
+                f"{SCHEDULER_DB_ENV} at a scheduler.db with a `projects` table."
+            )
+        if project not in projects:
+            raise SystemExit(
+                f"refused: project {project!r} has no row in the fleet's scheduler "
+                f"projects table ({scheduler_db_path()}) — a bundle member names a "
+                f"project the fleet has, and this name is not one"
+            )
     have = select(
         ns,
         "bundle_member",
@@ -2876,6 +2885,25 @@ def cmd_start(a):
     return 0
 
 
+def cmd_bundle_add(a):
+    """Create one proposed bundle through the public CLI."""
+    row = bundle(a.namespace, a.name, contract=a.contract or "")
+    print(f"{row['id']} bundle {row['name']!r} added (status {row['status']})")
+    if row["contract"]:
+        print(f"contract: {row['contract']}")
+    return 0
+
+
+def cmd_bundle_member(a):
+    """Add one project to a bundle, with scheduler validation unless explicitly escaped."""
+    row = bundle_member(a.namespace, a.bundle, a.project, a.role)
+    print(
+        f"{row['id']} member {row['project']!r} added to {row['bundle_id']} "
+        f"as {row['role']}"
+    )
+    return 0
+
+
 # ---------------------------------------------------------------- the ask -> store seam (AUG-035)
 # The README's loop is `ask` -> `answer --question-id`: ask names the question worth drilling and the
 # user records the decision that answers it. Until this seam existed the proposal lived ONLY as a
@@ -4253,6 +4281,25 @@ def main(argv=None):
     s.add_argument("--seed")
     s.add_argument("--seed-file")
     s.set_defaults(fn=cmd_start)
+
+    s = sub.add_parser("bundle", help="create bundles and add their project members")
+    bundle_sub = s.add_subparsers(dest="bundle_cmd", required=True)
+
+    b = bundle_sub.add_parser("add", help="create a proposed bundle")
+    b.add_argument("name")
+    b.add_argument("--contract", help="path to the spanning contract, if one exists")
+    b.set_defaults(fn=cmd_bundle_add)
+
+    b = bundle_sub.add_parser(
+        "member",
+        help="add a scheduler project (or explicit scratch project) to a bundle",
+    )
+    b.add_argument("bundle", help="bundle id, for example B-000001")
+    b.add_argument(
+        "project", help="project name; its rows live in the same-named namespace"
+    )
+    b.add_argument("role", help=f"one of: {', '.join(BUNDLE_ROLES)}")
+    b.set_defaults(fn=cmd_bundle_member)
 
     s = sub.add_parser(
         "ask", help="surface the next questions (JEV) + low-confidence decisions"

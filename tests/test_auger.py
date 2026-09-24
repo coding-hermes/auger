@@ -27,6 +27,7 @@ import io
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import urllib.error
@@ -341,6 +342,70 @@ def test_bundle_rows_round_trip_with_their_closed_set_status(ns: str):
         auger.bundle(ns, "games", status="maybe")
     assert "maybe" in str(ei.value) and "proposed" in str(ei.value), str(ei.value)
     assert len(rows(ns, "bundle", "")) == 2, "a refused bundle was stored anyway"
+
+
+def test_bundle_add_cli_writes_the_named_bundle(ns: str):
+    """A user can create a bundle through the public CLI, including its contract path."""
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "bundle",
+            "add",
+            "agent-ecosystem",
+            "--contract",
+            "crier/specs/AGENT-ECOSYSTEM.md",
+        ]
+    )
+    assert rc == 0 and "agent-ecosystem" in out, out
+    stored = row(ns, "bundle", "name=eq.agent-ecosystem")
+    assert stored["id"] in out, out
+    assert stored["contract"] == "crier/specs/AGENT-ECOSYSTEM.md"
+    assert stored["status"] == "proposed"
+
+
+def test_bundle_member_cli_validates_scheduler_projects(ns: str, monkeypatch, tmp_path):
+    """The CLI stores known fleet projects and refuses unknown ones without writing."""
+    scheduler = tmp_path / "scheduler.db"
+    with sqlite3.connect(scheduler) as con:
+        con.execute("create table projects (name text not null)")
+        con.execute("insert into projects(name) values ('bunker')")
+    monkeypatch.setenv(auger.SCHEDULER_DB_ENV, str(scheduler))
+    monkeypatch.delenv(auger.ALLOW_SCRATCH_MEMBERS_ENV, raising=False)
+
+    _, added = run_cli(["-n", ns, "bundle", "add", "agent-ecosystem"])
+    bundle_id = added.split()[0]
+    rc, out = run_cli(
+        ["-n", ns, "bundle", "member", bundle_id, "bunker", "test-target"]
+    )
+    assert rc == 0 and bundle_id in out and "bunker" in out, out
+    assert row(ns, "bundle_member", "project=eq.bunker")["role"] == "test-target"
+
+    code, msg, _ = run_cli_exit(
+        ["-n", ns, "bundle", "member", bundle_id, "scratch-app", "consumer"]
+    )
+    assert code != 0 and "scratch-app" in msg and "scheduler" in msg, msg
+    assert rows(ns, "bundle_member", "project=eq.scratch-app") == []
+
+
+def test_bundle_member_cli_scratch_escape_warns_and_writes(
+    ns: str, monkeypatch, tmp_path
+):
+    """The explicit scratch escape bypasses only scheduler validation and is never silent."""
+    missing = tmp_path / "missing" / "scheduler.db"
+    monkeypatch.setenv(auger.SCHEDULER_DB_ENV, str(missing))
+    monkeypatch.setenv(auger.ALLOW_SCRATCH_MEMBERS_ENV, "1")
+
+    _, added = run_cli(["-n", ns, "bundle", "add", "scratch-pair"])
+    bundle_id = added.split()[0]
+    rc, out = run_cli(
+        ["-n", ns, "bundle", "member", bundle_id, "scratch-app", "consumer"]
+    )
+    assert rc == 0, out
+    assert "WARNING" in out and "AUGER_ALLOW_SCRATCH_MEMBERS=1" in out, out
+    assert "scratch-app" in out and "namespace" in out, out
+    stored = row(ns, "bundle_member", "project=eq.scratch-app")
+    assert stored["bundle_id"] == bundle_id and stored["role"] == "consumer"
 
 
 def test_unknown_role_and_missing_bundle_are_refused_without_a_fleet_db(ns: str):

@@ -79,6 +79,25 @@ scope        varchar   project | bundle    (-1/empty = project)
 A project may belong to several bundles (a harness is both an ecosystem member and its own
 project), which is why membership is a table and not a column.
 
+### 1.1 Membership addressing and CLI
+
+**A member's rows live in the namespace named after the member.** A `bundle_member.project` value
+of `bunker` therefore means auger reads that member's decisions and evidence from namespace
+`bunker`; putting bunker's rows in the bundle owner's namespace will not make them reachable.
+
+Create and populate a bundle without raw API calls:
+
+```
+auger -n crier bundle add agent-ecosystem --contract crier/specs/AGENT-ECOSYSTEM.md
+auger -n crier bundle member B-000001 crier owner
+auger -n crier bundle member B-000001 bunker test-target
+```
+
+Membership validates project names against the scheduler's read-only `projects` table by default.
+For standalone scratch projects only, set `AUGER_ALLOW_SCRATCH_MEMBERS=1`; auger skips that scheduler
+check and prints a visible warning repeating the namespace convention. The escape does not bypass
+role, bundle-existence, or duplicate-membership checks.
+
 ## 2. What bundling changes in the engine
 
 ### 2.1 The GATE searches the whole bundle (the biggest win)
