@@ -34,6 +34,7 @@ import sys
 import urllib.error
 import urllib.request
 import uuid
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 import pytest
 
@@ -1826,8 +1827,12 @@ def test_a_live_namespace_holding_a_hundred_and_one_decisions_keeps_answering(
             for i in range(1, 102)
         ],
     )
-    # The precondition of the freeze, asserted rather than assumed: a plain read caps at 100 rows.
-    assert len(rows(ns, "decision", f"project_id=eq.{pid}")) == API_PAGE
+    # The precondition of the freeze, asserted rather than assumed: ONE bare read is a page and no
+    # more (AUG-068 — the reason a count capped at 100 and the mint froze there), while the paged
+    # `select` the mint itself reads through now returns the whole table.
+    st, page, _ = auger.db(auger.tbl(ns, "decision", f"project_id=eq.{pid}"))
+    assert st == 200 and len(page) == API_PAGE
+    assert len(rows(ns, "decision", f"project_id=eq.{pid}")) == 101
 
     rc, out = run_cli(
         [
@@ -1861,6 +1866,291 @@ def test_a_live_namespace_holding_a_hundred_and_one_decisions_keeps_answering(
     )
     assert rc == 0 and out.startswith("D-103 recorded"), out
     assert row(ns, "decision", "id=eq.D-103&limit=1")["chosen"] == "minted two"
+
+
+# ------------------------------------- reads past one page of a declared table (AUG-068)
+# DuckBrain's declared-table GET is PAGE-CAPPED and says nothing about it: a request with no `limit`
+# returns at most `API_PAGE` rows, an explicit `limit` is honoured up to the server's hard cap, and the
+# response carries neither a row count nor a `Content-Range` — the rows coming back SHORT of the limit
+# asked for is the only truncation signal the API offers. `cmd_status` and `cmd_dump` read every
+# decision and every option with a bare `select`, so a namespace past a hundred rows of either was
+# reported short: measured on `auger-df7-scale`, 180 stored options read as "options 100" and D-031
+# rendered two of its three options. Nothing was ever LOST — only silently under-reported, which is
+# the worse failure for a reader who cannot tell a short table from a capped read.
+#
+# `select` now pages with an explicit `limit` + `offset` until a page comes back short of the size it
+# asked for. The cases below drive the REAL `select` against a stand-in SERVER — stubbed at `db`, one
+# layer UNDER the function under test, so the paging loop, its query building and its stop condition
+# are the production ones — and the last one against the live store.
+
+#: The server's own hard cap on an explicit `limit` (the live API clamps `limit=1000`).
+SERVER_MAX_LIMIT = 1000
+
+
+def decision_rows(count: int, prefix: str = "D") -> list[dict]:
+    """`count` zero-padded rows in id order — the shape a table past a page holds."""
+    return [{"id": f"{prefix}-{i:03d}"} for i in range(1, count + 1)]
+
+
+class StandInServer:
+    """A stand-in for DuckBrain's declared-table SERVER: rows in, PAGES out, cap included.
+
+    Stubbed at `db` — one layer BELOW `select` — so the real paging loop is what the cases exercise.
+    Fidelity is the point: a request with no `limit` gets `page` rows (the cap that produced this
+    row), an explicit `limit` is honoured up to `SERVER_MAX_LIMIT` and then clamped, `offset` pages
+    from there, `order=col.asc|desc` sorts, `col=eq.value` filters — and a read that cannot be
+    answered (unknown table, or `fail_after` requests) comes back non-200 with no rows.
+    A `select=` projection is ignored: auger reads whole rows.
+    """
+
+    def __init__(
+        self, rows: dict[str, list[dict]], *, page: int = API_PAGE, fail_after: int | None = None
+    ):
+        self.rows = rows
+        self.page = page
+        self.fail_after = fail_after
+        self.requests: list[str] = []
+
+    def __call__(self, path, method="GET", body=None, *a, **k):  # noqa: ARG002 - mirrors db()
+        assert method == "GET", f"the stand-in serves reads only, got {method} {path}"
+        self.requests.append(path)
+        if self.fail_after is not None and len(self.requests) > self.fail_after:
+            return 500, {"error": "the store stopped answering mid-read"}, {}
+        split = urlsplit(path)
+        parts = split.path.split("/")  # /api/ns/<ns>/tables/<table>
+        if len(parts) < 3 or parts[-2] != "tables":
+            return 404, {"error": f"not a declared-table path: {path}"}, {}
+        stored = self.rows.get(unquote(parts[-1]))
+        if stored is None:
+            return 404, {"error": f"no such table: {parts[-1]}"}, {}
+        pairs = dict(parse_qsl(split.query, keep_blank_values=True))
+        found = list(stored)
+        for key, value in pairs.items():
+            if key in ("limit", "offset", "order", "select", "count"):
+                continue
+            if value.startswith("eq."):
+                found = [r for r in found if str(r.get(key)) == value[3:]]
+        for clause in reversed(str(pairs.get("order", "")).split(",")):
+            col, _, direction = clause.strip().partition(".")
+            if col and direction in ("asc", "desc"):
+                found.sort(key=lambda r: str(r.get(col) or ""), reverse=direction == "desc")
+        limit = (
+            min(int(pairs["limit"]), SERVER_MAX_LIMIT) if "limit" in pairs else self.page
+        )
+        offset = int(pairs.get("offset", 0))
+        return 200, found[offset : offset + limit], {}
+
+
+def test_the_module_page_size_is_the_measured_live_page_size():
+    """AUG-068: `API_PAGE` is a MEASURED number — the stand-in caps at the same one the loop uses.
+
+    A stand-in capped differently from the production page size would prove nothing about the loop
+    (it could pass while the real 100-row cap still truncated), so the two names are tied here and
+    the live case proves the real server serves exactly this many rows for a filterless read.
+    """
+    assert auger.API_PAGE == API_PAGE == 100
+
+
+def test_select_reads_every_row_of_a_table_past_one_page(monkeypatch):
+    """AUG-068 criterion 1: 130 stored rows come back as 130 rows, not as the server's first page.
+
+    RED on the single-fetch `select`: it returned the first 100 rows with no error and no signal —
+    exactly the silent under-count this row is about.
+    """
+    stored = decision_rows(130)
+    server = StandInServer({"decision": stored})
+    monkeypatch.setattr(auger, "db", server)
+
+    got = auger.select(MINT_NS, "decision", "")
+    assert len(got) == 130 == len(stored), f"{len(got)} rows served for {len(stored)} stored"
+    assert [r["id"] for r in got] == [r["id"] for r in stored]
+    # The cap the row measured, asserted rather than assumed: ONE bare GET returns a page and no
+    # signal at all that the table holds more.
+    st, page, _ = auger.db(auger.tbl(MINT_NS, "decision", ""))
+    assert st == 200 and len(page) == API_PAGE, page
+
+
+def test_the_pages_ask_with_limit_and_offset_until_a_page_comes_back_short(monkeypatch):
+    """180 rows = 100 + 80, and the SECOND page is short of the size it asked for: the stop signal.
+
+    The rows are asserted to be the whole table, in order and without repeats: offset paging that
+    dropped or repeated a row would still "find more than 100".
+    """
+    stored = decision_rows(180, prefix="O")
+    server = StandInServer({"option": stored})
+    monkeypatch.setattr(auger, "db", server)
+
+    got = auger.select(MINT_NS, "option", "")
+    assert [r["id"] for r in got] == [r["id"] for r in stored]
+    assert len({r["id"] for r in got}) == 180, "a paged read repeated a row"
+    assert len(server.requests) == 2, server.requests
+    assert server.requests[0].endswith("?limit=100"), server.requests[0]
+    assert server.requests[1].endswith("?limit=100&offset=100"), server.requests[1]
+
+
+def test_a_table_that_is_an_exact_multiple_of_the_page_still_terminates(monkeypatch):
+    """200 rows: two full pages, then the empty page that proves the table ended.
+
+    The case the "fewer than a page" stop condition exists for: two full pages in a row must not
+    read as "there is nothing after 200", and must not loop.
+    """
+    stored = decision_rows(200, prefix="O")
+    server = StandInServer({"option": stored})
+    monkeypatch.setattr(auger, "db", server)
+
+    assert len(auger.select(MINT_NS, "option", "")) == 200
+    assert len(server.requests) == 3, server.requests
+    assert server.requests[2].endswith("?limit=100&offset=200"), server.requests[2]
+
+
+def test_a_caller_limit_stays_a_ceiling_and_still_costs_one_request(monkeypatch):
+    """The page-safe mint shape (`order=id.desc&limit=1`) must not become a walk of the table.
+
+    AUG-069's `next_id` reads ONE row per mint. Paging must not multiply that into a full read, and
+    must not hand the caller more rows than it asked for.
+    """
+    stored = decision_rows(130)
+    server = StandInServer({"decision": stored})
+    monkeypatch.setattr(auger, "db", server)
+
+    got = auger.select(MINT_NS, "decision", "select=id&order=id.desc&limit=1")
+    assert [r["id"] for r in got] == ["D-130"], got
+    assert len(server.requests) == 1, server.requests
+    assert "limit=1" in server.requests[0] and "limit=100" not in server.requests[0]
+
+
+def test_a_caller_limit_above_one_page_is_served_in_pages_up_to_that_limit(monkeypatch):
+    """`limit=180` over a 180-row table is 180 rows in 2 requests — not 100, and not one request.
+
+    The limit is a ceiling on the RESULT, not a page size: the loop asks for `min(API_PAGE,
+    remaining)`, so the caller's own paging intent (the API honours `limit=180`, then a bare read
+    would page from 100) is served in pages rather than trusted or discarded.
+    """
+    stored = decision_rows(180, prefix="O")
+    server = StandInServer({"option": stored})
+    monkeypatch.setattr(auger, "db", server)
+
+    assert len(auger.select(MINT_NS, "option", "limit=180")) == 180
+    assert len(server.requests) == 2, server.requests
+    assert server.requests[1].endswith("?limit=80&offset=100"), server.requests[1]
+
+
+def test_a_read_that_fails_mid_page_never_reads_as_a_short_table(monkeypatch):
+    """A 500 on the SECOND page must not come back as "the table holds 100 rows".
+
+    `select_or_empty` is the caller forbidden from inventing rows: its non-200 answer means "no rows
+    here", so a partial page would be this row's silent under-count wearing a neighbourly face.
+    `select` stays loud about the same read.
+    """
+    server = StandInServer({"option": decision_rows(180, prefix="O")}, fail_after=1)
+    monkeypatch.setattr(auger, "db", server)
+    assert auger.select_or_empty(MINT_NS, "option", "") == []
+
+    with pytest.raises(SystemExit) as ei:
+        auger.select(MINT_NS, "option", "")
+    assert "select option failed (500)" in str(ei.value), str(ei.value)
+
+
+def test_a_table_that_cannot_answer_is_still_nothing_for_select_or_empty(monkeypatch):
+    """`select_or_empty`'s own contract, unchanged by paging: one unanswered read, no rows, no walk."""
+    server = StandInServer({})
+    monkeypatch.setattr(auger, "db", server)
+    assert auger.select_or_empty(MINT_NS, "option", "") == []
+    assert len(server.requests) == 1, server.requests
+
+
+def test_the_page_safe_mint_reads_the_highest_id_through_the_real_paged_select(monkeypatch):
+    """AUG-069 and AUG-068 together: the mint reads ONE page-safe row out of a capped 101-row table.
+
+    The AUG-069 cases stub `select` itself, which cannot see the paging loop; this one stubs the
+    server a layer lower, so the read the mint depends on is the real paged one — and it still costs
+    exactly one request, which is the "no count-based mint" property.
+    """
+    stored = [{"id": f"D-{i:03d}", "project_id": MINT_PID} for i in range(1, 102)]
+    server = StandInServer({"decision": stored})
+    monkeypatch.setattr(auger, "db", server)
+
+    assert len(auger.select(MINT_NS, "decision", f"project_id=eq.{MINT_PID}")) == 101
+
+    server.requests.clear()
+    assert auger.next_id(MINT_NS, "decision", "D", width=3) == "D-102"
+    assert len(server.requests) == 1, server.requests
+    assert server.requests[0].endswith("?select=id&order=id.desc&limit=1"), server.requests[0]
+
+    server.requests.clear()
+    assert auger.decision_id_width(MINT_NS) == 3
+    assert len(server.requests) == 1, server.requests
+
+
+def test_status_and_dump_report_a_namespace_holding_more_than_a_page(project: dict):
+    """AUG-068 criterion 2, against the real store: the 180-option shape the row measured.
+
+    60 decisions x 3 options = 180 option rows in one namespace. `status` must count all 180 (it read
+    100 before this change) and `dump` must render all three of D-031's options (it rendered two).
+    """
+    ns, pid = project["ns"], project["pid"]
+    decisions = 60
+    options = 3
+    auger.insert(
+        ns,
+        "decision",
+        [
+            {
+                "id": f"D-{i:03d}",
+                "project_id": pid,
+                "domain": "",
+                "question_id": "",
+                "chosen": f"option one of decision {i}",
+                "why_not": "recorded by the page-scale leg",
+                "reversal_cost": "",
+                "confidence": 0.5,
+                "status": "decided",
+                "evidence_key": f"/auger/{pid}/D-{i:03d}",
+            }
+            for i in range(1, decisions + 1)
+        ],
+    )
+    auger.insert(
+        ns,
+        "option",
+        [
+            {
+                "id": f"D-{i:03d}-O{n}",
+                "decision_id": f"D-{i:03d}",
+                "label": f"option {n} of decision {i}",
+                "costs": "",
+                "breaks": "",
+                "active": n == 1,
+            }
+            for i in range(1, decisions + 1)
+            for n in range(1, options + 1)
+        ],
+    )
+
+    # The cap, proved live rather than assumed: a bare GET is ONE page and says nothing about it.
+    st, page, _ = auger.db(auger.tbl(ns, "option", ""))
+    assert st == 200, (st, page)
+    assert len(page) == API_PAGE == auger.API_PAGE, (
+        f"the live server served {len(page)} rows for a filterless read — either the server's page "
+        "size moved off API_PAGE (the stand-in and the loop both key on it) or this leg stored fewer "
+        "rows than it meant to"
+    )
+    # ... and the read the two verbs make now returns the whole table.
+    assert len(auger.select(ns, "option", "")) == decisions * options
+
+    rc, out = run_cli(["-n", ns, "status"])
+    assert rc == 0, out
+    assert f"decisions {decisions} | options {decisions * options} |" in out, out[:400]
+
+    rc, out = run_cli(["-n", ns, "dump"])
+    assert rc == 0, out
+    split = out.split("\n## D-031", 1)
+    assert len(split) == 2, "D-031 is missing from the dump"
+    block = split[1].split("\n## ", 1)[0]
+    for n in range(1, options + 1):
+        assert f"D-031-O{n}" in block, (
+            f"D-031's option {n} is missing from what the dump rendered:\n{block}"
+        )
 
 
 # ---------------------------------------------------------------- the walk's TRIGGER (AUG-028)

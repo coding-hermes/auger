@@ -442,11 +442,111 @@ def tbl(ns: str, table: str, query: str = "") -> str:
     return f"{base}?{encode_query(query)}" if query else base
 
 
+#: How many rows ONE declared-table GET returns … and the reason `select` pages at all (AUG-068).
+#: Measured on the live API: a read with no `limit` returns at most this many rows, an explicit
+#: `limit` is honoured up to the server's own hard cap (1000), and the response carries NO row count
+#: and no `Content-Range` — so equality between the rows returned and the limit asked for is the only
+#: truncation signal a caller gets. A measured number, not a guess: the live suite asserts that a
+#: real filterless read returns exactly this many rows.
+API_PAGE = 100
+
+#: How many page requests ONE read may make before it gives up loudly. A bounded loop needs a bound:
+#: this is not the stop condition (a page SHORT of the size asked for is), it is the guard against a
+#: server that ignores `offset` and would otherwise serve the same full page forever.
+MAX_PAGES = 1000
+
+
+def _query_pairs(query: str) -> dict:
+    """The flat `key=value` pairs of a declared-table query, the way the server reads them."""
+    pairs = {}
+    for part in query.split("&"):
+        key, eq, value = part.partition("=")
+        if eq and key:
+            pairs[key] = value
+    return pairs
+
+
+def _int_or_none(value) -> int | None:
+    """A non-negative integer, or None for anything else — a `limit=all` is not a page size."""
+    text = str(value if value is not None else "").strip()
+    return int(text) if text.isdigit() else None
+
+
+def _page_query(query: str, limit: int, offset: int) -> str:
+    """`query` with OUR page `limit`/`offset` — the caller's own pairs kept.
+
+    The caller's `limit`/`offset` are REPLACED, never sent alongside: two `limit=` pairs in one query
+    is not a request the server can honour, and silently keeping whichever it picked would make the
+    page size a guess. Everything else — filters, `select`, `order` — travels untouched, so the pages
+    are the same query over the same rows. `offset=0` is left out: it is the server's own default, and
+    the first request of a read then looks exactly like the single request it used to be.
+    """
+    kept = [
+        part
+        for part in query.split("&")
+        if part and part.partition("=")[0] not in ("limit", "offset")
+    ]
+    kept.append(f"limit={limit}")
+    if offset:
+        kept.append(f"offset={offset}")
+    return "&".join(kept)
+
+
+def _select_paged(ns: str, table: str, query: str, strict: bool) -> list:
+    """Every matching row, read in pages (AUG-068).
+
+    A declared-table GET is page-capped and says NOTHING about it: with no `limit` the server returns
+    `API_PAGE` rows, and a response is 200 with no row count and no `Content-Range` whether it holds
+    one row or the first page of ten thousand. Equality between the rows returned and the limit asked
+    for is therefore the ONLY truncation signal — so a caller either pages, or silently under-reports.
+    `cmd_status` and `cmd_dump` read whole tables and did the latter: 180 stored options reported as
+    "options 100", a decision rendering two of its three options.
+
+    So a page is short of the size it asked for (the table ended) or this loop asks for the next one.
+    `limit`-doubling would work too and is worse: the page size then depends on everything before it,
+    and its stop condition depends on the server clamping an oversized limit it never promised to
+    clamp. A fixed page plus an offset is bounded and deterministic.
+
+    `strict` picks the only difference between the two public readers: an unanswered read RAISES for
+    the caller's own namespace, or reads as "no rows here" for a sibling's (`select_or_empty`). That
+    second case is all-or-nothing on purpose: a partially paged result would be exactly this row's
+    silent under-count handed to the one caller that cannot distinguish it from an empty table.
+    """
+    pairs = _query_pairs(query)
+    ceiling = _int_or_none(pairs.get("limit"))
+    offset = _int_or_none(pairs.get("offset")) or 0
+    rows: list = []
+    for _page in range(MAX_PAGES):
+        # The caller's limit is a ceiling on the RESULT, never the page size: `limit=1` (the mint's
+        # page-safe read) must stay ONE request, and `limit=180` is served as pages up to 180.
+        want = API_PAGE if ceiling is None else min(API_PAGE, ceiling - len(rows))
+        if want <= 0:
+            return rows
+        st, body, _ = db(tbl(ns, table, _page_query(query, want, offset)))
+        if st != 200:
+            if strict:
+                raise SystemExit(f"select {table} failed ({st}): {body}")
+            return []
+        page = body if isinstance(body, list) else []
+        rows.extend(page)
+        if len(page) < want:
+            return rows
+        if ceiling is not None and len(rows) >= ceiling:
+            return rows
+        offset += len(page)
+    raise SystemExit(
+        f"select {table} made {MAX_PAGES} full-page reads without reaching a short page: the server "
+        "is not honouring `offset`, so paging cannot terminate. Refusing to return a partial read."
+    )
+
+
 def select(ns: str, table: str, query: str = "") -> list:
-    st, body, _ = db(tbl(ns, table, query))
-    if st != 200:
-        raise SystemExit(f"select {table} failed ({st}): {body}")
-    return body if isinstance(body, list) else []
+    """Every row the query matches — pages past the server's page cap instead of returning one (AUG-068).
+
+    The caller's `limit`, when it passes one, still caps the result: `limit=1` is one row and one
+    request, which is what the page-safe id reads (`next_id`, `decision_id_width`) depend on.
+    """
+    return _select_paged(ns, table, query, strict=True)
 
 
 def select_or_empty(ns: str, table: str, query: str = "") -> list:
@@ -458,9 +558,12 @@ def select_or_empty(ns: str, table: str, query: str = "") -> list:
     rows here", never a crash in the middle of the asking project's own verb and never a row invented
     to fill the gap. The asking project's OWN namespace keeps the loud `select`: a broken read there
     is a defect, not a neighbourly absence.
+
+    Paged like `select` (AUG-068), and a page that fails mid-read discards the pages before it: this
+    reader's only answer to a read it could not finish is "no rows", and half a table would be a
+    short table to every caller that trusts it.
     """
-    st, body, _ = db(tbl(ns, table, query))
-    return body if st == 200 and isinstance(body, list) else []
+    return _select_paged(ns, table, query, strict=False)
 
 
 def insert(ns: str, table: str, rows) -> dict:
