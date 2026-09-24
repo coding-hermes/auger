@@ -47,7 +47,28 @@ guards:
   static_analysis: false
 evaluator:
   max_iterations: 200
-  max_time: 60m
+  # max_time raised 60m -> 90m (AUG-051 re-judge, 2026-09-24). The 60m run
+  # (verdict 17adfdb4 / dir .gitreins/history/2026-09-24/f53d8f6c) returned
+  # tier1 PASS, tier2 INCOMPLETE with items:[] and `Cap exceeded: Time cap (1h)
+  # exceeded` - a BUDGET death, never a merits failure. Cause found by reading
+  # the eval's own children: it ran this repo's full gate as tier-2 evidence
+  # (`bash tests/gate.sh` ~9 min under load) and POLLED it in a repeating
+  # `sleep 29; tail /tmp/gate2.txt` loop, so the wall clock went to the evidence
+  # command's duration x polls rather than to criterion checking.
+  # This is the pre-solved class `gitreins-tier2-time-cap-exceeded`
+  # (off-by-one answer 2353: raise the time knob in EVERY location, never
+  # re-dispatch a worker). This repo carries the knob in exactly ONE place
+  # (`evaluator:`; no pipeline.stages block - verified by grep), so this line is
+  # the whole fix.
+  # ⚠️ NOTE FOR THE NEXT SIZER: `defaults:` is NOT read for this knob by the
+  # config loader; only the `evaluator:` block (and an optional combined
+  # `evaluator.cap` string) takes effect. Any "raise max_time" that lands in the
+  # `defaults:` block is DEAD CONFIG and the eval will starve at the value here.
+  # Escalation history: 60m starved once (17adfdb4) -> 90m. UNPROVEN rung: one
+  # clean run with no `Cap exceeded` line settles it; if the time cap fires again,
+  # the fix is the CRITERION (stop making the judge re-run the 9-minute gate as
+  # evidence), not another raise.
+  max_time: 90m
   max_input_tokens: 4M
   max_output_tokens: 131072
   tool_call_weight: 0.1
