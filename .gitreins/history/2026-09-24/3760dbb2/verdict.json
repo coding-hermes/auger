@@ -1,0 +1,104 @@
+{
+  "task_id": "AUG-030",
+  "task_title": "Supersession: re-answering a question flags and supersedes the prior decision",
+  "task_criteria": [
+    "answer flags an overlapping decided decision and --supersedes writes a supersedes edge (decision->decision), flips the old decision status to superseded with the reason recorded in facet rows; dump renders superseded decisions as such and excludes them from ACTIVE CONFIGURATION; status names unresolved supersession chains; tests cover flag, edge, status flip, dump exclusion"
+  ],
+  "passed": true,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "d9c5562fe6c1993fde13adf019c33065fb7a18fa",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260924T051612.687585Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: scanners=gitleaks+builtin cross-check\n12:21AM INF scanned ~638598 bytes (638.60 KB) in 867ms\n12:21AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 39 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260924T051612.687585Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [ 52%]\n................................................................         [100%]\n136 passed in 485.10s (0:08:05)\n== end-to-end smoke ==\nnamespace: auger-smoke-2034845\nnamespace sweep: no stale auger-smoke-*/auger-eval-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n  PASS toggle changed the stored configuration\n== verdict: record + list round-trip ==\n  PASS a good verdict is recorded\n  PASS a bad verdict is recorded\n  PASS the good verdict shows in the list\n  PASS the bad verdict's reasons show in the list\n  PASS both --good and --bad refuse\n  PASS the refused pair wrote nothing\n\nnamespace auger-smoke-2034845 removed\npassed 21, failed 0\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260924T051612.687585Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 answer flags an overlapping decided decision and --supersedes writes a supersedes edge (decision->decision), flips the old decision status to superseded with the reason recorded in facet rows; dump renders superseded decisions as such and excludes them from ACTIVE CONFIGURATION; status names unresolved supersession chains; tests cover flag, edge, status flip, dump exclusion: Fresh evidence: `python -m pytest tests/test_auger.py -k \"supersede or supersession\" -p no:cacheprovider -q` -> \"6 passed, 130 deselected in 2.54s\" (exit 0); `python -m py_compile auger.py` OK; `ruff check auger.py` -> \"All checks passed!\". FLAG: auger.py:3734-3743 prints \"supersedes?  D-001 (4.05, decided) ... pass --supersedes D-001\"; test_auger.py:760-784 asserts the warning and that no edge is written. EDGE decision->decision: auger.py:1848 edge(kind=\"supersedes\", src_kind=\"decision\", dst_kind=\"decision\"); test_auger.py:720-728 asserts exactly one edge with src (decision,D-003) -> dst (decision,D-001) and note \"D-003 supersedes D-001: the envelope format changed\". STATUS FLIP: auger.py:1859 patch(decision,target,{\"status\":SUPERSEDED_STATUS}) with SUPERSEDED_STATUS=\"superseded\" (auger.py:248); test_auger.py:717 asserts \"status -> superseded\" and :729 asserts stored status. FACET REASON: auger.py:1861-1875 writes reason \"superseded by D-00X: why\" into facet rows; test_auger.py:818 asserts note \"superseded by D-002: the answer was re-evaluated\". DUMP: auger.py:4206-4212 sets live_ids=set() for superseded decisions so they are excluded from confs, and :4237 renders \"[SUPERSEDED by X]\"; ACTIVE CONFIGURATION line at auger.py:4256; test_auger.py:903-915 asserts \"## D-001  (4.05)  conf 0.82  [SUPERSEDED by D-003]\" and \"ACTIVE CONFIGURATION: D-002=staging table, D-003=blake3 envelope\" (D-001 absent). STATUS UNRESOLVED CHAIN: auger.py:3894-3928 prints the \"supersession:\" block including \"UNRESOLVED: D-00X is still decided with an active option despite supersession by D-00Y\"; test_auger.py:839-862. Validation/refusals: auger.py:1799-1830 (self-supersede, nonexistent target, --supersedes-why without target); test_auger.py:732-756 asserts nothing is written on refusal.\nSupersession is fully implemented and verified: fresh targeted tests pass (6 passed), py_compile and ruff clean, and code inspection confirms the detection flag, decision->decision supersedes edge, status flip with facet reason, dump rendering/exclusion from ACTIVE CONFIGURATION, and UNRESOLVED chain reporting.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 answer flags an overlapping decided decision and --supersedes writes a supersedes edge (decision->decision), flips the old decision status to superseded with the reason recorded in facet rows; dump renders superseded decisions as such and excludes them from ACTIVE CONFIGURATION; status names unresolved supersession chains; tests cover flag, edge, status flip, dump exclusion: Fresh evidence: `python -m pytest tests/test_auger.py -k \"supersede or supersession\" -p no:cacheprovider -q` -> \"6 passed, 130 deselected in 2.54s\" (exit 0); `python -m py_compile auger.py` OK; `ruff check auger.py` -> \"All checks passed!\". FLAG: auger.py:3734-3743 prints \"supersedes?  D-001 (4.05, decided) ... pass --supersedes D-001\"; test_auger.py:760-784 asserts the warning and that no edge is written. EDGE decision->decision: auger.py:1848 edge(kind=\"supersedes\", src_kind=\"decision\", dst_kind=\"decision\"); test_auger.py:720-728 asserts exactly one edge with src (decision,D-003) -> dst (decision,D-001) and note \"D-003 supersedes D-001: the envelope format changed\". STATUS FLIP: auger.py:1859 patch(decision,target,{\"status\":SUPERSEDED_STATUS}) with SUPERSEDED_STATUS=\"superseded\" (auger.py:248); test_auger.py:717 asserts \"status -> superseded\" and :729 asserts stored status. FACET REASON: auger.py:1861-1875 writes reason \"superseded by D-00X: why\" into facet rows; test_auger.py:818 asserts note \"superseded by D-002: the answer was re-evaluated\". DUMP: auger.py:4206-4212 sets live_ids=set() for superseded decisions so they are excluded from confs, and :4237 renders \"[SUPERSEDED by X]\"; ACTIVE CONFIGURATION line at auger.py:4256; test_auger.py:903-915 asserts \"## D-001  (4.05)  conf 0.82  [SUPERSEDED by D-003]\" and \"ACTIVE CONFIGURATION: D-002=staging table, D-003=blake3 envelope\" (D-001 absent). STATUS UNRESOLVED CHAIN: auger.py:3894-3928 prints the \"supersession:\" block including \"UNRESOLVED: D-00X is still decided with an active option despite supersession by D-00Y\"; test_auger.py:839-862. Validation/refusals: auger.py:1799-1830 (self-supersede, nonexistent target, --supersedes-why without target); test_auger.py:732-756 asserts nothing is written on refusal.\nSupersession is fully implemented and verified: fresh targeted tests pass (6 passed), py_compile and ruff clean, and code inspection confirms the detection flag, decision->decision supersedes edge, status flip with facet reason, dump rendering/exclusion from ACTIVE CONFIGURATION, and UNRESOLVED chain reporting.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "answer flags an overlapping decided decision and --supersedes writes a supersedes edge (decision->decision), flips the old decision status to superseded with the reason recorded in facet rows; dump renders superseded decisions as such and excludes them from ACTIVE CONFIGURATION; status names unresolved supersession chains; tests cover flag, edge, status flip, dump exclusion",
+                "status": "PASS",
+                "detail": "Fresh evidence: `python -m pytest tests/test_auger.py -k \"supersede or supersession\" -p no:cacheprovider -q` -> \"6 passed, 130 deselected in 2.54s\" (exit 0); `python -m py_compile auger.py` OK; `ruff check auger.py` -> \"All checks passed!\". FLAG: auger.py:3734-3743 prints \"supersedes?  D-001 (4.05, decided) ... pass --supersedes D-001\"; test_auger.py:760-784 asserts the warning and that no edge is written. EDGE decision->decision: auger.py:1848 edge(kind=\"supersedes\", src_kind=\"decision\", dst_kind=\"decision\"); test_auger.py:720-728 asserts exactly one edge with src (decision,D-003) -> dst (decision,D-001) and note \"D-003 supersedes D-001: the envelope format changed\". STATUS FLIP: auger.py:1859 patch(decision,target,{\"status\":SUPERSEDED_STATUS}) with SUPERSEDED_STATUS=\"superseded\" (auger.py:248); test_auger.py:717 asserts \"status -> superseded\" and :729 asserts stored status. FACET REASON: auger.py:1861-1875 writes reason \"superseded by D-00X: why\" into facet rows; test_auger.py:818 asserts note \"superseded by D-002: the answer was re-evaluated\". DUMP: auger.py:4206-4212 sets live_ids=set() for superseded decisions so they are excluded from confs, and :4237 renders \"[SUPERSEDED by X]\"; ACTIVE CONFIGURATION line at auger.py:4256; test_auger.py:903-915 asserts \"## D-001  (4.05)  conf 0.82  [SUPERSEDED by D-003]\" and \"ACTIVE CONFIGURATION: D-002=staging table, D-003=blake3 envelope\" (D-001 absent). STATUS UNRESOLVED CHAIN: auger.py:3894-3928 prints the \"supersession:\" block including \"UNRESOLVED: D-00X is still decided with an active option despite supersession by D-00Y\"; test_auger.py:839-862. Validation/refusals: auger.py:1799-1830 (self-supersede, nonexistent target, --supersedes-why without target); test_auger.py:732-756 asserts nothing is written on refusal."
+              }
+            ],
+            "summary": "Supersession is fully implemented and verified: fresh targeted tests pass (6 passed), py_compile and ruff clean, and code inspection confirms the detection flag, decision->decision supersedes edge, status flip with facet reason, dump rendering/exclusion from ACTIVE CONFIGURATION, and UNRESOLVED chain reporting."
+          }
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: AUG-030\n\nStage tier1: PASS\n    \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 answer flags an overlapping decided decision and --supersedes writes a supersedes edge (decision->decision), flips the old decision status to superseded with the reason recorded in facet rows; dump renders superseded decisions as such and excludes them from ACTIVE CONFIGURATION; status names unresolved supersession chains; tests cover flag, edge, status flip, dump exclusion: Fresh evidence: `python -m pytest tests/test_auger.py -k \"supersede or supersession\" -p no:cacheprovider -q` -> \"6 passed, 130 deselected in 2.54s\" (exit 0); `python -m py_compile auger.py` OK; `ruff check auger.py` -> \"All checks passed!\". FLAG: auger.py:3734-3743 prints \"supersedes?  D-001 (4.05, decided) ... pass --supersedes D-001\"; test_auger.py:760-784 asserts the warning and that no edge is written. EDGE decision->decision: auger.py:1848 edge(kind=\"supersedes\", src_kind=\"decision\", dst_kind=\"decision\"); test_auger.py:720-728 asserts exactly one edge with src (decision,D-003) -> dst (decision,D-001) and note \"D-003 supersedes D-001: the envelope format changed\". STATUS FLIP: auger.py:1859 patch(decision,target,{\"status\":SUPERSEDED_STATUS}) with SUPERSEDED_STATUS=\"superseded\" (auger.py:248); test_auger.py:717 asserts \"status -> superseded\" and :729 asserts stored status. FACET REASON: auger.py:1861-1875 writes reason \"superseded by D-00X: why\" into facet rows; test_auger.py:818 asserts note \"superseded by D-002: the answer was re-evaluated\". DUMP: auger.py:4206-4212 sets live_ids=set() for superseded decisions so they are excluded from confs, and :4237 renders \"[SUPERSEDED by X]\"; ACTIVE CONFIGURATION line at auger.py:4256; test_auger.py:903-915 asserts \"## D-001  (4.05)  conf 0.82  [SUPERSEDED by D-003]\" and \"ACTIVE CONFIGURATION: D-002=staging table, D-003=blake3 envelope\" (D-001 absent). STATUS UNRESOLVED CHAIN: auger.py:3894-3928 prints the \"supersession:\" block including \"UNRESOLVED: D-00X is still decided with an active option despite supersession by D-00Y\"; test_auger.py:839-862. Validation/refusals: auger.py:1799-1830 (self-supersede, nonexistent target, --supersedes-why without target); test_auger.py:732-756 asserts nothing is written on refusal.\nSupersession is fully implemented and verified: fresh targeted tests pass (6 passed), py_compile and ruff clean, and code inspection confirms the detection flag, decision->decision supersedes edge, status flip with facet reason, dump rendering/exclusion from ACTIVE CONFIGURATION, and UNRESOLVED chain reporting.\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-09-24T06:17:41.664415",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-09-24T06:17:41.678557+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 35637,
+        "truncated": false,
+        "source": "git show d9c5562fe6c1"
+      }
+    ],
+    "task_id": "AUG-030"
+  }
+}

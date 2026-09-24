@@ -1,0 +1,127 @@
+commit 4f017c3bd32bdbc1f42b2ead8b43e2e9536a331c
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Thu Sep 24 02:50:11 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Thu Sep 24 02:50:11 2026 -0500
+
+    fix: do not re-propose closed questions. Addresses AUG-056.
+    
+    Store proposed-question identity against the project's durable question rows. Refuse an exact canonical match only when the prior row is settled and carries a stored decision closure; moot and budget-thin rows remain eligible for propagation semantics.
+    
+    Verification:
+    - RED: the new closed-question regression failed pre-fix by storing Q-000002 after D-001 closed Q-000001.
+    - GREEN: targeted regression tests passed (2 passed).
+    - GREEN: ask-focused tests passed (20 passed).
+    - GREEN: full tests/test_auger.py passed (141 passed, 4 pre-existing unknown-mark warnings).
+    - GREEN: ruff check auger.py and py_compile passed.
+---
+ auger.py            | 34 ++++++++++++++++++++++++++++++----
+ tests/test_auger.py | 46 ++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 76 insertions(+), 4 deletions(-)
+
+diff --git a/auger.py b/auger.py
+index 1412184..63d904f 100755
+--- a/auger.py
++++ b/auger.py
+@@ -3080,14 +3080,40 @@ def store_proposed_question(
+     if float(noul) >= T_ANSWERED:
+         return "", f"the gate scores it already answered (noul {float(noul)})"
+     try:
+-        open_rows = select(ns, "question", f"project_id=eq.{project_id}&status=eq.open")
++        project_questions = select(
++            ns, "question", f"project_id=eq.{project_id}&order=id.asc"
++        )
+     except SystemExit as exc:
+-        return "", f"the questions already open could not be read — {exc}"
++        return "", f"the project's stored questions could not be read — {exc}"
+     text = criterion["sentence"]
+     want = text.casefold()
+-    for q in open_rows:
+-        if str(q.get("text") or "").strip().casefold() == want:
++    for q in project_questions:
++        if str(q.get("text") or "").strip().casefold() != want:
++            continue
++        if q.get("status") == "open":
+             return "", f"already open as {q.get('id')}"
++        # Only a settled question that carries a durable decision closure is a duplicate. In
++        # particular, do not suppress moot/budget-thin rows: propagation may reopen or otherwise
++        # revisit those states, so a matching proposal remains a legitimate new question.
++        if q.get("status") not in SETTLED_STATES:
++            continue
++        facets = select(ns, "facet", f"question_id=eq.{q.get('id')}&order=id.asc")
++        closure = next(
++            (
++                f
++                for f in facets
++                if f.get("status") == "closed" and str(f.get("closed_by") or "").strip()
++            ),
++            None,
++        )
++        if closure:
++            reason = str(closure.get("note") or "").strip()
++            detail = f": {reason}" if reason else ""
++            return (
++                "",
++                f"already closed/answered as {q.get('id')} by "
++                f"{closure['closed_by']}{detail}",
++            )
+     qid = next_id(ns, "question", "Q")
+     row = {
+         "id": qid,
+diff --git a/tests/test_auger.py b/tests/test_auger.py
+index b646163..c3788f1 100644
+--- a/tests/test_auger.py
++++ b/tests/test_auger.py
+@@ -2157,6 +2157,52 @@ def test_ask_does_not_store_the_same_question_twice(project: dict, monkeypatch):
+     assert len(rows(ns, "facet", "question_id=eq.Q-000001")) == len(auger.facet_set())
+ 
+ 
++def test_ask_does_not_repropose_a_question_after_answer_closes_it(
++    project: dict, monkeypatch
++):
++    """The fresh ask -> answer -> ask loop preserves the durable answered question identity."""
++    ns, pid = project["ns"], project["pid"]
++    monkeypatch.setattr(auger, "jev", ask_stub(Q_NEXT, 0.73, 0.10))
++
++    rc, out = run_cli(["-n", ns, "ask"])
++    assert rc == 0 and "stored question: Q-000001" in out, out
++    rc, out = answer_cli(ns, "D-001", "4.05", "single SQLite file", qid="Q-000001")
++    assert rc == 0 and "closed Q-000001" in out, out
++
++    monkeypatch.setattr(auger, "jev", ask_stub(Q_NEXT, 0.73, 0.10))
++    rc, out = run_cli(["-n", ns, "ask"])
++    assert rc == 0, out
++    assert "stored question:" not in out, out
++    assert "already closed/answered" in out and "Q-000001" in out, out
++    assert "answered by D-001" in out, out
++    assert len(rows(ns, "question", f"project_id=eq.{pid}")) == 1
++    assert len(rows(ns, "decision", f"project_id=eq.{pid}")) == 1
++    assert row(ns, "question", "id=eq.Q-000001")["status"] == "answered"
++
++
++def test_ask_stores_a_different_question_after_answer_closes_the_first(
++    project: dict, monkeypatch
++):
++    """Closing one proposal does not suppress a different canonical proposal next round."""
++    ns, pid = project["ns"], project["pid"]
++    different = "how_does_it_fail"
++    different_text = auger.ASK_NEW_QUESTION_CRITERIA[different]["sentence"]
++    monkeypatch.setattr(auger, "jev", ask_stub(Q_NEXT, 0.73, 0.10))
++
++    rc, out = run_cli(["-n", ns, "ask"])
++    assert rc == 0 and "stored question: Q-000001" in out, out
++    rc, out = answer_cli(ns, "D-001", "4.05", "single SQLite file", qid="Q-000001")
++    assert rc == 0 and "closed Q-000001" in out, out
++
++    monkeypatch.setattr(auger, "jev", ask_stub(different, 0.73, 0.10))
++    rc, out = run_cli(["-n", ns, "ask"])
++    assert rc == 0, out
++    assert f"stored question: Q-000002  {different_text}" in out, out
++    assert len(rows(ns, "question", f"project_id=eq.{pid}")) == 2
++    assert len(rows(ns, "decision", f"project_id=eq.{pid}")) == 1
++    assert row(ns, "question", "id=eq.Q-000002")["status"] == "open"
++
++
+ @pytest.mark.parametrize(
+     "stub, want",
+     [

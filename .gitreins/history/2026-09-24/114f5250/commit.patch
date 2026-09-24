@@ -1,0 +1,58 @@
+commit 52280a6ddd45930fe2030548f5edd38bc3610b03
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Thu Sep 24 07:23:37 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Thu Sep 24 07:23:37 2026 -0500
+
+    fix: repo-root .tmp_* scratch files no longer red the Tier-1 lint arm. Addresses AUG-049.
+    
+    Untracked scratch scripts (.tmp_*.py) in the repo root turned the Tier-1 lint
+    arm red on a clean tree — proven 09-23 on fb2bff77/AUG-035 where the step failed
+    with E401 pointing at .tmp_tick_board.py and .tmp_tick_worker_probe.py while the
+    committed tree at HEAD linted clean. The built-in lint arm selects files itself
+    (it ignores lint_command), so it picked up litter .gitignore did not cover.
+    
+    - .gitignore: add repo-root .tmp_* rule (ruff respects gitignore, so
+      `ruff check .` stays clean even when litter exists — verified with a probe
+      file before and after the rule).
+    - README: document the convention — scratch scripts go under /tmp, never the
+      workdir; the gitignore rule is the seatbelt, the convention is the fix.
+    
+    Verified: ruff check . with a staged-style .tmp_ probe = "All checks passed!";
+    git check-ignore proves the rule matches; committed tree unchanged.
+    
+    Co-authored-by: Alexis Okuwa <wojonstech@gmail.com>
+---
+ .gitignore | 1 +
+ README.md  | 9 +++++++++
+ 2 files changed, 10 insertions(+)
+
+diff --git a/.gitignore b/.gitignore
+index ecbf51f..f72c1b4 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,6 +1,7 @@
+ __pycache__/
+ *.pyc
+ /tmp/
++.tmp_*
+ .gitreins/tasks.yaml
+ .gitreins/usage.jsonl
+ .gitreins/logs/
+diff --git a/README.md b/README.md
+index 43a9eef..9a812e3 100644
+--- a/README.md
++++ b/README.md
+@@ -189,3 +189,12 @@ edge     facet     bundle    bundle_member  verdict
+ ```bash
+ bash tests/smoke.sh          # full loop against a scratch namespace
+ ```
++
++## Scratch files
++
++Scratch scripts (tick probes, one-off checks) never live in this repo — write them under
++`/tmp/`, not the workdir. Untracked `.tmp_*` litter in the repo root used to turn the
++Tier-1 lint arm red on a clean tree (a committed tree can lint clean while the gate fails
++on a scratch file it never should have seen); `.gitignore` now carries a repo-root
++`.tmp_*` rule as the backstop, and ruff respects it, so `ruff check .` stays clean even
++when litter exists. The convention is the fix; the gitignore line is the seatbelt.
