@@ -1,0 +1,256 @@
+commit daf87f349239106a565ae3c04439b708fc8a4214
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Thu Sep 24 13:39:11 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Thu Sep 24 13:39:11 2026 -0500
+
+    dogfood: run 7 (scale + concurrency) — 100-row page cap bends reads (AUG-068), count-mint freezes writes past 100 decisions (AUG-069 P0), concurrent writers corrupt duplicate ids (AUG-070)
+    
+    Verdict PROMISING-BUT-ROUGH. Namespace auger-df7-scale (78 decisions, 303 option
+    rows) left as the standing repro. Install leg SKIPPED-install-bunker explicitly
+    (AUG-071; path re-proven same-day by run 5). Off-by-one post-debug submissions
+    sub_623674 + sub_a9b935. Evidence: docs/dogfood/2026-09-24-scale-concurrency-integration.md
+---
+ .coding-hermes/board/events.jsonl                  |   1 +
+ .coding-hermes/board/tasks.jsonl                   |   4 +
+ .coding-hermes/dogfood-log.md                      |   1 +
+ .../2026-09-24-scale-concurrency-integration.md    | 116 +++++++++++++++++++++
+ docs/dogfood/diagnostics.md                        |  47 +++++++++
+ skills/auger-usage/SKILL.md                        |  20 ++++
+ 6 files changed, 189 insertions(+)
+
+diff --git a/.coding-hermes/board/events.jsonl b/.coding-hermes/board/events.jsonl
+index 0c6e1db..b09b242 100644
+--- a/.coding-hermes/board/events.jsonl
++++ b/.coding-hermes/board/events.jsonl
+@@ -127,3 +127,4 @@
+ {"id":127,"timestamp":"2026-09-24 15:16:47","event_type":"task_created","task_id":"AUG-66","actor":"foreman","detail":"{\"id\":\"AUG-66\",\"status\":\"pending\"}"}
+ {"id":128,"timestamp":"2026-09-24 15:16:47","event_type":"task_created","task_id":"AUG-67","actor":"foreman","detail":"{\"id\":\"AUG-67\",\"status\":\"pending\"}"}
+ {"id":129,"timestamp":"2026-09-24 17:20:00","event_type":"annotation","task_id":null,"actor":"qa-foreman","detail":"tick auger-qa-2026-09-24-17-09-25; FULL battery on bunker-las-01 agent d0bba189 (default bunker-las-02 was OFFLINE, retargeted per-launch), head 8613712: zero FAIL, zero new findings. Recurrence vs events 119/125: chaos-disconnect INFO (suite green under network cut, no network dep), chaos-errorpath INFO/UNVERIFIED (no start command to exercise), lint/tests/docker-build/compose-config NOT-IN-BATTERY (5th consecutive cycle — harness battery-generator gap, recorded in observations, not re-filed per cycle). Hosted CI 3/3 green pre-run. Evidence: /tmp/qa-auger-20260924-1709.jsonl (17 rows)"}
++{"id": 130, "timestamp": "2026-09-24 18:40:00", "event_type": "annotation", "task_id": null, "actor": "auger-dogfood", "detail": "dogfood run 7 (scale + concurrency leg) verdict PROMISING-BUT-ROUGH: at 60 decisions the reads mis-report (AUG-068, page cap 100), past 100 decisions all writes lock out (AUG-069, P0), two writers corrupt duplicate ids into the store and dump renders the collision as a two-valued configuration (AUG-070). Numbers: answer 6.7/s serial 0.15s warm each, 60 answers in 9s; 60 more in 58s concurrent; status 1.99s+-1.28s and dump 0.43s+-0.50s at 100 rows (hyperfine n=10); recall 22s warm at 61 memories vs 3.9s measured on a small namespace in run 5; propagate 2s; hypothesis dump 196ms; init 1s, start <1s. Install leg SKIPPED-install-bunker explicitly: path re-proven same-day by run 5 (agent d1a530b6 smoke=ok); this run's fresh surface was scale/concurrency, install-independent. Off-by-one submissions sub_623674 + sub_a9b935 (cadence post-debug). Evidence: docs/dogfood/2026-09-24-scale-concurrency-integration.md"}
+diff --git a/.coding-hermes/board/tasks.jsonl b/.coding-hermes/board/tasks.jsonl
+index dd9ceaa..1fd21b2 100644
+--- a/.coding-hermes/board/tasks.jsonl
++++ b/.coding-hermes/board/tasks.jsonl
+@@ -72,3 +72,7 @@
+ {"id": "AUG-065", "title": "[P2] SCOPE: auger — decide what connecting over the muster protocol means for this service", "priority": "P2", "complexity": 2, "status": "pending", "created_at": "2026-09-24T15:16:47Z", "updated_at": "2026-09-24T15:16:47Z", "reasoning": "CONTEXT — what \"connect over muster\" means here (read before scoping).\n\nmuster (github.com/wojons/muster) turns any OpenAPI 3.x spec into a typed CLI\n(openapi-cli), an MCP server (openapi-mcp), a daemon, and a Go library. A consumer\nattaches with one config block:\n\n  {\"mcpServers\": {\"<name>\": {\"command\": \"openapi-mcp\",\n                             \"args\": [\"--spec\", \"<url-or-path>\", \"--base-url\", \"<api>\"]}}}\n\n(muster README \"mcpServers\" + docs/integration-guide.md §2; verified 2026-09-24.)\n\nDESIGN AUTHORITY for every protocol row: muster/specs/PROTOCOLS.md — \"no protocol\nimplementation row may start before its adapter satisfies this spec's pipeline and\ncross-cutting contracts on paper\". The pipeline is discover/ingest -> protocol-neutral\noperation model -> SHARED command+MCP generation -> per-protocol transport executor.\nOpenAPI 3.x is the FIRST adapter, not the engine. muster's board carries PROTO-001..008.\n\n\"Support for people to connect to us over the muster protocol\" therefore means, for this\nproject: (1) publish a muster-consumable OpenAPI 3.x contract for our own service,\n(2) ship the consumer config + a human quickstart, (3) PROVE muster's own binaries\ningest it and drive the live service. Nothing here re-implements muster — we consume it.\n\n             THIS ROW IS ONE THIRD OF A CHAIN (scope -> spec -> build) filed together\n2026-09-24 at the operator's request. Do not start this row until its predecessor\nhas landed; the spec row must not invent a surface the scope row has not decided, and\nthe build row must not guess a contract the spec row has not frozen.\n\n             MEASURED STATE OF AUGER TODAY (2026-09-24, read from the live tree):\n\n             auger has NO HTTP server at all — measured 2026-09-24: no serve verb, no http.server/HTTPServer\nbind in auger.py. It is a stdlib-only Python CLI (`python3 auger.py -n <ns> <verb>`, 13 verbs)\nthat rides DuckBrain's declared-tables HTTP API on 127.0.0.1:3000 and calls JEV for judging.\nSo auger is the one target where \"connect over muster\" has no obvious referent, and the scope\ndecision is load-bearing. The three real options:\n  (a) EXPOSE auger: add a local HTTP API over the verbs (init/ask/answer/status/dump/recall/...)\n      and publish a spec for THAT. Most work, most value — agents could drill a spec over MCP.\n  (b) EXPOSE THE SUBSTRATE: publish the DuckBrain table API contract, which auger already rides.\n      Cheap, but it exposes the database, not auger's method — probably the wrong product.\n  (c) WRAP THE CLI: ship a muster-visible wrapper so an agent drives auger's verbs as tools\n      without any HTTP surface on auger at all. Least code; weakest typing.\nRelevant prior art in-repo: AUG-052 (split question generation from judgement) and the JEV\ndependency mean any exposed surface inherits two external dependencies (DuckBrain token, JEV key)\n— the scope must say how a muster consumer authenticates to those.\n\n             Specific scope questions: choose (a), (b) or (c) with the reason recorded. If (a): which verbs are\nread-only (status/dump/recall/check/ask) versus mutating (answer/toggle/propagate/feedback/verdict) —\nthe mutating half writes decisions into DuckBrain and must be MCP-gated. Also decide whether the\nspec is generated from the argparse registry (one source of truth, matching this repo's existing\ndiscipline) or hand-written, and how auth to the two external dependencies is carried by a muster\nclient that only knows how to send HTTP headers.\n\n             DELIVERABLE — a written scope, on this row (no code):\n             1. the surface we expose and why that surface (and, explicitly, what we do NOT expose)\n             2. the exact muster consumer block (the mcpServers entry with its real --spec path/URL\n                and --base-url) written out verbatim\n             3. the acceptance test for the later rows: the precise commands a verifier runs, and\n                the assertions that make them non-vacuous\n             4. the boundary call: which operations are agent-safe through MCP and which must be\n                gated (muster's MCP safety contract — mutating operations an agent should not\n                reach unattended)\n             5. the auth story: this service's credential/header vs what muster's config can carry\n\n             ACCEPTANCE: the row closes with the five items above present and concrete enough\n             that the spec row needs no new decision. If a real decision is still open, say so\n             and name who rules on it.", "capability_tags": ["+integration", "+protocol", "+interop"], "attempts": 0, "blocked_reason": null, "blocked_since": null, "blocks": [], "ci_result": null, "commit_hash": null, "completed_at": null, "depends_on": [], "dispatched_at": null, "exit_code": null, "fallback_model": null, "fallback_provider": null, "files_changed": [], "foreman_note": null, "guard_result": null, "perpetual": null, "primary_model": null, "primary_provider": null, "review_notes": null, "worker_status": "pending", "worker_summary": null, "detail": {"fingerprint": "24bc1f57fa28f71390c8296d592d461f1e169ab7442de72f901bf2f13ab9fc76"}, "worktree": null, "branch": null, "superseded_by": null}
+ {"id": "AUG-066", "title": "[P2] SPEC: auger — author the OpenAPI 3.x contract muster consumes, plus the consumer wiring", "priority": "P2", "complexity": 2, "status": "pending", "created_at": "2026-09-24T15:16:47Z", "updated_at": "2026-09-24T15:16:47Z", "reasoning": "CONTEXT — what \"connect over muster\" means here (read before scoping).\n\nmuster (github.com/wojons/muster) turns any OpenAPI 3.x spec into a typed CLI\n(openapi-cli), an MCP server (openapi-mcp), a daemon, and a Go library. A consumer\nattaches with one config block:\n\n  {\"mcpServers\": {\"<name>\": {\"command\": \"openapi-mcp\",\n                             \"args\": [\"--spec\", \"<url-or-path>\", \"--base-url\", \"<api>\"]}}}\n\n(muster README \"mcpServers\" + docs/integration-guide.md §2; verified 2026-09-24.)\n\nDESIGN AUTHORITY for every protocol row: muster/specs/PROTOCOLS.md — \"no protocol\nimplementation row may start before its adapter satisfies this spec's pipeline and\ncross-cutting contracts on paper\". The pipeline is discover/ingest -> protocol-neutral\noperation model -> SHARED command+MCP generation -> per-protocol transport executor.\nOpenAPI 3.x is the FIRST adapter, not the engine. muster's board carries PROTO-001..008.\n\n\"Support for people to connect to us over the muster protocol\" therefore means, for this\nproject: (1) publish a muster-consumable OpenAPI 3.x contract for our own service,\n(2) ship the consumer config + a human quickstart, (3) PROVE muster's own binaries\ningest it and drive the live service. Nothing here re-implements muster — we consume it.\n\n             THIS ROW IS ONE THIRD OF A CHAIN (scope -> spec -> build) filed together\n2026-09-24 at the operator's request. Do not start this row until its predecessor\nhas landed; the spec row must not invent a surface the scope row has not decided, and\nthe build row must not guess a contract the spec row has not frozen.\n\n             Spec work: whatever the scope chose, the contract must state where the auger CLI and the exposed\nsurface can drift and how that is checked — auger's argv surface is the product today, so a spec\nthat describes a surface nobody tests against the CLI is the drift risk to design out.\n\n             DELIVERABLE — the contract and the wiring, frozen on this row:\n             1. the OpenAPI 3.x document muster will be pointed at (file or served route), with its\n                location named precisely and its generation rule stated (hand-written vs generated\n                from the route table — this repo's own doctrine decides which)\n             2. operationIds, request/response schemas, and the servers[] url that muster dereferences\n                (muster falls back to the spec's own servers[].url when --base-url is omitted; a\n                RELATIVE servers url cannot be dereferenced standalone — say which case applies)\n             3. the consumer config block + a three-line human quickstart (the CLI form:\n                openapi-cli <generated-verb>), both added to this repo's docs\n             4. the parity rule: what keeps the spec from drifting off the real routes, in the\n                same shape as this repo's existing drift checks\n\n             ACCEPTANCE: the spec parses in muster's own parser, the consumer block is copy-pasteable,\n             and the parity rule is expressed as an executable check (not a comment).", "capability_tags": ["+integration", "+protocol", "+interop"], "attempts": 0, "blocked_reason": null, "blocked_since": null, "blocks": [], "ci_result": null, "commit_hash": null, "completed_at": null, "depends_on": ["AUG-065"], "dispatched_at": null, "exit_code": null, "fallback_model": null, "fallback_provider": null, "files_changed": [], "foreman_note": null, "guard_result": null, "perpetual": null, "primary_model": null, "primary_provider": null, "review_notes": null, "worker_status": "pending", "worker_summary": null, "detail": {"fingerprint": "ab680d81435f3c2296e52e5459c5e8baa4a792af225db2f940cc95e016253fe0"}, "worktree": null, "branch": null, "superseded_by": null}
+ {"id": "AUG-067", "title": "[P2] BUILD: auger — implement the muster surface and prove it end to end against the live service", "priority": "P2", "complexity": 3, "status": "pending", "created_at": "2026-09-24T15:16:47Z", "updated_at": "2026-09-24T15:16:47Z", "reasoning": "CONTEXT — what \"connect over muster\" means here (read before scoping).\n\nmuster (github.com/wojons/muster) turns any OpenAPI 3.x spec into a typed CLI\n(openapi-cli), an MCP server (openapi-mcp), a daemon, and a Go library. A consumer\nattaches with one config block:\n\n  {\"mcpServers\": {\"<name>\": {\"command\": \"openapi-mcp\",\n                             \"args\": [\"--spec\", \"<url-or-path>\", \"--base-url\", \"<api>\"]}}}\n\n(muster README \"mcpServers\" + docs/integration-guide.md §2; verified 2026-09-24.)\n\nDESIGN AUTHORITY for every protocol row: muster/specs/PROTOCOLS.md — \"no protocol\nimplementation row may start before its adapter satisfies this spec's pipeline and\ncross-cutting contracts on paper\". The pipeline is discover/ingest -> protocol-neutral\noperation model -> SHARED command+MCP generation -> per-protocol transport executor.\nOpenAPI 3.x is the FIRST adapter, not the engine. muster's board carries PROTO-001..008.\n\n\"Support for people to connect to us over the muster protocol\" therefore means, for this\nproject: (1) publish a muster-consumable OpenAPI 3.x contract for our own service,\n(2) ship the consumer config + a human quickstart, (3) PROVE muster's own binaries\ningest it and drive the live service. Nothing here re-implements muster — we consume it.\n\n             THIS ROW IS ONE THIRD OF A CHAIN (scope -> spec -> build) filed together\n2026-09-24 at the operator's request. Do not start this row until its predecessor\nhas landed; the spec row must not invent a surface the scope row has not decided, and\nthe build row must not guess a contract the spec row has not frozen.\n\n             Build work: the E2E must show a real drill over the muster path, not a health check — e.g. a\ngenerated tool that records a decision or returns a namespace's status map, with the DuckBrain\nnamespace named. If the scope chose (c), prove the wrapper drives the real CLI and that a refusal\n(unknown option, unknown namespace) surfaces as a tool error rather than a silent success.\n\n             DELIVERABLE — implementation plus a LIVE proof:\n             1. land the spec + parity check the spec row froze\n             2. build muster from source and demonstrate its OWN binaries against this service:\n                - `openapi-mcp --spec <ours>` → the typed tools are listed and at least one READ tool\n                  executes against the live service and returns real data\n                - `openapi-cli <generated-verb>` → a typed command executes and prints a real response\n                - the generated CLI must be driven through the documented invocation, not a bespoke\n                  shell script standing in for it\n             3. paste the raw output of both as this row's evidence, with the exact commands\n             4. name any operation muster generates that an agent should NOT be given, and how it is\n                withheld (per the scope row's boundary call)\n\n             ACCEPTANCE: a verifier who has never seen this repo can reproduce the two muster\n             binaries working against the live service from the row's own text. A spec that parses\n             but whose generated tools fail against the service is a FAIL, not a partial.\n\n             NOTE: muster is PRIVATE (github.com/wojons/muster) — the build row needs GOPRIVATE +\n             GitHub auth; record the working incantation in the row.", "capability_tags": ["+integration", "+protocol", "+interop"], "attempts": 0, "blocked_reason": null, "blocked_since": null, "blocks": [], "ci_result": null, "commit_hash": null, "completed_at": null, "depends_on": ["AUG-066"], "dispatched_at": null, "exit_code": null, "fallback_model": null, "fallback_provider": null, "files_changed": [], "foreman_note": null, "guard_result": null, "perpetual": null, "primary_model": null, "primary_provider": null, "review_notes": null, "worker_status": "pending", "worker_summary": null, "detail": {"fingerprint": "0c77918502f28364612c12a9b2f087d83496c2c2b6f03a83280e7d5a8cde9a61"}, "worktree": null, "branch": null, "superseded_by": null}
++{"id": "AUG-068", "title": "[P1] DuckBrain declared-table selects silently cap at 100 rows: status/dump under-count and drop real rows past the page size (no truncation signal, no pagination)", "priority": "P1", "complexity": 2, "reasoning": "DO-7 scale leg, namespace auger-df7-scale: after 60 answers x 3 options, `auger status` reported 'options 100' and `auger dump` rendered D-031 with 2 of its 3 options; the store held 180 correct rows (verified via explicit limit=1000 curl: 100 returned by default, limit=101 -> 101, limit=180 -> 180; no Content-Range header, HTTP 200, zero truncation signal). cmd_status and cmd_dump call select() with NO limit, so any auger project past 100 option/decision rows silently mis-reports. Fix direction: paginate every unbounded select in auger.py (limit+offset loop, or re-fetch with a doubled limit when len==limit — equality is the only signal the API gives); upstream substrate could emit Content-Range. Related: AUG-022 already flags count-based health checks.", "status": "pending", "created_at": "2026-09-24 18:40:00", "updated_at": "2026-09-24 18:40:00"}
++{"id": "AUG-069", "title": "[P0] answer's count-based id mint freezes ALL writes past 100 decisions ('D-101 already exists' forever) — uses len(select()), the exact bug next_id() exists to avoid", "priority": "P0", "complexity": 2, "reasoning": "DO-7 scale+concurrency leg: after the 100th decision, every answer — including a single writer after the concurrent leg ended — is refused with \"refused: decision 'D-101' already exists\". cmd_answer mints `did = f\"D-{len(select(ns,'decision', project filter))+1:03d}\"`; that unpaginated select caps at 100 rows, so the mint sticks at D-101 while the real next id is D-102+. next_id() (auger.py:519) already does the right thing (order=id.desc&limit=1, page-safe) and its docstring names the count-based approach as 'the classic bug this deliberately does not have' — cmd_answer just doesn't use it. Permanent write lockout for any project past 100 decisions; only recovery is explicit --id. Fix: mint the default id via next_id() and paginate any count kept for reporting.", "status": "pending", "created_at": "2026-09-24 18:40:00", "updated_at": "2026-09-24 18:40:00"}
++{"id": "AUG-070", "title": "[P1] concurrent writers collide in the answer check-then-insert window: duplicate decisions/options stored (DuckBrain enforces no uniqueness) and the loser is refused instead of re-minting+retrying", "priority": "P1", "complexity": 3, "reasoning": "DO-7 concurrency leg, 2 parallel writers x 30 answers into one namespace: 18 refusals; the store ended with 102 decision rows for 101 logical answers, 9 duplicate option ids, D-074/D-092/D-094 carrying 6 option rows each — and `dump --config` renders the corrupted id TWICE with two different real choices ('Adopt approach 69A' and 'Adopt approach 99A') with no drift warning. Two defects compound: (a) node_exists check and insert are not atomic against a substrate that enforces nothing (auger's own comment: referential integrity is OURS); (b) a duplicate-id refusal is terminal — the writer exits instead of re-minting the next id and retrying. Fix direction: re-mint+retry on duplicate-id refusal (bounded), and add a consistency self-check (or make dump's drift warning actually fire) so duplicated ids surface instead of rendering a two-valued configuration.", "status": "pending", "created_at": "2026-09-24 18:40:00", "updated_at": "2026-09-24 18:40:00"}
++{"id": "AUG-071", "title": "[P2] SKIPPED-install-bunker — 7th dogfood run (scale + concurrency leg): install path re-proven same-day by run 5; fresh surface was install-independent", "priority": "P2", "complexity": 1, "status": "pending", "created_at": "2026-09-24 18:55:00", "updated_at": "2026-09-24 18:55:00", "reasoning": "SKIPPED-install-bunker (explicit, not silent). Reason: the documented fresh-install path was re-proven PASSED on ephemeral bunker las-bunker-03 by run 5 EARLY THE SAME DAY (agent d1a530b6, substrate 142s + loop 1s, smoke=ok) and re-proven again by runs 2/3; re-running it hours later proves nothing new. Host probed healthy for the record (bunker3: HOST_OK, bunkerd active, Docker 26.1.5) but no agent was spawned — this run's fresh surface was scale (44 domains, 100+ decisions) and concurrency (2 writers), both install-independent. Evidence: docs/dogfood/2026-09-24-scale-concurrency-integration.md; standing repro namespace auger-df7-scale."}
+diff --git a/.coding-hermes/dogfood-log.md b/.coding-hermes/dogfood-log.md
+index 36b3ded..221b284 100644
+--- a/.coding-hermes/dogfood-log.md
++++ b/.coding-hermes/dogfood-log.md
+@@ -10,3 +10,4 @@
+ | 2026-09-24 (6th) | 🟡 PROMISING-BUT-ROUGH (returning-user regression + trust leg) | "A user can come back, check what is already answered, drill further, and trust the namespace survives a substrate restart" — both run-5 P1 fixes verified holding (AUG-055 refuses rc=1 nothing-written; AUG-056 gate blocks the duplicate), full namespace+embeddings survived kill+restart on a dedicated substrate, check/recall/toggle/feedback all exercised; new blocker: `feedback` crashes with raw InvalidURL on any project name containing a space (URL values unencoded). | AUG-061 (P1 unencoded query values crash feedback on spaced names) · AUG-062 (P2 -1.0 confidence sentinel leaks into dump/status/feedback) · AUG-063 (P3 check 6.5-9.7s warm vs dump 0.10s) | ~3 min to rendered config on a fresh namespace; restart survival proven same session | dedicated substrate :3117 no install leg needed (install path re-proven by runs 2/3/5; durability was this run's install-adjacent surface) |
+ 
+ | 2026-09-24 (6th) | install leg | SKIPPED-install-bunker — install path re-proven same-day by run 5 (agent d1a530b6, smoke=ok); this run's fresh surface was durability, proven on a dedicated local substrate (:3117, kill+restart, namespace+embeddings intact). Row AUG-064. |
++| 2026-09-24 (7th) | 🟡 PROMISING-BUT-ROUGH (scale + concurrency — the untouched surface) | "A user can grow a real drill to dozens of decisions and the tool stays fast, consistent, and trustworthy — including two users writing the same namespace at once" — writes stay fast and consistent to 100 rows (60 answers/9 s serial, 0.15 s warm each), then the 100-row page cap silently bends every read (AUG-068) and permanently locks all writes past 100 decisions (AUG-069, P0); concurrent writers corrupt duplicate ids into the store and dump renders the collision as a two-valued configuration with no warning (AUG-070). recall scales badly (22 s warm at 61 memories vs 3.9 s small). | AUG-068 (P1 silent 100-row truncation, no pagination in status/dump) · AUG-069 (P0 count-mint freeze = permanent write lockout) · AUG-070 (P1 TOCTOU duplicates render as a real config) | ~90 s empty namespace -> 60-decision drill; first anomaly noticed at answer 60 | install leg SKIPPED-install-bunker explicitly (re-proven same-day by run 5, agent d1a530b6); scale/concurrency is install-independent; off-by-one sub_623674 + sub_a9b935; evidence docs/dogfood/2026-09-24-scale-concurrency-integration.md |
+diff --git a/docs/dogfood/2026-09-24-scale-concurrency-integration.md b/docs/dogfood/2026-09-24-scale-concurrency-integration.md
+new file mode 100644
+index 0000000..83cc1d5
+--- /dev/null
++++ b/docs/dogfood/2026-09-24-scale-concurrency-integration.md
+@@ -0,0 +1,116 @@
++# Run 7 — scale & concurrency (2026-09-24)
++
++Lane: auger-dogfood · tick auger-dogfood-2026-09-24-18-11-36 · verdict **PROMISING-BUT-ROUGH**
++(scales beautifully to the doorstep of 100 rows, then silently lies and locks)
++
++## The promise under test
++
++Runs 1–6 proved the loop on namespaces of 1–8 decisions. A real drill is not eight
++decisions. This run asked the question none of them asked: **what does auger look
++like grown up?** — 44 domains seeded, 100+ decisions, two agents writing the same
++namespace at once, and the read/write verbs measured at that size.
++
++## Setup (all on the shared substrate, shared namespace `auger-df7-scale`)
++
++- `init --seed-domains` 1 s (44 NOT-REACHED domain rows) · `start --seed-file` <1 s.
++- Serial leg: 60 × `answer` (3 options each) across 30 domains in **9 s**
++  (6.7 answers/s, ~0.15 s warm per write) — zero errors, zero corruption.
++- Concurrency leg: 2 parallel writers × 30 answers in **58 s**.
++- Read costs at ~100 rows (hyperfine, n=10): `status` 1.99 s ± 1.28 s,
++  `dump` 0.43 s ± 0.50 s; `propagate` 2 s; hypothesis dump (`--config D-001=O2`)
++  196 ms; `recall` **22 s warm** at 61 embedded memories (run 5 measured 3.9 s
++  on a small namespace — the wait scales with what's stored, not just the query).
++
++## What broke (three defects, one of them P0)
++
++### AUG-068 (P1) — reads silently truncate at the substrate's 100-row page cap
++
++After 60 answers (180 option rows), `status` printed `options 100` and `dump`
++rendered D-031 with 2 of its 3 options. The store held all 180 rows correctly.
++Proven with raw curls: the declared-tables endpoint returns exactly 100 rows with
++no `limit` (200 OK, no Content-Range, no truncation flag); `limit=101` returns 101.
++`cmd_status`/`cmd_dump` never paginate. **There is no way to detect the cap from
++the response alone** — the only signal is `len(rows) == limit` when you chose to
++send a limit.
++
++### AUG-069 (P0) — every write locks out permanently past 100 decisions
++
++`cmd_answer` mints the default id from a row count:
++`did = "D-" + (len(select(decision, project))+1)`. That unpaginated select caps at
++100, so the mint sticks at `D-101` forever while the real next id is D-102+. Every
++answer after the 100th — concurrent OR single-writer — is refused:
++
++```
++refused: decision 'D-101' already exists — answer decision IDs must be unique
++```
++
++The freeze outlives the writers and does not self-heal. Explicit `--id D-102`
++succeeds; the next count-minted answer refuses again. The irony is on record in
++the repo: `next_id()` (auger.py:519) exists precisely to avoid "the classic bug"
++of count-based minting, is already page-safe (`order=id.desc&limit=1`), and is
++used by every OTHER table — `cmd_answer` just doesn't use it for the default id.
++
++### AUG-070 (P1) — concurrent writers corrupt ids; dump renders the collision as a real configuration
++
++Two writers minted the same ids in the check-then-insert window (DuckBrain
++enforces no uniqueness — auger's own comment says referential integrity is OURS).
++The loser is refused instead of re-minting. Store afterwards: 102 decision rows
++for 101 logical answers, 9 duplicate option ids, D-074/D-092/D-094 carrying 6
++option rows each. User-visible: `dump --config` renders **D-074 twice with two
++different real choices** ("Adopt approach 69A" and "Adopt approach 99A"), and the
++drift warning that is supposed to flag a decision without exactly one active
++option never fired — two `[x]` rows is still "one per decision" to the renderer
++if it counts decisions, not options.
++
++## What held up
++
++- Serial writes at scale: 60 answers, 9 s, perfect consistency afterwards
++  (verified per-decision against the store with an independent script).
++- The refusal guard is fail-closed: a colliding write never half-lands; the id
++  uniqueness refusal is correct behavior, just terminal when it shouldn't be.
++- `dump --config` still named a contradiction with the record at 100 rows.
++- `propagate` stayed at 2 s at scale; hypothesis dumps ~0.2 s.
++- init/start stay sub-second; the 44-domain grid seeds correctly.
++
++## Cost of using it at scale (headline numbers)
++
++| operation | small namespace (runs 3/5) | this run (~100 rows) |
++|---|---|---|
++| answer (write) | ~0.1–0.2 s | 0.15 s serial · 58 s/30 concurrent (incl. refusals) |
++| status | 0.20 s | 1.99 s ± 1.28 s |
++| dump | 0.11 s | 0.43 s ± 0.50 s |
++| recall | 3.9 s | **22 s** |
++| propagate | — | 2 s |
++| init + start | ~1 s | ~1 s |
++
++## Install leg
++
++SKIPPED-install-bunker, explicit: the documented fresh-install path was re-proven
++same-day by run 5 on bunker las-bunker-03 (agent d1a530b6, substrate 142 s + loop,
++smoke=ok). This run's fresh surface — scale and concurrency — is install-independent.
++Host probed healthy (`bunker3`: HOST_OK, bunkerd active) but no agent was spawned.
++
++## Off-by-one submissions (cadence post-debug)
++
++Both classes were absent from the corpus (`not_found` on discover):
++
++- `sub_623674` — unpaginated-table-select-silent-100-row-truncation
++- `sub_a9b935` — row-count-id-minting-freeze-past-page-cap
++
++## What a maintainer should fix first (one hour)
++
++1. `cmd_answer`: mint via `next_id()` — one line, kills the P0 freeze (AUG-069).
++2. Paginate `select` in `cmd_status`/`cmd_dump` (AUG-068) — or have `select()`
++   re-fetch with a doubled limit whenever `len(rows) == limit` sent.
++3. Duplicate-id refusal → re-mint + bounded retry (AUG-070).
++
++## Reproduction
++
++```bash
++export AUGER_NS=auger-df7-scale    # left behind, 77+ decisions, intentionally unpolluted further
++python3 auger.py status | sed -n 2p          # 'options 100' while the store holds 300+
++python3 auger.py answer --chosen X           # refused: decision 'D-101' already exists
++python3 auger.py answer --id D-200 --chosen X  # explicit id recovers
++curl -s "http://127.0.0.1:3000/api/ns/$AUGER_NS/tables/decision?select=id&limit=1000" \
++  -H "x-api-key: $(cat ~/.duckbrain/foreman-status.token)" | jq length
++```
+diff --git a/docs/dogfood/diagnostics.md b/docs/dogfood/diagnostics.md
+index 5efce6a..99021bf 100644
+--- a/docs/dogfood/diagnostics.md
++++ b/docs/dogfood/diagnostics.md
+@@ -322,3 +322,50 @@ other daemon: on a multi-tenant box it may not be yours.
+   `dump` 111 ms ± 9 ms; `recall` 3.9 s; `ask` 5.0–6.4 s (a JEV call, ~$0.00004).
+   `status` is ~10x faster than the 2.2 s ± 1.3 s reported in run 3 (evidence for
+   AUG-047, not a new row).
++
++## Run 7 (2026-09-24) — how the scale defects were found, and why they hid for six runs
++
++Every earlier dogfood run judged auger on namespaces of 1–8 decisions. The
++defects of run 7 live entirely past the 100th row, which is why six green runs
++never saw them: the test suite's fixtures are small, and nothing else grows a
++namespace. The construction was deliberately boring — 60 serial answers across
++the 44-domain grid, then 30+30 from two parallel writers — with an independent
++verification script reading the store directly after each leg.
++
++The discovery chain is a lesson in silent-truncation debugging:
++
++1. The symptom was INTERNAL INCONSISTENCY, not an error: `status` said
++   "options 100" while dump's per-decision rendering disagreed with it
++   (D-031 missing its third option). Neither printed anything wrong-looking on
++   its own. When two views of one store disagree, believe neither and read the
++   store directly (curl with `limit=1000`) — that probe took one minute and
++   proved the data was fine and the READS were wrong.
++2. Bisecting the endpoint with curl (`limit=99/100/101/179/180`) showed a hard
++   page cap at 100 with no signal: 200 OK, no Content-Range, no field. A client
++   can only detect it by comparing `len(rows)` to the limit it sent. Any
++   integration on this substrate that "reads a table" without pagination is
++   silently wrong past 100 rows — auger was the first caller big enough to find
++   out.
++3. The P0 write lockout fell out of the same cap through a different door:
++   `cmd_answer` mints `D-<count+1>` from an unpaginated select, so the mint
++   froze at D-101 while the store held 101+ decisions. The repo already contains
++   the correct allocator (`next_id()`, highest-id-based, page-safe, and its
++   docstring explicitly names the count-based approach as "the classic bug this
++   deliberately does not have") — answer simply doesn't route through it. The
++   general lesson: when a codebase carries a "we deliberately don't have bug X"
++   comment, grep for every path that could still hit X anyway; the guarantee is
++   only as wide as its callers.
++4. The concurrency leg (2 writers × 30 answers) produced 18 refusals and left
++   duplicate decision/option ids in the store — the check-then-insert window is
++   unguarded because DuckBrain enforces no uniqueness. The visible consequence
++   was nasty and quiet at once: `dump --config` rendered D-074 twice with two
++   different real choices, no drift warning. A renderer that asserts "exactly
++   one active option per decision" must count options per id, not rows per
++   decision — duplicated ids are invisible to row-grouping.
++
++Left behind on purpose: namespace `auger-df7-scale` (77 decisions, 303 option
++rows, duplicates included) is the standing repro for AUG-068/069/070 — see the
++reproduction block in `2026-09-24-scale-concurrency-integration.md`. Both
++debugged classes were submitted to off-by-one post-debug (`sub_623674`,
++`sub_a9b935`) so the next agent hitting a silent 100-row cap anywhere in this
++substrate family gets the answer pre-solved.
+diff --git a/skills/auger-usage/SKILL.md b/skills/auger-usage/SKILL.md
+index 47d3a6a..f1541c1 100644
+--- a/skills/auger-usage/SKILL.md
++++ b/skills/auger-usage/SKILL.md
+@@ -202,3 +202,23 @@ python3 auger.py -n <ns> recall "any seed phrase"   # proves embeddings
+   measures 199 ms, not the 2.2 s of AUG-047.
+ - **Still live:** `answer --domain` accepts any string (4.99, and even `notanumber`,
+   both recorded exit 0) — AUG-038.
++- **Every unpaginated read is silently capped at 100 rows (AUG-068).** The
++  substrate returns exactly the first 100 rows when a table select carries no
++  `limit` — 200 OK, no Content-Range, no truncation flag. Past 100 decisions in
++  a project, `status` under-counts, `dump` drops real options, and nothing
++  warns. Never trust either verb's numbers once `decisions` passes ~95; verify
++  against the store with an explicit `limit=1000` select.
++- **A project past 100 decisions cannot take a default-id answer AT ALL
++  (AUG-069, P0).** The mint is count-based and caps with the page: every answer
++  refuses with `decision 'D-101' already exists`, forever, single-writer
++  included. Workaround: pass `--id D-<highest+1>` explicitly (find the highest
++  via `?select=id&order=id.desc&limit=1`). Don't "retry harder" — the refusal
++  is deterministic.
++- **Never run two auger writers against one namespace (AUG-070).** They mint the
++  same ids in the check-then-insert window and the store keeps duplicate
++  decision/option rows; `dump --config` then renders one decision twice with
++  two different real choices and no warning. If it happened, find duplicates
++  with a per-id count over `?select=id&limit=1000` before trusting any dump.
++- **`recall` slows with everything the project ever embedded (22 s warm at 61
++  memories vs 3.9 s small).** At drill scale the "is this already answered"
++  lookup is the slowest read in the tool; budget for it or batch questions.
