@@ -242,8 +242,10 @@ EDGE_KINDS = (
     "derives_from",
     "references",
     "blocks",
+    "supersedes",
 )
 EDGE_SOURCES = ("gate", "impact", "human", "rule")
+SUPERSEDED_STATUS = "superseded"
 # The bundle model's closed sets (SPEC-002 section 1). `status` and `role` are sets the ENGINE
 # switches on — a retired bundle is not walked, a test-target does not own the contract — so they
 # live in code and are refused BY NAME when they are wrong: EDGE_KINDS' rule, applied to the two
@@ -1791,6 +1793,95 @@ def record_local_breaks(
             note=note,
         )
         written.append((wrote["id"], target))
+    return written
+
+
+def supersede_targets(
+    ns: str, project_id: str, decision_id: str, raw: list | None, why: str = ""
+) -> list:
+    """Validate `--supersedes` targets before the answer writes anything."""
+    targets, seen = [], set()
+    for raw_id in raw or []:
+        target = (raw_id or "").strip()
+        if target and target not in seen:
+            seen.add(target)
+            targets.append(target)
+    if why and not targets:
+        raise SystemExit(
+            "--supersedes-why names no --supersedes target — the reason belongs on a supersedes "
+            "edge, and no supersession was named"
+        )
+    for target in targets:
+        if target == decision_id:
+            raise SystemExit(
+                f"refused: {decision_id} cannot supersede itself — a new answer must replace "
+                "an older decision"
+            )
+        if not select(
+            ns,
+            "decision",
+            f"id=eq.{target}&project_id=eq.{project_id}&select=id&limit=1",
+        ):
+            raise SystemExit(
+                f"refused: decision {target!r} does not exist in project {project_id} — "
+                "a supersession names a decision this project already recorded"
+            )
+    return targets
+
+
+def record_supersessions(
+    ns: str,
+    project_id: str,
+    decision_id: str,
+    targets: list,
+    why: str,
+) -> list:
+    """Record supersession edges, status flips, and the old decisions' facet reasons."""
+    written = []
+    for target in targets:
+        note = f"{decision_id} supersedes {target}"
+        if why:
+            note += f": {why}"
+        wrote = edge(
+            ns,
+            project_id,
+            "supersedes",
+            "decision",
+            decision_id,
+            "decision",
+            target,
+            source="human",
+            note=note,
+        )
+        patch(ns, "decision", target, {"status": SUPERSEDED_STATUS})
+        idx = edge_index(graph_edges(ns, project_id))
+        questions = questions_closed_by(ns, project_id, idx).get(target, [])
+        reason = f"superseded by {decision_id}"
+        if why:
+            reason += f": {why}"
+        fields = {"status": "closed", "closed_by": decision_id, "note": reason}
+        for question_id in questions:
+            have = select(ns, "facet", f"question_id=eq.{question_id}&order=id.asc")
+            if have:
+                for facet_row in have:
+                    patch(ns, "facet", facet_row["id"], fields)
+            else:
+                first = int(next_id(ns, "facet", "F").split("-")[1])
+                insert(
+                    ns,
+                    "facet",
+                    [
+                        {
+                            "id": f"F-{first + i:0{ID_WIDTH}d}",
+                            "project_id": project_id,
+                            "question_id": question_id,
+                            "facet": name,
+                            **fields,
+                        }
+                        for i, name in enumerate(facet_set())
+                    ],
+                )
+        written.append((wrote["id"], target, questions))
     return written
 
 
@@ -3514,6 +3605,9 @@ def cmd_answer(a):
     break_targets = local_break_targets(
         ns, pid, did, a.invalidates, a.invalidates_why or ""
     )
+    supersede_target_ids = supersede_targets(
+        ns, pid, did, a.supersedes, a.supersedes_why or ""
+    )
     row = {
         "id": did,
         "project_id": pid,
@@ -3584,6 +3678,9 @@ def cmd_answer(a):
     # hook does: the impact pass is the one step here that spends a model call, and a refusal must not
     # be discovered after it.
     breaks = record_local_breaks(ns, pid, did, break_targets, a.invalidates_why or "")
+    supersessions = record_supersessions(
+        ns, pid, did, supersede_target_ids, a.supersedes_why or ""
+    )
     stored_scope = DEFAULT_SCOPE if warning else decision_scope(row)
     impact = bundle_impact(ns, pid, {**row, "scope": stored_scope})
     print(
@@ -3603,6 +3700,15 @@ def cmd_answer(a):
             f"  trigger    `auger propagate` is the walk this edge fires: it moots the questions "
             f"{'/'.join(b for _, b in breaks)} answered and reopens their stale children"
         )
+    for eid, target, questions in supersessions:
+        print(
+            f"  supersedes {eid}  {did} supersedes {target} — status -> {SUPERSEDED_STATUS}"
+        )
+        if questions:
+            print(
+                f"  facets    {target}: refreshed {len(questions)} question(s) with "
+                f"closed_by {did}"
+            )
     # The walk's own report (AUG-027): `impact["lines"]` carries one line per member the pass
     # WALKED — its decision, the verdict word and the score — so that an 'unchanged' member and a
     # skipped one are both visible in the verb's output. Without that the answer to a run where
@@ -3618,6 +3724,23 @@ def cmd_answer(a):
         print(line)
     if warning:
         print(warning)
+    domain = (a.domain or "").strip()
+    if domain:
+        candidates = [
+            d
+            for d in select(ns, "decision", f"project_id=eq.{pid}&order=id.asc")
+            if d.get("id") != did
+            and (d.get("domain") or "").strip() == domain
+            and d.get("status") != SUPERSEDED_STATUS
+        ]
+        shown = candidates[:3]
+        for candidate in shown:
+            print(
+                f"  supersedes?  {candidate['id']} ({domain}, {candidate.get('status') or 'decided'}) "
+                f"is in this domain — pass --supersedes {candidate['id']} to record it"
+            )
+        if len(candidates) > len(shown):
+            print(f"  supersedes?  (+{len(candidates) - len(shown)} more)")
     return 0
 
 
@@ -3768,6 +3891,43 @@ def cmd_status(a):
         print()
         print("\n".join(activation_warnings))
 
+    supersession_edges = [
+        e
+        for e in graph_edges(ns, pid)
+        if e.get("kind") == "supersedes"
+        and e.get("src_kind") == "decision"
+        and e.get("dst_kind") == "decision"
+    ]
+    superseded = [d for d in dec if d.get("status") == SUPERSEDED_STATUS]
+    if supersession_edges or superseded:
+        print("\nsupersession:")
+        for e in supersession_edges:
+            print(f"  {e['src_id']} supersedes {e['dst_id']}")
+        edged_old = {e["dst_id"] for e in supersession_edges}
+        for d in superseded:
+            if d["id"] not in edged_old:
+                print(f"  marked superseded: {d['id']} (no supersedes edge)")
+        dec_by_id = {d["id"]: d for d in dec}
+        opts_by_dec = options_by_decision(opt)
+        for e in supersession_edges:
+            old = dec_by_id.get(e["dst_id"])
+            if old and old.get("status") == "decided":
+                if any(o.get("active") for o in opts_by_dec.get(old["id"], [])):
+                    print(
+                        f"  UNRESOLVED: {old['id']} is still decided with an active option "
+                        f"despite supersession by {e['src_id']}"
+                    )
+        closed = questions_closed_by(ns, pid, edge_index(graph_edges(ns, pid)))
+        for old in superseded:
+            for question_id in closed.get(old["id"], []):
+                questions = select(ns, "question", f"id=eq.{question_id}&limit=1")
+                if questions and questions[0].get("status") in SETTLED_STATES:
+                    print(
+                        f"  residue (expected): question {question_id} remains "
+                        f"{questions[0]['status']} although answering decision {old['id']} "
+                        "is superseded"
+                    )
+
     # SPEC-001 BEAT 2, the reading half: how much branch is still open, and how deep the stored
     # dependency chain runs. Both numbers come off the ROWS — the question statuses and the
     # question->question edges — never off the prose in this report, so a project with no question
@@ -3883,6 +4043,8 @@ def activation_warning_lines(
     by_dec = options_by_decision(opts)
     lines = []
     for d in dec:
+        if d.get("status") == SUPERSEDED_STATUS:
+            continue
         cand = by_dec.get(d["id"], [])
         if not cand:
             continue
@@ -3994,6 +4156,14 @@ def cmd_dump(a):
     dec = select(ns, "decision", f"project_id=eq.{pid}&order=domain.asc,id.asc")
     opts = select(ns, "option", "order=id.asc")
     by_dec = options_by_decision(opts)
+    superseded_by = {}
+    for e in graph_edges(ns, pid):
+        if (
+            e.get("kind") == "supersedes"
+            and e.get("src_kind") == "decision"
+            and e.get("dst_kind") == "decision"
+        ):
+            superseded_by.setdefault(e["dst_id"], []).append(e["src_id"])
 
     # --config overrides: accept a full option id, label, or bare index, but refuse every
     # malformed/unknown/ambiguous entry before rendering so a current dump cannot masquerade as a
@@ -4033,7 +4203,16 @@ def cmd_dump(a):
     confs, shadows, live_by_dec = [], [], {}
     for d in dec:
         cand = by_dec.get(d["id"], [])
-        if hypothetical:
+        superseders = superseded_by.get(d["id"], [])
+        if d.get("status") == SUPERSEDED_STATUS or superseders:
+            live_ids = set()
+            if d["id"] in overrides:
+                names = ", ".join(superseders) if superseders else "another decision"
+                shadows.append(
+                    f"{d['id']}: --config override is superseded by {names} and is not "
+                    "part of the active configuration"
+                )
+        elif hypothetical:
             live_ids = overrides.get(d["id"]) or {
                 o["id"] for o in cand if o.get("active")
             }
@@ -4054,6 +4233,13 @@ def cmd_dump(a):
                 )
         lines.append(
             f"## {d['id']}  ({d.get('domain') or '—'})  conf {d.get('confidence')}"
+            + (
+                f"  [SUPERSEDED by {', '.join(superseders)}]"
+                if superseders
+                else "  [SUPERSEDED]"
+                if d.get("status") == SUPERSEDED_STATUS
+                else ""
+            )
         )
         lines.append(f"   chosen   : {d.get('chosen')}")
         lines.append(f"   why not  : {d.get('why_not') or '(not recorded)'}")
@@ -4339,6 +4525,18 @@ def main(argv=None):
         metavar="WHY",
         help="why the invalidated decision is dead; recorded on the break edge's note "
         "(`--why` is the same option). Only with --invalidates.",
+    )
+    s.add_argument(
+        "--supersedes",
+        action="append",
+        metavar="D-00X",
+        help="record that this answer replaces a prior decision; repeatable",
+    )
+    s.add_argument(
+        "--supersedes-why",
+        dest="supersedes_why",
+        metavar="WHY",
+        help="why the prior decision is superseded; only with --supersedes",
     )
     s.set_defaults(fn=cmd_answer)
 

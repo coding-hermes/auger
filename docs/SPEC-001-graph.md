@@ -30,6 +30,9 @@ a question is not "pending", it is in one specific condition with a reason.
 | `moot` | a parent decision was overturned, so this question no longer matters | PROPAGATE |
 | `budget_thin` | closed by hitting the branch ceiling, with the reason recorded | BUDGET |
 
+Decision rows normally carry status `decided`. When a later answer replaces one, its status is
+`superseded`; it remains on the record for history but is no longer part of the configuration.
+
 `answered` and `linked` are deliberately different: `answered` cost a new answer and `linked`
 cost only a gate call. The ratio of the two is the engine's honest score of how much repeated
 work the gate is saving — and that ratio is worth reporting every run.
@@ -48,7 +51,7 @@ edge
   id           varchar   E-000001        (fixed-width, per the project's own id law)
   project_id   varchar
   kind         varchar   opens | closes | satisfies | affects | breaks |
-                         derives_from | references | blocks
+                         derives_from | references | blocks | supersedes
   src_kind     varchar   decision | question | unknown | assumption
   src_id       varchar
   dst_kind     varchar
@@ -77,6 +80,8 @@ edges, and DuckBrain serves them over the declared-table API with filters and or
 - **`references`** — answer → answer. This answer cites that one as evidence. (E1)
 - **`blocks`** — question → question. This question cannot be answered until that one is. This is
   the only edge that *prevents* progress, and it is what makes depth ordering meaningful. (E4)
+- **`supersedes`** — answer → decision. This answer replaces that decision; the superseded decision
+  remains on the record but is no longer part of the configuration.
 
 ## 3. The `facet` table (E5 — "many ways of looking")
 

@@ -126,7 +126,8 @@ Record a decision with its rejected alternatives.
 **Arguments:** `--chosen` (required), `--id` (defaults to the next `D-` number),
 `--option` (repeatable — every alternative, chosen ones included), `--why-not`,
 `--domain`, `--question-id`, `--reversal-cost`, `--confidence` (float), `--status`
-(defaults `decided`), `--scope` (`project` | `bundle`, default `project`).
+(defaults `decided`), `--scope` (`project` | `bundle`, default `project`), `--supersedes`
+(repeatable decision id), `--supersedes-why`.
 
 **Writes:** one `decision` row; one `option` row per `--option` (id `<D-###>-O<n>`,
 `active` on exactly the chosen one); one embedded memory under
@@ -135,12 +136,19 @@ never listing the chosen option as rejected. With `--question-id`: a `closes` ed
 (`decision` → `question`) and the question moved to `answered`, its reason recorded on
 its `facet` rows. With `--scope bundle` (as stored): the bundle impact pass — `affects`
 or `breaks` edges naming each sibling's bundle-scoped decision the answer touches, and
-an `escalation` row for every break, recorded with a default action.
+an `escalation` row for every break, recorded with a default action. With `--supersedes`,
+one local `supersedes` edge per target, the old decision's status is patched to
+`superseded`, and the old decision's answered questions have their facet rows refreshed
+with the new decision and reason.
 
 **Never writes:** anything into a sibling project's namespace — a break in a member's
 contract is recorded as an edge and an escalation HERE, naming the sibling there; the
-sibling's rows are read, never rewritten. Without `--question-id` it never touches
-`question`, `facet`, or `edge` rows at all.
+sibling's rows are read, never rewritten. A supersession never rewrites the prior
+decision's chosen option or the question's own state; it only records the edge, status,
+and facet reason described above. Invalid supersession arguments are refused before any
+answer or option write. A same-domain detection line is only a warning and never
+auto-supersedes a decision. Without `--question-id` it never touches `question`,
+`facet`, or `edge` rows at all, except for explicit `--supersedes` or `--invalidates`.
 
 ## check
 

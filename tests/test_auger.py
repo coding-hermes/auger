@@ -691,6 +691,135 @@ def test_a_namespace_declared_before_scope_keeps_working(live_service: str):
         assert teardown_namespace(ns) == []
 
 
+def test_answer_supersedes_marks_the_old_decision_and_records_one_edge(decided: dict):
+    ns, pid = decided["ns"], decided["pid"]
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-003",
+            "--domain",
+            "4.07",
+            "--chosen",
+            "blake3 envelope",
+            "--option",
+            "blake3 envelope",
+            "--option",
+            "sha256 envelope",
+            "--supersedes",
+            "D-001",
+            "--supersedes-why",
+            "the envelope format changed",
+        ]
+    )
+    assert rc == 0 and "supersedes" in out and "status -> superseded" in out, out
+
+    edges = rows(ns, "edge", f"project_id=eq.{pid}&order=id.asc")
+    supersedes = [e for e in edges if e.get("kind") == "supersedes"]
+    assert len(supersedes) == 1, supersedes
+    edge = supersedes[0]
+    assert (edge["src_kind"], edge["src_id"]) == ("decision", "D-003")
+    assert (edge["dst_kind"], edge["dst_id"]) == ("decision", "D-001")
+    assert edge["source"] == "human"
+    assert edge["confidence"] == -1.0
+    assert "dst_project" not in edge or not edge["dst_project"]
+    assert edge["note"] == "D-003 supersedes D-001: the envelope format changed"
+    assert row(ns, "decision", "id=eq.D-001")["status"] == auger.SUPERSEDED_STATUS
+
+
+def test_answer_supersede_refusals_write_nothing(decided: dict):
+    ns, pid = decided["ns"], decided["pid"]
+    before = {
+        "decision": rows(ns, "decision", f"project_id=eq.{pid}&order=id.asc"),
+        "option": rows(ns, "option", "order=id.asc"),
+        "edge": rows(ns, "edge", "order=id.asc"),
+    }
+    base = ["-n", ns, "answer", "--id", "D-009", "--chosen", "new answer"]
+
+    rc, msg, _ = run_cli_exit(base + ["--supersedes", "D-099"])
+    assert rc != 0 and "D-099" in msg and "does not exist" in msg, msg
+    rc, msg, _ = run_cli_exit(base + ["--supersedes", "D-009"])
+    assert rc != 0 and "D-009" in msg and "itself" in msg, msg
+    rc, msg, _ = run_cli_exit(
+        base + ["--supersedes-why", "the old answer no longer applies"]
+    )
+    assert rc != 0 and "--supersedes" in msg and "target" in msg, msg
+
+    after = {
+        "decision": rows(ns, "decision", f"project_id=eq.{pid}&order=id.asc"),
+        "option": rows(ns, "option", "order=id.asc"),
+        "edge": rows(ns, "edge", "order=id.asc"),
+    }
+    assert after == before, (
+        "a refused supersession wrote decision, option, or edge rows"
+    )
+
+
+def test_answer_supersede_detection_warns_without_superseding(decided: dict):
+    ns = decided["ns"]
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-003",
+            "--domain",
+            D001["domain"],
+            "--chosen",
+            "another envelope",
+            "--option",
+            "another envelope",
+            "--confidence",
+            "0.7",
+        ]
+    )
+    assert rc == 0
+    assert (
+        f"supersedes?  D-001 ({D001['domain']}, decided)" in out
+        and "pass --supersedes D-001" in out
+    ), out
+    assert rows(ns, "edge", "kind=eq.supersedes") == []
+    assert row(ns, "decision", "id=eq.D-003")["status"] == "decided"
+
+
+def test_answer_supersede_refreshes_facets_without_rewriting_question(project: dict):
+    ns, pid = project["ns"], project["pid"]
+    store_questions(ns, pid, ("Q-000001", Q_WATCH, "answered"))
+    rc, out = answer_cli(ns, "D-001", "4.05", "single SQLite file", qid="Q-000001")
+    assert rc == 0, out
+
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-002",
+            "--domain",
+            "4.06",
+            "--chosen",
+            "row locking",
+            "--supersedes",
+            "D-001",
+            "--supersedes-why",
+            "the answer was re-evaluated",
+        ]
+    )
+    assert rc == 0, out
+    assert row(ns, "question", "id=eq.Q-000001")["status"] == "answered"
+    facets = rows(ns, "facet", "question_id=eq.Q-000001&order=id.asc")
+    assert [f["facet"] for f in facets] == list(auger.facet_set())
+    assert all(
+        f["status"] == "closed"
+        and f["closed_by"] == "D-002"
+        and f["note"] == "superseded by D-002: the answer was re-evaluated"
+        for f in facets
+    ), facets
+
+
 # ================================================================= status
 def test_status_counts_the_stored_rows(decided: dict):
     """`status` counts what is stored; the stored rows are the assertion."""
@@ -707,6 +836,32 @@ def test_status_counts_the_stored_rows(decided: dict):
     assert "D-002" in out and f"{D002['confidence']:.2f}" in out, out
 
 
+def test_status_supersede_chain_and_quiet_control(decided: dict):
+    ns = decided["ns"]
+    rc, before = run_cli(["-n", ns, "status"])
+    assert rc == 0 and "supersession:" not in before, before
+
+    rc, answer_out = run_cli(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-003",
+            "--domain",
+            "4.07",
+            "--chosen",
+            "new envelope",
+            "--supersedes",
+            "D-001",
+        ]
+    )
+    assert rc == 0, answer_out
+    rc, after = run_cli(["-n", ns, "status"])
+    assert rc == 0
+    assert "supersession:" in after and "D-003 supersedes D-001" in after, after
+
+
 # ================================================================= dump: current, hypothetical, output
 def test_dump_renders_the_stored_configuration(decided: dict):
     rc, out = run_cli(["-n", decided["ns"], "dump"])
@@ -718,6 +873,48 @@ def test_dump_renders_the_stored_configuration(decided: dict):
     for d in (D001, D002):
         assert f"{d['did']}  ({d['domain']})" in out, out
         assert d["why_not"] in out, out
+
+
+def test_dump_excludes_superseded_decision_from_active_configuration(decided: dict):
+    ns = decided["ns"]
+    rc, answer_out = run_cli(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-003",
+            "--domain",
+            "4.07",
+            "--chosen",
+            "blake3 envelope",
+            "--option",
+            "blake3 envelope",
+            "--option",
+            "sha256 envelope",
+            "--supersedes",
+            "D-001",
+        ]
+    )
+    assert rc == 0, answer_out
+
+    rc, out = run_cli(["-n", ns, "dump"])
+    assert rc == 0
+    assert "## D-001  (4.05)  conf 0.82  [SUPERSEDED by D-003]" in out, out
+    assert "ACTIVE CONFIGURATION: D-002=staging table, D-003=blake3 envelope" in out, (
+        out
+    )
+    assert "[x] D-001-O1" not in out
+    assert "[ ] D-001-O1" in out
+
+    rc, hypothetical = run_cli(["-n", ns, "dump", "--config", "D-001=O2"])
+    assert rc == 0
+    assert "CONTRADICTIONS WITH THE RECORD" in hypothetical, hypothetical
+    assert "D-001: --config override is superseded by D-003" in hypothetical
+    assert (
+        "ACTIVE CONFIGURATION: D-002=staging table, D-003=blake3 envelope"
+        in hypothetical
+    )
 
 
 def test_dump_config_does_not_mutate_the_stored_rows(decided: dict):
