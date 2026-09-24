@@ -27,7 +27,9 @@ Conventions every verb shares:
 
 ## init
 
-Create (or verify) the namespace and declare the SDM tables.
+Create (or verify) the namespace and declare the SDM tables. The namespace list is only a fast
+path: `init` verifies the namespace resource itself and treats a confirmed create conflict as
+`existing`.
 
 **Arguments:** `--seed-domains` (also seed the 44-domain grid as `domain` rows). Without it
 there is nothing beyond the top-level `--namespace`.

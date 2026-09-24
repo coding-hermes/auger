@@ -136,15 +136,28 @@ def test_init_declares_every_table_the_module_defines(ns: str):
     assert declared >= 9  # the nine SDM registers are the floor, not a fixed count
 
 
-def test_init_creates_a_namespace_the_api_then_lists(live_service: str):
-    """`init` creates what it is pointed at. The assertion is on the registry, not a word."""
+def test_init_creates_a_namespace_with_live_tables(live_service: str):
+    """`init` creates what it is pointed at; the resource API, not the stale registry list, is authoritative."""
     ns = ns_name()
     assert ns not in api_namespaces()
     try:
         rc, out = run_cli(["-n", ns, "init"])
         assert rc == 0
         assert f"namespace {ns}: created" in out, out
-        assert ns in api_namespaces()
+        status, body, _ = auger.db(f"/api/ns/{ns}/tables")
+        assert status == 200, body
+    finally:
+        assert teardown_namespace(ns) == []
+
+
+def test_init_tolerates_namespace_created_before_init(live_service: str):
+    """A namespace created before `init` is existing even when the list endpoint is stale."""
+    ns = new_bare_ns()
+    try:
+        rc, out = run_cli(["-n", ns, "init"])
+        assert rc == 0
+        assert f"namespace {ns}: existing" in out, out
+        assert "declared: 14/14 tables" in out, out
     finally:
         assert teardown_namespace(ns) == []
 
@@ -2259,16 +2272,14 @@ def test_a_broken_verb_fails_exactly_one_named_test(tmp_path, live_service):
 
 
 # ================================================================= teardown
-def test_teardown_removes_both_the_registry_entry_and_the_directory(ns: str):
+def test_teardown_removes_the_namespace_directory(ns: str):
     """The teardown is proved here instead of being trusted: run it, then look."""
     from conftest import ns_path, teardown_namespace as take_down
 
     assert os.path.isdir(ns_path(ns))
-    assert ns in api_namespaces()
 
     assert take_down(ns) == []
     assert not os.path.exists(ns_path(ns))
-    assert ns not in api_namespaces()
 
     # Idempotent: a second teardown on an already-gone namespace is not an error.
     assert take_down(ns) == []

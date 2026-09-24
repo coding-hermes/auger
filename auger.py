@@ -2758,11 +2758,37 @@ def cmd_init(a):
         else []
     )
     created = False
-    if ns not in names:
+    existing = ns in names
+    if existing:
+        # The registry list is a fast path, not the existence authority. A stale row can
+        # name a namespace whose directory is gone, so confirm the namespace resource itself.
+        verify_st, verify_body, _ = db(f"/api/ns/{ns}/tables")
+        if verify_st == 200:
+            existing = True
+        elif verify_st == 404:
+            existing = False
+        else:
+            raise SystemExit(
+                f"could not verify namespace {ns} ({verify_st}): {verify_body}"
+            )
+    if not existing:
         st, body, _ = db("/api/namespaces", "POST", {"name": ns})
-        if st not in (200, 201):
+        if st in (200, 201):
+            created = True
+        elif st == 409 or (
+            isinstance(body, dict) and str(body.get("code", "")).upper() == "CONFLICT"
+        ):
+            # The create response is authoritative when the list is stale. Verify the
+            # conflict names a namespace that is actually readable before continuing.
+            verify_st, verify_body, _ = db(f"/api/ns/{ns}/tables")
+            if verify_st != 200:
+                raise SystemExit(
+                    f"could not create namespace {ns} ({st}): {body}; "
+                    f"could not verify existing namespace ({verify_st}): {verify_body}"
+                )
+            existing = True
+        else:
             raise SystemExit(f"could not create namespace {ns} ({st}): {body}")
-        created = True
     # declare (idempotent) the SDM tables
     d = os.path.join(ns_dir(ns), "tables")
     os.makedirs(d, exist_ok=True)
