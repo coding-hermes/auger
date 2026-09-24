@@ -516,21 +516,49 @@ def delete_namespace(ns: str, retries: int = TEARDOWN_RETRIES) -> tuple[int, obj
 # DuckBrain stores what it is sent — it enforces nothing — so referential integrity is OURS.
 # An edge is a claim about two nodes; an edge whose endpoint does not exist is not a claim about
 # anything, and a silently stored orphan is worse than a refusal because it reads as evidence.
-def next_id(ns: str, table: str, prefix: str) -> str:
+def next_id(ns: str, table: str, prefix: str, width: int | None = None) -> str:
     """The next fixed-width id for a table, derived from the HIGHEST existing id.
 
-    Not from a row count: a count collides the moment a row is deleted (the classic bug this
-    deliberately does not have). An empty table yields the first id, PREFIX-000001.
+    Not from a row count: a count collides the moment a row is deleted AND it stops advancing the
+    moment the read is capped (the classic bugs this deliberately does not have). An empty table
+    yields the first id, PREFIX-000001.
+
+    `width` is the number of DIGITS to pad to and defaults to `ID_WIDTH`, the six-digit law every
+    existing caller (`E`, `F`, `B`, `BM`, `V`, `Q`, `ESC`, ...) is already minted under: a caller
+    that passes no width is byte-for-byte unchanged. A table that holds a DIFFERENT, narrower id
+    law passes that width explicitly — decisions are three digits wide (D-007, D-101, see
+    `decision_id_width`) and a six-digit row in that column would sort below every existing id
+    under `order=id.desc`. The width is a FLOOR, never a truncation: a number needing more digits
+    than `width` keeps all of them.
     """
+    pad = ID_WIDTH if width is None else width
     rows = select(ns, table, "select=id&order=id.desc&limit=1")
     if not rows or not rows[0].get("id"):
-        return f"{prefix}-{'0' * (ID_WIDTH - 1)}1"
+        return f"{prefix}-{1:0{pad}d}"
     m = re.search(r"(\d+)\s*$", str(rows[0]["id"]))
-    return (
-        f"{prefix}-{int(m.group(1)) + 1:0{ID_WIDTH}d}"
-        if m
-        else f"{prefix}-{'0' * (ID_WIDTH - 1)}1"
-    )
+    return f"{prefix}-{int(m.group(1)) + 1:0{pad}d}" if m else f"{prefix}-{1:0{pad}d}"
+
+
+#: The width the LIVE decision ids are minted at: D-007, D-101 — three digits (AUG-069). `ID_WIDTH`
+#: is the six-digit edge/facet/bundle law and is deliberately NOT this one: the ids in the real
+#: namespaces are three digits, and one table holding two id widths sorts wrongly under the
+#: lexicographic `order=id.desc` read that `next_id` mints from.
+DECISION_ID_WIDTH = 3
+
+
+def decision_id_width(ns: str) -> int:
+    """The digit width this namespace's decision ids are minted at.
+
+    Read from the SAME page-safe row `next_id` mints from — the highest id, `order=id.desc&limit=1`
+    — so the width can never be derived from a capped page of a bigger table. An empty table yields
+    `DECISION_ID_WIDTH`, and a table wider than `ID_WIDTH` is capped there so one accidental row
+    cannot mint an over-wide id law for the whole namespace.
+    """
+    rows = select(ns, "decision", "select=id&order=id.desc&limit=1")
+    if not rows or not rows[0].get("id"):
+        return DECISION_ID_WIDTH
+    m = re.search(r"-(\d+)\s*$", str(rows[0]["id"]))
+    return min(len(m.group(1)), ID_WIDTH) if m else DECISION_ID_WIDTH
 
 
 def node_exists(ns: str, kind: str, node_id: str) -> bool:
@@ -3660,7 +3688,16 @@ def cmd_answer(a):
         raise SystemExit(
             f"unknown decision scope {a.scope!r}: expected one of {', '.join(DECISION_SCOPES)}"
         )
-    did = a.id or f"D-{len(select(ns, 'decision', f'project_id=eq.{pid}')) + 1:03d}"
+    # AUG-069: the default id is derived from the HIGHEST stored decision id, never from a row
+    # count. `len(select(...)) + 1` was the count: DuckBrain's declared-table selects cap at 100
+    # rows with no truncation signal (AUG-068), so past the 100th decision the mint stuck at D-101
+    # and the `node_exists` guard below then refused EVERY `answer` — a permanent write lockout
+    # whose only escape was an explicit --id. `next_id` does the page-safe read (limit=1, highest
+    # first) and `decision_id_width` keeps the live three-digit width (D-101 -> D-102), because the
+    # ids in the real namespaces are three digits and a six-digit row would sort below them all.
+    # The id is namespace-scoped, so the read is too: a sibling project's rows are exactly what a
+    # per-project count could not see.
+    did = a.id or next_id(ns, "decision", "D", width=decision_id_width(ns))
     # Refuse every precondition that can be decided from the requested IDs before inserting the
     # decision or any of its options. `close_question` still defends its own public contract below,
     # but discovering a missing question there is too late for `answer`: the answer rows already

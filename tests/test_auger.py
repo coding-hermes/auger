@@ -1611,6 +1611,225 @@ def test_propagate_reopens_the_stale_branch_and_reaches_the_grandchild(
     )
 
 
+# ------------------------------------------------- the default decision id (AUG-069)
+# `answer` with no --id minted its id from a ROW COUNT: `len(select(ns, 'decision', project_filter))`
+# + 1. DuckBrain's declared-table reads cap at 100 rows with no truncation signal (AUG-068), so the
+# moment a namespace held a hundred decisions the mint stuck on D-101 — an id that already existed —
+# and the uniqueness guard then refused EVERY answer: a permanent write lockout whose only escape was
+# an explicit --id. The mint is now `next_id` (the page-safe highest-id reader whose docstring names
+# the count as "the classic bug this deliberately does not have"), at the width the live ids use.
+#
+# The unit cases drive the REAL `answer` verb through `auger.main` against a stand-in HTTP layer, so
+# the mint and the guard the lockout ran through are the production ones; only the transport and the
+# model calls are stubbed. The stand-in CAPS its reads like the live API does, deliberately: a
+# stand-in that answered honestly would pass a count mint and prove nothing.
+
+#: The stand-in's page cap — AUG-068: a declared-table read returns at most this many rows.
+API_PAGE = 100
+MINT_NS = "auger-mint-unit"  # never created: every call below is answered by the stand-in
+MINT_PID = "P-MINT"
+
+
+def query_pairs(query: str) -> dict[str, str]:
+    """The flat key=value pairs of a DuckBrain read query, the way the server reads them."""
+    pairs: dict[str, str] = {}
+    for part in query.split("&"):
+        if "=" in part:
+            key, value = part.split("=", 1)
+            pairs[key] = value
+    return pairs
+
+
+def stand_in_api(ids: list[str], table: str = "decision", queries: list | None = None):
+    """A stand-in for one declared table: rows in, CAPPED pages out.
+
+    `order=id.desc` sorts descending (the ids are zero-padded, so lexicographic IS numeric here),
+    `limit=N` takes N, and an absent limit takes a full page — the AUG-068 shape that froze the count
+    mint. `queries` records every read, so a test can assert WHICH read produced an id.
+    """
+    stored = [{"id": i, "project_id": MINT_PID} for i in ids]
+
+    def _select(ns: str, wanted: str, query: str = "") -> list:  # noqa: ARG001 - mirrors select()
+        if queries is not None:
+            queries.append(query)
+        if wanted != table:
+            return []
+        pairs = query_pairs(query)
+        found = list(stored)
+        for key in ("id", "project_id"):
+            value = pairs.get(key, "")
+            if value.startswith("eq."):
+                found = [r for r in found if r[key] == value[3:]]
+        found.sort(key=lambda r: r["id"], reverse=pairs.get("order") == "id.desc")
+        return found[: int(pairs["limit"]) if "limit" in pairs else API_PAGE]
+
+    return _select
+
+
+def drive_answer(
+    monkeypatch, ids: list[str], *extra: str
+) -> tuple[str, list[dict], list[str]]:
+    """Run the REAL `answer` verb against a stand-in decision table holding `ids`.
+
+    Returns (stdout, the decision rows the verb wrote, every read query it made). Only the transport
+    and the model calls are stubbed: `_project`, `insert_decision`, `insert`, `remember` and the
+    bundle impact pass — never the mint, never the uniqueness guard.
+    """
+    written: list[dict] = []
+    queries: list[str] = []
+    monkeypatch.setattr(auger, "select", stand_in_api(ids, queries=queries))
+    monkeypatch.setattr(
+        auger, "_project", lambda ns, pid=None: {"id": MINT_PID, "name": "mint"}
+    )
+    monkeypatch.setattr(auger, "insert_decision", lambda ns, row: written.append(row) or "")
+    monkeypatch.setattr(auger, "insert", lambda ns, table, rows: {})
+    monkeypatch.setattr(auger, "remember", lambda *a, **k: {})
+    monkeypatch.setattr(
+        auger,
+        "bundle_impact",
+        lambda ns, pid, row: {"scoped": False, "walked": [], "lines": [], "warnings": []},
+    )
+    rc, out = run_cli(["-n", MINT_NS, "answer", "--chosen", "one option", *extra])
+    assert rc == 0, out
+    return out, written, queries
+
+
+def test_answer_past_a_hundred_decisions_mints_from_the_highest_id(monkeypatch):
+    """AUG-069: the 101st answer in a namespace is D-102 — not a stuck, already-stored D-101.
+
+    The stand-in holds exactly the ids the dogfood namespace held (D-001..D-101) and caps its reads
+    at 100 rows, so a count still reads 100 and mints the id that is taken.
+    """
+    ids = [f"D-{i:03d}" for i in range(1, 102)]
+    out, written, queries = drive_answer(monkeypatch, ids)
+
+    # The stand-in is not a polite fiction: it CAPS, which is the property that froze the mint.
+    assert len(auger.select(MINT_NS, "decision", f"project_id=eq.{MINT_PID}")) == API_PAGE
+    # ... so the expression this replaced (`len(...) + 1`) yields an id the store already holds, and
+    # the guard below then refused the answer. Named here so the regression cannot return silently.
+    assert f"D-{API_PAGE + 1:03d}" == "D-101" and "D-101" in ids
+
+    assert out.startswith("D-102 recorded"), out
+    assert [r["id"] for r in written] == ["D-102"], written
+    # Criterion 1: the id came from the HIGHEST id, read page-safely — not from a count.
+    assert queries[0] == "select=id&order=id.desc&limit=1", queries
+    # and the uniqueness guard still ran against the requested id, after the mint
+    assert "id=eq.D-102&select=id&limit=1" in queries, queries
+
+
+def test_the_minted_id_keeps_the_three_digit_width_of_the_live_ids(monkeypatch):
+    """AUG-069: D-101 -> D-102, NOT D-000102. `ID_WIDTH` is the six-digit edge/facet/bundle law and
+    is deliberately not the decision law: every decision id in the real namespaces is three digits,
+    and one table holding two widths sorts wrongly under the `order=id.desc` read the mint needs.
+    """
+    out, written, _ = drive_answer(monkeypatch, [f"D-{i:03d}" for i in range(1, 102)])
+    assert auger.ID_WIDTH == 6, "the six-digit law this must not apply to decisions"
+    assert written[0]["id"] == "D-102", written
+    assert not out.startswith("D-000102"), out
+
+
+def test_an_empty_project_still_mints_D_001(monkeypatch):
+    """The first decision of a namespace is unchanged: D-001, three digits, from the same
+    page-safe read — an empty table has no highest id to read, and that is not an error.
+    """
+    out, written, queries = drive_answer(monkeypatch, [])
+    assert out.startswith("D-001 recorded"), out
+    assert [r["id"] for r in written] == ["D-001"], written
+    assert queries[0] == "select=id&order=id.desc&limit=1", queries
+
+
+def test_an_explicit_id_is_still_used_verbatim_and_mints_nothing(monkeypatch):
+    """Criterion 3: `--id` wins before any mint — and costs no highest-id read at all."""
+    out, written, queries = drive_answer(monkeypatch, ["D-101"], "--id", "D-500")
+    assert out.startswith("D-500 recorded"), out
+    assert [r["id"] for r in written] == ["D-500"], written
+    assert not any("order=id.desc" in q for q in queries), queries
+
+
+def test_next_id_still_mints_the_six_digit_law_for_its_existing_callers(monkeypatch):
+    """Criterion 3, one layer down: `width` defaults to `ID_WIDTH`, so E/F/B/BM/V/Q are unchanged."""
+    monkeypatch.setattr(auger, "select", stand_in_api([], table="edge"))
+    assert auger.next_id(MINT_NS, "edge", "E") == "E-000001"
+    monkeypatch.setattr(auger, "select", stand_in_api(["E-000041"], table="edge"))
+    assert auger.next_id(MINT_NS, "edge", "E") == "E-000042"
+    monkeypatch.setattr(auger, "select", stand_in_api(["F-000041"], table="facet"))
+    assert auger.next_id(MINT_NS, "facet", "F") == "F-000042"
+    monkeypatch.setattr(auger, "select", stand_in_api(["B-000009"], table="bundle"))
+    assert auger.next_id(MINT_NS, "bundle", "B") == "B-000010"
+
+
+def test_next_id_pads_to_the_width_it_is_given_and_never_truncates(monkeypatch):
+    """A width is a FLOOR: three digits for decisions, and a number past 999 keeps all its digits."""
+    monkeypatch.setattr(auger, "select", stand_in_api(["D-998"]))
+    assert auger.next_id(MINT_NS, "decision", "D", width=3) == "D-999"
+    monkeypatch.setattr(auger, "select", stand_in_api(["D-999"]))
+    assert auger.next_id(MINT_NS, "decision", "D", width=3) == "D-1000"
+
+
+def test_the_decision_id_width_is_read_from_the_highest_id(monkeypatch):
+    """The width read is the same page-safe read the mint uses, with the live three-digit default.
+
+    A namespace already minted at `ID_WIDTH`, or holding one accidentally over-wide id, cannot widen
+    the law for good: the value is capped at `ID_WIDTH`, and an id with no digits at all is the
+    default rather than a crash.
+    """
+    queries: list[str] = []
+    monkeypatch.setattr(auger, "select", stand_in_api([], queries=queries))
+    assert auger.decision_id_width(MINT_NS) == auger.DECISION_ID_WIDTH == 3
+    assert queries == ["select=id&order=id.desc&limit=1"], queries
+
+    for ids, want in (
+        (["D-101"], 3),
+        (["D-000102"], 6),
+        (["D-1234567"], 6),
+        (["no-digits-here"], 3),
+    ):
+        monkeypatch.setattr(auger, "select", stand_in_api(ids))
+        assert auger.decision_id_width(MINT_NS) == want, ids
+
+
+def test_a_live_namespace_holding_a_hundred_and_one_decisions_keeps_answering(project: dict):
+    """AUG-069 criterion 2, end to end against the real store: 101 stored decisions, then TWO answers
+    with no --id. The mint ADVANCES (D-102, then D-103) at the three-digit width, where the count
+    mint would have refused both with "refused: decision 'D-101' already exists".
+    """
+    ns, pid = project["ns"], project["pid"]
+    auger.insert(
+        ns,
+        "decision",
+        [
+            {
+                "id": f"D-{i:03d}",
+                "project_id": pid,
+                "domain": "",
+                "question_id": "",
+                "chosen": f"stored by the scale leg, {i}",
+                "why_not": "",
+                "reversal_cost": "",
+                "confidence": 0.5,
+                "status": "decided",
+                "evidence_key": f"/auger/{pid}/D-{i:03d}",
+            }
+            for i in range(1, 102)
+        ],
+    )
+    # The precondition of the freeze, asserted rather than assumed: a plain read caps at 100 rows.
+    assert len(rows(ns, "decision", f"project_id=eq.{pid}")) == API_PAGE
+
+    rc, out = run_cli(
+        ["-n", ns, "answer", "--chosen", "minted one", "--why-not", "n/a", "--confidence", "0.5"]
+    )
+    assert rc == 0 and out.startswith("D-102 recorded"), out
+    assert row(ns, "decision", "id=eq.D-102&limit=1")["chosen"] == "minted one"
+
+    # and it is not a one-shot: the NEXT answer reads D-102 and mints D-103
+    rc, out = run_cli(
+        ["-n", ns, "answer", "--chosen", "minted two", "--why-not", "n/a", "--confidence", "0.5"]
+    )
+    assert rc == 0 and out.startswith("D-103 recorded"), out
+    assert row(ns, "decision", "id=eq.D-103&limit=1")["chosen"] == "minted two"
+
+
 # ---------------------------------------------------------------- the walk's TRIGGER (AUG-028)
 # The rule walk fires on a `breaks` edge whose dst is a DECISION with NO dst_project — a LOCAL
 # invalidation. Every case above HAND-WRITES that edge with `auger.edge`, which is precisely what the
