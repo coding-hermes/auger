@@ -189,3 +189,12 @@ edge     facet     bundle    bundle_member  verdict
 ```bash
 bash tests/smoke.sh          # full loop against a scratch namespace
 ```
+
+## Scratch files
+
+Scratch scripts (tick probes, one-off checks) never live in this repo — write them under
+`/tmp/`, not the workdir. Untracked `.tmp_*` litter in the repo root used to turn the
+Tier-1 lint arm red on a clean tree (a committed tree can lint clean while the gate fails
+on a scratch file it never should have seen); `.gitignore` now carries a repo-root
+`.tmp_*` rule as the backstop, and ruff respects it, so `ruff check .` stays clean even
+when litter exists. The convention is the fix; the gitignore line is the seatbelt.
