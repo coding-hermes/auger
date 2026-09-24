@@ -3080,14 +3080,40 @@ def store_proposed_question(
     if float(noul) >= T_ANSWERED:
         return "", f"the gate scores it already answered (noul {float(noul)})"
     try:
-        open_rows = select(ns, "question", f"project_id=eq.{project_id}&status=eq.open")
+        project_questions = select(
+            ns, "question", f"project_id=eq.{project_id}&order=id.asc"
+        )
     except SystemExit as exc:
-        return "", f"the questions already open could not be read — {exc}"
+        return "", f"the project's stored questions could not be read — {exc}"
     text = criterion["sentence"]
     want = text.casefold()
-    for q in open_rows:
-        if str(q.get("text") or "").strip().casefold() == want:
+    for q in project_questions:
+        if str(q.get("text") or "").strip().casefold() != want:
+            continue
+        if q.get("status") == "open":
             return "", f"already open as {q.get('id')}"
+        # Only a settled question that carries a durable decision closure is a duplicate. In
+        # particular, do not suppress moot/budget-thin rows: propagation may reopen or otherwise
+        # revisit those states, so a matching proposal remains a legitimate new question.
+        if q.get("status") not in SETTLED_STATES:
+            continue
+        facets = select(ns, "facet", f"question_id=eq.{q.get('id')}&order=id.asc")
+        closure = next(
+            (
+                f
+                for f in facets
+                if f.get("status") == "closed" and str(f.get("closed_by") or "").strip()
+            ),
+            None,
+        )
+        if closure:
+            reason = str(closure.get("note") or "").strip()
+            detail = f": {reason}" if reason else ""
+            return (
+                "",
+                f"already closed/answered as {q.get('id')} by "
+                f"{closure['closed_by']}{detail}",
+            )
     qid = next_id(ns, "question", "Q")
     row = {
         "id": qid,

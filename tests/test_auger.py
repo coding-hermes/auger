@@ -2157,6 +2157,52 @@ def test_ask_does_not_store_the_same_question_twice(project: dict, monkeypatch):
     assert len(rows(ns, "facet", "question_id=eq.Q-000001")) == len(auger.facet_set())
 
 
+def test_ask_does_not_repropose_a_question_after_answer_closes_it(
+    project: dict, monkeypatch
+):
+    """The fresh ask -> answer -> ask loop preserves the durable answered question identity."""
+    ns, pid = project["ns"], project["pid"]
+    monkeypatch.setattr(auger, "jev", ask_stub(Q_NEXT, 0.73, 0.10))
+
+    rc, out = run_cli(["-n", ns, "ask"])
+    assert rc == 0 and "stored question: Q-000001" in out, out
+    rc, out = answer_cli(ns, "D-001", "4.05", "single SQLite file", qid="Q-000001")
+    assert rc == 0 and "closed Q-000001" in out, out
+
+    monkeypatch.setattr(auger, "jev", ask_stub(Q_NEXT, 0.73, 0.10))
+    rc, out = run_cli(["-n", ns, "ask"])
+    assert rc == 0, out
+    assert "stored question:" not in out, out
+    assert "already closed/answered" in out and "Q-000001" in out, out
+    assert "answered by D-001" in out, out
+    assert len(rows(ns, "question", f"project_id=eq.{pid}")) == 1
+    assert len(rows(ns, "decision", f"project_id=eq.{pid}")) == 1
+    assert row(ns, "question", "id=eq.Q-000001")["status"] == "answered"
+
+
+def test_ask_stores_a_different_question_after_answer_closes_the_first(
+    project: dict, monkeypatch
+):
+    """Closing one proposal does not suppress a different canonical proposal next round."""
+    ns, pid = project["ns"], project["pid"]
+    different = "how_does_it_fail"
+    different_text = auger.ASK_NEW_QUESTION_CRITERIA[different]["sentence"]
+    monkeypatch.setattr(auger, "jev", ask_stub(Q_NEXT, 0.73, 0.10))
+
+    rc, out = run_cli(["-n", ns, "ask"])
+    assert rc == 0 and "stored question: Q-000001" in out, out
+    rc, out = answer_cli(ns, "D-001", "4.05", "single SQLite file", qid="Q-000001")
+    assert rc == 0 and "closed Q-000001" in out, out
+
+    monkeypatch.setattr(auger, "jev", ask_stub(different, 0.73, 0.10))
+    rc, out = run_cli(["-n", ns, "ask"])
+    assert rc == 0, out
+    assert f"stored question: Q-000002  {different_text}" in out, out
+    assert len(rows(ns, "question", f"project_id=eq.{pid}")) == 2
+    assert len(rows(ns, "decision", f"project_id=eq.{pid}")) == 1
+    assert row(ns, "question", "id=eq.Q-000002")["status"] == "open"
+
+
 @pytest.mark.parametrize(
     "stub, want",
     [
