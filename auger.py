@@ -3197,7 +3197,10 @@ def cmd_start(a):
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     insert(ns, "project", row)
-    remember(ns, f"/auger/{pid}/seed", seed)
+    if seed:
+        # An empty seed has nothing to store or embed: POSTing it makes DuckBrain's
+        # required-content gate (DB-GAP-058) 400 the call and abort a fresh start.
+        remember(ns, f"/auger/{pid}/seed", seed)
     print(f"project {pid} in namespace {ns}")
     print(f"seed stored ({len(seed)} chars) + embedded")
     return 0

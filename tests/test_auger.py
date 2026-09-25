@@ -196,6 +196,56 @@ def test_start_stores_the_project_row_and_embeds_the_seed(project: dict):
     )
 
 
+# AUG-072: an empty seed has nothing to store or embed. DuckBrain's required-content
+# gate (DB-GAP-058) 400s a POST /api/memories with content == "", so `start` without
+# --seed must not call `remember` at all — while a non-empty seed must still store +
+# embed exactly once, with the key the recall path looks for.
+def test_start_with_empty_seed_never_calls_remember(monkeypatch, capsys):
+    """`start` with no --seed inserts the project row and makes NO remember call."""
+    calls: list[tuple] = []
+
+    def fake_remember(ns: str, key: str, content: str, domain: str = "concept") -> dict:
+        calls.append((ns, key, content))
+        return {}
+
+    ns = "auger-worker072-unit"  # never touched: remember and insert are stubbed
+    pid = "P-EMPTYSEED"
+    monkeypatch.setattr(auger, "remember", fake_remember)
+    monkeypatch.setattr(
+        auger, "insert", lambda ns_, table, rows: {"table": table, "row": rows}
+    )
+
+    rc, out = run_cli(["-n", ns, "start", "--id", pid])
+
+    assert rc == 0, out
+    assert calls == [], f"remember was called with an empty seed: {calls}"
+    assert f"project {pid} in namespace {ns}" in out, out
+    assert "seed stored (0 chars)" in out, out
+
+
+def test_start_with_a_seed_stores_and_embeds_exactly_once(monkeypatch):
+    """`start` with a non-empty seed calls remember once with the seed key + content."""
+    calls: list[tuple] = []
+
+    def fake_remember(ns: str, key: str, content: str, domain: str = "concept") -> dict:
+        calls.append((ns, key, content))
+        return {}
+
+    ns = "auger-worker072-unit"  # never touched: remember and insert are stubbed
+    pid = "P-SEEDED"
+    monkeypatch.setattr(auger, "remember", fake_remember)
+    monkeypatch.setattr(
+        auger, "insert", lambda ns_, table, rows: {"table": table, "row": rows}
+    )
+
+    rc, out = run_cli(["-n", ns, "start", "--id", pid, "--seed", "hello seed"])
+
+    assert rc == 0, out
+    assert calls == [(ns, f"/auger/{pid}/seed", "hello seed")], calls
+    assert f"project {pid} in namespace {ns}" in out, out
+    assert "seed stored (10 chars) + embedded" in out, out
+
+
 def test_answer_writes_every_decision_field_to_the_row(decided: dict):
     """Every field `answer` was given comes back off the STORED row."""
     d = row(decided["ns"], "decision", "id=eq.D-001")
