@@ -43,6 +43,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections import Counter
 from datetime import datetime, timezone
 from urllib.parse import quote
 
@@ -677,6 +678,13 @@ def next_id(ns: str, table: str, prefix: str, width: int | None = None) -> str:
 #: namespaces are three digits, and one table holding two id widths sorts wrongly under the
 #: lexicographic `order=id.desc` read that `next_id` mints from.
 DECISION_ID_WIDTH = 3
+
+#: AUG-070: how many times an auto-minted decision id is checked against the live store before the
+#: answer gives up. The check-then-insert window cannot be closed from this side (DuckBrain enforces
+#: no uniqueness), so a losing writer re-mints instead of refusing; the bound keeps a pathologically
+#: contended namespace from spinning. Three attempts cover the observed two-writer race with room
+#: for one more, and each attempt costs one `limit=1` read — the mint's own page-safe shape.
+AUG070_ID_ATTEMPTS = 3
 
 
 def decision_id_width(ns: str) -> int:
@@ -3847,9 +3855,38 @@ def cmd_answer(a):
     # exist by then. The same ordering makes an explicit retry idempotently loud instead of allowing
     # duplicate decision and option IDs into stores that do not enforce primary-key uniqueness.
     qid = (a.question_id or "").strip()
-    if node_exists(ns, "decision", did):
+    if not a.id:
+        # AUG-070: the mint read happens-before other writers' writes, so the id `next_id` derived
+        # can already be stored by the time this process checks — or by the time its own INSERT
+        # lands. DuckBrain enforces NO uniqueness (the comment above `next_id` says it: referential
+        # integrity is OURS), so a losing writer's duty is to RE-MINT from the live highest id and
+        # retry, never to exit with the answer lost. Bounded: the mint cannot be allowed to spin on
+        # a namespace that holds the id before the mint even runs (the serial case below), and
+        # three attempts cover the observed two-writer race with room for one more. Everything that
+        # captured the previous did — the option ids, the evidence key, the row itself — is
+        # recomputed inside the loop, because ids are embedded in rows, not carried by reference.
+        for attempt in range(1, AUG070_ID_ATTEMPTS + 1):
+            if not node_exists(ns, "decision", did):
+                break
+            did = next_id(ns, "decision", "D", width=decision_id_width(ns))
+        else:
+            raise SystemExit(
+                f"refused: the auto-minted decision id {did!r} is taken — re-minted and re-checked "
+                f"{AUG070_ID_ATTEMPTS} times against the live highest id and every attempt collided "
+                f"(concurrent writers); NOTHING was stored. Remedy: retry `answer` once the other "
+                f"writer settles, or pass an explicit --id."
+            )
+    elif node_exists(ns, "decision", did):
+        # The explicit-id path keeps the terminal refusal (a caller that NAMED the id must decide
+        # what to do about the collision), but the message now says what the refusal actually
+        # guarantees: nothing was written (AUG-034's atomic-refusal doctrine, stated in the message
+        # so a reader does not have to trust the code), and that the auto-minted path is the one
+        # that survives a concurrent writer.
         raise SystemExit(
-            f"refused: decision {did!r} already exists — answer decision IDs must be unique"
+            f"refused: decision {did!r} already exists — answer decision IDs must be unique, and "
+            f"NOTHING was stored (no decision, no options, no evidence, no edges). The "
+            f"auto-minted path (no --id) re-mints from the live highest id and retries instead of "
+            f"refusing; pass no --id to take that path."
         )
     if qid and not node_exists(ns, "question", qid):
         raise SystemExit(
@@ -3869,6 +3906,11 @@ def cmd_answer(a):
     # token grammar as dump/toggle (full id, label, or bare suffix), but resolve provisional rows so
     # a refusal cannot leave a decision with zero active options. The stored choice is canonicalized
     # to the option label; otherwise a token such as O2 would look contradictory in dump --config.
+    # (AUG-070: this build sits AFTER the bounded re-mint above, so the ids baked into the option
+    # rows, the evidence key and the break/supersede payloads are the id that survived the check.
+    # A collision from here on is the residual insert-insert window, read back below — re-running
+    # this build for a new id could not help, because the row under the OLD id is already stored
+    # and deleting it is not this verb's business.)
     option_rows = [
         {
             "id": f"{did}-O{i + 1}",
@@ -3900,6 +3942,19 @@ def cmd_answer(a):
     if scope and scope != DEFAULT_SCOPE:
         row["scope"] = scope
     warning = insert_decision(ns, row)
+    if not a.id:
+        # AUG-070, the residual insert-insert window: the pre-insert check can pass for BOTH
+        # writers and both inserts then land — DuckBrain enforces NO uniqueness. The read-back is
+        # BOUNDED (`limit=2`: one row is ours, two is ours plus a sibling's) and DELETES NOTHING —
+        # deleting is a human decision about whose answer survives. The residue is surfaced in the
+        # same DUPLICATE IDS grammar `dump` renders, so the drift is named at write time AND on
+        # every later read of the config.
+        readback = select(ns, "decision", f"id=eq.{did}&select=id&limit=2")
+        if len(readback) > 1:
+            print(
+                f"{WARN_DUPLICATE_IDS}: {did} x{len(readback)}+ — concurrent writers collided; "
+                f"dedupe before trusting this config"
+            )
     for option in option_rows:
         option["active"] = bool(
             resolved_option and option["id"] == resolved_option["id"]
@@ -4340,6 +4395,38 @@ def activation_warning_lines(
     return [WARN_ACTIVATION] + lines if lines else []
 
 
+#: AUG-070: the header of the duplicate-id warning block. Two writers can pass the same
+#: check-then-insert window and both insert (DuckBrain enforces NO uniqueness — referential
+#: integrity is ours), leaving two decisions under one id and options minted over each other.
+#: The consequence that matters to a READER is that one id renders two different real choices,
+#: so the warning names the ids and says what to do about it — and dump keeps rendering, because
+#: a drifted record is still worth reading (the doctrine at `activation_warning_lines` above).
+WARN_DUPLICATE_IDS = "WARNING: DUPLICATE IDS"
+
+
+def duplicate_id_warning_lines(dec: list[dict], opts: list[dict]) -> list[str]:
+    """The warning block for ids the store holds MORE THAN ONCE of (AUG-070).
+
+    `dec` and `opts` are the rows `dump` already read: a duplicate is a row-count-per-id fact
+    about exactly those lists, so no extra read is spent. Sorted by id, then count: the same
+    drifted namespace names the same drift on every render, and a reader cross-checking the
+    warning against a raw table read finds the same list.
+    """
+    dec_counts = Counter(d.get("id") or "" for d in dec)
+    opt_counts = Counter(o.get("id") or "" for o in opts)
+    parts = [
+        f"{id_} x{n}"
+        for id_, n in sorted(dec_counts.items()) + sorted(opt_counts.items())
+        if n > 1
+    ]
+    if not parts:
+        return []
+    return [
+        f"{WARN_DUPLICATE_IDS}: {', '.join(parts)} — concurrent writers collided; "
+        f"dedupe before trusting this config"
+    ]
+
+
 def cmd_toggle(a):
     """Turn options on/off — the what-if switch: ONE option per decision by default.
 
@@ -4534,6 +4621,10 @@ def cmd_dump(a):
         for s in shadows:
             lines.append(f"  - {s}")
     lines += activation_warning_lines(dec, opts, live_by_dec)
+    # AUG-070: ids the store holds more than once of — the residue of two writers passing the same
+    # check-then-insert window. Warned about by name and STILL rendered: a drifted record is still
+    # worth reading, and silently rendering one id as two different real choices is the defect.
+    lines += duplicate_id_warning_lines(dec, opts)
     out = "\n".join(lines)
     if a.out:
         with open(a.out, "w") as f:

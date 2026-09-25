@@ -1778,6 +1778,266 @@ def test_next_id_pads_to_the_width_it_is_given_and_never_truncates(monkeypatch):
     assert auger.next_id(MINT_NS, "decision", "D", width=3) == "D-1000"
 
 
+# ------------------------------------- the check-then-insert window (AUG-070)
+# The mint reads the highest id, then the pre-insert check reads it again, then the INSERT lands —
+# three steps another writer can move between. DuckBrain enforces NO uniqueness, so a lost race is
+# either an answer lost to a refusal (the observed dominant shape) or two rows under one id. The
+# cases below drive the REAL `answer` and the REAL `dump` against a stand-in SERVER stubbed at
+# `db` — one layer under everything, so the mint, the guard, the retry loop and the warning block
+# are the production ones — and the server reproduces the two race shapes exactly.
+
+#: How many attempts the bounded re-mint is allowed. Asserted against the module constant so the
+#: bound cannot silently loosen or tighten. The getattr keeps this block importable against a
+#: PRE-AUG070 tree, so the RED proof below exercises the race itself instead of crashing collection.
+AUG070_ATTEMPTS = getattr(auger, "AUG070_ID_ATTEMPTS", 3)
+
+
+def race_decision_row(did: str, chosen: str) -> dict:
+    """One decision row in the full shape `answer` sends."""
+    return {
+        "id": did,
+        "project_id": MINT_PID,
+        "domain": "",
+        "question_id": "",
+        "chosen": chosen,
+        "why_not": "",
+        "reversal_cost": "",
+        "confidence": 0.5,
+        "status": "decided",
+        "evidence_key": f"/auger/{MINT_PID}/{did}",
+    }
+
+
+class RaceServer:
+    """DuckBrain's declared-table SERVER with inserts — the transport the race needs.
+
+    Reads serve from `tables` (eq-filters, order, limit, offset); POSTs append and return 201.
+    Two race shapes, reproduced by the server rather than by mocking the guard:
+
+      * `appear_on_query` — the first read whose path carries that substring finds `ghost_rows`
+        already stored. Keyed on `id=eq.D-074` (the pre-insert check's read) this is shape (a):
+        the sibling writer's insert landed between this writer's MINT read and its CHECK read,
+        so the mint saw a free id and the check does not.
+      * `duplicate_every_insert` — every decision POST is immediately stored twice: BOTH writers
+        passed the same window (shape b taken to its pathological end, the only honest way to
+        make every attempt collide from inside one process).
+    """
+
+    def __init__(
+        self,
+        tables: dict[str, list[dict]],
+        ghost_rows: list[dict] | None = None,
+        appear_on_query: str = "",
+        duplicate_every_insert: bool = False,
+    ):
+        self.tables = {t: list(rows) for t, rows in tables.items()}
+        self.ghost_rows = list(ghost_rows or [])
+        self.appear_on_query = appear_on_query
+        self.ghost_shown = False
+        self.duplicate_every_insert = duplicate_every_insert
+        self.requests: list[tuple[str, str]] = []
+
+    def __call__(self, path, method="GET", body=None, *a, **k):  # noqa: ARG002 - mirrors db()
+        self.requests.append((method, path))
+        split = urlsplit(path)
+        parts = split.path.split("/")  # /api/ns/<ns>/tables/<table>
+        if method == "POST":
+            table = unquote(parts[-1])
+            rows = body if isinstance(body, list) else [body]
+            self.tables.setdefault(table, []).extend(rows)
+            if table == "decision" and self.duplicate_every_insert:
+                self.tables[table].extend(rows)
+            return 201, {}, {}
+        if self.ghost_rows and not self.ghost_shown and self.appear_on_query in path:
+            self.tables.setdefault("decision", []).extend(self.ghost_rows)
+            self.ghost_shown = True
+        if len(parts) < 3 or parts[-2] != "tables":
+            return 404, {"error": f"not a declared-table path: {path}"}, {}
+        stored = self.tables.get(unquote(parts[-1]))
+        if stored is None:
+            return 404, {"error": f"no such table: {parts[-1]}"}, {}
+        pairs = dict(parse_qsl(split.query, keep_blank_values=True))
+        found = list(stored)
+        for key, value in pairs.items():
+            if key in ("limit", "offset", "order", "select", "count"):
+                continue
+            if value.startswith("eq."):
+                found = [r for r in found if str(r.get(key)) == value[3:]]
+        for clause in reversed(str(pairs.get("order", "")).split(",")):
+            col, _, direction = clause.strip().partition(".")
+            if col and direction in ("asc", "desc"):
+                found.sort(
+                    key=lambda r: str(r.get(col) or ""), reverse=direction == "desc"
+                )
+        limit = int(pairs["limit"]) if "limit" in pairs else max(len(found), 1)
+        offset = int(pairs.get("offset", 0))
+        return 200, found[offset : offset + limit], {}
+
+
+def race_stubs(monkeypatch) -> None:
+    """Everything around the transport that `answer` touches but the race does not exercise."""
+    monkeypatch.setattr(
+        auger, "_project", lambda ns, pid=None: {"id": MINT_PID, "name": "race"}
+    )
+    monkeypatch.setattr(auger, "remember", lambda *a, **k: {})
+    monkeypatch.setattr(
+        auger,
+        "bundle_impact",
+        lambda ns, pid, row: {
+            "scoped": False,
+            "walked": [],
+            "lines": [],
+            "warnings": [],
+        },
+    )
+
+
+def test_a_lost_race_remints_and_lands_the_answer_under_a_new_id(monkeypatch):
+    """AUG-070 shape (a): the sibling's insert lands between our mint and our check.
+
+    The mint reads a free D-074; the CHECK read finds D-074 stored (the ghost appears on exactly
+    the `id=eq.D-074` query). The answer must be RE-MINTED to the live highest id + 1 (D-075) and
+    stored ONCE under it — never lost to a refusal, and with nothing rewritten: the ghost row is
+    the sibling's and stays untouched, the dead attempt's option ids are never stored, and the
+    evidence key carries the id that was actually stored.
+    """
+    server = RaceServer(
+        {"decision": [race_decision_row("D-073", "earlier")], "edge": []},
+        ghost_rows=[race_decision_row("D-074", "the sibling got there first")],
+        appear_on_query="id=eq.D-074",
+    )
+    monkeypatch.setattr(auger, "db", server)
+    race_stubs(monkeypatch)
+
+    rc, out = run_cli(
+        [
+            "-n",
+            MINT_NS,
+            "answer",
+            "--chosen",
+            "alpha",
+            "--option",
+            "alpha",
+            "--option",
+            "beta",
+        ]
+    )
+
+    assert rc == 0, out
+    assert out.startswith("D-075 recorded"), out
+    decisions = [r["id"] for r in server.tables["decision"]]
+    assert decisions == ["D-073", "D-074", "D-075"], decisions
+    # the ghost is the SIBLING's row, stored once: this writer neither duplicated nor rewrote it
+    assert sum(1 for r in server.tables["decision"] if r["id"] == "D-074") == 1
+    stored = next(r for r in server.tables["decision"] if r["id"] == "D-075")
+    assert stored["chosen"] == "alpha", stored
+    assert stored["evidence_key"] == f"/auger/{MINT_PID}/D-075", stored
+    # the dead attempt's D-074-O* ids are never stored: the retry re-mints BEFORE any row is built
+    assert [o["id"] for o in server.tables.get("option", [])] == [
+        "D-075-O1",
+        "D-075-O2",
+    ], server.tables.get("option")
+    # exactly one decision POST landed: the retry re-minted before writing, not after
+    assert (
+        sum(1 for m, p in server.requests if m == "POST" and p.endswith("/decision"))
+        == 1
+    ), server.requests
+
+
+def test_a_permanently_contended_answer_is_bounded_and_names_the_id_and_attempts(
+    monkeypatch,
+):
+    """The bound: a namespace where EVERY minted id is already taken when the check runs.
+
+    The pre-insert re-mint loop is bounded by `AUG070_ID_ATTEMPTS`: three attempts, each a re-mint
+    from the live highest id, then a loud refusal naming the id and the attempt count — with
+    NOTHING stored, because the bound fired before the first write. The mint cannot be allowed to
+    spin on a store that answers "taken" forever.
+    """
+    posts: list[str] = []
+
+    def always_taken(path, method="GET", body=None, *a, **k):
+        """The mint's highest-id read is frozen at D-073 and every id=eq.<id> check says taken."""
+        if method == "POST":
+            posts.append(path)
+            return 201, {}, {}
+        if "order=id.desc" in path:
+            return 200, [{"id": "D-073"}], {}  # the highest id never moves
+        if "id=eq." in path and "select=id" in path:
+            did = path.split("id=eq.")[1].split("&")[0]
+            return 200, [{"id": did}], {}  # ... and every checked id is taken
+        return 200, [], {}
+
+    monkeypatch.setattr(auger, "db", always_taken)
+    race_stubs(monkeypatch)
+
+    rc, msg, _ = run_cli_exit(["-n", MINT_NS, "answer", "--chosen", "alpha"])
+
+    assert rc != 0, msg
+    assert "D-074" in msg, msg  # the id every attempt minted from the frozen highest
+    assert f"re-checked {AUG070_ATTEMPTS} times" in msg, msg
+    assert "NOTHING was stored" in msg, msg
+    # bounded BEFORE the first write: the contention was at the mint, and no row was written
+    assert posts == [], f"a bounded pre-insert refusal wrote: {posts!r}"
+
+
+def test_an_explicit_duplicate_id_refusal_says_nothing_was_stored(monkeypatch):
+    """The explicit `--id` path keeps its terminal refusal, but says what it guarantees.
+
+    NOTHING was stored — the guarantee AUG-034 bought for the serial case, now in the message
+    so a reader does not have to trust the code — and the message names the auto-minted path
+    (no --id) as the one that re-mints and retries instead of refusing.
+    """
+    monkeypatch.setattr(
+        auger,
+        "db",
+        RaceServer({"decision": [race_decision_row("D-034", "taken")], "edge": []}),
+    )
+    race_stubs(monkeypatch)
+
+    rc, msg, _ = run_cli_exit(
+        ["-n", MINT_NS, "answer", "--id", "D-034", "--chosen", "a retry must not land"]
+    )
+
+    assert rc != 0, msg
+    assert "D-034" in msg and "already exists" in msg, msg
+    assert "NOTHING was stored" in msg, msg
+    assert "auto-minted" in msg and "--id" in msg, msg
+
+
+def test_dump_names_duplicate_ids_rather_than_rendering_them_silently(monkeypatch):
+    """A drifted store — two decisions under D-073, three options under D-073-O1 — is WARNED about
+    by name and STILL rendered (a drifted record is still worth reading): the defect was one id
+    silently rendering two different real choices with no signal at all.
+    """
+    dec = [
+        race_decision_row("D-073", "postgres"),
+        race_decision_row("D-073", "sqlite"),
+        race_decision_row("D-074", "untouched"),
+    ]
+    opts = [
+        {"id": "D-073-O1", "decision_id": "D-073", "label": "postgres", "active": True},
+        {"id": "D-073-O1", "decision_id": "D-073", "label": "sqlite", "active": True},
+        {"id": "D-073-O1", "decision_id": "D-073", "label": "neither", "active": False},
+        {"id": "D-074-O1", "decision_id": "D-074", "label": "only", "active": True},
+    ]
+    monkeypatch.setattr(
+        auger, "db", RaceServer({"decision": dec, "option": opts, "edge": []})
+    )
+    race_stubs(monkeypatch)
+
+    rc, out = run_cli(["-n", MINT_NS, "dump", "--config", "D-073=postgres"])
+
+    assert rc == 0, out
+    assert "DUPLICATE IDS: D-073 x2, D-073-O1 x3" in out, out
+    assert "concurrent writers collided; dedupe before trusting this config" in out, out
+    # still readable: both rows render, both real choices visible, and the render COMPLETED
+    assert out.count("## D-073") == 2, out
+    assert "chosen   : postgres" in out and "chosen   : sqlite" in out, out
+    assert "## D-074" in out, out
+    assert "ACTIVE CONFIGURATION" in out, out
+
+
 def test_the_decision_id_width_is_read_from_the_highest_id(monkeypatch):
     """The width read is the same page-safe read the mint uses, with the live three-digit default.
 
