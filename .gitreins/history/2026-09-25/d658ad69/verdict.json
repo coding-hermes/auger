@@ -1,0 +1,104 @@
+{
+  "task_id": "AUG-062",
+  "task_title": "answer sentinel -1.0 leaks into user-facing output; unmeasured decisions read as confident",
+  "task_criteria": [
+    "After a default-confidence answer: dump never shows a bare '-1' for confidence; the answer echo does not print 'confidence -1.0'; feedback's thin list INCLUDES unmeasured decisions (not 'every recorded decision is at or above the threshold'); status min/mean/max ignore the sentinel; priority judgments treat unmeasured as low, not confident"
+  ],
+  "passed": true,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "3a844ea38b2d5cb92479601b1475707b4ad99317",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260925T041526.701493Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: scanners=gitleaks+builtin cross-check\n11:17PM INF scanned ~787077 bytes (787.08 KB) in 292ms\n11:17PM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 44 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260925T041526.701493Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [ 40%]\n........................................................................ [ 81%]\n.................................                                        [100%]\n177 passed in 641.13s (0:10:41)\n== end-to-end smoke ==\nnamespace: auger-smoke-2855084\nnamespace sweep: no stale auger-smoke-*/auger-eval-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n  PASS toggle changed the stored configuration\n== verdict: record + list round-trip ==\n  PASS a good verdict is recorded\n  PASS a bad verdict is recorded\n  PASS the good verdict shows in the list\n  PASS the bad verdict's reasons show in the list\n  PASS both --good and --bad refuse\n  PASS the refused pair wrote nothing\n\nnamespace auger-smoke-2855084 removed\npassed 21, failed 0\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260925T041526.701493Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 After a default-confidence answer: dump never shows a bare '-1' for confidence; the answer echo does not print 'confidence -1.0'; feedback's thin list INCLUDES unmeasured decisions (not 'every recorded decision is at or above the threshold'); status min/mean/max ignore the sentinel; priority judgments treat unmeasured as low, not confident: All five sub-parts verified in auger.py and by tests. (1) dump: auger.py:4508 renders `conf {_conf_render(...)}` -> 'conf n/a'; test_confidence_sentinel_stays_in_the_store_and_never_renders asserts '-1' not in dump_out and '## D-001  (4.05)  conf n/a' present. (2) answer echo: auger.py:3959 `confidence {_conf_render(row['confidence'])}` -> 'confidence n/a'; same test asserts '-1' not in out and 'confidence n/a' in out. (3) feedback thin list: thin_decisions (auger.py:2170-2183) returns measured_thin + unmeasured via _is_unmeasured, and cmd_feedback prints _conf_render(conf) at auger.py:2597; the '(none \u2014 every recorded decision is at or above the threshold)' line only prints when both thin and drilled are empty (auger.py:2594-2595); test_confidence_sentinel_decisions_are_thin_not_confident asserts '  D-003  n/a  <- thinnest first' in out and '(none' not in out. (4) status aggregates: auger.py:4073 `confs = _conf_values(dec)` drops the sentinel (auger.py:83-90), and per-domain means at auger.py:4082 use _conf_values; test_confidence_sentinel_is_excluded_from_status_aggregates asserts 'confidence: min 0.50  mean 0.70  max 0.90' (sentinels excluded, not averaged in). (5) priority judgments: auger.py:2420 `if not _is_unmeasured(d) and d['confidence'] < T_PRIORITY`; test_confidence_sentinel_is_never_a_priority_judgment_below_the_floor asserts the measured D-002 escalates with its real 0.20 while no '-1'/D-003 escalation exists, and D-003 is still drilled. Helper unit check: _conf_render(-1.0)='n/a', _conf_values([-1.0,0.5,0.9,None])=[0.5,0.9], _is_unmeasured correct. Tests: `python3 -m pytest tests/test_auger.py -k confidence_sentinel -x -q` -> '5 passed, 172 deselected in 17.59s' (exit 0); full gate `bash tests/gate.sh` -> 'All checks passed!' (ruff), '177 passed in 524.11s (0:08:44)', smoke 'passed 21, failed 0', 'GATE PASS' (exit 0).\nThe -1.0 sentinel is confined to the store: every reader path (dump, answer echo, feedback thin list, status aggregates, priority judgments) routes through _conf_render/_conf_values/_is_unmeasured, and the full gate passes (177 passed, GATE PASS).",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 After a default-confidence answer: dump never shows a bare '-1' for confidence; the answer echo does not print 'confidence -1.0'; feedback's thin list INCLUDES unmeasured decisions (not 'every recorded decision is at or above the threshold'); status min/mean/max ignore the sentinel; priority judgments treat unmeasured as low, not confident: All five sub-parts verified in auger.py and by tests. (1) dump: auger.py:4508 renders `conf {_conf_render(...)}` -> 'conf n/a'; test_confidence_sentinel_stays_in_the_store_and_never_renders asserts '-1' not in dump_out and '## D-001  (4.05)  conf n/a' present. (2) answer echo: auger.py:3959 `confidence {_conf_render(row['confidence'])}` -> 'confidence n/a'; same test asserts '-1' not in out and 'confidence n/a' in out. (3) feedback thin list: thin_decisions (auger.py:2170-2183) returns measured_thin + unmeasured via _is_unmeasured, and cmd_feedback prints _conf_render(conf) at auger.py:2597; the '(none \u2014 every recorded decision is at or above the threshold)' line only prints when both thin and drilled are empty (auger.py:2594-2595); test_confidence_sentinel_decisions_are_thin_not_confident asserts '  D-003  n/a  <- thinnest first' in out and '(none' not in out. (4) status aggregates: auger.py:4073 `confs = _conf_values(dec)` drops the sentinel (auger.py:83-90), and per-domain means at auger.py:4082 use _conf_values; test_confidence_sentinel_is_excluded_from_status_aggregates asserts 'confidence: min 0.50  mean 0.70  max 0.90' (sentinels excluded, not averaged in). (5) priority judgments: auger.py:2420 `if not _is_unmeasured(d) and d['confidence'] < T_PRIORITY`; test_confidence_sentinel_is_never_a_priority_judgment_below_the_floor asserts the measured D-002 escalates with its real 0.20 while no '-1'/D-003 escalation exists, and D-003 is still drilled. Helper unit check: _conf_render(-1.0)='n/a', _conf_values([-1.0,0.5,0.9,None])=[0.5,0.9], _is_unmeasured correct. Tests: `python3 -m pytest tests/test_auger.py -k confidence_sentinel -x -q` -> '5 passed, 172 deselected in 17.59s' (exit 0); full gate `bash tests/gate.sh` -> 'All checks passed!' (ruff), '177 passed in 524.11s (0:08:44)', smoke 'passed 21, failed 0', 'GATE PASS' (exit 0).\nThe -1.0 sentinel is confined to the store: every reader path (dump, answer echo, feedback thin list, status aggregates, priority judgments) routes through _conf_render/_conf_values/_is_unmeasured, and the full gate passes (177 passed, GATE PASS).",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "After a default-confidence answer: dump never shows a bare '-1' for confidence; the answer echo does not print 'confidence -1.0'; feedback's thin list INCLUDES unmeasured decisions (not 'every recorded decision is at or above the threshold'); status min/mean/max ignore the sentinel; priority judgments treat unmeasured as low, not confident",
+                "status": "PASS",
+                "detail": "All five sub-parts verified in auger.py and by tests. (1) dump: auger.py:4508 renders `conf {_conf_render(...)}` -> 'conf n/a'; test_confidence_sentinel_stays_in_the_store_and_never_renders asserts '-1' not in dump_out and '## D-001  (4.05)  conf n/a' present. (2) answer echo: auger.py:3959 `confidence {_conf_render(row['confidence'])}` -> 'confidence n/a'; same test asserts '-1' not in out and 'confidence n/a' in out. (3) feedback thin list: thin_decisions (auger.py:2170-2183) returns measured_thin + unmeasured via _is_unmeasured, and cmd_feedback prints _conf_render(conf) at auger.py:2597; the '(none \u2014 every recorded decision is at or above the threshold)' line only prints when both thin and drilled are empty (auger.py:2594-2595); test_confidence_sentinel_decisions_are_thin_not_confident asserts '  D-003  n/a  <- thinnest first' in out and '(none' not in out. (4) status aggregates: auger.py:4073 `confs = _conf_values(dec)` drops the sentinel (auger.py:83-90), and per-domain means at auger.py:4082 use _conf_values; test_confidence_sentinel_is_excluded_from_status_aggregates asserts 'confidence: min 0.50  mean 0.70  max 0.90' (sentinels excluded, not averaged in). (5) priority judgments: auger.py:2420 `if not _is_unmeasured(d) and d['confidence'] < T_PRIORITY`; test_confidence_sentinel_is_never_a_priority_judgment_below_the_floor asserts the measured D-002 escalates with its real 0.20 while no '-1'/D-003 escalation exists, and D-003 is still drilled. Helper unit check: _conf_render(-1.0)='n/a', _conf_values([-1.0,0.5,0.9,None])=[0.5,0.9], _is_unmeasured correct. Tests: `python3 -m pytest tests/test_auger.py -k confidence_sentinel -x -q` -> '5 passed, 172 deselected in 17.59s' (exit 0); full gate `bash tests/gate.sh` -> 'All checks passed!' (ruff), '177 passed in 524.11s (0:08:44)', smoke 'passed 21, failed 0', 'GATE PASS' (exit 0)."
+              }
+            ],
+            "summary": "The -1.0 sentinel is confined to the store: every reader path (dump, answer echo, feedback thin list, status aggregates, priority judgments) routes through _conf_render/_conf_values/_is_unmeasured, and the full gate passes (177 passed, GATE PASS)."
+          }
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: AUG-062\n\nStage tier1: PASS\n    \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 After a default-confidence answer: dump never shows a bare '-1' for confidence; the answer echo does not print 'confidence -1.0'; feedback's thin list INCLUDES unmeasured decisions (not 'every recorded decision is at or above the threshold'); status min/mean/max ignore the sentinel; priority judgments treat unmeasured as low, not confident: All five sub-parts verified in auger.py and by tests. (1) dump: auger.py:4508 renders `conf {_conf_render(...)}` -> 'conf n/a'; test_confidence_sentinel_stays_in_the_store_and_never_renders asserts '-1' not in dump_out and '## D-001  (4.05)  conf n/a' present. (2) answer echo: auger.py:3959 `confidence {_conf_render(row['confidence'])}` -> 'confidence n/a'; same test asserts '-1' not in out and 'confidence n/a' in out. (3) feedback thin list: thin_decisions (auger.py:2170-2183) returns measured_thin + unmeasured via _is_unmeasured, and cmd_feedback prints _conf_render(conf) at auger.py:2597; the '(none \u2014 every recorded decision is at or above the threshold)' line only prints when both thin and drilled are empty (auger.py:2594-2595); test_confidence_sentinel_decisions_are_thin_not_confident asserts '  D-003  n/a  <- thinnest first' in out and '(none' not in out. (4) status aggregates: auger.py:4073 `confs = _conf_values(dec)` drops the sentinel (auger.py:83-90), and per-domain means at auger.py:4082 use _conf_values; test_confidence_sentinel_is_excluded_from_status_aggregates asserts 'confidence: min 0.50  mean 0.70  max 0.90' (sentinels excluded, not averaged in). (5) priority judgments: auger.py:2420 `if not _is_unmeasured(d) and d['confidence'] < T_PRIORITY`; test_confidence_sentinel_is_never_a_priority_judgment_below_the_floor asserts the measured D-002 escalates with its real 0.20 while no '-1'/D-003 escalation exists, and D-003 is still drilled. Helper unit check: _conf_render(-1.0)='n/a', _conf_values([-1.0,0.5,0.9,None])=[0.5,0.9], _is_unmeasured correct. Tests: `python3 -m pytest tests/test_auger.py -k confidence_sentinel -x -q` -> '5 passed, 172 deselected in 17.59s' (exit 0); full gate `bash tests/gate.sh` -> 'All checks passed!' (ruff), '177 passed in 524.11s (0:08:44)', smoke 'passed 21, failed 0', 'GATE PASS' (exit 0).\nThe -1.0 sentinel is confined to the store: every reader path (dump, answer echo, feedback thin list, status aggregates, priority judgments) routes through _conf_render/_conf_values/_is_unmeasured, and the full gate passes (177 passed, GATE PASS).\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-09-25T04:41:53.800868",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-09-25T04:41:53.866004+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 26371,
+        "truncated": false,
+        "source": "git show 3a844ea38b2d"
+      }
+    ],
+    "task_id": "AUG-062"
+  }
+}

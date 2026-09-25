@@ -1,0 +1,578 @@
+commit 3a844ea38b2d5cb92479601b1475707b4ad99317
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Thu Sep 24 23:06:54 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Thu Sep 24 23:06:54 2026 -0500
+
+    fix: AUG-062 confidence sentinel -1.0 no longer leaks into user-facing output
+    
+    `answer` without --confidence stores the spec'd -1 sentinel ("asserted directly,
+    not scored by a model") — that stays in the store unchanged — but it leaked into
+    every reader: dump and the answer echo printed a bare -1.0, feedback's
+    `0 <= c < 0.60` filter read the unmeasured decision as CONFIDENT (reporting
+    "every recorded decision is at or above the threshold" while one had never been
+    scored), and the priority-judgment branch escalated it as "-1.00 below the 0.30
+    floor". Fix shape: one renderer (_conf_render — n/a for the sentinel) now serves
+    every user-facing confidence render (answer echo, dump header, feedback thin
+    list + proposer state + opens-edge note, ask seats state, status drill list);
+    aggregations go through _conf_values, so status min/mean/max and the
+    coverage-by-domain means exclude the sentinel; thin_decisions treats unmeasured
+    as thin alongside the measured-thin band. Ordering chosen for thin_decisions:
+    measured rows by confidence then id, then unmeasured rows by id. Priority-
+    judgment choice: SKIP numeric escalation for unmeasured rows — the 0.30 floor is
+    a judgment about a measurement, and an unmeasured decision never failed one; it
+    is still drilled like any other thin decision. Sites left rendering raw on
+    purpose (model-stated values that can never hold the decision sentinel): ask's
+    completeness/subject/question echoes, the impact-verdict refusal line, and
+    verdict --list's dash for a scoreless (never-sentinel) verdict. The stale
+    thin_decisions docstring ("unknown is not low") now states the new behavior.
+    
+    RED (pre-fix): AssertionError: D-001 recorded  (confidence -1.0, 1 of 2 active, embedded, scope project)
+    GREEN (post-fix): 177 passed (172 prior + 5 new AUG-062 tests) in 570s; ruff check auger.py clean; gate tail: "GATE PASS"
+    
+    Co-authored-by: Alexis Okuwa <wojonstech@gmail.com>
+---
+ auger.py            |  97 ++++++++++++-----
+ tests/test_auger.py | 292 ++++++++++++++++++++++++++++++++++++++++++++++++++--
+ 2 files changed, 355 insertions(+), 34 deletions(-)
+
+diff --git a/auger.py b/auger.py
+index 16b1b13..8c97fd0 100755
+--- a/auger.py
++++ b/auger.py
+@@ -65,6 +65,36 @@ T_PRIORITY = (
+ # and CONTINUES ON THE DEFAULT: it never blocks waiting for a person
+ # (SPEC-001 section 7, Q5; docs/ENGINE.md open question 5).
+ 
++
++# AUG-062. The -1 sentinel ("asserted directly, not scored by a model") lives in the STORE —
++# every decision `answer` records without --confidence carries it, and that must not change. The
++# defect was the LEAK: renders showed the bare -1 as if it were a measurement, and a `0 <= c`
++# filter read "unmeasured" as "measured high". So: every confidence that reaches a READER goes
++# through `_conf_render` (the sentinel renders as n/a), every AVERAGE goes through `_conf_values`
++# (the sentinel is dropped, never averaged in), and the thin predicate treats unmeasured as the
++# weakest evidence there is instead of as a passing grade.
++def _conf_render(v) -> str:
++    """A confidence as the READER sees it: the -1 sentinel renders as n/a, never a bare -1."""
++    if isinstance(v, (int, float)) and v >= 0:
++        return f"{v:g}"
++    return "n/a"
++
++
++def _conf_values(rows: list) -> list:
++    """The MEASURED confidences of `rows`: the -1 sentinel is dropped, never averaged in."""
++    return [
++        float(r["confidence"])
++        for r in rows
++        if isinstance(r.get("confidence"), (int, float)) and r["confidence"] >= 0
++    ]
++
++
++def _is_unmeasured(dec_row: dict) -> bool:
++    """True when a decision row's confidence is the -1 sentinel — nobody scored it."""
++    c = dec_row.get("confidence")
++    return not (isinstance(c, (int, float)) and c >= 0)
++
++
+ # The budget governor. The ceiling is a NUMBER OF QUESTIONS ASKED BY ONE RUN, and it is enforced
+ # by the program rather than trusted to an agent — that refusal is the whole reason this is
+ # software (docs/ENGINE.md E4: "the budget is enforced by the program, not the agent").
+@@ -2134,19 +2164,24 @@ def feedback_budget() -> int:
+ def thin_decisions(ns: str, project_id: str) -> list:
+     """The decisions that need drilling, THINNEST FIRST — criterion (a) of this row.
+ 
+-    RECORDED confidence only: `confidence` is -1 on a row whose confidence nobody stated, and
+-    "unknown" is not "low" — the same distinction `status` makes. Ordered by confidence and then
++    A decision is thin when its confidence is MEASURED and below `T_CONFIDENT`, or when it is
++    UNMEASURED at all (the -1 sentinel `answer` stores for "asserted directly, not scored by a
++    model" — AUG-062: an unmeasured decision is the thinnest evidence there is, not a passing
++    grade, and hiding it from this list let `feedback` report every decision as confident while
++    one had never been scored). Ordered measured-first by confidence, then the unmeasured ones
+     by id, so two runs over an unchanged project drill it in the same order.
+     """
+     rows = select(
+         ns, "decision", f"project_id=eq.{project_id}&order=confidence.asc,id.asc"
+     )
+-    return [
++    measured_thin = [
+         d
+         for d in rows
+         if isinstance(d.get("confidence"), (int, float))
+         and 0 <= d["confidence"] < T_CONFIDENT
+     ]
++    unmeasured = [d for d in rows if _is_unmeasured(d)]
++    return measured_thin + sorted(unmeasured, key=lambda d: d["id"])
+ 
+ 
+ def drilled_decisions(ns: str, project_id: str, qs: dict | None = None) -> dict:
+@@ -2208,7 +2243,7 @@ def feedback_state(
+         "",
+         "THE DECISION WHOSE CONFIDENCE IS TOO LOW TO BUILD ON:",
+         f"{dec_row['id']} ({dec_row.get('domain') or 'no domain'}): {dec_row.get('chosen')}",
+-        f"confidence: {dec_row.get('confidence')}",
++        f"confidence: {_conf_render(dec_row.get('confidence'))}",
+         f"reversal cost: {dec_row.get('reversal_cost') or 'not recorded'}",
+         f"why the rejected alternatives lost: {dec_row.get('why_not') or 'not recorded'}",
+     ]
+@@ -2285,7 +2320,8 @@ def record_followup(
+             qid,
+             source="rule",
+             warnings=warnings,
+-            note=f"the confidence in {dec_row['id']} is {dec_row.get('confidence')} "
++            note=f"the confidence in {dec_row['id']} is "
++            f"{_conf_render(dec_row.get('confidence'))} "
+             f"(< {T_CONFIDENT}), so the engine proposed a follow-up "
+             f"({proposer_model()})",
+         )["id"]
+@@ -2376,11 +2412,12 @@ def feedback(ns: str, project_id: str, *, budget: int | None = None) -> dict:
+ 
+     # ---- 2. Q5: a decision this thin is a PRIORITY JUDGMENT, not a drilling problem. Escalate it
+     # with a default and CONTINUE on the default — the run is unattended and never blocks.
++    # AUG-062: the floor is a judgment about a MEASURED confidence. An unmeasured decision (the
++    # -1 sentinel) is thin and is drilled below like any other, but it never FAILED the floor —
++    # nobody scored it — so escalating "-1.00 below the 0.30 floor" would state a weighing that
++    # was never made. The sentinel never reaches this branch.
+     for d in cand:
+-        if (
+-            isinstance(d.get("confidence"), (int, float))
+-            and d["confidence"] < T_PRIORITY
+-        ):
++        if not _is_unmeasured(d) and d["confidence"] < T_PRIORITY:
+             esc = escalate(
+                 ns,
+                 pid,
+@@ -2557,7 +2594,7 @@ def cmd_feedback(a):
+     if not rep["thin"] and not rep["drilled"]:
+         print("  (none — every recorded decision is at or above the threshold)")
+     for did, conf in rep["thin"]:
+-        print(f"  {did}  {conf}  <- thinnest first")
++        print(f"  {did}  {_conf_render(conf)}  <- thinnest first")
+     for did, qid in rep["drilled"]:
+         print(f"  {did}  already drilled: {qid} is open and awaiting an answer")
+     print(
+@@ -3337,7 +3374,10 @@ def cmd_ask(a):
+         f"- {h.get('key')}: {h.get('content', '')[:300]}" for h in hits
+     )
+     decisions = (
+-        "\n".join(f"- {d['id']} (conf {d['confidence']}): {d['chosen']}" for d in seats)
++        "\n".join(
++            f"- {d['id']} (conf {_conf_render(d.get('confidence'))}): {d['chosen']}"
++            for d in seats
++        )
+         or "(none yet)"
+     )
+     state = (
+@@ -3916,7 +3956,8 @@ def cmd_answer(a):
+     impact = bundle_impact(ns, pid, {**row, "scope": stored_scope})
+     active_count = 1 if resolved_option else 0
+     print(
+-        f"{did} recorded  (confidence {row['confidence']}, {active_count} of {len(option_rows)} active, "
++        f"{did} recorded  (confidence {_conf_render(row['confidence'])}, "
++        f"{active_count} of {len(option_rows)} active, "
+         f"embedded, scope {decision_scope(row)}{closed})"
+     )
+     # The local break, surfaced in the same grammar `propagate` reports its walk in (AUG-028): the
+@@ -4027,11 +4068,9 @@ def cmd_status(a):
+         f"decisions {len(dec)} | options {len(opt)} | escalations {len(esc)} | unknowns {len(unk)} | domains {cov['rows']}"
+     )
+     if dec:
+-        confs = [
+-            d["confidence"]
+-            for d in dec
+-            if isinstance(d.get("confidence"), (int, float)) and d["confidence"] >= 0
+-        ]
++        # AUG-062: the sentinel is a NON-measurement, so it is excluded from every aggregate —
++        # min/mean/max describe the decisions somebody actually scored.
++        confs = _conf_values(dec)
+         if confs:
+             print(
+                 f"confidence: min {min(confs):.2f}  mean {sum(confs) / len(confs):.2f}  max {max(confs):.2f}"
+@@ -4040,12 +4079,7 @@ def cmd_status(a):
+         print("\ncoverage by domain (decisions, mean confidence):")
+         for k in sorted(by_dom):
+             rows = by_dom[k]
+-            cs = [
+-                r["confidence"]
+-                for r in rows
+-                if isinstance(r.get("confidence"), (int, float))
+-                and r["confidence"] >= 0
+-            ]
++            cs = _conf_values(rows)
+             m = f"{sum(cs) / len(cs):.2f}" if cs else "n/a"
+             flag = (
+                 "  <- needs drilling"
+@@ -4103,18 +4137,25 @@ def cmd_status(a):
+             "  ROWS WITH NO `num` (they cannot be matched to the grid at all): "
+             f"{', '.join(cov['nameless'])}"
+         )
++    # AUG-062: the drill list reads the same predicate `feedback` reads (thin_decisions' twin) —
++    # an unmeasured decision is thin, not confident, and renders n/a, never the bare sentinel.
+     thin = [
+         d
+         for d in dec
+-        if isinstance(d.get("confidence"), (int, float))
+-        and 0 <= d["confidence"] < T_CONFIDENT
++        if (
++            isinstance(d.get("confidence"), (int, float))
++            and 0 <= d["confidence"] < T_CONFIDENT
++        )
++        or _is_unmeasured(d)
+     ]
+     if thin:
+         print(
+             f"\n{len(thin)} decision(s) below {T_CONFIDENT} — these are what `auger ask` will drill:"
+         )
+-        for d in sorted(thin, key=lambda x: x["confidence"]):
+-            print(f"  {d['id']}  {d['confidence']:.2f}  {d['chosen'][:70]}")
++        for d in sorted(thin, key=lambda x: _conf(x)):
++            print(
++                f"  {d['id']}  {_conf_render(d.get('confidence'))}  {d['chosen'][:70]}"
++            )
+     # The selection invariant (AUG-015): the counts above cannot show WHICH options are active, so a
+     # decision holding zero or two-or-more of them is named here. Warned, never fatal — the map this
+     # verb exists to print is still the answer, and a record with a collision is still worth reading.
+@@ -4464,7 +4505,7 @@ def cmd_dump(a):
+                     f"({d.get('chosen')}) — reason on file: {d.get('why_not') or 'none'}"
+                 )
+         lines.append(
+-            f"## {d['id']}  ({d.get('domain') or '—'})  conf {d.get('confidence')}"
++            f"## {d['id']}  ({d.get('domain') or '—'})  conf {_conf_render(d.get('confidence'))}"
+             + (
+                 f"  [SUPERSEDED by {', '.join(superseders)}]"
+                 if superseders
+diff --git a/tests/test_auger.py b/tests/test_auger.py
+index 20ce232..ac23d9c 100644
+--- a/tests/test_auger.py
++++ b/tests/test_auger.py
+@@ -1904,7 +1904,11 @@ class StandInServer:
+     """
+ 
+     def __init__(
+-        self, rows: dict[str, list[dict]], *, page: int = API_PAGE, fail_after: int | None = None
++        self,
++        rows: dict[str, list[dict]],
++        *,
++        page: int = API_PAGE,
++        fail_after: int | None = None,
+     ):
+         self.rows = rows
+         self.page = page
+@@ -1933,9 +1937,13 @@ class StandInServer:
+         for clause in reversed(str(pairs.get("order", "")).split(",")):
+             col, _, direction = clause.strip().partition(".")
+             if col and direction in ("asc", "desc"):
+-                found.sort(key=lambda r: str(r.get(col) or ""), reverse=direction == "desc")
++                found.sort(
++                    key=lambda r: str(r.get(col) or ""), reverse=direction == "desc"
++                )
+         limit = (
+-            min(int(pairs["limit"]), SERVER_MAX_LIMIT) if "limit" in pairs else self.page
++            min(int(pairs["limit"]), SERVER_MAX_LIMIT)
++            if "limit" in pairs
++            else self.page
+         )
+         offset = int(pairs.get("offset", 0))
+         return 200, found[offset : offset + limit], {}
+@@ -1962,7 +1970,9 @@ def test_select_reads_every_row_of_a_table_past_one_page(monkeypatch):
+     monkeypatch.setattr(auger, "db", server)
+ 
+     got = auger.select(MINT_NS, "decision", "")
+-    assert len(got) == 130 == len(stored), f"{len(got)} rows served for {len(stored)} stored"
++    assert len(got) == 130 == len(stored), (
++        f"{len(got)} rows served for {len(stored)} stored"
++    )
+     assert [r["id"] for r in got] == [r["id"] for r in stored]
+     # The cap the row measured, asserted rather than assumed: ONE bare GET returns a page and no
+     # signal at all that the table holds more.
+@@ -2059,7 +2069,9 @@ def test_a_table_that_cannot_answer_is_still_nothing_for_select_or_empty(monkeyp
+     assert len(server.requests) == 1, server.requests
+ 
+ 
+-def test_the_page_safe_mint_reads_the_highest_id_through_the_real_paged_select(monkeypatch):
++def test_the_page_safe_mint_reads_the_highest_id_through_the_real_paged_select(
++    monkeypatch,
++):
+     """AUG-069 and AUG-068 together: the mint reads ONE page-safe row out of a capped 101-row table.
+ 
+     The AUG-069 cases stub `select` itself, which cannot see the paging loop; this one stubs the
+@@ -2075,7 +2087,9 @@ def test_the_page_safe_mint_reads_the_highest_id_through_the_real_paged_select(m
+     server.requests.clear()
+     assert auger.next_id(MINT_NS, "decision", "D", width=3) == "D-102"
+     assert len(server.requests) == 1, server.requests
+-    assert server.requests[0].endswith("?select=id&order=id.desc&limit=1"), server.requests[0]
++    assert server.requests[0].endswith("?select=id&order=id.desc&limit=1"), (
++        server.requests[0]
++    )
+ 
+     server.requests.clear()
+     assert auger.decision_id_width(MINT_NS) == 3
+@@ -5576,3 +5590,269 @@ def test_a_domain_whose_row_is_gone_is_reported_absent_not_skipped(project: dict
+     assert "OFF-GRID rows" in out and "9.99" in out, out
+     # and the moved row is still a real stored row: the report describes the table, it does not fix it
+     assert row(ns, "domain", "num=eq.9.99")["id"] == moving["id"]
++
++
++# ================================================================= the confidence sentinel (AUG-062)
++# `answer` without --confidence stores the spec'd sentinel -1 ("asserted directly, not scored by
++# a model" — the `edge` docstring). That value must STAY in the store; the defect is the LEAK:
++# renders showed a bare -1 as if it were a measurement, and the feedback engine's `0 <= c` filter
++# read "unmeasured" as "measured high", reporting a decision nobody scored as being at or above
++# the threshold. Every case below proves the sentinel survives in the ROW and never reaches the
++# READER. Deterministic throughout: the models are stubbed, the rows are re-read from DuckBrain.
++def test_confidence_sentinel_stays_in_the_store_and_never_renders(project: dict):
++    """AC1/AC5: a default-confidence answer keeps -1 in the decision row, but neither its own
++    echo nor `dump` ever prints the sentinel — an unmeasured confidence renders as n/a."""
++    ns = project["ns"]
++    rc, out = run_cli(
++        [
++            "-n",
++            ns,
++            "answer",
++            "--id",
++            "D-001",
++            "--domain",
++            "4.05",
++            "--chosen",
++            "single SQLite file",
++            "--option",
++            "single SQLite file",
++            "--option",
++            "Postgres",
++            "--why-not",
++            "the seed forbids a second service",
++        ]
++    )
++    assert rc == 0, out
++    # The sentinel is UNCHANGED in the store — the spec'd "asserted directly" value.
++    assert row(ns, "decision", "id=eq.D-001")["confidence"] == pytest.approx(-1.0)
++    # AC5: the echo says what was recorded, not the raw sentinel.
++    assert "-1" not in out, out
++    assert "confidence n/a" in out, out
++    # AC1: `dump` renders the same decision as "conf n/a", never a bare -1/-1.0.
++    rc, dump_out = run_cli(["-n", ns, "dump"])
++    assert rc == 0, dump_out
++    assert "-1" not in dump_out, dump_out
++    assert "conf n/a" in dump_out, dump_out
++    assert "## D-001  (4.05)  conf n/a" in dump_out, dump_out
++
++
++def test_confidence_sentinel_decisions_are_thin_not_confident(
++    decided: dict, monkeypatch
++):
++    """AC2: an unmeasured decision belongs in `feedback`'s thin list beside the measured-thin
++    ones — `0 <= c` must not read the sentinel as a passing grade — and the follow-up it
++    produces never quotes the sentinel into its edge note. Ordering stays deterministic:
++    measured rows by confidence first, then the unmeasured ones by id."""
++    ns, pid = decided["ns"], decided["pid"]
++    rc, out = run_cli(
++        [
++            "-n",
++            ns,
++            "answer",
++            "--id",
++            "D-003",
++            "--domain",
++            "4.07",
++            "--chosen",
++            "unmeasured",
++            "--option",
++            "unmeasured",
++            "--option",
++            "other",
++            "--why-not",
++            "the other one is worse",
++        ]
++    )
++    assert rc == 0, out
++    assert row(ns, "decision", "id=eq.D-003")["confidence"] == pytest.approx(-1.0)
++
++    ids = [d["id"] for d in auger.thin_decisions(ns, pid)]
++    assert ids == ["D-002", "D-003"], ids
++
++    monkeypatch.setattr(auger, "recall", recall_hits(ns, pid, "D-002"))
++    calls: list = []
++    monkeypatch.setattr(auger, "jev", gate_stub(0.10, calls))
++    proposer_states: list = []
++    scripted = [FOLLOWUP_Q, "Second question?"]
++
++    def proposer_spy(state, *a, **k):
++        proposer_states.append(state)
++        return scripted.pop(0), ""
++
++    monkeypatch.setattr(auger, "propose_question", proposer_spy)
++    rc, out = run_cli(["-n", ns, "feedback", "--budget", "1"])
++    assert rc == 0, out
++    # The unmeasured decision is IN the thin list, rendered n/a — and the old false claim
++    # ("every recorded decision is at or above the threshold") is gone.
++    assert "  D-002  0.41  <- thinnest first" in out, out
++    assert "  D-003  n/a  <- thinnest first" in out, out
++    assert "(none" not in out, out
++    # The proposer was fed the state for BOTH decisions; the unmeasured one reads n/a.
++    assert any("confidence: 0.41" in s for s in proposer_states), proposer_states
++    assert any("confidence: n/a" in s for s in proposer_states), proposer_states
++    # Both decisions produced a follow-up (one asked, one budget-thin), and the sentinel
++    # never reaches the `opens` edge notes.
++    qrows = rows(ns, "question", "qclass=eq.follow_up&order=id.asc")
++    assert len(qrows) == 2, qrows
++    notes = {e["src_id"]: e["note"] for e in rows(ns, "edge", "kind=eq.opens")}
++    assert notes["D-002"].startswith(
++        "the confidence in D-002 is 0.41 (< 0.6), so the engine"
++    ), notes
++    assert notes["D-003"].startswith(
++        "the confidence in D-003 is n/a (< 0.6), so the engine"
++    ), notes
++
++
++def test_confidence_sentinel_is_never_a_priority_judgment_below_the_floor(
++    project: dict, monkeypatch
++):
++    """AC4: a MEASURED decision below the 0.30 floor is escalated as a priority judgment; an
++    UNMEASURED one is thin and gets drilled, but is never claimed to be "-1.00 below the
++    0.30 floor" — a weighing nobody scored is not a weighing that failed one."""
++    ns, pid = project["ns"], project["pid"]
++    for did, conf in (("D-002", ["--confidence", "0.20"]), ("D-003", [])):
++        argv = [
++            "-n",
++            ns,
++            "answer",
++            "--id",
++            did,
++            "--domain",
++            "4.06",
++            "--chosen",
++            f"pick {did}",
++            "--option",
++            f"pick {did}",
++            "--option",
++            "other",
++            "--why-not",
++            "worse",
++            *conf,
++        ]
++        rc, out = run_cli(argv)
++        assert rc == 0, out
++    monkeypatch.setattr(auger, "recall", recall_hits(ns, pid, "D-002"))
++    monkeypatch.setattr(auger, "jev", gate_stub(0.10, []))
++    monkeypatch.setattr(
++        auger, "propose_question", proposer_stub([FOLLOWUP_Q, "Second question?"], [])
++    )
++    rc, out = run_cli(["-n", ns, "feedback", "--budget", "2"])
++    assert rc == 0, out
++    esc = [e["question"] for e in rows(ns, "escalation", "order=id.asc")]
++    # The measured row earns its escalation, with its real number.
++    assert any(
++        "priority judgment: D-002 has confidence 0.20, below the 0.3 floor" in t
++        for t in esc
++    ), esc
++    # The unmeasured row is escalated for NOTHING, and no -1 claim exists on the record.
++    assert not any("D-003" in t or "-1" in t for t in esc), esc
++    # It is still drilled: thin is thin.
++    opens = {e["src_id"] for e in rows(ns, "edge", "kind=eq.opens")}
++    assert opens == {"D-002", "D-003"}, opens
++
++
++def test_confidence_sentinel_is_excluded_from_status_aggregates(project: dict):
++    """AC3: the min/mean/max line and the coverage-by-domain means exclude the sentinel —
++    averaging a number nobody stated would print 0.22 here instead of 0.70 — while the
++    drill list gains the unmeasured decisions as n/a."""
++    ns = project["ns"]
++    specs = (
++        ("D-001", ["--confidence", "0.5"]),
++        ("D-002", ["--confidence", "0.9"]),
++        ("D-003", []),  # unmeasured: the sentinel
++        ("D-004", ["--confidence", "0.7"]),
++        ("D-005", []),  # unmeasured, alone in its domain
++    )
++    for did, extra in specs:
++        argv = [
++            "-n",
++            ns,
++            "answer",
++            "--id",
++            did,
++            "--domain",
++            "4.06" if did == "D-005" else "4.05",
++            "--chosen",
++            "x",
++            "--option",
++            "x",
++            "--option",
++            "y",
++            "--why-not",
++            "y loses",
++            *extra,
++        ]
++        rc, out = run_cli(argv)
++        assert rc == 0, out
++    rc, out = run_cli(["-n", ns, "status"])
++    assert rc == 0, out
++    # (0.5 + 0.9 + 0.7) / 3 = 0.70 — the sentinels are excluded, not averaged in.
++    assert "confidence: min 0.50  mean 0.70  max 0.90" in out, out
++    cov = [
++        ln
++        for ln in out.splitlines()
++        if ln.strip().startswith(("4.05", "4.06")) and "terminating ring" not in ln
++    ]
++    assert [ln.split()[:3] for ln in cov] == [
++        ["4.05", "4", "0.70"],
++        ["4.06", "1", "n/a"],
++    ], cov
++    # and the drill list: the unmeasured decisions appear as n/a, never as -1/-1.0.
++    # The renderer matches the raw-confidence rendering every other site used (`:g`), so a
++    # measured 0.5 reads 0.5 — the site-local `:.2f` is gone with the leak.
++    assert "  D-003  n/a  x" in out, out
++    assert "  D-005  n/a  x" in out, out
++    assert "  D-001  0.5  x" in out, out
++
++
++def test_confidence_sentinel_renders_n_a_in_ask_seats_and_verdict_list(
++    decided: dict, monkeypatch
++):
++    """The remaining raw interpolations: `ask`'s seats list renders an unmeasured decision as
++    conf n/a, and `verdict --list` keeps its dash for a verdict with no score at all (that
++    column reads MODEL verdicts, which never carry the decision sentinel)."""
++    ns = decided["ns"]
++    rc, out = run_cli(
++        [
++            "-n",
++            ns,
++            "answer",
++            "--id",
++            "D-003",
++            "--domain",
++            "4.07",
++            "--chosen",
++            "unmeasured",
++            "--option",
++            "unmeasured",
++            "--option",
++            "other",
++            "--why-not",
++            "the other one is worse",
++        ]
++    )
++    assert rc == 0, out
++
++    seats_states: list = []
++
++    def seats_jev_spy(state, questions, *a, **k):
++        seats_states.append(state)
++        return ask_stub("how_is_it_tested", 0.73, 0.10)(state, questions, *a, **k)
++
++    monkeypatch.setattr(auger, "jev", seats_jev_spy)
++    rc, out = run_cli(["-n", ns, "ask"])
++    assert rc == 0, out
++    # The seats list is the state `ask` FEEDS the model — assert it there, where the sentinel
++    # would reach a consumer (the seats have no other stdout render to leak through).
++    assert any(
++        "- D-003 (conf n/a): unmeasured" in c
++        and "- D-002 (conf 0.41): staging table" in c
++        for c in seats_states
++    ), seats_states
++
++    rc, out = run_cli(["-n", ns, "verdict", "--good", "D-001=x", "--reasons", "r"])
++    assert rc == 0, out
++    rc, out = run_cli(["-n", ns, "verdict", "--list"])
++    assert rc == 0, out
++    assert "conf —" in out, out
++    assert "-1" not in out, out
