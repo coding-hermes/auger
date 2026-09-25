@@ -1,0 +1,104 @@
+{
+  "task_id": "AUG-070",
+  "task_title": "concurrent writers collide in the answer check-then-insert window",
+  "task_criteria": [
+    "A concurrent auger answer that loses the id race no longer exits: the auto-minted path re-mints from the live highest id and retries (bounded), landing exactly one decision row per logical answer; duplicated decision/option ids are surfaced with a named warning on a user-facing surface (dump --config); regression tests prove the re-mint retry and duplicate surfacing RED on unfixed code; bash tests/gate.sh ends GATE PASS"
+  ],
+  "passed": true,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "2725d66dc45e7a2221cca9dd2e681bf675b0f5c2",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260925T072225.119343Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: scanners=gitleaks+builtin cross-check\n2:24AM INF scanned ~773443 bytes (773.44 KB) in 382ms\n2:24AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 42 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260925T072225.119343Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [ 39%]\n........................................................................ [ 79%]\n.....................................                                    [100%]\n181 passed in 498.56s (0:08:18)\n== end-to-end smoke ==\nnamespace: auger-smoke-2109216\nnamespace sweep: no stale auger-smoke-*/auger-eval-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n  PASS toggle changed the stored configuration\n== verdict: record + list round-trip ==\n  PASS a good verdict is recorded\n  PASS a bad verdict is recorded\n  PASS the good verdict shows in the list\n  PASS the bad verdict's reasons show in the list\n  PASS both --good and --bad refuse\n  PASS the refused pair wrote nothing\n\nnamespace auger-smoke-2109216 removed\npassed 21, failed 0\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260925T072225.119343Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 A concurrent auger answer that loses the id race no longer exits: the auto-minted path re-mints from the live highest id and retries (bounded), landing exactly one decision row per logical answer; duplicated decision/option ids are surfaced with a named warning on a user-facing surface (dump --config); regression tests prove the re-mint retry and duplicate surfacing RED on unfixed code; bash tests/gate.sh ends GATE PASS: Bounded re-mint: auger.py:3868-3880 with AUG070_ID_ATTEMPTS=3 (auger.py:687) \u2014 auto-minted path (no --id) re-mints via next_id(ns,'decision','D',width=decision_id_width(ns)) and re-checks node_exists, breaking to the normal write path when free; the else-branch refuses naming the id, the attempt count and 'NOTHING was stored'. Exactly one row per logical answer: test_a_lost_race_remints_and_lands_the_answer_under_a_new_id asserts decisions == ['D-073','D-074','D-075'], exactly one D-074 row, exactly one decision POST, and option ids D-075-O1/O2 (dead attempt's ids never stored) \u2014 PASSED. Duplicate surfacing: WARN_DUPLICATE_IDS='WARNING: DUPLICATE IDS' (auger.py:4404), duplicate_id_warning_lines (auger.py:4407-4427) wired into cmd_dump at auger.py:4627; test_dump_names_duplicate_ids_rather_than_rendering_them_silently asserts 'DUPLICATE IDS: D-073 x2, D-073-O1 x3' in `dump --config` output with rc 0 \u2014 PASSED. RED proof: copied HEAD~1:auger.py over auger.py and ran the 4 new tests -> '4 failed, 177 deselected' (SystemExit refusal, missing 're-checked 3 times', missing 'NOTHING was stored', missing 'DUPLICATE IDS: D-073 x2, D-073-O1 x3'); tree restored identical (diff -q clean); GREEN on fixed tree '4 passed'. Gate: `bash tests/gate.sh` -> exit 0, '== syntax ==' ok, '== lint == All checks passed!', '181 passed in 480.57s (0:08:00)', smoke 'passed 21, failed 0', 'LIVE ARMS: ran 2; skipped 0', 'GATE PASS'. ruff clean, py_compile ok, no LSP diagnostics. (Minor non-criterion note: RaceServer.duplicate_every_insert is defined but unused by any test.)\nAll AUG-070 requirements verified: bounded re-mint retry lands exactly one decision row, duplicate ids are named on dump --config, the 4 regression tests are RED on the unfixed engine and GREEN on the fix, and bash tests/gate.sh ends GATE PASS (181 passed, smoke 21/0).",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 A concurrent auger answer that loses the id race no longer exits: the auto-minted path re-mints from the live highest id and retries (bounded), landing exactly one decision row per logical answer; duplicated decision/option ids are surfaced with a named warning on a user-facing surface (dump --config); regression tests prove the re-mint retry and duplicate surfacing RED on unfixed code; bash tests/gate.sh ends GATE PASS: Bounded re-mint: auger.py:3868-3880 with AUG070_ID_ATTEMPTS=3 (auger.py:687) \u2014 auto-minted path (no --id) re-mints via next_id(ns,'decision','D',width=decision_id_width(ns)) and re-checks node_exists, breaking to the normal write path when free; the else-branch refuses naming the id, the attempt count and 'NOTHING was stored'. Exactly one row per logical answer: test_a_lost_race_remints_and_lands_the_answer_under_a_new_id asserts decisions == ['D-073','D-074','D-075'], exactly one D-074 row, exactly one decision POST, and option ids D-075-O1/O2 (dead attempt's ids never stored) \u2014 PASSED. Duplicate surfacing: WARN_DUPLICATE_IDS='WARNING: DUPLICATE IDS' (auger.py:4404), duplicate_id_warning_lines (auger.py:4407-4427) wired into cmd_dump at auger.py:4627; test_dump_names_duplicate_ids_rather_than_rendering_them_silently asserts 'DUPLICATE IDS: D-073 x2, D-073-O1 x3' in `dump --config` output with rc 0 \u2014 PASSED. RED proof: copied HEAD~1:auger.py over auger.py and ran the 4 new tests -> '4 failed, 177 deselected' (SystemExit refusal, missing 're-checked 3 times', missing 'NOTHING was stored', missing 'DUPLICATE IDS: D-073 x2, D-073-O1 x3'); tree restored identical (diff -q clean); GREEN on fixed tree '4 passed'. Gate: `bash tests/gate.sh` -> exit 0, '== syntax ==' ok, '== lint == All checks passed!', '181 passed in 480.57s (0:08:00)', smoke 'passed 21, failed 0', 'LIVE ARMS: ran 2; skipped 0', 'GATE PASS'. ruff clean, py_compile ok, no LSP diagnostics. (Minor non-criterion note: RaceServer.duplicate_every_insert is defined but unused by any test.)\nAll AUG-070 requirements verified: bounded re-mint retry lands exactly one decision row, duplicate ids are named on dump --config, the 4 regression tests are RED on the unfixed engine and GREEN on the fix, and bash tests/gate.sh ends GATE PASS (181 passed, smoke 21/0).",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "A concurrent auger answer that loses the id race no longer exits: the auto-minted path re-mints from the live highest id and retries (bounded), landing exactly one decision row per logical answer; duplicated decision/option ids are surfaced with a named warning on a user-facing surface (dump --config); regression tests prove the re-mint retry and duplicate surfacing RED on unfixed code; bash tests/gate.sh ends GATE PASS",
+                "status": "PASS",
+                "detail": "Bounded re-mint: auger.py:3868-3880 with AUG070_ID_ATTEMPTS=3 (auger.py:687) \u2014 auto-minted path (no --id) re-mints via next_id(ns,'decision','D',width=decision_id_width(ns)) and re-checks node_exists, breaking to the normal write path when free; the else-branch refuses naming the id, the attempt count and 'NOTHING was stored'. Exactly one row per logical answer: test_a_lost_race_remints_and_lands_the_answer_under_a_new_id asserts decisions == ['D-073','D-074','D-075'], exactly one D-074 row, exactly one decision POST, and option ids D-075-O1/O2 (dead attempt's ids never stored) \u2014 PASSED. Duplicate surfacing: WARN_DUPLICATE_IDS='WARNING: DUPLICATE IDS' (auger.py:4404), duplicate_id_warning_lines (auger.py:4407-4427) wired into cmd_dump at auger.py:4627; test_dump_names_duplicate_ids_rather_than_rendering_them_silently asserts 'DUPLICATE IDS: D-073 x2, D-073-O1 x3' in `dump --config` output with rc 0 \u2014 PASSED. RED proof: copied HEAD~1:auger.py over auger.py and ran the 4 new tests -> '4 failed, 177 deselected' (SystemExit refusal, missing 're-checked 3 times', missing 'NOTHING was stored', missing 'DUPLICATE IDS: D-073 x2, D-073-O1 x3'); tree restored identical (diff -q clean); GREEN on fixed tree '4 passed'. Gate: `bash tests/gate.sh` -> exit 0, '== syntax ==' ok, '== lint == All checks passed!', '181 passed in 480.57s (0:08:00)', smoke 'passed 21, failed 0', 'LIVE ARMS: ran 2; skipped 0', 'GATE PASS'. ruff clean, py_compile ok, no LSP diagnostics. (Minor non-criterion note: RaceServer.duplicate_every_insert is defined but unused by any test.)"
+              }
+            ],
+            "summary": "All AUG-070 requirements verified: bounded re-mint retry lands exactly one decision row, duplicate ids are named on dump --config, the 4 regression tests are RED on the unfixed engine and GREEN on the fix, and bash tests/gate.sh ends GATE PASS (181 passed, smoke 21/0)."
+          }
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: AUG-070\n\nStage tier1: PASS\n    \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 A concurrent auger answer that loses the id race no longer exits: the auto-minted path re-mints from the live highest id and retries (bounded), landing exactly one decision row per logical answer; duplicated decision/option ids are surfaced with a named warning on a user-facing surface (dump --config); regression tests prove the re-mint retry and duplicate surfacing RED on unfixed code; bash tests/gate.sh ends GATE PASS: Bounded re-mint: auger.py:3868-3880 with AUG070_ID_ATTEMPTS=3 (auger.py:687) \u2014 auto-minted path (no --id) re-mints via next_id(ns,'decision','D',width=decision_id_width(ns)) and re-checks node_exists, breaking to the normal write path when free; the else-branch refuses naming the id, the attempt count and 'NOTHING was stored'. Exactly one row per logical answer: test_a_lost_race_remints_and_lands_the_answer_under_a_new_id asserts decisions == ['D-073','D-074','D-075'], exactly one D-074 row, exactly one decision POST, and option ids D-075-O1/O2 (dead attempt's ids never stored) \u2014 PASSED. Duplicate surfacing: WARN_DUPLICATE_IDS='WARNING: DUPLICATE IDS' (auger.py:4404), duplicate_id_warning_lines (auger.py:4407-4427) wired into cmd_dump at auger.py:4627; test_dump_names_duplicate_ids_rather_than_rendering_them_silently asserts 'DUPLICATE IDS: D-073 x2, D-073-O1 x3' in `dump --config` output with rc 0 \u2014 PASSED. RED proof: copied HEAD~1:auger.py over auger.py and ran the 4 new tests -> '4 failed, 177 deselected' (SystemExit refusal, missing 're-checked 3 times', missing 'NOTHING was stored', missing 'DUPLICATE IDS: D-073 x2, D-073-O1 x3'); tree restored identical (diff -q clean); GREEN on fixed tree '4 passed'. Gate: `bash tests/gate.sh` -> exit 0, '== syntax ==' ok, '== lint == All checks passed!', '181 passed in 480.57s (0:08:00)', smoke 'passed 21, failed 0', 'LIVE ARMS: ran 2; skipped 0', 'GATE PASS'. ruff clean, py_compile ok, no LSP diagnostics. (Minor non-criterion note: RaceServer.duplicate_every_insert is defined but unused by any test.)\nAll AUG-070 requirements verified: bounded re-mint retry lands exactly one decision row, duplicate ids are named on dump --config, the 4 regression tests are RED on the unfixed engine and GREEN on the fix, and bash tests/gate.sh ends GATE PASS (181 passed, smoke 21/0).\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-09-25T07:44:28.477074",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-09-25T07:44:28.508813+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 26200,
+        "truncated": false,
+        "source": "git show 2725d66dc45e"
+      }
+    ],
+    "task_id": "AUG-070"
+  }
+}

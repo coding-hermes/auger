@@ -1,0 +1,506 @@
+commit 2725d66dc45e7a2221cca9dd2e681bf675b0f5c2
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Fri Sep 25 02:14:34 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Fri Sep 25 02:14:34 2026 -0500
+
+    fix: AUG-070 concurrent answer writers re-mint on id collision instead of refusing
+    
+    The race (DO-7 evidence: 2 writers x 30 answers into one namespace, 18 refusals,
+    102 decision rows for 101 logical answers, 9 duplicate option ids, one id rendered
+    twice by dump --config with two different real choices): DuckBrain enforces NO
+    uniqueness — referential integrity is ours — so the mint->check->insert window
+    races two ways.
+    
+      (a) writer B mints the id A already stored -> B's node_exists check fires ->
+          B EXITS rc=1 and the ANSWER IS LOST (the dominant observed shape);
+      (b) both writers' checks pass before either insert lands -> duplicate id rows.
+    
+    Fix, auger.py (additive; cmd_answer structure otherwise untouched):
+    
+      1. AUTO-MINTED path (no --id): the duplicate check is a BOUNDED RE-MINT loop
+         (AUG070_ID_ATTEMPTS = 3 attempts). Each attempt re-mints from the live
+         highest id via the same page-safe next_id read (AUG-069 semantics and the
+         three-digit decision width untouched) and re-checks; the loop exits to the
+         normal write path the moment the id is free. After the bound it refuses
+         loudly naming the id and the attempt count — the mint may not spin on a
+         store that answers "taken" forever — and the refusal is proven to write
+         NOTHING (test asserts zero POSTs).
+      2. EXPLICIT --id path: terminal refusal kept, message now states the guarantee:
+         NOTHING was stored (no decision, no options, no evidence, no edges), and
+         that the auto-minted path re-mints instead of refusing.
+      3. Residual insert-insert window (shape b, optional req 5 taken): on the
+         auto-minted path the decision is read back bounded (id=eq.<did>&limit=2)
+         after the insert — one row is ours, two is ours plus a sibling's. On
+         detection a WARNING: DUPLICATE IDS line is printed naming the id and count.
+         Nothing is deleted; the residue is left for a human dedupe decision.
+      4. dump self-check: duplicate decision ids and duplicate option ids are
+         surfaced as a named warning block ("WARNING: DUPLICATE IDS: D-074 x2,
+         D-074-O1 x3 — concurrent writers collided; dedupe before trusting this
+         config") and the render CONTINUES — a drifted record is still worth
+         reading (the AUG-015 doctrine); what it no longer does is render one id
+         as two different real choices with no signal. New pure helper
+         duplicate_id_warning_lines() beside activation_warning_lines().
+    
+    All reads/writes stay on the existing db()/select()/insert()/insert_decision()
+    transport (429 backpressure property untouched); no hand-rolled HTTP.
+    
+    Tests (tests/test_auger.py, fake transport at db(), RaceServer extends the
+    established StandInServer pattern with POSTs and two race shapes):
+    
+      * test_a_lost_race_remints_and_lands_the_answer_under_a_new_id — ghost row
+        appears on the id=eq.D-074 check read (shape a): asserts re-mint to D-075,
+        exactly one decision POST, the answer landed under the NEW id with the new
+        evidence_key, the ghost row untouched, no dead-attempt option ids stored.
+      * test_a_permanently_contended_answer_is_bounded_and_names_the_id_and_attempts
+        — highest id frozen, every check says taken: asserts the refusal names the
+        id and "re-checked 3 times", and that zero POSTs were written.
+      * test_an_explicit_duplicate_id_refusal_says_nothing_was_stored — the --id
+        refusal message states NOTHING was stored and names the auto-minted path.
+      * test_dump_names_duplicate_ids_rather_than_rendering_them_silently —
+        duplicated decision/option rows seeded via the fake: asserts the named
+        DUPLICATE IDS warning, that the render continues (both rows readable),
+        rc 0.
+    
+    RED proof (tests run against the UNFIXED engine, `git stash push -- auger.py`,
+    run, `git stash pop` — pop rc=0, tree verified restored): 4 failed,
+    177 deselected. Failure lines:
+    
+      SystemExit: refused: decision 'D-074' already exists — answer decision IDs
+      must be unique                      <- shape (a): the answer LOST, as observed
+      assert 're-checked 3 times' in "refused: decision 'D-074' already exists ..."
+      assert 'NOTHING was stored' in "refused: decision 'D-034' already exists ..."
+      assert 'DUPLICATE IDS: D-073 x2, D-073-O1 x3' in '<dump render ...>'  <- the
+      unfixed dump rendered D-073 seven contradictory times with no warning.
+    
+    GREEN: 4 passed on the fixed tree; full gate below.
+    
+    Gate:
+      bash tests/gate.sh -> GATE PASS (exit 0): syntax ok, ruff clean,
+      pytest 181 passed in 676.98s, end-to-end smoke passed 21 failed 0
+      (LIVE ARMS: ran 2; skipped 0).
+---
+ auger.py            |  95 ++++++++++++++++++-
+ tests/test_auger.py | 260 ++++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 353 insertions(+), 2 deletions(-)
+
+diff --git a/auger.py b/auger.py
+index 8c97fd0..faab15b 100755
+--- a/auger.py
++++ b/auger.py
+@@ -43,6 +43,7 @@ import sys
+ import time
+ import urllib.error
+ import urllib.request
++from collections import Counter
+ from datetime import datetime, timezone
+ from urllib.parse import quote
+ 
+@@ -678,6 +679,13 @@ def next_id(ns: str, table: str, prefix: str, width: int | None = None) -> str:
+ #: lexicographic `order=id.desc` read that `next_id` mints from.
+ DECISION_ID_WIDTH = 3
+ 
++#: AUG-070: how many times an auto-minted decision id is checked against the live store before the
++#: answer gives up. The check-then-insert window cannot be closed from this side (DuckBrain enforces
++#: no uniqueness), so a losing writer re-mints instead of refusing; the bound keeps a pathologically
++#: contended namespace from spinning. Three attempts cover the observed two-writer race with room
++#: for one more, and each attempt costs one `limit=1` read — the mint's own page-safe shape.
++AUG070_ID_ATTEMPTS = 3
++
+ 
+ def decision_id_width(ns: str) -> int:
+     """The digit width this namespace's decision ids are minted at.
+@@ -3847,9 +3855,38 @@ def cmd_answer(a):
+     # exist by then. The same ordering makes an explicit retry idempotently loud instead of allowing
+     # duplicate decision and option IDs into stores that do not enforce primary-key uniqueness.
+     qid = (a.question_id or "").strip()
+-    if node_exists(ns, "decision", did):
++    if not a.id:
++        # AUG-070: the mint read happens-before other writers' writes, so the id `next_id` derived
++        # can already be stored by the time this process checks — or by the time its own INSERT
++        # lands. DuckBrain enforces NO uniqueness (the comment above `next_id` says it: referential
++        # integrity is OURS), so a losing writer's duty is to RE-MINT from the live highest id and
++        # retry, never to exit with the answer lost. Bounded: the mint cannot be allowed to spin on
++        # a namespace that holds the id before the mint even runs (the serial case below), and
++        # three attempts cover the observed two-writer race with room for one more. Everything that
++        # captured the previous did — the option ids, the evidence key, the row itself — is
++        # recomputed inside the loop, because ids are embedded in rows, not carried by reference.
++        for attempt in range(1, AUG070_ID_ATTEMPTS + 1):
++            if not node_exists(ns, "decision", did):
++                break
++            did = next_id(ns, "decision", "D", width=decision_id_width(ns))
++        else:
++            raise SystemExit(
++                f"refused: the auto-minted decision id {did!r} is taken — re-minted and re-checked "
++                f"{AUG070_ID_ATTEMPTS} times against the live highest id and every attempt collided "
++                f"(concurrent writers); NOTHING was stored. Remedy: retry `answer` once the other "
++                f"writer settles, or pass an explicit --id."
++            )
++    elif node_exists(ns, "decision", did):
++        # The explicit-id path keeps the terminal refusal (a caller that NAMED the id must decide
++        # what to do about the collision), but the message now says what the refusal actually
++        # guarantees: nothing was written (AUG-034's atomic-refusal doctrine, stated in the message
++        # so a reader does not have to trust the code), and that the auto-minted path is the one
++        # that survives a concurrent writer.
+         raise SystemExit(
+-            f"refused: decision {did!r} already exists — answer decision IDs must be unique"
++            f"refused: decision {did!r} already exists — answer decision IDs must be unique, and "
++            f"NOTHING was stored (no decision, no options, no evidence, no edges). The "
++            f"auto-minted path (no --id) re-mints from the live highest id and retries instead of "
++            f"refusing; pass no --id to take that path."
+         )
+     if qid and not node_exists(ns, "question", qid):
+         raise SystemExit(
+@@ -3869,6 +3906,11 @@ def cmd_answer(a):
+     # token grammar as dump/toggle (full id, label, or bare suffix), but resolve provisional rows so
+     # a refusal cannot leave a decision with zero active options. The stored choice is canonicalized
+     # to the option label; otherwise a token such as O2 would look contradictory in dump --config.
++    # (AUG-070: this build sits AFTER the bounded re-mint above, so the ids baked into the option
++    # rows, the evidence key and the break/supersede payloads are the id that survived the check.
++    # A collision from here on is the residual insert-insert window, read back below — re-running
++    # this build for a new id could not help, because the row under the OLD id is already stored
++    # and deleting it is not this verb's business.)
+     option_rows = [
+         {
+             "id": f"{did}-O{i + 1}",
+@@ -3900,6 +3942,19 @@ def cmd_answer(a):
+     if scope and scope != DEFAULT_SCOPE:
+         row["scope"] = scope
+     warning = insert_decision(ns, row)
++    if not a.id:
++        # AUG-070, the residual insert-insert window: the pre-insert check can pass for BOTH
++        # writers and both inserts then land — DuckBrain enforces NO uniqueness. The read-back is
++        # BOUNDED (`limit=2`: one row is ours, two is ours plus a sibling's) and DELETES NOTHING —
++        # deleting is a human decision about whose answer survives. The residue is surfaced in the
++        # same DUPLICATE IDS grammar `dump` renders, so the drift is named at write time AND on
++        # every later read of the config.
++        readback = select(ns, "decision", f"id=eq.{did}&select=id&limit=2")
++        if len(readback) > 1:
++            print(
++                f"{WARN_DUPLICATE_IDS}: {did} x{len(readback)}+ — concurrent writers collided; "
++                f"dedupe before trusting this config"
++            )
+     for option in option_rows:
+         option["active"] = bool(
+             resolved_option and option["id"] == resolved_option["id"]
+@@ -4340,6 +4395,38 @@ def activation_warning_lines(
+     return [WARN_ACTIVATION] + lines if lines else []
+ 
+ 
++#: AUG-070: the header of the duplicate-id warning block. Two writers can pass the same
++#: check-then-insert window and both insert (DuckBrain enforces NO uniqueness — referential
++#: integrity is ours), leaving two decisions under one id and options minted over each other.
++#: The consequence that matters to a READER is that one id renders two different real choices,
++#: so the warning names the ids and says what to do about it — and dump keeps rendering, because
++#: a drifted record is still worth reading (the doctrine at `activation_warning_lines` above).
++WARN_DUPLICATE_IDS = "WARNING: DUPLICATE IDS"
++
++
++def duplicate_id_warning_lines(dec: list[dict], opts: list[dict]) -> list[str]:
++    """The warning block for ids the store holds MORE THAN ONCE of (AUG-070).
++
++    `dec` and `opts` are the rows `dump` already read: a duplicate is a row-count-per-id fact
++    about exactly those lists, so no extra read is spent. Sorted by id, then count: the same
++    drifted namespace names the same drift on every render, and a reader cross-checking the
++    warning against a raw table read finds the same list.
++    """
++    dec_counts = Counter(d.get("id") or "" for d in dec)
++    opt_counts = Counter(o.get("id") or "" for o in opts)
++    parts = [
++        f"{id_} x{n}"
++        for id_, n in sorted(dec_counts.items()) + sorted(opt_counts.items())
++        if n > 1
++    ]
++    if not parts:
++        return []
++    return [
++        f"{WARN_DUPLICATE_IDS}: {', '.join(parts)} — concurrent writers collided; "
++        f"dedupe before trusting this config"
++    ]
++
++
+ def cmd_toggle(a):
+     """Turn options on/off — the what-if switch: ONE option per decision by default.
+ 
+@@ -4534,6 +4621,10 @@ def cmd_dump(a):
+         for s in shadows:
+             lines.append(f"  - {s}")
+     lines += activation_warning_lines(dec, opts, live_by_dec)
++    # AUG-070: ids the store holds more than once of — the residue of two writers passing the same
++    # check-then-insert window. Warned about by name and STILL rendered: a drifted record is still
++    # worth reading, and silently rendering one id as two different real choices is the defect.
++    lines += duplicate_id_warning_lines(dec, opts)
+     out = "\n".join(lines)
+     if a.out:
+         with open(a.out, "w") as f:
+diff --git a/tests/test_auger.py b/tests/test_auger.py
+index ac23d9c..dbec439 100644
+--- a/tests/test_auger.py
++++ b/tests/test_auger.py
+@@ -1778,6 +1778,266 @@ def test_next_id_pads_to_the_width_it_is_given_and_never_truncates(monkeypatch):
+     assert auger.next_id(MINT_NS, "decision", "D", width=3) == "D-1000"
+ 
+ 
++# ------------------------------------- the check-then-insert window (AUG-070)
++# The mint reads the highest id, then the pre-insert check reads it again, then the INSERT lands —
++# three steps another writer can move between. DuckBrain enforces NO uniqueness, so a lost race is
++# either an answer lost to a refusal (the observed dominant shape) or two rows under one id. The
++# cases below drive the REAL `answer` and the REAL `dump` against a stand-in SERVER stubbed at
++# `db` — one layer under everything, so the mint, the guard, the retry loop and the warning block
++# are the production ones — and the server reproduces the two race shapes exactly.
++
++#: How many attempts the bounded re-mint is allowed. Asserted against the module constant so the
++#: bound cannot silently loosen or tighten. The getattr keeps this block importable against a
++#: PRE-AUG070 tree, so the RED proof below exercises the race itself instead of crashing collection.
++AUG070_ATTEMPTS = getattr(auger, "AUG070_ID_ATTEMPTS", 3)
++
++
++def race_decision_row(did: str, chosen: str) -> dict:
++    """One decision row in the full shape `answer` sends."""
++    return {
++        "id": did,
++        "project_id": MINT_PID,
++        "domain": "",
++        "question_id": "",
++        "chosen": chosen,
++        "why_not": "",
++        "reversal_cost": "",
++        "confidence": 0.5,
++        "status": "decided",
++        "evidence_key": f"/auger/{MINT_PID}/{did}",
++    }
++
++
++class RaceServer:
++    """DuckBrain's declared-table SERVER with inserts — the transport the race needs.
++
++    Reads serve from `tables` (eq-filters, order, limit, offset); POSTs append and return 201.
++    Two race shapes, reproduced by the server rather than by mocking the guard:
++
++      * `appear_on_query` — the first read whose path carries that substring finds `ghost_rows`
++        already stored. Keyed on `id=eq.D-074` (the pre-insert check's read) this is shape (a):
++        the sibling writer's insert landed between this writer's MINT read and its CHECK read,
++        so the mint saw a free id and the check does not.
++      * `duplicate_every_insert` — every decision POST is immediately stored twice: BOTH writers
++        passed the same window (shape b taken to its pathological end, the only honest way to
++        make every attempt collide from inside one process).
++    """
++
++    def __init__(
++        self,
++        tables: dict[str, list[dict]],
++        ghost_rows: list[dict] | None = None,
++        appear_on_query: str = "",
++        duplicate_every_insert: bool = False,
++    ):
++        self.tables = {t: list(rows) for t, rows in tables.items()}
++        self.ghost_rows = list(ghost_rows or [])
++        self.appear_on_query = appear_on_query
++        self.ghost_shown = False
++        self.duplicate_every_insert = duplicate_every_insert
++        self.requests: list[tuple[str, str]] = []
++
++    def __call__(self, path, method="GET", body=None, *a, **k):  # noqa: ARG002 - mirrors db()
++        self.requests.append((method, path))
++        split = urlsplit(path)
++        parts = split.path.split("/")  # /api/ns/<ns>/tables/<table>
++        if method == "POST":
++            table = unquote(parts[-1])
++            rows = body if isinstance(body, list) else [body]
++            self.tables.setdefault(table, []).extend(rows)
++            if table == "decision" and self.duplicate_every_insert:
++                self.tables[table].extend(rows)
++            return 201, {}, {}
++        if self.ghost_rows and not self.ghost_shown and self.appear_on_query in path:
++            self.tables.setdefault("decision", []).extend(self.ghost_rows)
++            self.ghost_shown = True
++        if len(parts) < 3 or parts[-2] != "tables":
++            return 404, {"error": f"not a declared-table path: {path}"}, {}
++        stored = self.tables.get(unquote(parts[-1]))
++        if stored is None:
++            return 404, {"error": f"no such table: {parts[-1]}"}, {}
++        pairs = dict(parse_qsl(split.query, keep_blank_values=True))
++        found = list(stored)
++        for key, value in pairs.items():
++            if key in ("limit", "offset", "order", "select", "count"):
++                continue
++            if value.startswith("eq."):
++                found = [r for r in found if str(r.get(key)) == value[3:]]
++        for clause in reversed(str(pairs.get("order", "")).split(",")):
++            col, _, direction = clause.strip().partition(".")
++            if col and direction in ("asc", "desc"):
++                found.sort(
++                    key=lambda r: str(r.get(col) or ""), reverse=direction == "desc"
++                )
++        limit = int(pairs["limit"]) if "limit" in pairs else max(len(found), 1)
++        offset = int(pairs.get("offset", 0))
++        return 200, found[offset : offset + limit], {}
++
++
++def race_stubs(monkeypatch) -> None:
++    """Everything around the transport that `answer` touches but the race does not exercise."""
++    monkeypatch.setattr(
++        auger, "_project", lambda ns, pid=None: {"id": MINT_PID, "name": "race"}
++    )
++    monkeypatch.setattr(auger, "remember", lambda *a, **k: {})
++    monkeypatch.setattr(
++        auger,
++        "bundle_impact",
++        lambda ns, pid, row: {
++            "scoped": False,
++            "walked": [],
++            "lines": [],
++            "warnings": [],
++        },
++    )
++
++
++def test_a_lost_race_remints_and_lands_the_answer_under_a_new_id(monkeypatch):
++    """AUG-070 shape (a): the sibling's insert lands between our mint and our check.
++
++    The mint reads a free D-074; the CHECK read finds D-074 stored (the ghost appears on exactly
++    the `id=eq.D-074` query). The answer must be RE-MINTED to the live highest id + 1 (D-075) and
++    stored ONCE under it — never lost to a refusal, and with nothing rewritten: the ghost row is
++    the sibling's and stays untouched, the dead attempt's option ids are never stored, and the
++    evidence key carries the id that was actually stored.
++    """
++    server = RaceServer(
++        {"decision": [race_decision_row("D-073", "earlier")], "edge": []},
++        ghost_rows=[race_decision_row("D-074", "the sibling got there first")],
++        appear_on_query="id=eq.D-074",
++    )
++    monkeypatch.setattr(auger, "db", server)
++    race_stubs(monkeypatch)
++
++    rc, out = run_cli(
++        [
++            "-n",
++            MINT_NS,
++            "answer",
++            "--chosen",
++            "alpha",
++            "--option",
++            "alpha",
++            "--option",
++            "beta",
++        ]
++    )
++
++    assert rc == 0, out
++    assert out.startswith("D-075 recorded"), out
++    decisions = [r["id"] for r in server.tables["decision"]]
++    assert decisions == ["D-073", "D-074", "D-075"], decisions
++    # the ghost is the SIBLING's row, stored once: this writer neither duplicated nor rewrote it
++    assert sum(1 for r in server.tables["decision"] if r["id"] == "D-074") == 1
++    stored = next(r for r in server.tables["decision"] if r["id"] == "D-075")
++    assert stored["chosen"] == "alpha", stored
++    assert stored["evidence_key"] == f"/auger/{MINT_PID}/D-075", stored
++    # the dead attempt's D-074-O* ids are never stored: the retry re-mints BEFORE any row is built
++    assert [o["id"] for o in server.tables.get("option", [])] == [
++        "D-075-O1",
++        "D-075-O2",
++    ], server.tables.get("option")
++    # exactly one decision POST landed: the retry re-minted before writing, not after
++    assert (
++        sum(1 for m, p in server.requests if m == "POST" and p.endswith("/decision"))
++        == 1
++    ), server.requests
++
++
++def test_a_permanently_contended_answer_is_bounded_and_names_the_id_and_attempts(
++    monkeypatch,
++):
++    """The bound: a namespace where EVERY minted id is already taken when the check runs.
++
++    The pre-insert re-mint loop is bounded by `AUG070_ID_ATTEMPTS`: three attempts, each a re-mint
++    from the live highest id, then a loud refusal naming the id and the attempt count — with
++    NOTHING stored, because the bound fired before the first write. The mint cannot be allowed to
++    spin on a store that answers "taken" forever.
++    """
++    posts: list[str] = []
++
++    def always_taken(path, method="GET", body=None, *a, **k):
++        """The mint's highest-id read is frozen at D-073 and every id=eq.<id> check says taken."""
++        if method == "POST":
++            posts.append(path)
++            return 201, {}, {}
++        if "order=id.desc" in path:
++            return 200, [{"id": "D-073"}], {}  # the highest id never moves
++        if "id=eq." in path and "select=id" in path:
++            did = path.split("id=eq.")[1].split("&")[0]
++            return 200, [{"id": did}], {}  # ... and every checked id is taken
++        return 200, [], {}
++
++    monkeypatch.setattr(auger, "db", always_taken)
++    race_stubs(monkeypatch)
++
++    rc, msg, _ = run_cli_exit(["-n", MINT_NS, "answer", "--chosen", "alpha"])
++
++    assert rc != 0, msg
++    assert "D-074" in msg, msg  # the id every attempt minted from the frozen highest
++    assert f"re-checked {AUG070_ATTEMPTS} times" in msg, msg
++    assert "NOTHING was stored" in msg, msg
++    # bounded BEFORE the first write: the contention was at the mint, and no row was written
++    assert posts == [], f"a bounded pre-insert refusal wrote: {posts!r}"
++
++
++def test_an_explicit_duplicate_id_refusal_says_nothing_was_stored(monkeypatch):
++    """The explicit `--id` path keeps its terminal refusal, but says what it guarantees.
++
++    NOTHING was stored — the guarantee AUG-034 bought for the serial case, now in the message
++    so a reader does not have to trust the code — and the message names the auto-minted path
++    (no --id) as the one that re-mints and retries instead of refusing.
++    """
++    monkeypatch.setattr(
++        auger,
++        "db",
++        RaceServer({"decision": [race_decision_row("D-034", "taken")], "edge": []}),
++    )
++    race_stubs(monkeypatch)
++
++    rc, msg, _ = run_cli_exit(
++        ["-n", MINT_NS, "answer", "--id", "D-034", "--chosen", "a retry must not land"]
++    )
++
++    assert rc != 0, msg
++    assert "D-034" in msg and "already exists" in msg, msg
++    assert "NOTHING was stored" in msg, msg
++    assert "auto-minted" in msg and "--id" in msg, msg
++
++
++def test_dump_names_duplicate_ids_rather_than_rendering_them_silently(monkeypatch):
++    """A drifted store — two decisions under D-073, three options under D-073-O1 — is WARNED about
++    by name and STILL rendered (a drifted record is still worth reading): the defect was one id
++    silently rendering two different real choices with no signal at all.
++    """
++    dec = [
++        race_decision_row("D-073", "postgres"),
++        race_decision_row("D-073", "sqlite"),
++        race_decision_row("D-074", "untouched"),
++    ]
++    opts = [
++        {"id": "D-073-O1", "decision_id": "D-073", "label": "postgres", "active": True},
++        {"id": "D-073-O1", "decision_id": "D-073", "label": "sqlite", "active": True},
++        {"id": "D-073-O1", "decision_id": "D-073", "label": "neither", "active": False},
++        {"id": "D-074-O1", "decision_id": "D-074", "label": "only", "active": True},
++    ]
++    monkeypatch.setattr(
++        auger, "db", RaceServer({"decision": dec, "option": opts, "edge": []})
++    )
++    race_stubs(monkeypatch)
++
++    rc, out = run_cli(["-n", MINT_NS, "dump", "--config", "D-073=postgres"])
++
++    assert rc == 0, out
++    assert "DUPLICATE IDS: D-073 x2, D-073-O1 x3" in out, out
++    assert "concurrent writers collided; dedupe before trusting this config" in out, out
++    # still readable: both rows render, both real choices visible, and the render COMPLETED
++    assert out.count("## D-073") == 2, out
++    assert "chosen   : postgres" in out and "chosen   : sqlite" in out, out
++    assert "## D-074" in out, out
++    assert "ACTIVE CONFIGURATION" in out, out
++
++
+ def test_the_decision_id_width_is_read_from_the_highest_id(monkeypatch):
+     """The width read is the same page-safe read the mint uses, with the live three-digit default.
+ 
