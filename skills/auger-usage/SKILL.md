@@ -50,7 +50,8 @@ only. Public repo: `coding-hermes/auger`.
    HTTP table API (or the CLI). Direct edits desync the declared-table layer.
 4. **`dump --config` is read-only by design.** To actually change the stored
    config: `toggle --on <option-id> --off <option-id>` (batch flips together —
-   see pitfall 2).
+   see pitfall 2) for what-if flips, or `answer --supersedes D-XXX` for a
+   formal reversal. Know the difference (pitfall 6).
 5. **Scratch work goes in throwaway namespaces** (`auger-smoke-*` style), and
    you own the cleanup: `rm -rf ~/duckbrain/namespaces/<ns>` when done.
 
@@ -68,10 +69,20 @@ only. Public repo: `coding-hermes/auger`.
    key and looks like a total outage. Mirror `JEV_MODEL` from auger.py.
 4. **ask/check take 5-7s**: that is the JEV network round trip. Fail-closed
    UNKNOWN output = JEV unavailable; report it, don't retry blindly.
-5. **Fresh DuckBrain without auth**: start daemon plain (no `--auth=apikey`),
+5. **Two ways to change your mind, two different footprints** (run 9):
+   `toggle` flips an option's active row only — the recorded choice and its
+   memory row stay with the original answer, so current-mode `dump` then shows
+   chosen-label O1 with active-checkbox O2 SILENTLY (the contradiction pass
+   exists only in hypothetical mode, AUG-077), and `recall` keeps telling the
+   old story. For a real reversal use `answer --supersedes D-XXX --chosen ...
+   --supersedes-why ...` — it mints the successor, flips status, records the
+   edge, refreshes facets. Even then, `recall` ranks the superseded decision
+   EQUAL with its successor and unmarked (AUG-078) — trust `dump`/`check` over
+   `recall` for "what did we choose" until that fix lands.
+6. **Fresh DuckBrain without auth**: start daemon plain (no `--auth=apikey`),
    set any non-empty `DUCKBRAIN_API_KEY`. With auth enabled, keys live in
    `~/.duckbrain/auth.json`.
-6. **Shared-host pidfile clash**: `EACCES /tmp/duckbrain-http.pid` = another
+7. **Shared-host pidfile clash**: `EACCES /tmp/duckbrain-http.pid` = another
    user's daemon; use a different port and `DUCKBRAIN_DATA_DIR`.
 
 ## The HTTP data layer (integrator surface, probed 2026-09-23)

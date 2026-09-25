@@ -369,3 +369,41 @@ reproduction block in `2026-09-24-scale-concurrency-integration.md`. Both
 debugged classes were submitted to off-by-one post-debug (`sub_623674`,
 `sub_a9b935`) so the next agent hitting a silent 100-row cap anywhere in this
 substrate family gets the answer pre-solved.
+
+## Run 9 (2026-09-25) — how the mind-change path actually works
+
+The what-if surface is three different mechanisms that must agree, and run 9 is the
+map of where they agree and where they don't:
+
+- **The hypothetical renderer** (`dump --config D-001=X`) writes NOTHING and is the
+  strongest output in the product: it flips the checkbox in a sandboxed view and
+  cross-checks the hypothesis against the recorded choice, printing a
+  `CONTRADICTIONS WITH THE RECORD` block that quotes the stored why-not. This check
+  lives ONLY in the hypothetical path — current mode has no counterpart, which is
+  finding AUG-077.
+- **The quick mind-change** (`toggle --on D-XXX-OY`) is a table-row flip: it
+  deactivates the sibling with an explicit printed note (the AUG-015 exclusivity
+  behavior). It does NOT touch the memory layer, does NOT mark the recorded choice,
+  and does NOT re-run any contradiction pass — the store then holds chosen-label O1
+  with active-checkbox O2, and only the hypothetical path knows how to say so.
+- **The formal reversal** (`answer ... --supersedes D-XXX`) is the full mechanism:
+  new decision row, supersedes edge, status flip, facet refresh, fresh embedding. The
+  graph work is complete. The gap is downstream: retrieval (`recall`) ranks the
+  superseded row equal to its successor because the edge relation is never consulted
+  at ranking time — finding AUG-078.
+
+The right way to change a decision today: `answer --supersedes` (never bare toggle),
+then read the world through `check`/`dump` rather than `recall` until AUG-078 lands.
+
+Substrate scratch-boot recipe (learned the hard way this run): a scratch daemon needs
+the FULL embedding env exported into its process (`DUCKBRAIN_EMBEDDING_{PROVIDER,
+MODEL,BASE_URL,API_KEY,DIMENSIONS,TIMEOUT_MS}` — copy from the production daemon's
+/proc environ, never print the key). Two quirks to expect, neither an auger bug:
+(1) `/health` can report `embedding.healthy=false` / status `degraded` even while
+embedding calls succeed — the auger verbs are the functional test; (2) an unexplained
+daemon death lost the data-dir contents but NOT the namespaces tree — the
+git/JSONL-backed storage of record is what matters, and a restart resumed the
+namespace with zero loss (matches run 8's durability finding from the other side).
+
+Timing walkaway: dump 307ms cold, toggle ~1.2s ± 0.6s, status 8.6s ± 3.5s at two
+decisions (AUG-047 evidence), ask ~6-7s (JEV), answer 1.6-4.4s (embedding-bound).
