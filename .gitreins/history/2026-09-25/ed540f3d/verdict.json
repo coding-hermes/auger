@@ -1,0 +1,104 @@
+{
+  "task_id": "AUG-075",
+  "task_title": "check and recall fail open on a dead substrate",
+  "task_criteria": [
+    "cmd_check and cmd_recall fail CLOSED when the DuckBrain substrate is unreachable (transport error or non-200): both exit non-zero with an explicit error naming the substrate failure, never print 'no stored evidence matched \u2014 treat as a new question' or an empty recall on a failed call. Tests cover the fail-closed path for both verbs; bash tests/gate.sh ends GATE PASS."
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "715be71900c0e98e930dd33be38a8144d4de24e7",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260925T132044.365226Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: scanners=gitleaks+builtin cross-check\n8:25AM INF scanned ~793016 bytes (793.02 KB) in 329ms\n8:25AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 43 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260925T132044.365226Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [ 37%]\n........................................................................ [ 75%]\n...............................................                          [100%]\n191 passed in 666.29s (0:11:06)\n== end-to-end smoke ==\nnamespace: auger-smoke-3343027\nnamespace sweep: no stale auger-smoke-*/auger-eval-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n  PASS toggle changed the stored configuration\n== verdict: record + list round-trip ==\n  PASS a good verdict is recorded\n  PASS a bad verdict is recorded\n  PASS the good verdict shows in the list\n  PASS the bad verdict's reasons show in the list\n  PASS both --good and --bad refuse\n  PASS the refused pair wrote nothing\n\nnamespace auger-smoke-3343027 removed\npassed 21, failed 0\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260925T132044.365226Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": false,
+      "any_failed": true,
+      "summary": "INCOMPLETE\n  \u2717 cmd_check and cmd_recall fail CLOSED when the DuckBrain substrate is unreachable (transport error or non-200): both exit non-zero with an explicit error naming the substrate failure, never print 'no stored evidence matched \u2014 treat as a new question' or an empty recall on a failed call. Tests cover the fail-closed path for both verbs; bash tests/gate.sh ends GATE PASS.: Code + tests satisfy the fail-closed requirement, but the gate does NOT end GATE PASS. CODE: auger.py:1076 adds `class SubstrateError(SystemExit)`; auger.py:1087-1115 `recall()` raises SubstrateError for st==0 (the _req transport contract, auger.py:409-410) and every non-200, while a real 200 with no items still returns [] (404 only tolerated via the documented missing_ok carve-out used by recall_many, auger.py:1199-1214). cmd_check (auger.py:4124-4141) catches it, prints 'substrate unavailable \u2014 cannot check: {exc}' plus a fail-closed note and `return 1`; the 'no stored evidence matched \u2014 treat as a new question' line at auger.py:4139 is reachable only when recall returned [] (rc 0). cmd_recall (auger.py:4702-4719) likewise prints 'substrate unavailable \u2014 cannot recall: {exc}' and `return 1`, printing nothing on a genuine empty 200. main() returns a.fn(a) and sys.exit(main()) (auger.py:5108-5112), so rc 1 is a non-zero exit. cmd_ask (auger.py:3423-3431) and gate_question (auger.py:1729-1730) also map the raise onto their fail-closed channels. TESTS: fresh run `python3 -m pytest tests/test_auger.py -k \"aug075 or substrate or fails_closed or dead_store or missing_namespace or missing_sibling\" -q` -> exit 0, '6 passed, 185 deselected in 3.70s'; the new cases at tests/test_auger.py:1452-1585 cover both verbs (test_check_fails_closed_when_the_substrate_is_dead asserts rc==1, 'substrate' in out, and 'treat as a new question' NOT in out; test_recall_verb_fails_closed_when_the_store_is_unreachable asserts rc==1 and that a genuine empty keeps rc 0/silent), all mocked at the db() boundary. GATE: fresh `bash tests/gate.sh` -> syntax OK, lint 'All checks passed!', pytest '1 failed, 190 passed in 969.56s (0:16:09)' and NO 'GATE PASS' line (exit non-zero). The single failure is tests/test_auger.py::test_confidence_sentinel_stays_in_the_store_and_never_renders (assert '-1' not in dump_out, tests/test_auger.py:6087) \u2014 a pre-existing, unrelated flake: the identical assertion exists unchanged at line 5944 of HEAD~1, the dump header embeds datetime.now(timezone.utc).isoformat() (auger.py:4559), and the test passes in isolation ('1 passed in 7.03s'). It is untouched by this commit (the diff only adds AUG-075 tests and updates recall stub signatures). Nonetheless the criterion's literal requirement \u2014 'bash tests/gate.sh ends GATE PASS' \u2014 is not met on this run.\nThe fail-closed code and its tests for cmd_check/cmd_recall are correct and pass, but the required gate run ended '1 failed, 190 passed' with no GATE PASS (a pre-existing, unrelated timestamp/namespace-substring flake in test_confidence_sentinel_stays_in_the_store_and_never_renders), so the criterion is not fully satisfied.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": false,
+          "output": "INCOMPLETE\n  \u2717 cmd_check and cmd_recall fail CLOSED when the DuckBrain substrate is unreachable (transport error or non-200): both exit non-zero with an explicit error naming the substrate failure, never print 'no stored evidence matched \u2014 treat as a new question' or an empty recall on a failed call. Tests cover the fail-closed path for both verbs; bash tests/gate.sh ends GATE PASS.: Code + tests satisfy the fail-closed requirement, but the gate does NOT end GATE PASS. CODE: auger.py:1076 adds `class SubstrateError(SystemExit)`; auger.py:1087-1115 `recall()` raises SubstrateError for st==0 (the _req transport contract, auger.py:409-410) and every non-200, while a real 200 with no items still returns [] (404 only tolerated via the documented missing_ok carve-out used by recall_many, auger.py:1199-1214). cmd_check (auger.py:4124-4141) catches it, prints 'substrate unavailable \u2014 cannot check: {exc}' plus a fail-closed note and `return 1`; the 'no stored evidence matched \u2014 treat as a new question' line at auger.py:4139 is reachable only when recall returned [] (rc 0). cmd_recall (auger.py:4702-4719) likewise prints 'substrate unavailable \u2014 cannot recall: {exc}' and `return 1`, printing nothing on a genuine empty 200. main() returns a.fn(a) and sys.exit(main()) (auger.py:5108-5112), so rc 1 is a non-zero exit. cmd_ask (auger.py:3423-3431) and gate_question (auger.py:1729-1730) also map the raise onto their fail-closed channels. TESTS: fresh run `python3 -m pytest tests/test_auger.py -k \"aug075 or substrate or fails_closed or dead_store or missing_namespace or missing_sibling\" -q` -> exit 0, '6 passed, 185 deselected in 3.70s'; the new cases at tests/test_auger.py:1452-1585 cover both verbs (test_check_fails_closed_when_the_substrate_is_dead asserts rc==1, 'substrate' in out, and 'treat as a new question' NOT in out; test_recall_verb_fails_closed_when_the_store_is_unreachable asserts rc==1 and that a genuine empty keeps rc 0/silent), all mocked at the db() boundary. GATE: fresh `bash tests/gate.sh` -> syntax OK, lint 'All checks passed!', pytest '1 failed, 190 passed in 969.56s (0:16:09)' and NO 'GATE PASS' line (exit non-zero). The single failure is tests/test_auger.py::test_confidence_sentinel_stays_in_the_store_and_never_renders (assert '-1' not in dump_out, tests/test_auger.py:6087) \u2014 a pre-existing, unrelated flake: the identical assertion exists unchanged at line 5944 of HEAD~1, the dump header embeds datetime.now(timezone.utc).isoformat() (auger.py:4559), and the test passes in isolation ('1 passed in 7.03s'). It is untouched by this commit (the diff only adds AUG-075 tests and updates recall stub signatures). Nonetheless the criterion's literal requirement \u2014 'bash tests/gate.sh ends GATE PASS' \u2014 is not met on this run.\nThe fail-closed code and its tests for cmd_check/cmd_recall are correct and pass, but the required gate run ended '1 failed, 190 passed' with no GATE PASS (a pre-existing, unrelated timestamp/namespace-substring flake in test_confidence_sentinel_stays_in_the_store_and_never_renders), so the criterion is not fully satisfied.",
+          "error": "",
+          "data": {
+            "verdict": "INCOMPLETE",
+            "items": [
+              {
+                "criterion": "cmd_check and cmd_recall fail CLOSED when the DuckBrain substrate is unreachable (transport error or non-200): both exit non-zero with an explicit error naming the substrate failure, never print 'no stored evidence matched \u2014 treat as a new question' or an empty recall on a failed call. Tests cover the fail-closed path for both verbs; bash tests/gate.sh ends GATE PASS.",
+                "status": "FAIL",
+                "detail": "Code + tests satisfy the fail-closed requirement, but the gate does NOT end GATE PASS. CODE: auger.py:1076 adds `class SubstrateError(SystemExit)`; auger.py:1087-1115 `recall()` raises SubstrateError for st==0 (the _req transport contract, auger.py:409-410) and every non-200, while a real 200 with no items still returns [] (404 only tolerated via the documented missing_ok carve-out used by recall_many, auger.py:1199-1214). cmd_check (auger.py:4124-4141) catches it, prints 'substrate unavailable \u2014 cannot check: {exc}' plus a fail-closed note and `return 1`; the 'no stored evidence matched \u2014 treat as a new question' line at auger.py:4139 is reachable only when recall returned [] (rc 0). cmd_recall (auger.py:4702-4719) likewise prints 'substrate unavailable \u2014 cannot recall: {exc}' and `return 1`, printing nothing on a genuine empty 200. main() returns a.fn(a) and sys.exit(main()) (auger.py:5108-5112), so rc 1 is a non-zero exit. cmd_ask (auger.py:3423-3431) and gate_question (auger.py:1729-1730) also map the raise onto their fail-closed channels. TESTS: fresh run `python3 -m pytest tests/test_auger.py -k \"aug075 or substrate or fails_closed or dead_store or missing_namespace or missing_sibling\" -q` -> exit 0, '6 passed, 185 deselected in 3.70s'; the new cases at tests/test_auger.py:1452-1585 cover both verbs (test_check_fails_closed_when_the_substrate_is_dead asserts rc==1, 'substrate' in out, and 'treat as a new question' NOT in out; test_recall_verb_fails_closed_when_the_store_is_unreachable asserts rc==1 and that a genuine empty keeps rc 0/silent), all mocked at the db() boundary. GATE: fresh `bash tests/gate.sh` -> syntax OK, lint 'All checks passed!', pytest '1 failed, 190 passed in 969.56s (0:16:09)' and NO 'GATE PASS' line (exit non-zero). The single failure is tests/test_auger.py::test_confidence_sentinel_stays_in_the_store_and_never_renders (assert '-1' not in dump_out, tests/test_auger.py:6087) \u2014 a pre-existing, unrelated flake: the identical assertion exists unchanged at line 5944 of HEAD~1, the dump header embeds datetime.now(timezone.utc).isoformat() (auger.py:4559), and the test passes in isolation ('1 passed in 7.03s'). It is untouched by this commit (the diff only adds AUG-075 tests and updates recall stub signatures). Nonetheless the criterion's literal requirement \u2014 'bash tests/gate.sh ends GATE PASS' \u2014 is not met on this run."
+              }
+            ],
+            "summary": "The fail-closed code and its tests for cmd_check/cmd_recall are correct and pass, but the required gate run ended '1 failed, 190 passed' with no GATE PASS (a pre-existing, unrelated timestamp/namespace-substring flake in test_confidence_sentinel_stays_in_the_store_and_never_renders), so the criterion is not fully satisfied."
+          }
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: AUG-075\n\nStage tier1: PASS\n    \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==\n\nStage tier2: FAIL\n  INCOMPLETE\n  \u2717 cmd_check and cmd_recall fail CLOSED when the DuckBrain substrate is unreachable (transport error or non-200): both exit non-zero with an explicit error naming the substrate failure, never print 'no stored evidence matched \u2014 treat as a new question' or an empty recall on a failed call. Tests cover the fail-closed path for both verbs; bash tests/gate.sh ends GATE PASS.: Code + tests satisfy the fail-closed requirement, but the gate does NOT end GATE PASS. CODE: auger.py:1076 adds `class SubstrateError(SystemExit)`; auger.py:1087-1115 `recall()` raises SubstrateError for st==0 (the _req transport contract, auger.py:409-410) and every non-200, while a real 200 with no items still returns [] (404 only tolerated via the documented missing_ok carve-out used by recall_many, auger.py:1199-1214). cmd_check (auger.py:4124-4141) catches it, prints 'substrate unavailable \u2014 cannot check: {exc}' plus a fail-closed note and `return 1`; the 'no stored evidence matched \u2014 treat as a new question' line at auger.py:4139 is reachable only when recall returned [] (rc 0). cmd_recall (auger.py:4702-4719) likewise prints 'substrate unavailable \u2014 cannot recall: {exc}' and `return 1`, printing nothing on a genuine empty 200. main() returns a.fn(a) and sys.exit(main()) (auger.py:5108-5112), so rc 1 is a non-zero exit. cmd_ask (auger.py:3423-3431) and gate_question (auger.py:1729-1730) also map the raise onto their fail-closed channels. TESTS: fresh run `python3 -m pytest tests/test_auger.py -k \"aug075 or substrate or fails_closed or dead_store or missing_namespace or missing_sibling\" -q` -> exit 0, '6 passed, 185 deselected in 3.70s'; the new cases at tests/test_auger.py:1452-1585 cover both verbs (test_check_fails_closed_when_the_substrate_is_dead asserts rc==1, 'substrate' in out, and 'treat as a new question' NOT in out; test_recall_verb_fails_closed_when_the_store_is_unreachable asserts rc==1 and that a genuine empty keeps rc 0/silent), all mocked at the db() boundary. GATE: fresh `bash tests/gate.sh` -> syntax OK, lint 'All checks passed!', pytest '1 failed, 190 passed in 969.56s (0:16:09)' and NO 'GATE PASS' line (exit non-zero). The single failure is tests/test_auger.py::test_confidence_sentinel_stays_in_the_store_and_never_renders (assert '-1' not in dump_out, tests/test_auger.py:6087) \u2014 a pre-existing, unrelated flake: the identical assertion exists unchanged at line 5944 of HEAD~1, the dump header embeds datetime.now(timezone.utc).isoformat() (auger.py:4559), and the test passes in isolation ('1 passed in 7.03s'). It is untouched by this commit (the diff only adds AUG-075 tests and updates recall stub signatures). Nonetheless the criterion's literal requirement \u2014 'bash tests/gate.sh ends GATE PASS' \u2014 is not met on this run.\nThe fail-closed code and its tests for cmd_check/cmd_recall are correct and pass, but the required gate run ended '1 failed, 190 passed' with no GATE PASS (a pre-existing, unrelated timestamp/namespace-substring flake in test_confidence_sentinel_stays_in_the_store_and_never_renders), so the criterion is not fully satisfied.\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-09-25T13:58:38.433976",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-09-25T13:58:38.458848+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 18450,
+        "truncated": false,
+        "source": "git show 715be71900c0"
+      }
+    ],
+    "task_id": "AUG-075"
+  }
+}

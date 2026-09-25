@@ -1,0 +1,406 @@
+commit 715be71900c0e98e930dd33be38a8144d4de24e7
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Fri Sep 25 08:03:58 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Fri Sep 25 08:03:58 2026 -0500
+
+    fix: AUG-075 check/recall fail closed on a dead substrate
+    
+    recall() collapsed every non-200 response — including _req's st=0 transport
+    contract — into the same [] a genuinely empty store returns, so `check`
+    answered "no stored evidence matched — treat as a new question" (rc=0) while
+    the evidence sat in an unreachable store, and `recall` printed nothing at all.
+    recall() now raises the new SubstrateError (a SystemExit subclass, so any
+    uncaught raise stays a clean CLI failure) for st=0 and every non-200, while a
+    real 200 keeps returning [] so an empty store may be believed. cmd_check and
+    cmd_recall catch it, print the substrate's own words with an explicit
+    fail-closed note, and exit 1; cmd_ask and gate_question (the other recall
+    callers) map the same raise onto their existing fail-closed channels so a dead
+    substrate can never read as "no evidence" there either. The sibling walk keeps
+    its documented SPEC-002 2.1 tolerance via recall's missing_ok carve-out: a
+    404 from a never-started sibling namespace is still "no rows here", but a
+    substrate that cannot answer is an error everywhere. The _req transport
+    contract and its inline 429 retries are untouched; every case is pinned at the
+    db() boundary so the no-bypass property holds.
+---
+ auger.py            |  87 ++++++++++++++++++++++++++---
+ docs/VERBS.md       |   9 ++-
+ tests/test_auger.py | 155 ++++++++++++++++++++++++++++++++++++++++++++++++++--
+ 3 files changed, 234 insertions(+), 17 deletions(-)
+
+diff --git a/auger.py b/auger.py
+index 6c13e80..e590749 100755
+--- a/auger.py
++++ b/auger.py
+@@ -1073,12 +1073,44 @@ def bundle_member(
+     return row
+ 
+ 
+-def recall(ns: str, q: str, limit: int = 5) -> list:
++class SubstrateError(SystemExit):
++    """A memory-store call failed to ANSWER (AUG-075): transport dead, non-200.
++
++    A SystemExit subclass so an uncaught raise is still the CLI's clean failure —
++    the message on stderr, exit status 1, no traceback — and so `except SystemExit`
++    handlers upstream keep working unchanged. Raising (instead of returning a
++    sentinel) is what keeps every caller honest: a caller that forgets to handle a
++    failed substrate read cannot silently continue with empty-handed data.
++    """
++
++
++def recall(ns: str, q: str, limit: int = 5, missing_ok: bool = False) -> list:
++    """Semantic search over a namespace's embedded rows.
++
++    AUG-075, fail closed: "the store has nothing" and "the store cannot be asked"
++    are different answers, and only the first is `[]`. A transport failure arrives
++    as st == 0 (the `_req` contract, untouched here) and any other refusal as its
++    HTTP status; both raise `SubstrateError` naming the substrate's own words. An
++    EMPTY store — a real 200 — still returns `[]`, so a caller that sees no rows
++    may believe them.
++
++    `missing_ok` is the ONE documented carve-out (SPEC-002 section 2.1): a
++    namespace that does not exist — a bundle sibling never started — has no rows
++    here, so its 404 reads as `[]` instead of an error. The verbs keep the default
++    and stay strict: a user pointing `recall`/`check` at a missing namespace is
++    told so, not handed silence.
++    """
+     st, body, _ = db(
+         f"/api/memories?namespace={url_seg(ns)}&q={quote(q)}&limit={limit}", timeout=60
+     )
+     if st != 200:
+-        return []
++        if missing_ok and st == 404:
++            return []
++        detail = body.get("error", body) if isinstance(body, dict) else body
++        raise SubstrateError(
++            f"substrate read failed for {ns!r} (status {st}): {detail} — a failed "
++            "read is NOT an empty store"
++        )
+     return body.get("items", []) if isinstance(body, dict) else []
+ 
+ 
+@@ -1171,11 +1203,13 @@ def recall_many(places: list, q: str, limit: int = 5) -> list:
+     substrate's own order. SEQUENTIAL on purpose (SPEC-002 section 2.1's `recall_many`): DuckBrain's
+     API is token-bucketed, so fanning out spends the same budget with more ways to fail, and a
+     namespace that returns nothing — a sibling that does not exist, or holds no evidence — must
+-    contribute NOTHING rather than an invented neighbour.
++    contribute NOTHING rather than an invented neighbour. A sibling namespace that does not exist
++    yet (a 404, AUG-075's `missing_ok` carve-out) is exactly that "nothing"; a substrate that
++    cannot be ANSWERED still raises, because a dead store must not read as an empty one.
+     """
+     out: list = []
+     for where in places:
+-        for hit in recall(where, q, limit=limit):
++        for hit in recall(where, q, limit=limit, missing_ok=True):
+             out.append((where, hit))
+     return out
+ 
+@@ -1690,7 +1724,10 @@ def gate_question(ns: str, project_id: str, text: str, limit: int = 5):
+     """
+     home = project_name(ns, project_id)
+     places = [(ns, home)] + bundle_namespaces(ns, home)
+-    hits = recall_many([where for where, _ in places], text, limit=limit)
++    try:
++        hits = recall_many([where for where, _ in places], text, limit=limit)
++    except SubstrateError as exc:  # AUG-075: the store could not be asked
++        return None, "", "", str(exc)
+     if not hits:
+         return None, "", "", None
+     evidence = "\n".join(
+@@ -3380,7 +3417,16 @@ def cmd_ask(a):
+     )
+     unknown = select(ns, "unknown", f"project_id=eq.{pid}")
+     unans = select(ns, "question", f"project_id=eq.{pid}&status=eq.open")
+-    hits = recall(ns, p.get("seed", "") or "project spec", limit=6)
++    hits = []
++    try:
++        hits = recall(ns, p.get("seed", "") or "project spec", limit=6)
++    except SubstrateError as exc:  # AUG-075: the store could not be asked
++        print(f"substrate unavailable — cannot ask: {exc}")
++        print(
++            "fail-closed: no next-question is invented while the memory store "
++            "cannot be read."
++        )
++        return 1
+     evidence = "\n".join(
+         f"- {h.get('key')}: {h.get('content', '')[:300]}" for h in hits
+     )
+@@ -4076,9 +4122,22 @@ def cmd_answer(a):
+ 
+ 
+ def cmd_check(a):
+-    """Before asking: is this already answered by what we hold?"""
++    """Before asking: is this already answered by what we hold?
++
++    AUG-075, fail closed: a substrate that cannot be asked is an error with exit 1,
++    never "no stored evidence matched — treat as a new question" — that sentence is
++    reserved for a store that was asked and genuinely holds nothing.
++    """
+     ns = a.namespace
+-    hits = recall(ns, a.question, limit=a.limit)
++    try:
++        hits = recall(ns, a.question, limit=a.limit)
++    except SubstrateError as exc:  # AUG-075: the store could not be asked
++        print(f"substrate unavailable — cannot check: {exc}")
++        print(
++            "fail-closed: a memory store that cannot be read is NOT the same as an "
++            "empty one — no 'new question' answer is invented."
++        )
++        return 1
+     if not hits:
+         print("no stored evidence matched — treat as a new question")
+         return 0
+@@ -4641,7 +4700,17 @@ def cmd_dump(a):
+ 
+ 
+ def cmd_recall(a):
+-    for h in recall(a.namespace, a.query, a.limit):
++    """AUG-075, fail closed: a store that cannot be asked is an error, not an empty list."""
++    try:
++        hits = recall(a.namespace, a.query, a.limit)
++    except SubstrateError as exc:  # AUG-075: the store could not be asked
++        print(f"substrate unavailable — cannot recall: {exc}")
++        print(
++            "fail-closed: a memory store that cannot be read is NOT the same as an "
++            "empty one."
++        )
++        return 1
++    for h in hits:
+         print(
+             f"{h.get('score'):.3f}  {h.get('key')}\n     {h.get('content', '')[:200]}"
+         )
+diff --git a/docs/VERBS.md b/docs/VERBS.md
+index 52959df..b96c0b0 100644
+--- a/docs/VERBS.md
++++ b/docs/VERBS.md
+@@ -166,7 +166,10 @@ Is this question already answered by what we hold?
+ **Writes:** nothing. It retrieves the nearest stored evidence and makes one JEV call.
+ 
+ **Never writes:** anything. On a JEV failure it prints UNKNOWN and exits non-zero —
+-"unknown" is never turned into "already answered" or "new".
++"unknown" is never turned into "already answered" or "new". The same holds for the
++store itself (AUG-075): when the memory substrate cannot be read, `check` prints
++the substrate error and exits non-zero — a dead store never reads as "no stored
++evidence matched — treat as a new question".
+ 
+ ## status
+ 
+@@ -271,7 +274,9 @@ Semantic search over everything the namespace has embedded.
+ 
+ **Writes:** nothing. One GET against the memory store.
+ 
+-**Never writes:** anything.
++**Never writes:** anything. When the store cannot be read (AUG-075) it fails
++closed: the substrate error is printed and the exit is non-zero — an unreachable
++store is never printed as an empty result.
+ 
+ ## verdict
+ 
+diff --git a/tests/test_auger.py b/tests/test_auger.py
+index 85212dd..7fa0fe7 100644
+--- a/tests/test_auger.py
++++ b/tests/test_auger.py
+@@ -1449,6 +1449,149 @@ def test_check_maps_the_model_answer_to_the_threshold_verdict(ns: str, monkeypat
+     assert "NOT YET ANSWERED" in out, out
+ 
+ 
++# ============================================================ AUG-075: recall fails closed
++# A dead substrate used to be indistinguishable from an empty store: `recall`
++# collapsed every non-200 — including `_req`'s transport contract, st == 0 with an
++# `error` body — into the same `[]` a genuinely empty namespace returns, so `check`
++# answered "treat as a new question" with the evidence sitting in the store.
++#
++# Every case here mocks at the `db()` boundary, NOT at raw urllib: the no-bypass
++# property being asserted is that the REAL recall/verb code runs all the way down
++# to the substrate call, so a hand-rolled transport at a call site would not
++# satisfy these tests.
++
++
++def _substrate(st: int, body: dict):
++    """A db() stand-in that always answers `st`/`body` — a dead or shaped substrate."""
++
++    def fake_db(path, *args, **kwargs):
++        return st, body, {}
++
++    return fake_db
++
++
++def test_recall_transport_failure_is_a_failure_not_an_empty_store(monkeypatch):
++    """st == 0 is _req's unreachable-substrate contract; recall must raise, not return []."""
++    monkeypatch.setattr(
++        auger, "db", _substrate(0, {"error": "transport: connection refused"})
++    )
++    with pytest.raises(auger.SubstrateError) as ei:
++        auger.recall("auger-075-dead", "any question", limit=3)
++    msg = str(ei.value)
++    assert "substrate" in msg and "transport: connection refused" in msg, msg
++
++
++def test_recall_non_200_status_is_a_failure_not_an_empty_store(monkeypatch):
++    """Any non-200 refusal raises; a 200 with no items is still the empty-store `[]`."""
++    monkeypatch.setattr(auger, "db", _substrate(503, {"error": "unavailable"}))
++    with pytest.raises(auger.SubstrateError) as ei:
++        auger.recall("auger-075-dead", "any question", limit=3)
++    assert "substrate" in str(ei.value) and "503" in str(ei.value), str(ei.value)
++
++    # The other side of the line: a genuine 200 with nothing in it stays `[]`.
++    monkeypatch.setattr(auger, "db", _substrate(200, {"items": []}))
++    assert auger.recall("auger-075-dead", "any question", limit=3) == []
++
++
++def test_check_fails_closed_when_the_substrate_is_dead(monkeypatch):
++    """A dead store is never "no stored evidence matched — treat as a new question"."""
++    monkeypatch.setattr(
++        auger, "db", _substrate(0, {"error": "transport: connection refused"})
++    )
++    rc, out = run_cli(["-n", "auger-075-dead-ns", "check", "How is the record stored?"])
++    assert rc == 1, out
++    assert "substrate" in out, out
++    assert "treat as a new question" not in out, out
++    assert "no stored evidence matched" not in out, out
++
++
++def test_check_on_a_genuinely_empty_store_keeps_the_new_question_answer(monkeypatch):
++    """The fix must not swing the pendulum: an EMPTY store still reads rc=0."""
++    monkeypatch.setattr(auger, "db", _substrate(200, {"items": []}))
++    rc, out = run_cli(
++        ["-n", "auger-075-empty-ns", "check", "How is the record stored?"]
++    )
++    assert rc == 0, out
++    assert "no stored evidence matched — treat as a new question" in out, out
++    assert "substrate" not in out, out
++
++
++def test_recall_verb_fails_closed_when_the_store_is_unreachable(monkeypatch):
++    """`recall` exits non-zero naming the substrate; a genuine empty keeps rc=0 and silence."""
++    monkeypatch.setattr(
++        auger, "db", _substrate(0, {"error": "transport: connection refused"})
++    )
++    rc, out = run_cli(["-n", "auger-075-dead-ns", "recall", "anything"])
++    assert rc == 1, out
++    assert "substrate" in out, out
++
++    # The genuine empty result keeps its shape: rc 0, nothing printed.
++    monkeypatch.setattr(auger, "db", _substrate(200, {"items": []}))
++    rc, out = run_cli(["-n", "auger-075-empty-ns", "recall", "anything"])
++    assert rc == 0 and out == "", (rc, out)
++
++
++def test_the_verbs_stay_strict_on_a_missing_namespace(monkeypatch):
++    """`missing_ok` is the sibling-walk's carve-out, never the user verbs' (AUG-075).
++
++    A 404 from the memories endpoint means the NAMESPACE does not exist; pointing
++    `recall` at one is a user error the verb must name, not silence to hide — so the
++    default raises even though the same status reads as empty inside `recall_many`.
++    """
++    monkeypatch.setattr(
++        auger, "db", _substrate(404, {"error": "Namespace 'gone' does not exist"})
++    )
++    with pytest.raises(auger.SubstrateError) as ei:
++        auger.recall("gone", "any question", limit=3)
++    assert "404" in str(ei.value), str(ei.value)
++
++
++def test_recall_many_tolerates_a_missing_sibling_but_not_a_dead_store(monkeypatch):
++    """SPEC-002 2.1 survives the fail-closed change, both directions (AUG-075)."""
++    seen: list[str] = []
++
++    def missing_sibling_db(path, *a, **kw):
++        seen.append(path)
++        ns = unquote(str(path).split("namespace=")[1].split("&")[0])
++        if ns == "the-missing-one":
++            return 404, {"error": "Namespace 'the-missing-one' does not exist"}, {}
++        return 200, {"items": [{"key": "k", "score": 0.5, "content": "c"}]}, {}
++
++    monkeypatch.setattr(auger, "db", missing_sibling_db)
++    hits = auger.recall_many(["the-missing-one", "alive"], "q", limit=3)
++    assert [(where, h["key"]) for where, h in hits] == [("alive", "k")], hits
++    assert len(seen) == 2, seen  # the 404 did not stop the walk
++
++    # A substrate that cannot ANSWER is a different thing entirely: it raises.
++    monkeypatch.setattr(
++        auger, "db", _substrate(0, {"error": "transport: connection refused"})
++    )
++    with pytest.raises(auger.SubstrateError):
++        auger.recall_many(["the-missing-one"], "q", limit=3)
++
++
++def test_gate_question_reports_a_dead_substrate_as_an_error(monkeypatch):
++    """gate_question's err contract survives the recall fail-closed change (AUG-075).
++
++    The gate walks sibling namespaces through `select_or_empty`, which tolerates a
++    dead read as "no rows here", but its OWN recall must surface as `err` — never
++    as the (None, "", "", None) "no stored evidence" verdict, which would gate
++    nothing today and silently ask nothing tomorrow.
++    """
++    monkeypatch.setattr(
++        auger, "db", _substrate(0, {"error": "transport: connection refused"})
++    )
++    verdict, dec_id, src_project, err = auger.gate_question(
++        "auger-075-dead", "P-NONE", "Is anything true?"
++    )
++    assert verdict is None and dec_id == "" and src_project == "", (
++        verdict,
++        dec_id,
++        src_project,
++    )
++    assert err and "substrate" in err, err
++
++
+ # ================================================================= propagate (SPEC-001 BEAT 4)
+ # Closure and moot cascades. The walk is driven by stored rows and stored edges, so each case
+ # builds its graph over the module's own helpers (`auger.insert` for question nodes — the CLI has
+@@ -4185,7 +4328,7 @@ def test_the_gate_links_an_answer_held_in_a_sibling_namespace(
+ 
+     seen: list[str] = []
+ 
+-    def fake_recall(namespace, q, limit=5):
++    def fake_recall(namespace, q, limit=5, missing_ok=False):
+         seen.append(namespace)
+         if namespace == sibling_ns:
+             return [
+@@ -4257,7 +4400,7 @@ def test_the_gate_survives_a_sibling_namespace_that_cannot_answer(ns: str, monke
+     monkeypatch.setattr(
+         auger,
+         "recall",
+-        lambda n, q, limit=5: (
++        lambda n, q, limit=5, missing_ok=False: (
+             [
+                 {
+                     "key": "/auger/P-GONE/D-999",
+@@ -4364,7 +4507,7 @@ def test_a_namespace_declared_before_the_cross_project_edge_columns_keeps_workin
+         monkeypatch.setattr(
+             auger,
+             "recall",
+-            lambda n, q, limit=5: (
++            lambda n, q, limit=5, missing_ok=False: (
+                 [
+                     {
+                         "key": "/auger/P-SIB/D-007",
+@@ -4708,7 +4851,7 @@ def test_the_gate_with_no_bundle_membership_recalls_its_own_namespace_only(
+ 
+     seen: list[str] = []
+ 
+-    def fake_recall(namespace, q, limit=5):
++    def fake_recall(namespace, q, limit=5, missing_ok=False):
+         seen.append(namespace)
+         return (
+             [
+@@ -4791,7 +4934,7 @@ def recall_hits(ns: str, pid: str, *decisions: str):
+     which is what makes the difference between a LINK and an unlinkable verdict testable.
+     """
+ 
+-    def _stub(namespace, q, limit=5):  # noqa: ARG001 - mirrors recall's signature
++    def _stub(namespace, q, limit=5, missing_ok=False):  # noqa: ARG001 - mirrors recall's signature
+         return (
+             [
+                 {
+@@ -5171,7 +5314,7 @@ def test_feedback_does_not_ask_a_question_it_cannot_link(decided: dict, monkeypa
+     monkeypatch.setattr(
+         auger,
+         "recall",
+-        lambda namespace, q, limit=5: (
++        lambda namespace, q, limit=5, missing_ok=False: (
+             [
+                 {
+                     "key": "/notes/somewhere-else",

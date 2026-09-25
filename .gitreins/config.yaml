@@ -13,11 +13,13 @@ guards:
   # smoke loop (15 assertions against a live throwaway DuckBrain namespace).
   # Naming the wrapper rather than smoke.sh alone keeps the arms together.
   test_command: bash tests/gate.sh
-  # measured 2026-09-22 on the loaded host: 810s on the merged tree (AUG-018
-  # docs commit tripped the old 600s budget; pytest alone took ~470s under
-  # load). The docs commit was pushed with --no-verify (repo precedent
-  # 9c7222e) — a legit commit should never need that.
-  test_timeout: 1800
+  # measured 2026-09-25 (AUG-077 commit attempts): 3x consecutive timeouts at
+  # 1800s with pytest at ~72% (143/198, zero failures, secrets+lint clean) —
+  # the suite grew past the 09-22 measurement (810s) on a box whose fleet load
+  # runs 10-28 during business hours. Raised 1800 -> 3600 (one clean rung
+  # above the observed ~2400s worst case). The AUG-077 work was verified
+  # green before the raise: focused run 6 passed (4.59s) + syntax + ruff.
+  test_timeout: 3600
   # hook_timeout: the OVERALL guard budget (default 300s, engine/guard_manager.py
   # _coerce_timeout(guards_cfg.get("hook_timeout", 300))). It must exceed the
   # tests arm or the run is cut short: this repo's tests arm is `bash
@@ -28,8 +30,10 @@ guards:
   # guard_manager.run_all builds Tier1Result WITHOUT the `extra` map, so
   # allow_skips never reaches the CLI's exit-code policy) — board and docs
   # commits were blocked outright by a gate that had not actually failed.
-  # 1200s > test_timeout 900s, so no arm is ever cut short by the outer budget.
-  hook_timeout: 2400
+  # 3600s > test_timeout 3600s is NOT safe (the tests arm would be cut at its
+  # own budget) — raised 2400 -> 3900 on 2026-09-25 alongside test_timeout
+  # 1800 -> 3600, keeping the outer budget strictly above the inner one.
+  hook_timeout: 3900
   # allow_skips: true — REQUIRED, and the reason is a real defect.
   # The built-in lint arm SKIPS whenever no python file is staged (a docs, board
   # or tests-only commit). With allow_skips:false that skip is DEGRADED PASS =

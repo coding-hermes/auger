@@ -1,0 +1,116 @@
+{
+  "task_id": "AUG-072",
+  "task_title": "start's seed remember fails 400 VALIDATION_ERROR on every fresh run \u2014 the seed note never stores",
+  "task_criteria": [
+    "A fresh init+start with no seed completes exit 0 with no 400/VALIDATION_ERROR text and makes no remember call",
+    "A start WITH a seed still stores the seed note and embeds it (existing behavior unchanged)",
+    "Regression tests cover both cases, RED on unfixed code and GREEN after; ruff + py_compile clean"
+  ],
+  "passed": true,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "e3df3af803bb235f10b0239474f836ecbc6aa7bb",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260925T090545.463313Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: scanners=gitleaks+builtin cross-check\n4:11AM INF scanned ~777900 bytes (777.90 KB) in 770ms\n4:11AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 42 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260925T090545.463313Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [ 39%]\n........................................................................ [ 78%]\n.......................................                                  [100%]\n183 passed in 512.52s (0:08:32)\n== end-to-end smoke ==\nnamespace: auger-smoke-1607852\nnamespace sweep: no stale auger-smoke-*/auger-eval-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n  PASS toggle changed the stored configuration\n== verdict: record + list round-trip ==\n  PASS a good verdict is recorded\n  PASS a bad verdict is recorded\n  PASS the good verdict shows in the list\n  PASS the bad verdict's reasons show in the list\n  PASS both --good and --bad refuse\n  PASS the refused pair wrote nothing\n\nnamespace auger-smoke-1607852 removed\npassed 21, failed 0\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260925T090545.463313Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 A fresh init+start with no seed completes exit 0 with no 400/VALIDATION_ERROR text and makes no remember call: Live run on fresh ns auger-eval072-3012470: `python auger.py -n $NS init` then `start --id P-EVALNOSEEED` -> exit=0, output 'project P-EVALNOSEEED in namespace auger-eval072-3012470' + 'seed stored (0 chars) + embedded'; grep -Ei '400|VALIDATION_ERROR' on the output found nothing. GET /api/memories?namespace=$NS returned {\"items\":[],\"total\":0} proving NO remember call was made; project row present with seed=\"\". Code: auger.py:3200 `if seed:` guards the remember() call.\n  \u2713 A start WITH a seed still stores the seed note and embeds it (existing behavior unchanged): Live run `start --id P-EVALSEED --seed \"hello seed\"` -> exit=0, 'seed stored (10 chars) + embedded', no 400 text. GET /api/memories?namespace=$NS returned exactly 1 item: key='/auger/P-EVALSEED/seed', content='hello seed', domain='concept'. Semantic search q=hello%20seed returned score=1 with that key, confirming it was embedded. Code path auger.py:3200-3203 unchanged for non-empty seed.\n  \u2713 Regression tests cover both cases, RED on unfixed code and GREEN after; ruff + py_compile clean: tests/test_auger.py:203 test_start_with_empty_seed_never_calls_remember and :226 test_start_with_a_seed_stores_and_embeds_exactly_once. Fresh run: `pytest tests/test_auger.py -k \"start_with_empty_seed or start_with_a_seed\" -p no:cacheprovider -q` -> '2 passed, 181 deselected'. `ruff check auger.py tests/test_auger.py` -> 'All checks passed!' exit 0. `python -m py_compile auger.py tests/test_auger.py` -> exit 0. RED proof (prior context): reverting the `if seed:` guard produced '1 failed, 1 passed' with AssertionError 'remember was called with an empty seed'.\nThe `if seed:` guard in cmd_start (auger.py:3200) is verified live: no-seed start exits 0 with no 400/VALIDATION_ERROR and zero remember calls, seeded start still stores and embeds the seed note exactly once, and both regression tests pass with ruff and py_compile clean.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 A fresh init+start with no seed completes exit 0 with no 400/VALIDATION_ERROR text and makes no remember call: Live run on fresh ns auger-eval072-3012470: `python auger.py -n $NS init` then `start --id P-EVALNOSEEED` -> exit=0, output 'project P-EVALNOSEEED in namespace auger-eval072-3012470' + 'seed stored (0 chars) + embedded'; grep -Ei '400|VALIDATION_ERROR' on the output found nothing. GET /api/memories?namespace=$NS returned {\"items\":[],\"total\":0} proving NO remember call was made; project row present with seed=\"\". Code: auger.py:3200 `if seed:` guards the remember() call.\n  \u2713 A start WITH a seed still stores the seed note and embeds it (existing behavior unchanged): Live run `start --id P-EVALSEED --seed \"hello seed\"` -> exit=0, 'seed stored (10 chars) + embedded', no 400 text. GET /api/memories?namespace=$NS returned exactly 1 item: key='/auger/P-EVALSEED/seed', content='hello seed', domain='concept'. Semantic search q=hello%20seed returned score=1 with that key, confirming it was embedded. Code path auger.py:3200-3203 unchanged for non-empty seed.\n  \u2713 Regression tests cover both cases, RED on unfixed code and GREEN after; ruff + py_compile clean: tests/test_auger.py:203 test_start_with_empty_seed_never_calls_remember and :226 test_start_with_a_seed_stores_and_embeds_exactly_once. Fresh run: `pytest tests/test_auger.py -k \"start_with_empty_seed or start_with_a_seed\" -p no:cacheprovider -q` -> '2 passed, 181 deselected'. `ruff check auger.py tests/test_auger.py` -> 'All checks passed!' exit 0. `python -m py_compile auger.py tests/test_auger.py` -> exit 0. RED proof (prior context): reverting the `if seed:` guard produced '1 failed, 1 passed' with AssertionError 'remember was called with an empty seed'.\nThe `if seed:` guard in cmd_start (auger.py:3200) is verified live: no-seed start exits 0 with no 400/VALIDATION_ERROR and zero remember calls, seeded start still stores and embeds the seed note exactly once, and both regression tests pass with ruff and py_compile clean.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "A fresh init+start with no seed completes exit 0 with no 400/VALIDATION_ERROR text and makes no remember call",
+                "status": "PASS",
+                "detail": "Live run on fresh ns auger-eval072-3012470: `python auger.py -n $NS init` then `start --id P-EVALNOSEEED` -> exit=0, output 'project P-EVALNOSEEED in namespace auger-eval072-3012470' + 'seed stored (0 chars) + embedded'; grep -Ei '400|VALIDATION_ERROR' on the output found nothing. GET /api/memories?namespace=$NS returned {\"items\":[],\"total\":0} proving NO remember call was made; project row present with seed=\"\". Code: auger.py:3200 `if seed:` guards the remember() call."
+              },
+              {
+                "criterion": "A start WITH a seed still stores the seed note and embeds it (existing behavior unchanged)",
+                "status": "PASS",
+                "detail": "Live run `start --id P-EVALSEED --seed \"hello seed\"` -> exit=0, 'seed stored (10 chars) + embedded', no 400 text. GET /api/memories?namespace=$NS returned exactly 1 item: key='/auger/P-EVALSEED/seed', content='hello seed', domain='concept'. Semantic search q=hello%20seed returned score=1 with that key, confirming it was embedded. Code path auger.py:3200-3203 unchanged for non-empty seed."
+              },
+              {
+                "criterion": "Regression tests cover both cases, RED on unfixed code and GREEN after; ruff + py_compile clean",
+                "status": "PASS",
+                "detail": "tests/test_auger.py:203 test_start_with_empty_seed_never_calls_remember and :226 test_start_with_a_seed_stores_and_embeds_exactly_once. Fresh run: `pytest tests/test_auger.py -k \"start_with_empty_seed or start_with_a_seed\" -p no:cacheprovider -q` -> '2 passed, 181 deselected'. `ruff check auger.py tests/test_auger.py` -> 'All checks passed!' exit 0. `python -m py_compile auger.py tests/test_auger.py` -> exit 0. RED proof (prior context): reverting the `if seed:` guard produced '1 failed, 1 passed' with AssertionError 'remember was called with an empty seed'."
+              }
+            ],
+            "summary": "The `if seed:` guard in cmd_start (auger.py:3200) is verified live: no-seed start exits 0 with no 400/VALIDATION_ERROR and zero remember calls, seeded start still stores and embeds the seed note exactly once, and both regression tests pass with ruff and py_compile clean."
+          }
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: AUG-072\n\nStage tier1: PASS\n    \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 A fresh init+start with no seed completes exit 0 with no 400/VALIDATION_ERROR text and makes no remember call: Live run on fresh ns auger-eval072-3012470: `python auger.py -n $NS init` then `start --id P-EVALNOSEEED` -> exit=0, output 'project P-EVALNOSEEED in namespace auger-eval072-3012470' + 'seed stored (0 chars) + embedded'; grep -Ei '400|VALIDATION_ERROR' on the output found nothing. GET /api/memories?namespace=$NS returned {\"items\":[],\"total\":0} proving NO remember call was made; project row present with seed=\"\". Code: auger.py:3200 `if seed:` guards the remember() call.\n  \u2713 A start WITH a seed still stores the seed note and embeds it (existing behavior unchanged): Live run `start --id P-EVALSEED --seed \"hello seed\"` -> exit=0, 'seed stored (10 chars) + embedded', no 400 text. GET /api/memories?namespace=$NS returned exactly 1 item: key='/auger/P-EVALSEED/seed', content='hello seed', domain='concept'. Semantic search q=hello%20seed returned score=1 with that key, confirming it was embedded. Code path auger.py:3200-3203 unchanged for non-empty seed.\n  \u2713 Regression tests cover both cases, RED on unfixed code and GREEN after; ruff + py_compile clean: tests/test_auger.py:203 test_start_with_empty_seed_never_calls_remember and :226 test_start_with_a_seed_stores_and_embeds_exactly_once. Fresh run: `pytest tests/test_auger.py -k \"start_with_empty_seed or start_with_a_seed\" -p no:cacheprovider -q` -> '2 passed, 181 deselected'. `ruff check auger.py tests/test_auger.py` -> 'All checks passed!' exit 0. `python -m py_compile auger.py tests/test_auger.py` -> exit 0. RED proof (prior context): reverting the `if seed:` guard produced '1 failed, 1 passed' with AssertionError 'remember was called with an empty seed'.\nThe `if seed:` guard in cmd_start (auger.py:3200) is verified live: no-seed start exits 0 with no 400/VALIDATION_ERROR and zero remember calls, seeded start still stores and embeds the seed note exactly once, and both regression tests pass with ruff and py_compile clean.\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-09-25T10:05:21.231019",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-09-25T10:05:21.541601+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 5848,
+        "truncated": false,
+        "source": "git show e3df3af803bb"
+      }
+    ],
+    "task_id": "AUG-072"
+  }
+}

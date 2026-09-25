@@ -107,6 +107,24 @@ def option_flags(ns: str) -> dict[str, bool]:
     return {o["id"]: bool(o.get("active")) for o in rows(ns, "option", "order=id.asc")}
 
 
+def contradiction_entries(text: str) -> list[str]:
+    """The entries of a `CONTRADICTIONS WITH THE RECORD` block, in render order.
+
+    `[]` when the block is absent — so a test can assert on the EXACT set of contradictions a
+    render owes its reader without depending on where in the dump the block sits, and a new
+    entry cannot hide behind a substring match on the header.
+    """
+    lines = text.splitlines()
+    if "CONTRADICTIONS WITH THE RECORD:" not in lines:
+        return []
+    entries = []
+    for line in lines[lines.index("CONTRADICTIONS WITH THE RECORD:") + 1 :]:
+        if not line.startswith("  - "):
+            break
+        entries.append(line[4:])
+    return entries
+
+
 def ns_name() -> str:
     """A fresh test namespace NAME. Creating it is the caller's job."""
     return TEST_NS_PREFIX + uuid.uuid4().hex[:12]
@@ -2319,6 +2337,239 @@ def test_a_live_namespace_holding_a_hundred_and_one_decisions_keeps_answering(
     )
     assert rc == 0 and out.startswith("D-103 recorded"), out
     assert row(ns, "decision", "id=eq.D-103&limit=1")["chosen"] == "minted two"
+
+
+# -------------------- the contradiction a mind-change leaves in the CURRENT dump (AUG-077)
+# `toggle --on` a sibling of the recorded choice is the legitimate mind-change path, and it is honest
+# at the moment it writes (it reports the sibling it switched off). The dump that follows renders
+# `chosen` — the answer's label, canonicalized at write time — AND the toggled option as the one
+# configuration, with no signal at all: the exact two-valued configuration AUG-070 named for
+# duplicate ids, reachable through a path that never collides. The hypothetical render has always
+# named it; the stored state now owes its reader the same block.
+#
+# The first four arms drive the REAL `dump` against a stand-in SERVER (the AUG-070 pattern above), so
+# they run with no substrate and can build the shapes a live namespace cannot be asked for (a
+# superseded decision whose option rows kept their `active` flags, a record whose `chosen` names no
+# option at all). The three live arms below them cover the mind-change path a user actually takes,
+# and pin the hypothetical render as unchanged.
+
+
+def dump_decision(
+    did: str,
+    chosen: str,
+    status: str = "decided",
+    why_not: str = "no such service on one box",
+) -> dict:
+    """One decision row in the shape `dump` reads, with a reason on file that can be quoted."""
+    return {**race_decision_row(did, chosen), "why_not": why_not, "status": status}
+
+
+def dump_option(oid: str, label: str, active: bool) -> dict:
+    """One option row; the decision it belongs to is the id's own prefix."""
+    return {
+        "id": oid,
+        "decision_id": oid.rsplit("-", 1)[0],
+        "label": label,
+        "active": active,
+    }
+
+
+def stand_in_dump(monkeypatch, dec: list[dict], opts: list[dict]) -> None:
+    """`dump` reads the project row, the decision rows, the option rows and the supersedes edges."""
+    monkeypatch.setattr(
+        auger, "db", RaceServer({"decision": dec, "option": opts, "edge": []})
+    )
+    race_stubs(monkeypatch)
+
+
+def test_dump_current_mode_names_the_option_that_replaced_the_recorded_choice(
+    monkeypatch,
+):
+    """The mind-change as data: `chosen` is O1's label, O2 is the row flagged active."""
+    stand_in_dump(
+        monkeypatch,
+        [
+            dump_decision("D-001", "single SQLite file"),
+            dump_decision("D-002", "staging table"),
+        ],
+        [
+            dump_option("D-001-O1", "single SQLite file", False),
+            dump_option("D-001-O2", "Postgres", True),
+            dump_option("D-002-O1", "staging table", True),
+            dump_option("D-002-O2", "row locking", False),
+        ],
+    )
+
+    rc, out = run_cli(["-n", MINT_NS, "dump"])
+
+    assert rc == 0, out
+    assert "mode: current stored state" in out, out
+    assert contradiction_entries(out) == [
+        "D-001: active D-001-O2 (Postgres) contradicts the recorded choice "
+        "(single SQLite file) — reason on file: no such service on one box"
+    ], out
+    # Named, never hidden: the render COMPLETES with the selection it actually holds, so the reader
+    # can see the two values the warning is about.
+    assert "ACTIVE CONFIGURATION: D-001=Postgres, D-002=staging table" in out, out
+    assert "     [x] D-001-O2" in out, out
+
+
+def test_dump_current_mode_is_silent_when_the_active_option_is_the_recorded_choice(
+    monkeypatch,
+):
+    """The clean control: agreement owes no entry at all — not the block, not a line."""
+    stand_in_dump(
+        monkeypatch,
+        [
+            dump_decision("D-001", "single SQLite file"),
+            dump_decision("D-002", "row locking"),
+        ],
+        [
+            dump_option("D-001-O1", "single SQLite file", True),
+            dump_option("D-001-O2", "Postgres", False),
+            dump_option("D-002-O1", "staging table", False),
+            dump_option("D-002-O2", "row locking", True),
+        ],
+    )
+
+    rc, out = run_cli(["-n", MINT_NS, "dump"])
+
+    assert rc == 0, out
+    assert "   chosen   : single SQLite file" in out, out  # the render happened
+    assert "CONTRADICTIONS WITH THE RECORD" not in out, out
+    assert contradiction_entries(out) == [], out
+
+
+def test_dump_current_mode_names_a_recorded_choice_that_names_no_option(monkeypatch):
+    """A `chosen` that is not any option row's label — the record and the configuration disagree,
+    and the entry names the active option it disagrees with, quoting the reason on file."""
+    stand_in_dump(
+        monkeypatch,
+        [dump_decision("D-001", "we will use one file on one box")],
+        [
+            dump_option("D-001-O1", "Postgres", True),
+            dump_option("D-001-O2", "sqlite", False),
+        ],
+    )
+
+    rc, out = run_cli(["-n", MINT_NS, "dump"])
+
+    assert rc == 0, out
+    assert contradiction_entries(out) == [
+        "D-001: active D-001-O1 (Postgres) contradicts the recorded choice "
+        "(we will use one file on one box) — reason on file: no such service on one box"
+    ], out
+
+
+def test_dump_current_mode_never_invents_a_contradiction_it_cannot_name(monkeypatch):
+    """The shapes the pass declines to judge, each because it has no single option to name:
+
+    * two options active — the activation warning owns it;
+    * no option active — the same warning owns it;
+    * nothing recorded as `chosen` — a record that claims nothing contradicts nothing;
+    * superseded — it contributes nothing to the configuration, so nothing about it can
+      contradict, even though its option rows keep the `active` flags they were written with.
+    """
+    stand_in_dump(
+        monkeypatch,
+        [
+            dump_decision("D-001", "staging table"),  # two active
+            dump_decision("D-002", "single SQLite file"),  # none active
+            dump_decision("D-003", ""),  # nothing recorded
+            dump_decision(
+                "D-004", "single SQLite file", status=auger.SUPERSEDED_STATUS
+            ),
+        ],
+        [
+            dump_option("D-001-O1", "staging table", True),
+            dump_option("D-001-O2", "row locking", True),
+            dump_option("D-002-O1", "single SQLite file", False),
+            dump_option("D-003-O1", "only option", True),
+            dump_option("D-004-O1", "single SQLite file", False),
+            dump_option("D-004-O2", "Postgres", True),
+        ],
+    )
+
+    rc, out = run_cli(["-n", MINT_NS, "dump"])
+
+    assert rc == 0, out
+    assert "CONTRADICTIONS WITH THE RECORD" not in out, out
+    assert contradiction_entries(out) == [], out
+    # The two shapes it left alone are still reported, by the block that owns them.
+    assert "  - D-001: 2 of 2 options active (D-001-O1, D-001-O2)" in out, out
+    assert "  - D-002: 0 of 1 options active" in out, out
+    assert "## D-004" in out and "[SUPERSEDED]" in out, out
+
+
+def test_dump_in_current_mode_names_the_contradiction_a_toggle_created(decided: dict):
+    """AUG-077 on the path a user takes: `toggle --on` the OTHER option of D-001, then dump.
+
+    The toggle is honest and the toggled option IS the active configuration — what was missing is
+    the signal that the recorded choice no longer is.
+    """
+    ns = decided["ns"]
+    rc, out = run_cli(["-n", ns, "toggle", "--on", "D-001-O2"])
+    assert rc == 0 and "one option per decision D-001" in out, out
+
+    rc, current = run_cli(["-n", ns, "dump"])
+    assert rc == 0, current
+    assert "mode: current stored state" in current, current
+    why_not = row(ns, "decision", "id=eq.D-001")[
+        "why_not"
+    ]  # read it, do not hardcode it
+    assert why_not == D001["why_not"]
+    assert contradiction_entries(current) == [
+        "D-001: active D-001-O2 (Postgres) contradicts the recorded choice "
+        f"(single SQLite file) — reason on file: {why_not}"
+    ], current
+    assert "ACTIVE CONFIGURATION: D-001=Postgres, D-002=staging table" in current, (
+        current
+    )
+
+
+def test_dump_current_mode_goes_quiet_again_when_the_choice_is_toggled_back(
+    decided: dict,
+):
+    """The block tracks the STATE, not the fact that a mind-change once happened."""
+    ns = decided["ns"]
+    rc, out = run_cli(["-n", ns, "toggle", "--on", "D-001-O2"])
+    assert rc == 0, out
+    rc, drifted = run_cli(["-n", ns, "dump"])
+    assert "CONTRADICTIONS WITH THE RECORD" in drifted, (
+        drifted
+    )  # the state this arm starts from
+
+    rc, out = run_cli(["-n", ns, "toggle", "--on", "D-001-O1"])
+    assert rc == 0, out
+
+    rc, current = run_cli(["-n", ns, "dump"])
+    assert rc == 0, current
+    line = next(
+        ln for ln in current.splitlines() if ln.startswith("ACTIVE CONFIGURATION:")
+    )
+    assert (
+        line == "ACTIVE CONFIGURATION: D-001=single SQLite file, D-002=staging table"
+    ), line
+    assert contradiction_entries(current) == [], current
+
+
+def test_dump_hypothetical_still_reports_only_its_own_contradiction(decided: dict):
+    """The hypothesis keeps its contract: it names what the `--config` asks for and does NOT audit
+    the stored drift it was not asked about — the current render owns that, and this pins both."""
+    ns = decided["ns"]
+    rc, out = run_cli(
+        ["-n", ns, "toggle", "--on", "D-001-O2"]
+    )  # stored state is now drifted
+    assert rc == 0, out
+
+    rc, hyp = run_cli(["-n", ns, "dump", "--config", "D-002=row locking"])
+    assert rc == 0 and "mode: HYPOTHETICAL (nothing written)" in hyp, hyp
+    assert contradiction_entries(hyp) == [
+        "D-002: choosing row locking contradicts the recorded choice (staging table) "
+        f"— reason on file: {D002['why_not']}"
+    ], hyp
+    # Non-overridden decisions still render the stored selection — the render is unchanged.
+    assert "ACTIVE CONFIGURATION: D-001=Postgres, D-002=row locking" in hyp, hyp
 
 
 # ------------------------------------- reads past one page of a declared table (AUG-068)

@@ -1,0 +1,126 @@
+commit e3df3af803bb235f10b0239474f836ecbc6aa7bb
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Fri Sep 25 03:57:11 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Fri Sep 25 03:57:11 2026 -0500
+
+    fix: AUG-072 fresh-start seed remember no longer 400s on empty seed
+    
+    Root cause (verified live, not the board row's original guess): the payload is
+    NOT missing fields. DuckBrain's POST /api/memories required-content gate
+    (DB-GAP-058, duckbrain src/http/routes/memories.ts) 400s content == "" with
+    "Missing required fields: key, domain, content" (VALIDATION_ERROR). cmd_start
+    called remember(ns, f"/auger/{pid}/seed", seed) UNCONDITIONALLY, and with no
+    --seed/--seed-file the seed is "", so every fresh no-seed start printed the 400
+    line and exited 1 with the seed note never stored.
+    
+    Fix: skip the remember call when the seed is empty (`if seed:`). An empty seed
+    has nothing to store or embed; skipping is correct behavior. With a non-empty
+    seed the path is unchanged (store + embed + both print lines). The project-row
+    insert and remember()'s signature are untouched.
+    
+    RED proof (tests run against HEAD's unfixed cmd_start via `git stash push --
+    auger.py`):
+    
+        tests/test_auger.py::test_start_with_empty_seed_never_calls_remember FAILED
+        >       assert calls == [], f"remember was called with an empty seed: {calls}"
+        E       AssertionError: remember was called with an empty seed:
+        E         [('auger-worker072-unit', '/auger/P-EMPTYSEED/seed', '')]
+        1 failed, 1 passed
+    
+    Test B (with-seed stores/embeds exactly once with key /auger/<pid>/seed) was
+    already green on unfixed code, as expected. Both green after the fix.
+    
+    Live verification against DuckBrain 127.0.0.1:3000:
+    - unfixed: `start` on a fresh ns -> the 400 VALIDATION_ERROR line, exit 1.
+    - fixed, no seed: exit 0, "project P-... in namespace ...", no 400 text.
+    - fixed, --seed "hello seed": exit 0, seed note retrievable via `recall`
+      (1.000 /auger/P-.../seed). Both repro namespaces torn down after.
+    
+    Gate: bash tests/gate.sh -> GATE PASS (syntax, ruff clean, pytest green,
+    live smoke 21 passed / 0 failed, 2 live arms ran). ruff check auger.py +
+    tests/test_auger.py clean; py_compile clean.
+    
+    Co-authored-by: Alexis Okuwa <wojonstech@gmail.com>
+---
+ auger.py            |  5 ++++-
+ tests/test_auger.py | 50 ++++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 54 insertions(+), 1 deletion(-)
+
+diff --git a/auger.py b/auger.py
+index faab15b..6c13e80 100755
+--- a/auger.py
++++ b/auger.py
+@@ -3197,7 +3197,10 @@ def cmd_start(a):
+         "created_at": datetime.now(timezone.utc).isoformat(),
+     }
+     insert(ns, "project", row)
+-    remember(ns, f"/auger/{pid}/seed", seed)
++    if seed:
++        # An empty seed has nothing to store or embed: POSTing it makes DuckBrain's
++        # required-content gate (DB-GAP-058) 400 the call and abort a fresh start.
++        remember(ns, f"/auger/{pid}/seed", seed)
+     print(f"project {pid} in namespace {ns}")
+     print(f"seed stored ({len(seed)} chars) + embedded")
+     return 0
+diff --git a/tests/test_auger.py b/tests/test_auger.py
+index dbec439..85212dd 100644
+--- a/tests/test_auger.py
++++ b/tests/test_auger.py
+@@ -196,6 +196,56 @@ def test_start_stores_the_project_row_and_embeds_the_seed(project: dict):
+     )
+ 
+ 
++# AUG-072: an empty seed has nothing to store or embed. DuckBrain's required-content
++# gate (DB-GAP-058) 400s a POST /api/memories with content == "", so `start` without
++# --seed must not call `remember` at all — while a non-empty seed must still store +
++# embed exactly once, with the key the recall path looks for.
++def test_start_with_empty_seed_never_calls_remember(monkeypatch, capsys):
++    """`start` with no --seed inserts the project row and makes NO remember call."""
++    calls: list[tuple] = []
++
++    def fake_remember(ns: str, key: str, content: str, domain: str = "concept") -> dict:
++        calls.append((ns, key, content))
++        return {}
++
++    ns = "auger-worker072-unit"  # never touched: remember and insert are stubbed
++    pid = "P-EMPTYSEED"
++    monkeypatch.setattr(auger, "remember", fake_remember)
++    monkeypatch.setattr(
++        auger, "insert", lambda ns_, table, rows: {"table": table, "row": rows}
++    )
++
++    rc, out = run_cli(["-n", ns, "start", "--id", pid])
++
++    assert rc == 0, out
++    assert calls == [], f"remember was called with an empty seed: {calls}"
++    assert f"project {pid} in namespace {ns}" in out, out
++    assert "seed stored (0 chars)" in out, out
++
++
++def test_start_with_a_seed_stores_and_embeds_exactly_once(monkeypatch):
++    """`start` with a non-empty seed calls remember once with the seed key + content."""
++    calls: list[tuple] = []
++
++    def fake_remember(ns: str, key: str, content: str, domain: str = "concept") -> dict:
++        calls.append((ns, key, content))
++        return {}
++
++    ns = "auger-worker072-unit"  # never touched: remember and insert are stubbed
++    pid = "P-SEEDED"
++    monkeypatch.setattr(auger, "remember", fake_remember)
++    monkeypatch.setattr(
++        auger, "insert", lambda ns_, table, rows: {"table": table, "row": rows}
++    )
++
++    rc, out = run_cli(["-n", ns, "start", "--id", pid, "--seed", "hello seed"])
++
++    assert rc == 0, out
++    assert calls == [(ns, f"/auger/{pid}/seed", "hello seed")], calls
++    assert f"project {pid} in namespace {ns}" in out, out
++    assert "seed stored (10 chars) + embedded" in out, out
++
++
+ def test_answer_writes_every_decision_field_to_the_row(decided: dict):
+     """Every field `answer` was given comes back off the STORED row."""
+     d = row(decided["ns"], "decision", "id=eq.D-001")

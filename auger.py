@@ -4489,6 +4489,55 @@ def duplicate_id_warning_lines(dec: list[dict], opts: list[dict]) -> list[str]:
     ]
 
 
+#: AUG-077: the CURRENT render's contradiction pass. `toggle --on` a sibling of the recorded choice
+#: is the legitimate mind-change path, and it leaves `chosen` (the answer's label, canonicalized at
+#: write time) on file while a DIFFERENT option row is the one flagged active — the render then
+#: presents both as one configuration, and the duplicate-id warning (AUG-070) cannot see it because
+#: the two ids differ. The `--config` hypothesis has always named this; the stored state now does.
+def chosen_active_contradiction_lines(
+    dec: list[dict], opts: list[dict], live_by_dec: dict[str, set[str]]
+) -> list[str]:
+    """The `CONTRADICTIONS WITH THE RECORD` entries a CURRENT dump owes its reader (AUG-077).
+
+    One entry per decision whose RECORDED choice is not the option that decision's stored flags
+    select. `live_by_dec` is the selection the render treats as the configuration, so a superseded
+    decision — which contributes nothing to it — is never reported: it reaches this pass with no live
+    option, and nothing outside the configuration can contradict it. A decision is skipped too when
+      * its selection is not exactly ONE option — 0 or 2+ is what the activation warning names, and
+        there is no single active option to contrast the record against;
+      * nothing is recorded as `chosen` — a record that claims nothing contradicts nothing;
+      * the recorded choice names MORE than one option row (duplicate ids again) — naming one of them
+        would be a guess.
+    The entry names the decision, the recorded choice, the option that is actually active, and quotes
+    the reason on file — the same four facts, in the same grammar, as the hypothetical entry above.
+    """
+    by_dec = options_by_decision(opts)
+    lines = []
+    for d in dec:
+        live = set(live_by_dec.get(d["id"]) or set())
+        cand = by_dec.get(d["id"], [])
+        if len(live) != 1 or not cand:
+            continue
+        recorded = (d.get("chosen") or "").strip()
+        if not recorded:
+            continue
+        # The same token grammar `dump`/`toggle`/`answer` accept, so a row written before `chosen`
+        # was canonicalized to the option label is still read as the choice it names.
+        named = option_matches(cand, recorded, d["id"])
+        if len(named) == 1 and named[0]["id"] in live:
+            continue  # the record and the selection AGREE — a clean state owes no entry
+        if len(named) > 1:
+            continue  # ambiguous: which row the record means is the duplicate-id block's business
+        active = next((o for o in cand if o["id"] in live), None)
+        if active is None:
+            continue  # a selection this pass cannot attribute: report nothing, guess nothing
+        lines.append(
+            f"{d['id']}: active {active['id']} ({active['label']}) contradicts the recorded "
+            f"choice ({recorded}) — reason on file: {d.get('why_not') or 'none'}"
+        )
+    return lines
+
+
 def cmd_toggle(a):
     """Turn options on/off — the what-if switch: ONE option per decision by default.
 
@@ -4570,7 +4619,11 @@ def cmd_dump(a):
 
     In EITHER mode a decision whose active options are not exactly one is WARNED about at the foot
     of the dump and still rendered: a record that drifted is exactly when the reader needs to see
-    it (AUG-015).
+    it (AUG-015). In CURRENT mode a decision whose recorded choice is no longer its active option is
+    named in the CONTRADICTIONS WITH THE RECORD block too (AUG-077) — the block a `--config`
+    hypothesis has always carried — and still rendered, because the legacy `--config A=B` flow is not
+    the only way a record and its configuration come apart: `toggle --on` a sibling does it with
+    nothing colliding.
     """
     ns, pid = a.namespace, a.project_id
     p = _project(ns, pid)
@@ -4673,6 +4726,13 @@ def cmd_dump(a):
                     f"     {mark} {o['id']}  {o['label']}  costs={o.get('costs') or '—'}  breaks={o.get('breaks') or '—'}"
                 )
         lines.append("")
+    # AUG-077: the stored state can contradict the record without any id colliding, and a reader
+    # asking what the system looks like NOW is owed that as loudly as a reader asking about a
+    # hypothesis. A `--config` render judges the hypothesis — the pass above is ITS contract and is
+    # left exactly as it was; the drift it was not asked about is not restated there. Appending to
+    # the same list keeps ONE block, in decision order, at the foot of the dump.
+    if not hypothetical:
+        shadows += chosen_active_contradiction_lines(dec, opts, live_by_dec)
     lines.append("---")
     lines.append(
         f"ACTIVE CONFIGURATION: {', '.join(confs) if confs else '(nothing active)'}"
