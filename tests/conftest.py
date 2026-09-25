@@ -155,11 +155,25 @@ def teardown_namespace(ns: str) -> list[str]:
         )
     problems: list[str] = []
 
-    status, body = auger.delete_namespace(ns)
-    if status not in (200, 404):
-        problems.append(
-            f"DELETE /api/namespaces/{ns} returned {status}: {str(body)[:200]}"
-        )
+    # 409 = DuckBrain's native sync lock is held by an in-flight git push. The server
+    # itself says "Retry after it completes": under fleet load a push can run for
+    # minutes (observed: >90s), so retry 409 here with a bounded backoff before
+    # recording the problem. Bounded: ~10 min ceiling — a push that outlives it is
+    # recorded as a problem, never hung on.
+    deadline = time.monotonic() + 600
+    backoff = 5
+    while True:
+        status, body = auger.delete_namespace(ns)
+        if status not in (200, 404):
+            problems.append(
+                f"DELETE /api/namespaces/{ns} returned {status}: {str(body)[:200]}"
+            )
+            if status == 409 and time.monotonic() < deadline:
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 30)
+                problems.pop()  # retried below; only the final outcome is reported
+                continue
+        break
 
     path = ns_path(ns)
     shutil.rmtree(path, ignore_errors=True)

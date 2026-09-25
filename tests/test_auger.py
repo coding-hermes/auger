@@ -6078,13 +6078,17 @@ def test_confidence_sentinel_stays_in_the_store_and_never_renders(project: dict)
     assert rc == 0, out
     # The sentinel is UNCHANGED in the store — the spec'd "asserted directly" value.
     assert row(ns, "decision", "id=eq.D-001")["confidence"] == pytest.approx(-1.0)
-    # AC5: the echo says what was recorded, not the raw sentinel.
-    assert "-1" not in out, out
+    # AC5: the echo says what was recorded, not the raw sentinel. (The echo embeds the
+    # namespace name, which can itself contain "-1" — hex digit 1 after the prefix dash.)
+    assert "-1" not in out.replace(ns, "<ns>"), out
     assert "confidence n/a" in out, out
     # AC1: `dump` renders the same decision as "conf n/a", never a bare -1/-1.0.
     rc, dump_out = run_cli(["-n", ns, "dump"])
     assert rc == 0, dump_out
-    assert "-1" not in dump_out, dump_out
+    # The header embeds the raw namespace name (auger-pytest-<hex>), which can itself
+    # contain "-1" (hex digit 1 after the prefix dash) — strip it before the leak scan.
+    dump_body = dump_out.replace(ns, "<ns>")
+    assert "-1" not in dump_body, dump_body
     assert "conf n/a" in dump_out, dump_out
     assert "## D-001  (4.05)  conf n/a" in dump_out, dump_out
 
