@@ -1449,6 +1449,149 @@ def test_check_maps_the_model_answer_to_the_threshold_verdict(ns: str, monkeypat
     assert "NOT YET ANSWERED" in out, out
 
 
+# ============================================================ AUG-075: recall fails closed
+# A dead substrate used to be indistinguishable from an empty store: `recall`
+# collapsed every non-200 — including `_req`'s transport contract, st == 0 with an
+# `error` body — into the same `[]` a genuinely empty namespace returns, so `check`
+# answered "treat as a new question" with the evidence sitting in the store.
+#
+# Every case here mocks at the `db()` boundary, NOT at raw urllib: the no-bypass
+# property being asserted is that the REAL recall/verb code runs all the way down
+# to the substrate call, so a hand-rolled transport at a call site would not
+# satisfy these tests.
+
+
+def _substrate(st: int, body: dict):
+    """A db() stand-in that always answers `st`/`body` — a dead or shaped substrate."""
+
+    def fake_db(path, *args, **kwargs):
+        return st, body, {}
+
+    return fake_db
+
+
+def test_recall_transport_failure_is_a_failure_not_an_empty_store(monkeypatch):
+    """st == 0 is _req's unreachable-substrate contract; recall must raise, not return []."""
+    monkeypatch.setattr(
+        auger, "db", _substrate(0, {"error": "transport: connection refused"})
+    )
+    with pytest.raises(auger.SubstrateError) as ei:
+        auger.recall("auger-075-dead", "any question", limit=3)
+    msg = str(ei.value)
+    assert "substrate" in msg and "transport: connection refused" in msg, msg
+
+
+def test_recall_non_200_status_is_a_failure_not_an_empty_store(monkeypatch):
+    """Any non-200 refusal raises; a 200 with no items is still the empty-store `[]`."""
+    monkeypatch.setattr(auger, "db", _substrate(503, {"error": "unavailable"}))
+    with pytest.raises(auger.SubstrateError) as ei:
+        auger.recall("auger-075-dead", "any question", limit=3)
+    assert "substrate" in str(ei.value) and "503" in str(ei.value), str(ei.value)
+
+    # The other side of the line: a genuine 200 with nothing in it stays `[]`.
+    monkeypatch.setattr(auger, "db", _substrate(200, {"items": []}))
+    assert auger.recall("auger-075-dead", "any question", limit=3) == []
+
+
+def test_check_fails_closed_when_the_substrate_is_dead(monkeypatch):
+    """A dead store is never "no stored evidence matched — treat as a new question"."""
+    monkeypatch.setattr(
+        auger, "db", _substrate(0, {"error": "transport: connection refused"})
+    )
+    rc, out = run_cli(["-n", "auger-075-dead-ns", "check", "How is the record stored?"])
+    assert rc == 1, out
+    assert "substrate" in out, out
+    assert "treat as a new question" not in out, out
+    assert "no stored evidence matched" not in out, out
+
+
+def test_check_on_a_genuinely_empty_store_keeps_the_new_question_answer(monkeypatch):
+    """The fix must not swing the pendulum: an EMPTY store still reads rc=0."""
+    monkeypatch.setattr(auger, "db", _substrate(200, {"items": []}))
+    rc, out = run_cli(
+        ["-n", "auger-075-empty-ns", "check", "How is the record stored?"]
+    )
+    assert rc == 0, out
+    assert "no stored evidence matched — treat as a new question" in out, out
+    assert "substrate" not in out, out
+
+
+def test_recall_verb_fails_closed_when_the_store_is_unreachable(monkeypatch):
+    """`recall` exits non-zero naming the substrate; a genuine empty keeps rc=0 and silence."""
+    monkeypatch.setattr(
+        auger, "db", _substrate(0, {"error": "transport: connection refused"})
+    )
+    rc, out = run_cli(["-n", "auger-075-dead-ns", "recall", "anything"])
+    assert rc == 1, out
+    assert "substrate" in out, out
+
+    # The genuine empty result keeps its shape: rc 0, nothing printed.
+    monkeypatch.setattr(auger, "db", _substrate(200, {"items": []}))
+    rc, out = run_cli(["-n", "auger-075-empty-ns", "recall", "anything"])
+    assert rc == 0 and out == "", (rc, out)
+
+
+def test_the_verbs_stay_strict_on_a_missing_namespace(monkeypatch):
+    """`missing_ok` is the sibling-walk's carve-out, never the user verbs' (AUG-075).
+
+    A 404 from the memories endpoint means the NAMESPACE does not exist; pointing
+    `recall` at one is a user error the verb must name, not silence to hide — so the
+    default raises even though the same status reads as empty inside `recall_many`.
+    """
+    monkeypatch.setattr(
+        auger, "db", _substrate(404, {"error": "Namespace 'gone' does not exist"})
+    )
+    with pytest.raises(auger.SubstrateError) as ei:
+        auger.recall("gone", "any question", limit=3)
+    assert "404" in str(ei.value), str(ei.value)
+
+
+def test_recall_many_tolerates_a_missing_sibling_but_not_a_dead_store(monkeypatch):
+    """SPEC-002 2.1 survives the fail-closed change, both directions (AUG-075)."""
+    seen: list[str] = []
+
+    def missing_sibling_db(path, *a, **kw):
+        seen.append(path)
+        ns = unquote(str(path).split("namespace=")[1].split("&")[0])
+        if ns == "the-missing-one":
+            return 404, {"error": "Namespace 'the-missing-one' does not exist"}, {}
+        return 200, {"items": [{"key": "k", "score": 0.5, "content": "c"}]}, {}
+
+    monkeypatch.setattr(auger, "db", missing_sibling_db)
+    hits = auger.recall_many(["the-missing-one", "alive"], "q", limit=3)
+    assert [(where, h["key"]) for where, h in hits] == [("alive", "k")], hits
+    assert len(seen) == 2, seen  # the 404 did not stop the walk
+
+    # A substrate that cannot ANSWER is a different thing entirely: it raises.
+    monkeypatch.setattr(
+        auger, "db", _substrate(0, {"error": "transport: connection refused"})
+    )
+    with pytest.raises(auger.SubstrateError):
+        auger.recall_many(["the-missing-one"], "q", limit=3)
+
+
+def test_gate_question_reports_a_dead_substrate_as_an_error(monkeypatch):
+    """gate_question's err contract survives the recall fail-closed change (AUG-075).
+
+    The gate walks sibling namespaces through `select_or_empty`, which tolerates a
+    dead read as "no rows here", but its OWN recall must surface as `err` — never
+    as the (None, "", "", None) "no stored evidence" verdict, which would gate
+    nothing today and silently ask nothing tomorrow.
+    """
+    monkeypatch.setattr(
+        auger, "db", _substrate(0, {"error": "transport: connection refused"})
+    )
+    verdict, dec_id, src_project, err = auger.gate_question(
+        "auger-075-dead", "P-NONE", "Is anything true?"
+    )
+    assert verdict is None and dec_id == "" and src_project == "", (
+        verdict,
+        dec_id,
+        src_project,
+    )
+    assert err and "substrate" in err, err
+
+
 # ================================================================= propagate (SPEC-001 BEAT 4)
 # Closure and moot cascades. The walk is driven by stored rows and stored edges, so each case
 # builds its graph over the module's own helpers (`auger.insert` for question nodes — the CLI has
@@ -4185,7 +4328,7 @@ def test_the_gate_links_an_answer_held_in_a_sibling_namespace(
 
     seen: list[str] = []
 
-    def fake_recall(namespace, q, limit=5):
+    def fake_recall(namespace, q, limit=5, missing_ok=False):
         seen.append(namespace)
         if namespace == sibling_ns:
             return [
@@ -4257,7 +4400,7 @@ def test_the_gate_survives_a_sibling_namespace_that_cannot_answer(ns: str, monke
     monkeypatch.setattr(
         auger,
         "recall",
-        lambda n, q, limit=5: (
+        lambda n, q, limit=5, missing_ok=False: (
             [
                 {
                     "key": "/auger/P-GONE/D-999",
@@ -4364,7 +4507,7 @@ def test_a_namespace_declared_before_the_cross_project_edge_columns_keeps_workin
         monkeypatch.setattr(
             auger,
             "recall",
-            lambda n, q, limit=5: (
+            lambda n, q, limit=5, missing_ok=False: (
                 [
                     {
                         "key": "/auger/P-SIB/D-007",
@@ -4708,7 +4851,7 @@ def test_the_gate_with_no_bundle_membership_recalls_its_own_namespace_only(
 
     seen: list[str] = []
 
-    def fake_recall(namespace, q, limit=5):
+    def fake_recall(namespace, q, limit=5, missing_ok=False):
         seen.append(namespace)
         return (
             [
@@ -4791,7 +4934,7 @@ def recall_hits(ns: str, pid: str, *decisions: str):
     which is what makes the difference between a LINK and an unlinkable verdict testable.
     """
 
-    def _stub(namespace, q, limit=5):  # noqa: ARG001 - mirrors recall's signature
+    def _stub(namespace, q, limit=5, missing_ok=False):  # noqa: ARG001 - mirrors recall's signature
         return (
             [
                 {
@@ -5171,7 +5314,7 @@ def test_feedback_does_not_ask_a_question_it_cannot_link(decided: dict, monkeypa
     monkeypatch.setattr(
         auger,
         "recall",
-        lambda namespace, q, limit=5: (
+        lambda namespace, q, limit=5, missing_ok=False: (
             [
                 {
                     "key": "/notes/somewhere-else",

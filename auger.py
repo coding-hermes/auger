@@ -1073,12 +1073,44 @@ def bundle_member(
     return row
 
 
-def recall(ns: str, q: str, limit: int = 5) -> list:
+class SubstrateError(SystemExit):
+    """A memory-store call failed to ANSWER (AUG-075): transport dead, non-200.
+
+    A SystemExit subclass so an uncaught raise is still the CLI's clean failure —
+    the message on stderr, exit status 1, no traceback — and so `except SystemExit`
+    handlers upstream keep working unchanged. Raising (instead of returning a
+    sentinel) is what keeps every caller honest: a caller that forgets to handle a
+    failed substrate read cannot silently continue with empty-handed data.
+    """
+
+
+def recall(ns: str, q: str, limit: int = 5, missing_ok: bool = False) -> list:
+    """Semantic search over a namespace's embedded rows.
+
+    AUG-075, fail closed: "the store has nothing" and "the store cannot be asked"
+    are different answers, and only the first is `[]`. A transport failure arrives
+    as st == 0 (the `_req` contract, untouched here) and any other refusal as its
+    HTTP status; both raise `SubstrateError` naming the substrate's own words. An
+    EMPTY store — a real 200 — still returns `[]`, so a caller that sees no rows
+    may believe them.
+
+    `missing_ok` is the ONE documented carve-out (SPEC-002 section 2.1): a
+    namespace that does not exist — a bundle sibling never started — has no rows
+    here, so its 404 reads as `[]` instead of an error. The verbs keep the default
+    and stay strict: a user pointing `recall`/`check` at a missing namespace is
+    told so, not handed silence.
+    """
     st, body, _ = db(
         f"/api/memories?namespace={url_seg(ns)}&q={quote(q)}&limit={limit}", timeout=60
     )
     if st != 200:
-        return []
+        if missing_ok and st == 404:
+            return []
+        detail = body.get("error", body) if isinstance(body, dict) else body
+        raise SubstrateError(
+            f"substrate read failed for {ns!r} (status {st}): {detail} — a failed "
+            "read is NOT an empty store"
+        )
     return body.get("items", []) if isinstance(body, dict) else []
 
 
@@ -1171,11 +1203,13 @@ def recall_many(places: list, q: str, limit: int = 5) -> list:
     substrate's own order. SEQUENTIAL on purpose (SPEC-002 section 2.1's `recall_many`): DuckBrain's
     API is token-bucketed, so fanning out spends the same budget with more ways to fail, and a
     namespace that returns nothing — a sibling that does not exist, or holds no evidence — must
-    contribute NOTHING rather than an invented neighbour.
+    contribute NOTHING rather than an invented neighbour. A sibling namespace that does not exist
+    yet (a 404, AUG-075's `missing_ok` carve-out) is exactly that "nothing"; a substrate that
+    cannot be ANSWERED still raises, because a dead store must not read as an empty one.
     """
     out: list = []
     for where in places:
-        for hit in recall(where, q, limit=limit):
+        for hit in recall(where, q, limit=limit, missing_ok=True):
             out.append((where, hit))
     return out
 
@@ -1690,7 +1724,10 @@ def gate_question(ns: str, project_id: str, text: str, limit: int = 5):
     """
     home = project_name(ns, project_id)
     places = [(ns, home)] + bundle_namespaces(ns, home)
-    hits = recall_many([where for where, _ in places], text, limit=limit)
+    try:
+        hits = recall_many([where for where, _ in places], text, limit=limit)
+    except SubstrateError as exc:  # AUG-075: the store could not be asked
+        return None, "", "", str(exc)
     if not hits:
         return None, "", "", None
     evidence = "\n".join(
@@ -3380,7 +3417,16 @@ def cmd_ask(a):
     )
     unknown = select(ns, "unknown", f"project_id=eq.{pid}")
     unans = select(ns, "question", f"project_id=eq.{pid}&status=eq.open")
-    hits = recall(ns, p.get("seed", "") or "project spec", limit=6)
+    hits = []
+    try:
+        hits = recall(ns, p.get("seed", "") or "project spec", limit=6)
+    except SubstrateError as exc:  # AUG-075: the store could not be asked
+        print(f"substrate unavailable — cannot ask: {exc}")
+        print(
+            "fail-closed: no next-question is invented while the memory store "
+            "cannot be read."
+        )
+        return 1
     evidence = "\n".join(
         f"- {h.get('key')}: {h.get('content', '')[:300]}" for h in hits
     )
@@ -4076,9 +4122,22 @@ def cmd_answer(a):
 
 
 def cmd_check(a):
-    """Before asking: is this already answered by what we hold?"""
+    """Before asking: is this already answered by what we hold?
+
+    AUG-075, fail closed: a substrate that cannot be asked is an error with exit 1,
+    never "no stored evidence matched — treat as a new question" — that sentence is
+    reserved for a store that was asked and genuinely holds nothing.
+    """
     ns = a.namespace
-    hits = recall(ns, a.question, limit=a.limit)
+    try:
+        hits = recall(ns, a.question, limit=a.limit)
+    except SubstrateError as exc:  # AUG-075: the store could not be asked
+        print(f"substrate unavailable — cannot check: {exc}")
+        print(
+            "fail-closed: a memory store that cannot be read is NOT the same as an "
+            "empty one — no 'new question' answer is invented."
+        )
+        return 1
     if not hits:
         print("no stored evidence matched — treat as a new question")
         return 0
@@ -4641,7 +4700,17 @@ def cmd_dump(a):
 
 
 def cmd_recall(a):
-    for h in recall(a.namespace, a.query, a.limit):
+    """AUG-075, fail closed: a store that cannot be asked is an error, not an empty list."""
+    try:
+        hits = recall(a.namespace, a.query, a.limit)
+    except SubstrateError as exc:  # AUG-075: the store could not be asked
+        print(f"substrate unavailable — cannot recall: {exc}")
+        print(
+            "fail-closed: a memory store that cannot be read is NOT the same as an "
+            "empty one."
+        )
+        return 1
+    for h in hits:
         print(
             f"{h.get('score'):.3f}  {h.get('key')}\n     {h.get('content', '')[:200]}"
         )

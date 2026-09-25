@@ -166,7 +166,10 @@ Is this question already answered by what we hold?
 **Writes:** nothing. It retrieves the nearest stored evidence and makes one JEV call.
 
 **Never writes:** anything. On a JEV failure it prints UNKNOWN and exits non-zero —
-"unknown" is never turned into "already answered" or "new".
+"unknown" is never turned into "already answered" or "new". The same holds for the
+store itself (AUG-075): when the memory substrate cannot be read, `check` prints
+the substrate error and exits non-zero — a dead store never reads as "no stored
+evidence matched — treat as a new question".
 
 ## status
 
@@ -271,7 +274,9 @@ Semantic search over everything the namespace has embedded.
 
 **Writes:** nothing. One GET against the memory store.
 
-**Never writes:** anything.
+**Never writes:** anything. When the store cannot be read (AUG-075) it fails
+closed: the substrate error is printed and the exit is non-zero — an unreachable
+store is never printed as an empty result.
 
 ## verdict
 
