@@ -65,6 +65,36 @@ T_PRIORITY = (
 # and CONTINUES ON THE DEFAULT: it never blocks waiting for a person
 # (SPEC-001 section 7, Q5; docs/ENGINE.md open question 5).
 
+
+# AUG-062. The -1 sentinel ("asserted directly, not scored by a model") lives in the STORE —
+# every decision `answer` records without --confidence carries it, and that must not change. The
+# defect was the LEAK: renders showed the bare -1 as if it were a measurement, and a `0 <= c`
+# filter read "unmeasured" as "measured high". So: every confidence that reaches a READER goes
+# through `_conf_render` (the sentinel renders as n/a), every AVERAGE goes through `_conf_values`
+# (the sentinel is dropped, never averaged in), and the thin predicate treats unmeasured as the
+# weakest evidence there is instead of as a passing grade.
+def _conf_render(v) -> str:
+    """A confidence as the READER sees it: the -1 sentinel renders as n/a, never a bare -1."""
+    if isinstance(v, (int, float)) and v >= 0:
+        return f"{v:g}"
+    return "n/a"
+
+
+def _conf_values(rows: list) -> list:
+    """The MEASURED confidences of `rows`: the -1 sentinel is dropped, never averaged in."""
+    return [
+        float(r["confidence"])
+        for r in rows
+        if isinstance(r.get("confidence"), (int, float)) and r["confidence"] >= 0
+    ]
+
+
+def _is_unmeasured(dec_row: dict) -> bool:
+    """True when a decision row's confidence is the -1 sentinel — nobody scored it."""
+    c = dec_row.get("confidence")
+    return not (isinstance(c, (int, float)) and c >= 0)
+
+
 # The budget governor. The ceiling is a NUMBER OF QUESTIONS ASKED BY ONE RUN, and it is enforced
 # by the program rather than trusted to an agent — that refusal is the whole reason this is
 # software (docs/ENGINE.md E4: "the budget is enforced by the program, not the agent").
@@ -2134,19 +2164,24 @@ def feedback_budget() -> int:
 def thin_decisions(ns: str, project_id: str) -> list:
     """The decisions that need drilling, THINNEST FIRST — criterion (a) of this row.
 
-    RECORDED confidence only: `confidence` is -1 on a row whose confidence nobody stated, and
-    "unknown" is not "low" — the same distinction `status` makes. Ordered by confidence and then
+    A decision is thin when its confidence is MEASURED and below `T_CONFIDENT`, or when it is
+    UNMEASURED at all (the -1 sentinel `answer` stores for "asserted directly, not scored by a
+    model" — AUG-062: an unmeasured decision is the thinnest evidence there is, not a passing
+    grade, and hiding it from this list let `feedback` report every decision as confident while
+    one had never been scored). Ordered measured-first by confidence, then the unmeasured ones
     by id, so two runs over an unchanged project drill it in the same order.
     """
     rows = select(
         ns, "decision", f"project_id=eq.{project_id}&order=confidence.asc,id.asc"
     )
-    return [
+    measured_thin = [
         d
         for d in rows
         if isinstance(d.get("confidence"), (int, float))
         and 0 <= d["confidence"] < T_CONFIDENT
     ]
+    unmeasured = [d for d in rows if _is_unmeasured(d)]
+    return measured_thin + sorted(unmeasured, key=lambda d: d["id"])
 
 
 def drilled_decisions(ns: str, project_id: str, qs: dict | None = None) -> dict:
@@ -2208,7 +2243,7 @@ def feedback_state(
         "",
         "THE DECISION WHOSE CONFIDENCE IS TOO LOW TO BUILD ON:",
         f"{dec_row['id']} ({dec_row.get('domain') or 'no domain'}): {dec_row.get('chosen')}",
-        f"confidence: {dec_row.get('confidence')}",
+        f"confidence: {_conf_render(dec_row.get('confidence'))}",
         f"reversal cost: {dec_row.get('reversal_cost') or 'not recorded'}",
         f"why the rejected alternatives lost: {dec_row.get('why_not') or 'not recorded'}",
     ]
@@ -2285,7 +2320,8 @@ def record_followup(
             qid,
             source="rule",
             warnings=warnings,
-            note=f"the confidence in {dec_row['id']} is {dec_row.get('confidence')} "
+            note=f"the confidence in {dec_row['id']} is "
+            f"{_conf_render(dec_row.get('confidence'))} "
             f"(< {T_CONFIDENT}), so the engine proposed a follow-up "
             f"({proposer_model()})",
         )["id"]
@@ -2376,11 +2412,12 @@ def feedback(ns: str, project_id: str, *, budget: int | None = None) -> dict:
 
     # ---- 2. Q5: a decision this thin is a PRIORITY JUDGMENT, not a drilling problem. Escalate it
     # with a default and CONTINUE on the default — the run is unattended and never blocks.
+    # AUG-062: the floor is a judgment about a MEASURED confidence. An unmeasured decision (the
+    # -1 sentinel) is thin and is drilled below like any other, but it never FAILED the floor —
+    # nobody scored it — so escalating "-1.00 below the 0.30 floor" would state a weighing that
+    # was never made. The sentinel never reaches this branch.
     for d in cand:
-        if (
-            isinstance(d.get("confidence"), (int, float))
-            and d["confidence"] < T_PRIORITY
-        ):
+        if not _is_unmeasured(d) and d["confidence"] < T_PRIORITY:
             esc = escalate(
                 ns,
                 pid,
@@ -2557,7 +2594,7 @@ def cmd_feedback(a):
     if not rep["thin"] and not rep["drilled"]:
         print("  (none — every recorded decision is at or above the threshold)")
     for did, conf in rep["thin"]:
-        print(f"  {did}  {conf}  <- thinnest first")
+        print(f"  {did}  {_conf_render(conf)}  <- thinnest first")
     for did, qid in rep["drilled"]:
         print(f"  {did}  already drilled: {qid} is open and awaiting an answer")
     print(
@@ -3337,7 +3374,10 @@ def cmd_ask(a):
         f"- {h.get('key')}: {h.get('content', '')[:300]}" for h in hits
     )
     decisions = (
-        "\n".join(f"- {d['id']} (conf {d['confidence']}): {d['chosen']}" for d in seats)
+        "\n".join(
+            f"- {d['id']} (conf {_conf_render(d.get('confidence'))}): {d['chosen']}"
+            for d in seats
+        )
         or "(none yet)"
     )
     state = (
@@ -3916,7 +3956,8 @@ def cmd_answer(a):
     impact = bundle_impact(ns, pid, {**row, "scope": stored_scope})
     active_count = 1 if resolved_option else 0
     print(
-        f"{did} recorded  (confidence {row['confidence']}, {active_count} of {len(option_rows)} active, "
+        f"{did} recorded  (confidence {_conf_render(row['confidence'])}, "
+        f"{active_count} of {len(option_rows)} active, "
         f"embedded, scope {decision_scope(row)}{closed})"
     )
     # The local break, surfaced in the same grammar `propagate` reports its walk in (AUG-028): the
@@ -4027,11 +4068,9 @@ def cmd_status(a):
         f"decisions {len(dec)} | options {len(opt)} | escalations {len(esc)} | unknowns {len(unk)} | domains {cov['rows']}"
     )
     if dec:
-        confs = [
-            d["confidence"]
-            for d in dec
-            if isinstance(d.get("confidence"), (int, float)) and d["confidence"] >= 0
-        ]
+        # AUG-062: the sentinel is a NON-measurement, so it is excluded from every aggregate —
+        # min/mean/max describe the decisions somebody actually scored.
+        confs = _conf_values(dec)
         if confs:
             print(
                 f"confidence: min {min(confs):.2f}  mean {sum(confs) / len(confs):.2f}  max {max(confs):.2f}"
@@ -4040,12 +4079,7 @@ def cmd_status(a):
         print("\ncoverage by domain (decisions, mean confidence):")
         for k in sorted(by_dom):
             rows = by_dom[k]
-            cs = [
-                r["confidence"]
-                for r in rows
-                if isinstance(r.get("confidence"), (int, float))
-                and r["confidence"] >= 0
-            ]
+            cs = _conf_values(rows)
             m = f"{sum(cs) / len(cs):.2f}" if cs else "n/a"
             flag = (
                 "  <- needs drilling"
@@ -4103,18 +4137,25 @@ def cmd_status(a):
             "  ROWS WITH NO `num` (they cannot be matched to the grid at all): "
             f"{', '.join(cov['nameless'])}"
         )
+    # AUG-062: the drill list reads the same predicate `feedback` reads (thin_decisions' twin) —
+    # an unmeasured decision is thin, not confident, and renders n/a, never the bare sentinel.
     thin = [
         d
         for d in dec
-        if isinstance(d.get("confidence"), (int, float))
-        and 0 <= d["confidence"] < T_CONFIDENT
+        if (
+            isinstance(d.get("confidence"), (int, float))
+            and 0 <= d["confidence"] < T_CONFIDENT
+        )
+        or _is_unmeasured(d)
     ]
     if thin:
         print(
             f"\n{len(thin)} decision(s) below {T_CONFIDENT} — these are what `auger ask` will drill:"
         )
-        for d in sorted(thin, key=lambda x: x["confidence"]):
-            print(f"  {d['id']}  {d['confidence']:.2f}  {d['chosen'][:70]}")
+        for d in sorted(thin, key=lambda x: _conf(x)):
+            print(
+                f"  {d['id']}  {_conf_render(d.get('confidence'))}  {d['chosen'][:70]}"
+            )
     # The selection invariant (AUG-015): the counts above cannot show WHICH options are active, so a
     # decision holding zero or two-or-more of them is named here. Warned, never fatal — the map this
     # verb exists to print is still the answer, and a record with a collision is still worth reading.
@@ -4464,7 +4505,7 @@ def cmd_dump(a):
                     f"({d.get('chosen')}) — reason on file: {d.get('why_not') or 'none'}"
                 )
         lines.append(
-            f"## {d['id']}  ({d.get('domain') or '—'})  conf {d.get('confidence')}"
+            f"## {d['id']}  ({d.get('domain') or '—'})  conf {_conf_render(d.get('confidence'))}"
             + (
                 f"  [SUPERSEDED by {', '.join(superseders)}]"
                 if superseders

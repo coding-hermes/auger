@@ -1904,7 +1904,11 @@ class StandInServer:
     """
 
     def __init__(
-        self, rows: dict[str, list[dict]], *, page: int = API_PAGE, fail_after: int | None = None
+        self,
+        rows: dict[str, list[dict]],
+        *,
+        page: int = API_PAGE,
+        fail_after: int | None = None,
     ):
         self.rows = rows
         self.page = page
@@ -1933,9 +1937,13 @@ class StandInServer:
         for clause in reversed(str(pairs.get("order", "")).split(",")):
             col, _, direction = clause.strip().partition(".")
             if col and direction in ("asc", "desc"):
-                found.sort(key=lambda r: str(r.get(col) or ""), reverse=direction == "desc")
+                found.sort(
+                    key=lambda r: str(r.get(col) or ""), reverse=direction == "desc"
+                )
         limit = (
-            min(int(pairs["limit"]), SERVER_MAX_LIMIT) if "limit" in pairs else self.page
+            min(int(pairs["limit"]), SERVER_MAX_LIMIT)
+            if "limit" in pairs
+            else self.page
         )
         offset = int(pairs.get("offset", 0))
         return 200, found[offset : offset + limit], {}
@@ -1962,7 +1970,9 @@ def test_select_reads_every_row_of_a_table_past_one_page(monkeypatch):
     monkeypatch.setattr(auger, "db", server)
 
     got = auger.select(MINT_NS, "decision", "")
-    assert len(got) == 130 == len(stored), f"{len(got)} rows served for {len(stored)} stored"
+    assert len(got) == 130 == len(stored), (
+        f"{len(got)} rows served for {len(stored)} stored"
+    )
     assert [r["id"] for r in got] == [r["id"] for r in stored]
     # The cap the row measured, asserted rather than assumed: ONE bare GET returns a page and no
     # signal at all that the table holds more.
@@ -2059,7 +2069,9 @@ def test_a_table_that_cannot_answer_is_still_nothing_for_select_or_empty(monkeyp
     assert len(server.requests) == 1, server.requests
 
 
-def test_the_page_safe_mint_reads_the_highest_id_through_the_real_paged_select(monkeypatch):
+def test_the_page_safe_mint_reads_the_highest_id_through_the_real_paged_select(
+    monkeypatch,
+):
     """AUG-069 and AUG-068 together: the mint reads ONE page-safe row out of a capped 101-row table.
 
     The AUG-069 cases stub `select` itself, which cannot see the paging loop; this one stubs the
@@ -2075,7 +2087,9 @@ def test_the_page_safe_mint_reads_the_highest_id_through_the_real_paged_select(m
     server.requests.clear()
     assert auger.next_id(MINT_NS, "decision", "D", width=3) == "D-102"
     assert len(server.requests) == 1, server.requests
-    assert server.requests[0].endswith("?select=id&order=id.desc&limit=1"), server.requests[0]
+    assert server.requests[0].endswith("?select=id&order=id.desc&limit=1"), (
+        server.requests[0]
+    )
 
     server.requests.clear()
     assert auger.decision_id_width(MINT_NS) == 3
@@ -5576,3 +5590,269 @@ def test_a_domain_whose_row_is_gone_is_reported_absent_not_skipped(project: dict
     assert "OFF-GRID rows" in out and "9.99" in out, out
     # and the moved row is still a real stored row: the report describes the table, it does not fix it
     assert row(ns, "domain", "num=eq.9.99")["id"] == moving["id"]
+
+
+# ================================================================= the confidence sentinel (AUG-062)
+# `answer` without --confidence stores the spec'd sentinel -1 ("asserted directly, not scored by
+# a model" — the `edge` docstring). That value must STAY in the store; the defect is the LEAK:
+# renders showed a bare -1 as if it were a measurement, and the feedback engine's `0 <= c` filter
+# read "unmeasured" as "measured high", reporting a decision nobody scored as being at or above
+# the threshold. Every case below proves the sentinel survives in the ROW and never reaches the
+# READER. Deterministic throughout: the models are stubbed, the rows are re-read from DuckBrain.
+def test_confidence_sentinel_stays_in_the_store_and_never_renders(project: dict):
+    """AC1/AC5: a default-confidence answer keeps -1 in the decision row, but neither its own
+    echo nor `dump` ever prints the sentinel — an unmeasured confidence renders as n/a."""
+    ns = project["ns"]
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-001",
+            "--domain",
+            "4.05",
+            "--chosen",
+            "single SQLite file",
+            "--option",
+            "single SQLite file",
+            "--option",
+            "Postgres",
+            "--why-not",
+            "the seed forbids a second service",
+        ]
+    )
+    assert rc == 0, out
+    # The sentinel is UNCHANGED in the store — the spec'd "asserted directly" value.
+    assert row(ns, "decision", "id=eq.D-001")["confidence"] == pytest.approx(-1.0)
+    # AC5: the echo says what was recorded, not the raw sentinel.
+    assert "-1" not in out, out
+    assert "confidence n/a" in out, out
+    # AC1: `dump` renders the same decision as "conf n/a", never a bare -1/-1.0.
+    rc, dump_out = run_cli(["-n", ns, "dump"])
+    assert rc == 0, dump_out
+    assert "-1" not in dump_out, dump_out
+    assert "conf n/a" in dump_out, dump_out
+    assert "## D-001  (4.05)  conf n/a" in dump_out, dump_out
+
+
+def test_confidence_sentinel_decisions_are_thin_not_confident(
+    decided: dict, monkeypatch
+):
+    """AC2: an unmeasured decision belongs in `feedback`'s thin list beside the measured-thin
+    ones — `0 <= c` must not read the sentinel as a passing grade — and the follow-up it
+    produces never quotes the sentinel into its edge note. Ordering stays deterministic:
+    measured rows by confidence first, then the unmeasured ones by id."""
+    ns, pid = decided["ns"], decided["pid"]
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-003",
+            "--domain",
+            "4.07",
+            "--chosen",
+            "unmeasured",
+            "--option",
+            "unmeasured",
+            "--option",
+            "other",
+            "--why-not",
+            "the other one is worse",
+        ]
+    )
+    assert rc == 0, out
+    assert row(ns, "decision", "id=eq.D-003")["confidence"] == pytest.approx(-1.0)
+
+    ids = [d["id"] for d in auger.thin_decisions(ns, pid)]
+    assert ids == ["D-002", "D-003"], ids
+
+    monkeypatch.setattr(auger, "recall", recall_hits(ns, pid, "D-002"))
+    calls: list = []
+    monkeypatch.setattr(auger, "jev", gate_stub(0.10, calls))
+    proposer_states: list = []
+    scripted = [FOLLOWUP_Q, "Second question?"]
+
+    def proposer_spy(state, *a, **k):
+        proposer_states.append(state)
+        return scripted.pop(0), ""
+
+    monkeypatch.setattr(auger, "propose_question", proposer_spy)
+    rc, out = run_cli(["-n", ns, "feedback", "--budget", "1"])
+    assert rc == 0, out
+    # The unmeasured decision is IN the thin list, rendered n/a — and the old false claim
+    # ("every recorded decision is at or above the threshold") is gone.
+    assert "  D-002  0.41  <- thinnest first" in out, out
+    assert "  D-003  n/a  <- thinnest first" in out, out
+    assert "(none" not in out, out
+    # The proposer was fed the state for BOTH decisions; the unmeasured one reads n/a.
+    assert any("confidence: 0.41" in s for s in proposer_states), proposer_states
+    assert any("confidence: n/a" in s for s in proposer_states), proposer_states
+    # Both decisions produced a follow-up (one asked, one budget-thin), and the sentinel
+    # never reaches the `opens` edge notes.
+    qrows = rows(ns, "question", "qclass=eq.follow_up&order=id.asc")
+    assert len(qrows) == 2, qrows
+    notes = {e["src_id"]: e["note"] for e in rows(ns, "edge", "kind=eq.opens")}
+    assert notes["D-002"].startswith(
+        "the confidence in D-002 is 0.41 (< 0.6), so the engine"
+    ), notes
+    assert notes["D-003"].startswith(
+        "the confidence in D-003 is n/a (< 0.6), so the engine"
+    ), notes
+
+
+def test_confidence_sentinel_is_never_a_priority_judgment_below_the_floor(
+    project: dict, monkeypatch
+):
+    """AC4: a MEASURED decision below the 0.30 floor is escalated as a priority judgment; an
+    UNMEASURED one is thin and gets drilled, but is never claimed to be "-1.00 below the
+    0.30 floor" — a weighing nobody scored is not a weighing that failed one."""
+    ns, pid = project["ns"], project["pid"]
+    for did, conf in (("D-002", ["--confidence", "0.20"]), ("D-003", [])):
+        argv = [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            did,
+            "--domain",
+            "4.06",
+            "--chosen",
+            f"pick {did}",
+            "--option",
+            f"pick {did}",
+            "--option",
+            "other",
+            "--why-not",
+            "worse",
+            *conf,
+        ]
+        rc, out = run_cli(argv)
+        assert rc == 0, out
+    monkeypatch.setattr(auger, "recall", recall_hits(ns, pid, "D-002"))
+    monkeypatch.setattr(auger, "jev", gate_stub(0.10, []))
+    monkeypatch.setattr(
+        auger, "propose_question", proposer_stub([FOLLOWUP_Q, "Second question?"], [])
+    )
+    rc, out = run_cli(["-n", ns, "feedback", "--budget", "2"])
+    assert rc == 0, out
+    esc = [e["question"] for e in rows(ns, "escalation", "order=id.asc")]
+    # The measured row earns its escalation, with its real number.
+    assert any(
+        "priority judgment: D-002 has confidence 0.20, below the 0.3 floor" in t
+        for t in esc
+    ), esc
+    # The unmeasured row is escalated for NOTHING, and no -1 claim exists on the record.
+    assert not any("D-003" in t or "-1" in t for t in esc), esc
+    # It is still drilled: thin is thin.
+    opens = {e["src_id"] for e in rows(ns, "edge", "kind=eq.opens")}
+    assert opens == {"D-002", "D-003"}, opens
+
+
+def test_confidence_sentinel_is_excluded_from_status_aggregates(project: dict):
+    """AC3: the min/mean/max line and the coverage-by-domain means exclude the sentinel —
+    averaging a number nobody stated would print 0.22 here instead of 0.70 — while the
+    drill list gains the unmeasured decisions as n/a."""
+    ns = project["ns"]
+    specs = (
+        ("D-001", ["--confidence", "0.5"]),
+        ("D-002", ["--confidence", "0.9"]),
+        ("D-003", []),  # unmeasured: the sentinel
+        ("D-004", ["--confidence", "0.7"]),
+        ("D-005", []),  # unmeasured, alone in its domain
+    )
+    for did, extra in specs:
+        argv = [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            did,
+            "--domain",
+            "4.06" if did == "D-005" else "4.05",
+            "--chosen",
+            "x",
+            "--option",
+            "x",
+            "--option",
+            "y",
+            "--why-not",
+            "y loses",
+            *extra,
+        ]
+        rc, out = run_cli(argv)
+        assert rc == 0, out
+    rc, out = run_cli(["-n", ns, "status"])
+    assert rc == 0, out
+    # (0.5 + 0.9 + 0.7) / 3 = 0.70 — the sentinels are excluded, not averaged in.
+    assert "confidence: min 0.50  mean 0.70  max 0.90" in out, out
+    cov = [
+        ln
+        for ln in out.splitlines()
+        if ln.strip().startswith(("4.05", "4.06")) and "terminating ring" not in ln
+    ]
+    assert [ln.split()[:3] for ln in cov] == [
+        ["4.05", "4", "0.70"],
+        ["4.06", "1", "n/a"],
+    ], cov
+    # and the drill list: the unmeasured decisions appear as n/a, never as -1/-1.0.
+    # The renderer matches the raw-confidence rendering every other site used (`:g`), so a
+    # measured 0.5 reads 0.5 — the site-local `:.2f` is gone with the leak.
+    assert "  D-003  n/a  x" in out, out
+    assert "  D-005  n/a  x" in out, out
+    assert "  D-001  0.5  x" in out, out
+
+
+def test_confidence_sentinel_renders_n_a_in_ask_seats_and_verdict_list(
+    decided: dict, monkeypatch
+):
+    """The remaining raw interpolations: `ask`'s seats list renders an unmeasured decision as
+    conf n/a, and `verdict --list` keeps its dash for a verdict with no score at all (that
+    column reads MODEL verdicts, which never carry the decision sentinel)."""
+    ns = decided["ns"]
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-003",
+            "--domain",
+            "4.07",
+            "--chosen",
+            "unmeasured",
+            "--option",
+            "unmeasured",
+            "--option",
+            "other",
+            "--why-not",
+            "the other one is worse",
+        ]
+    )
+    assert rc == 0, out
+
+    seats_states: list = []
+
+    def seats_jev_spy(state, questions, *a, **k):
+        seats_states.append(state)
+        return ask_stub("how_is_it_tested", 0.73, 0.10)(state, questions, *a, **k)
+
+    monkeypatch.setattr(auger, "jev", seats_jev_spy)
+    rc, out = run_cli(["-n", ns, "ask"])
+    assert rc == 0, out
+    # The seats list is the state `ask` FEEDS the model — assert it there, where the sentinel
+    # would reach a consumer (the seats have no other stdout render to leak through).
+    assert any(
+        "- D-003 (conf n/a): unmeasured" in c
+        and "- D-002 (conf 0.41): staging table" in c
+        for c in seats_states
+    ), seats_states
+
+    rc, out = run_cli(["-n", ns, "verdict", "--good", "D-001=x", "--reasons", "r"])
+    assert rc == 0, out
+    rc, out = run_cli(["-n", ns, "verdict", "--list"])
+    assert rc == 0, out
+    assert "conf —" in out, out
+    assert "-1" not in out, out
