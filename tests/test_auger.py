@@ -1763,6 +1763,36 @@ def test_gate_question_reports_a_dead_substrate_as_an_error(monkeypatch):
     assert err and "substrate" in err, err
 
 
+# ============================================================= AUG-082: project-scoped recall
+# Two projects may deliberately share vocabulary while carrying different evidence. A selected
+# project must constrain the substrate's candidate set before semantic ranking/limiting; filtering
+# a namespace-wide top-N afterward can both leak a sibling and hide an in-project lower-ranked hit.
+def test_recall_cli_scopes_semantic_hits_to_the_selected_project(ns: str):
+    """Each `-p` arm sees only its seed; the no-`-p` control still sees both."""
+    query = "shared project scope probe quartz falcon"
+    projects = {
+        "P-AUG082-ALPHA": f"{query}. Alpha evidence says the ledger is amber.",
+        "P-AUG082-BETA": f"{query}. Beta evidence says the ledger is cobalt.",
+    }
+    for pid, seed in projects.items():
+        rc, out = run_cli(
+            ["-n", ns, "start", "--id", pid, "--name", pid.lower(), "--seed", seed]
+        )
+        assert rc == 0 and f"project {pid}" in out, out
+
+    all_hits = auger.recall(ns, query, limit=10)
+    assert {h.get("key") for h in all_hits} == {
+        f"/auger/{pid}/seed" for pid in projects
+    }, all_hits
+
+    for selected in projects:
+        other = next(pid for pid in projects if pid != selected)
+        rc, out = run_cli(["-n", ns, "-p", selected, "recall", query, "--limit", "10"])
+        assert rc == 0, out
+        assert f"/auger/{selected}/seed" in out, out
+        assert f"/auger/{other}/seed" not in out, out
+
+
 # ================================================================= AUG-078: recall marks superseded
 # `answer --supersedes` leaves the replaced decision's evidence embedded — retrieval keeps finding
 # the old story. The record already knows it was replaced (decision status) and by whom (the
@@ -1878,8 +1908,9 @@ def test_recall_orders_a_live_hit_before_a_superseded_one_at_equal_scores(
         note="D-002 supersedes D-001: the seed forbids a second service",
     )
 
-    def tied_recall(namespace, q, limit=5, missing_ok=False):
+    def tied_recall(namespace, q, limit=5, missing_ok=False, project_id=None):
         assert namespace == ns, namespace
+        assert project_id is None
         return [
             {"key": f"/auger/{pid}/D-001", "score": 0.99, "content": evidence},
             {"key": f"/auger/{pid}/D-002", "score": 0.99, "content": evidence},
@@ -4411,6 +4442,38 @@ def test_recall_sends_an_encoded_namespace(monkeypatch):
     assert auger.recall("ns with space", "one query", limit=3) == []
     assert seen["path"] == (
         "/api/memories?namespace=ns%20with%20space&q=one%20query&limit=3"
+    ), seen["path"]
+    validate_like_the_transport_does(seen["path"])
+
+
+def test_recall_sends_project_prefix_with_semantic_limit_and_rejects_foreign_hits(
+    monkeypatch,
+):
+    """AUG-082: scope reaches the substrate before top-N and is also enforced on its reply."""
+    seen: dict = {}
+    own = {
+        "key": "/auger/P selected/D-001",
+        "score": 0.8,
+        "content": "selected evidence",
+    }
+    foreign = {
+        "key": "/auger/P-OTHER/D-001",
+        "score": 0.99,
+        "content": "foreign evidence",
+    }
+
+    def fake_db(path, *a, **kw):
+        seen["path"] = path
+        # Return a contract-violating foreign row too: recall must fail closed on scope.
+        return 200, {"items": [foreign, own]}, {}
+
+    monkeypatch.setattr(auger, "db", fake_db)
+    assert auger.recall(
+        "ns with space", "one query", limit=1, project_id="P selected"
+    ) == [own]
+    assert seen["path"] == (
+        "/api/memories?namespace=ns%20with%20space"
+        "&prefix=%2Fauger%2FP%20selected%2F&q=one%20query&limit=1"
     ), seen["path"]
     validate_like_the_transport_does(seen["path"])
 

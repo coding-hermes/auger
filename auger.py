@@ -1098,7 +1098,13 @@ class SubstrateError(SystemExit):
     """
 
 
-def recall(ns: str, q: str, limit: int = 5, missing_ok: bool = False) -> list:
+def recall(
+    ns: str,
+    q: str,
+    limit: int = 5,
+    missing_ok: bool = False,
+    project_id: str | None = None,
+) -> list:
     """Semantic search over a namespace's embedded rows.
 
     AUG-075, fail closed: "the store has nothing" and "the store cannot be asked"
@@ -1113,9 +1119,21 @@ def recall(ns: str, q: str, limit: int = 5, missing_ok: bool = False) -> list:
     here, so its 404 reads as `[]` instead of an error. The verbs keep the default
     and stay strict: a user pointing `recall`/`check` at a missing namespace is
     told so, not handed silence.
+
+    When `project_id` is present, its `/auger/<project>/` key prefix is sent to
+    the substrate in the same request as the semantic query. That constrains the
+    candidate set before ranking and limiting; the result filter is a fail-closed
+    backstop if a substrate ever returns a key outside the requested prefix.
     """
+    project_prefix = f"/auger/{project_id}/" if project_id is not None else None
+    prefix_query = (
+        f"&prefix={quote(project_prefix, safe=_QUERY_VALUE_SAFE)}"
+        if project_prefix
+        else ""
+    )
     st, body, _ = db(
-        f"/api/memories?namespace={url_seg(ns)}&q={quote(q)}&limit={limit}", timeout=60
+        f"/api/memories?namespace={url_seg(ns)}{prefix_query}&q={quote(q)}&limit={limit}",
+        timeout=60,
     )
     if st != 200:
         if missing_ok and st == 404:
@@ -1125,7 +1143,15 @@ def recall(ns: str, q: str, limit: int = 5, missing_ok: bool = False) -> list:
             f"substrate read failed for {ns!r} (status {st}): {detail} — a failed "
             "read is NOT an empty store"
         )
-    return body.get("items", []) if isinstance(body, dict) else []
+    items = body.get("items", []) if isinstance(body, dict) else []
+    if project_prefix:
+        return [
+            item
+            for item in items
+            if isinstance(item, dict)
+            and str(item.get("key", "")).startswith(project_prefix)
+        ]
+    return items
 
 
 # ---------------------------------------------------------------- the bundle walk (SPEC-002 section 2)
@@ -4836,7 +4862,7 @@ SUPERSEDED_MARKER_NO_SUCCESSOR = RECALL_SNIPPET_INDENT + "[superseded]"
 def cmd_recall(a):
     """AUG-075, fail closed: a store that cannot be asked is an error, not an empty list."""
     try:
-        hits = recall(a.namespace, a.query, a.limit)
+        hits = recall(a.namespace, a.query, a.limit, project_id=a.project_id)
     except SubstrateError as exc:  # AUG-075: the store could not be asked
         print(f"substrate unavailable — cannot recall: {exc}")
         print(
@@ -4846,8 +4872,8 @@ def cmd_recall(a):
         return 1
     # AUG-078: the record knows which answers died (`answer --supersedes` flips the decision's
     # status and writes the supersedes edge), so a superseded hit is marked — naming its
-    # successor, which also breaks ties at equal scores live-first. Read per hit: recall has no
-    # project and the limit is 5, so the reads stay small.
+    # successor, which also breaks ties at equal scores live-first. Read per hit: recall returns
+    # at most the requested limit, so the reads stay small.
     marks = {}
     for hit in hits:
         did = decision_named(hit.get("key", ""))
