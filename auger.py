@@ -1708,6 +1708,33 @@ def decision_for_evidence(ns: str, project_id: str, key: str) -> str:
     )
 
 
+def supersession_for(ns: str, decision_id: str) -> tuple[bool, str]:
+    """Whether a decision is superseded, and the successor that replaced it — "" names nobody.
+
+    The record carries a supersession in two places: the decision row's `status`
+    (SUPERSEDED_STATUS) and the supersedes edge — `src` the successor, `dst` the replaced
+    decision, the direction record_supersessions writes. A status with no edge (the drift
+    `cmd_status` renders as "no supersedes edge") reports superseded with NO successor: an
+    unrecorded one is never invented. Both reads go through `select_or_empty` on purpose: this
+    lookup decorates a recall that already succeeded — AUG-075's fail-closed stays at the
+    retrieval — and a namespace whose tables were never declared (`auger init` never ran) holds
+    no decisions at all, which is "no rows here", not a reason the verb stops rendering its hits.
+    """
+    found = select_or_empty(
+        ns, "decision", f"id=eq.{decision_id}&select=status&limit=1"
+    )
+    if not found or found[0].get("status") != SUPERSEDED_STATUS:
+        return False, ""
+    for e in select_or_empty(
+        ns,
+        "edge",
+        f"kind=eq.supersedes&dst_id=eq.{decision_id}&select=src_id&order=id.asc",
+    ):
+        if e.get("src_id"):
+            return True, e["src_id"]
+    return True, ""
+
+
 def gate_question(ns: str, project_id: str, text: str, limit: int = 5):
     """The gate: is this question already fully answered by evidence we already hold?
 
@@ -4759,6 +4786,15 @@ def cmd_dump(a):
     return 0
 
 
+#: The snippet's continuation indent — the marker line under a superseded hit sits at the same
+#: column, so the block still reads as one hit.
+RECALL_SNIPPET_INDENT = "     "
+#: How a superseded hit says so (AUG-078): with its successor when the supersedes edge names one,
+#: bare when the status alone was moved — a successor that was never recorded is never invented.
+SUPERSEDED_MARKER = RECALL_SNIPPET_INDENT + "[superseded by {}]"
+SUPERSEDED_MARKER_NO_SUCCESSOR = RECALL_SNIPPET_INDENT + "[superseded]"
+
+
 def cmd_recall(a):
     """AUG-075, fail closed: a store that cannot be asked is an error, not an empty list."""
     try:
@@ -4770,9 +4806,33 @@ def cmd_recall(a):
             "empty one."
         )
         return 1
+    # AUG-078: the record knows which answers died (`answer --supersedes` flips the decision's
+    # status and writes the supersedes edge), so a superseded hit is marked — naming its
+    # successor, which also breaks ties at equal scores live-first. Read per hit: recall has no
+    # project and the limit is 5, so the reads stay small.
+    marks = {}
+    for hit in hits:
+        did = decision_named(hit.get("key", ""))
+        if did and did not in marks:
+            marks[did] = supersession_for(a.namespace, did)
+    hits = sorted(
+        hits,
+        key=lambda h: (
+            -(h.get("score") or 0),
+            1 if marks.get(decision_named(h.get("key", "")), (False, ""))[0] else 0,
+        ),
+    )
     for h in hits:
+        superseded, successor = marks.get(decision_named(h.get("key", "")), (False, ""))
+        marker = (
+            SUPERSEDED_MARKER.format(successor)
+            if superseded and successor
+            else (SUPERSEDED_MARKER_NO_SUCCESSOR if superseded else "")
+        )
         print(
-            f"{h.get('score'):.3f}  {h.get('key')}\n     {h.get('content', '')[:200]}"
+            f"{h.get('score'):.3f}  {h.get('key')}\n"
+            f"{RECALL_SNIPPET_INDENT}{h.get('content', '')[:200]}"
+            + (f"\n{marker}" if marker else "")
         )
     return 0
 

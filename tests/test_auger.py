@@ -1610,6 +1610,183 @@ def test_gate_question_reports_a_dead_substrate_as_an_error(monkeypatch):
     assert err and "substrate" in err, err
 
 
+# ================================================================= AUG-078: recall marks superseded
+# `answer --supersedes` leaves the replaced decision's evidence embedded — retrieval keeps finding
+# the old story. The record already knows it was replaced (decision status) and by whom (the
+# supersedes edge), so these pin the three renders: the successor-naming marker under the
+# superseded hit's snippet, the equal-score tie-break (live first), and the bare marker when no
+# successor edge resolves.
+
+
+def test_recall_marks_a_superseded_decision_with_its_successor(decided: dict):
+    """AUG-078: the replaced story stays retrievable, but it says so and names its successor.
+
+    `answer --supersedes` flips the old row's status and writes the edge while its evidence
+    stays embedded, so the raw ranking used to return both decisions at one score with no
+    way to tell which answer was live. The marker goes directly under the superseded hit's
+    snippet; the live successor renders exactly as before.
+    """
+    ns, pid = decided["ns"], decided["pid"]
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-003",
+            "--domain",
+            "4.05",
+            "--chosen",
+            "single SQLite file",
+            "--option",
+            "single SQLite file",
+            "--option",
+            "Postgres",
+            "--why-not",
+            "Postgres needs a service the seed forbids",
+            "--confidence",
+            "0.9",
+            "--supersedes",
+            "D-001",
+            "--supersedes-why",
+            "the envelope format changed",
+        ]
+    )
+    assert rc == 0 and "status -> superseded" in out, out
+
+    rc, out = run_cli(
+        ["-n", ns, "recall", "which option did we choose for question meaning"]
+    )
+    assert rc == 0, out
+    keys = [line.split("  ", 1)[1] for line in out.splitlines() if "  /auger/" in line]
+    assert f"/auger/{pid}/D-001" in keys, out
+    assert f"/auger/{pid}/D-003" in keys, out
+    # The superseded hit's block: the line under its snippet is the marker naming the successor.
+    d1 = out.split(f"/auger/{pid}/D-001\n", 1)[1].split("\n", 1)[1]
+    assert d1.split("\n", 1)[0] == "     [superseded by D-003]", out
+    # The live successor's block carries no marker.
+    d3 = out.split(f"/auger/{pid}/D-003\n", 1)[1].split("\n", 1)[1]
+    assert "superseded" not in d3.split("\n", 1)[0], out
+
+
+def test_recall_orders_a_live_hit_before_a_superseded_one_at_equal_scores(
+    project: dict, monkeypatch
+):
+    """AUG-078: one score, two answers — the live decision prints first.
+
+    The tie cannot be built against the live store: identical evidence scores
+    equally only until the namespace's git-native push settles, after which the
+    index diverges the two (measured: 1 vs 0.9839). So the retrieval boundary is
+    stubbed — the store's own tie order handed to the verb is superseded-first —
+    while the supersession itself is REAL: the edge (successor -> replaced) plus
+    the status flip `record_supersessions` performs, read back by cmd_recall from
+    the namespace exactly as the answer verb leaves them.
+    """
+    ns, pid = project["ns"], project["pid"]
+    evidence = "Question: 4.05. Decision D-001: we chose single SQLite file."
+    auger.insert(
+        ns,
+        "decision",
+        [
+            {
+                "id": "D-001",
+                "project_id": pid,
+                "domain": "4.05",
+                "question_id": "",
+                "chosen": "single SQLite file",
+                "why_not": "",
+                "reversal_cost": "",
+                "confidence": 0.5,
+                "status": auger.SUPERSEDED_STATUS,
+                "evidence_key": f"/auger/{pid}/D-001",
+            },
+            {
+                "id": "D-002",
+                "project_id": pid,
+                "domain": "4.05",
+                "question_id": "",
+                "chosen": "Postgres",
+                "why_not": "",
+                "reversal_cost": "",
+                "confidence": 0.5,
+                "status": "decided",
+                "evidence_key": f"/auger/{pid}/D-002",
+            },
+        ],
+    )
+    auger.edge(
+        ns,
+        pid,
+        "supersedes",
+        "decision",
+        "D-002",
+        "decision",
+        "D-001",
+        note="D-002 supersedes D-001: the seed forbids a second service",
+    )
+
+    def tied_recall(namespace, q, limit=5, missing_ok=False):
+        assert namespace == ns, namespace
+        return [
+            {"key": f"/auger/{pid}/D-001", "score": 0.99, "content": evidence},
+            {"key": f"/auger/{pid}/D-002", "score": 0.99, "content": evidence},
+        ]
+
+    monkeypatch.setattr(auger, "recall", tied_recall)
+    rc, out = run_cli(
+        ["-n", ns, "recall", "which option did we choose for question meaning"]
+    )
+    assert rc == 0, out
+    keys = [line.split("  ", 1)[1] for line in out.splitlines() if "  /auger/" in line]
+    assert keys == [f"/auger/{pid}/D-002", f"/auger/{pid}/D-001"], (
+        f"the superseded D-001 did not tie-break below the live D-002: {out}"
+    )
+    # The tie-break never suppresses the annotation: the dead story still says so.
+    d1 = out.split(f"/auger/{pid}/D-001\n", 1)[1].split("\n", 1)[1]
+    assert d1.split("\n", 1)[0] == "     [superseded by D-002]", out
+    # The live hit's block carries no marker even when it arrived after the dead one.
+    d2 = out.split(f"/auger/{pid}/D-002\n", 1)[1].split("\n", 1)[1]
+    assert "superseded" not in d2.split("\n", 1)[0], out
+
+
+def test_recall_degrades_to_a_bare_marker_without_a_successor_edge(project: dict):
+    """AUG-078: a status flip with no supersedes edge marks "superseded" and names nobody.
+
+    The drift `cmd_status` renders as "no supersedes edge" — a decision moved to superseded
+    whose successor was never recorded — must not gain an invented id: the bare marker says
+    the decision is dead and stops there.
+    """
+    ns, pid = project["ns"], project["pid"]
+    auger.insert(
+        ns,
+        "decision",
+        {
+            "id": "D-001",
+            "project_id": pid,
+            "domain": "4.05",
+            "question_id": "",
+            "chosen": "single SQLite file",
+            "why_not": "",
+            "reversal_cost": "",
+            "confidence": 0.5,
+            "status": auger.SUPERSEDED_STATUS,
+            "evidence_key": f"/auger/{pid}/D-001",
+        },
+    )
+    auger.remember(
+        ns,
+        f"/auger/{pid}/D-001",
+        "Question: 4.05. Decision D-001: we chose single SQLite file.",
+    )
+    rc, out = run_cli(
+        ["-n", ns, "recall", "which option did we choose for question meaning"]
+    )
+    assert rc == 0, out
+    assert f"/auger/{pid}/D-001" in out, out
+    d1 = out.split(f"/auger/{pid}/D-001\n", 1)[1].split("\n", 1)[1]
+    assert d1.split("\n", 1)[0] == "     [superseded]", out
+
+
 # ================================================================= propagate (SPEC-001 BEAT 4)
 # Closure and moot cascades. The walk is driven by stored rows and stored edges, so each case
 # builds its graph over the module's own helpers (`auger.insert` for question nodes — the CLI has
