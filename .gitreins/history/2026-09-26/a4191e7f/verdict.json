@@ -1,0 +1,122 @@
+{
+  "task_id": "AUG-074",
+  "task_title": "init resolves the substrate namespaces path and refuses a green 0/N declared tally",
+  "task_criteria": [
+    "ns_dir resolves the namespaces base from DUCKBRAIN_NAMESPACES_PATH when it is set and non-empty, and falls back to the legacy ~/duckbrain/namespaces otherwise",
+    "when the API serves 0 of the declared tables, init exits non-zero with a message naming the resolved declarations directory and the DUCKBRAIN_NAMESPACES_PATH knob \u2014 a misplaced-declarations run can never print a green init",
+    "the ordinary path is unchanged: init against a default-base substrate declares 14/14 tables and exits 0",
+    "regression tests cover the override, the fallback and the 0/N refusal, and they pass on the current tree"
+  ],
+  "passed": true,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "6b7acc3e19a3a8225861f893e27b5adb66dfde67",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260926T132927.154142Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: scanners=gitleaks+builtin cross-check\n9:54AM INF scanned ~872193 bytes (872.19 KB) in 533ms\n9:54AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 46 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260926T132927.154142Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [ 33%]\n........................................................................ [ 67%]\n....................................................................     [100%]\n212 passed in 1093.00s (0:18:13)\n== end-to-end smoke ==\nnamespace: auger-smoke-4130589\nnamespace sweep: no stale auger-smoke-*/auger-eval-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n  PASS toggle changed the stored configuration\n== verdict: record + list round-trip ==\n  PASS a good verdict is recorded\n  PASS a bad verdict is recorded\n  PASS the good verdict shows in the list\n  PASS the bad verdict's reasons show in the list\n  PASS both --good and --bad refuse\n  PASS the refused pair wrote nothing\n\nnamespace auger-smoke-4130589 removed\npassed 21, failed 0\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260926T132927.154142Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 ns_dir resolves the namespaces base from DUCKBRAIN_NAMESPACES_PATH when it is set and non-empty, and falls back to the legacy ~/duckbrain/namespaces otherwise: auger.py:325 defines NAMESPACES_PATH_ENV=\"DUCKBRAIN_NAMESPACES_PATH\"; auger.py:328-332 ns_dir() does base=os.environ.get(NAMESPACES_PATH_ENV,\"\").strip(); if not base: base=os.path.join(os.path.expanduser(\"~\"),\"duckbrain\",\"namespaces\"); return os.path.join(base,ns). The .strip() makes a whitespace-only value fall back too. Tests test_ns_dir_honors_the_namespaces_path_override (tests/test_auger.py:190-193) and test_ns_dir_falls_back_to_the_legacy_default_without_the_override (:196-201) both PASS.\n  \u2713 when the API serves 0 of the declared tables, init exits non-zero with a message naming the resolved declarations directory and the DUCKBRAIN_NAMESPACES_PATH knob \u2014 a misplaced-declarations run can never print a green init: auger.py:3231-3239: `if not have:` raises SystemExit(f\"declared: 0/{len(COLS)} tables \u2014 nothing visible to the API under {d}; namespaces base resolved from {NAMESPACES_PATH_ENV}\"), where d=os.path.join(ns_dir(ns),\"tables\") (auger.py:3198) is the resolved declarations dir. The raise happens before any success print, so a 0/N run cannot print green. test_init_refuses_a_zero_declared_tally (tests/test_auger.py:204-241) asserts code==1, \"declared: 0/\" in msg, auger.ns_dir(ns) in msg, and auger.NAMESPACES_PATH_ENV in msg \u2014 PASSED.\n  \u2713 the ordinary path is unchanged: init against a default-base substrate declares 14/14 tables and exits 0: auger.py:114 COLS has 14 entries (verified: python -c \"import auger; print(len(auger.COLS))\" -> 14). tests/test_auger.py:181-183 test_init_tolerates_namespace_created_before_init asserts rc==0 and \"declared: 14/14 tables\" in out against a live default-base substrate; it PASSED. Full gate `bash tests/gate.sh` -> \"212 passed in 1708.51s\", smoke \"passed 21, failed 0\", \"GATE PASS\".\n  \u2713 regression tests cover the override, the fallback and the 0/N refusal, and they pass on the current tree: tests/test_auger.py:190-193 (override), :196-201 (fallback), :204-241 (0/N refusal), :244-259 (partial-tally still exit 0). Ran `python -m pytest tests/test_auger.py -k \"ns_dir or zero_declared or partial_tally\" -q` -> \"4 passed, 208 deselected in 0.09s\". Full gate `bash tests/gate.sh` -> syntax OK, ruff \"All checks passed!\", \"212 passed in 1708.51s (0:28:28)\", smoke \"passed 21, failed 0\", \"LIVE ARMS: ran 2; skipped 0\", \"GATE PASS\".\nAll four AUG-074 criteria are implemented in auger.py (ns_dir env override + fallback, 0/N SystemExit refusal naming the resolved dir and knob) and covered by passing regression tests; the full gate is green (212 passed, smoke 21/21, GATE PASS).",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 ns_dir resolves the namespaces base from DUCKBRAIN_NAMESPACES_PATH when it is set and non-empty, and falls back to the legacy ~/duckbrain/namespaces otherwise: auger.py:325 defines NAMESPACES_PATH_ENV=\"DUCKBRAIN_NAMESPACES_PATH\"; auger.py:328-332 ns_dir() does base=os.environ.get(NAMESPACES_PATH_ENV,\"\").strip(); if not base: base=os.path.join(os.path.expanduser(\"~\"),\"duckbrain\",\"namespaces\"); return os.path.join(base,ns). The .strip() makes a whitespace-only value fall back too. Tests test_ns_dir_honors_the_namespaces_path_override (tests/test_auger.py:190-193) and test_ns_dir_falls_back_to_the_legacy_default_without_the_override (:196-201) both PASS.\n  \u2713 when the API serves 0 of the declared tables, init exits non-zero with a message naming the resolved declarations directory and the DUCKBRAIN_NAMESPACES_PATH knob \u2014 a misplaced-declarations run can never print a green init: auger.py:3231-3239: `if not have:` raises SystemExit(f\"declared: 0/{len(COLS)} tables \u2014 nothing visible to the API under {d}; namespaces base resolved from {NAMESPACES_PATH_ENV}\"), where d=os.path.join(ns_dir(ns),\"tables\") (auger.py:3198) is the resolved declarations dir. The raise happens before any success print, so a 0/N run cannot print green. test_init_refuses_a_zero_declared_tally (tests/test_auger.py:204-241) asserts code==1, \"declared: 0/\" in msg, auger.ns_dir(ns) in msg, and auger.NAMESPACES_PATH_ENV in msg \u2014 PASSED.\n  \u2713 the ordinary path is unchanged: init against a default-base substrate declares 14/14 tables and exits 0: auger.py:114 COLS has 14 entries (verified: python -c \"import auger; print(len(auger.COLS))\" -> 14). tests/test_auger.py:181-183 test_init_tolerates_namespace_created_before_init asserts rc==0 and \"declared: 14/14 tables\" in out against a live default-base substrate; it PASSED. Full gate `bash tests/gate.sh` -> \"212 passed in 1708.51s\", smoke \"passed 21, failed 0\", \"GATE PASS\".\n  \u2713 regression tests cover the override, the fallback and the 0/N refusal, and they pass on the current tree: tests/test_auger.py:190-193 (override), :196-201 (fallback), :204-241 (0/N refusal), :244-259 (partial-tally still exit 0). Ran `python -m pytest tests/test_auger.py -k \"ns_dir or zero_declared or partial_tally\" -q` -> \"4 passed, 208 deselected in 0.09s\". Full gate `bash tests/gate.sh` -> syntax OK, ruff \"All checks passed!\", \"212 passed in 1708.51s (0:28:28)\", smoke \"passed 21, failed 0\", \"LIVE ARMS: ran 2; skipped 0\", \"GATE PASS\".\nAll four AUG-074 criteria are implemented in auger.py (ns_dir env override + fallback, 0/N SystemExit refusal naming the resolved dir and knob) and covered by passing regression tests; the full gate is green (212 passed, smoke 21/21, GATE PASS).",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "ns_dir resolves the namespaces base from DUCKBRAIN_NAMESPACES_PATH when it is set and non-empty, and falls back to the legacy ~/duckbrain/namespaces otherwise",
+                "status": "PASS",
+                "detail": "auger.py:325 defines NAMESPACES_PATH_ENV=\"DUCKBRAIN_NAMESPACES_PATH\"; auger.py:328-332 ns_dir() does base=os.environ.get(NAMESPACES_PATH_ENV,\"\").strip(); if not base: base=os.path.join(os.path.expanduser(\"~\"),\"duckbrain\",\"namespaces\"); return os.path.join(base,ns). The .strip() makes a whitespace-only value fall back too. Tests test_ns_dir_honors_the_namespaces_path_override (tests/test_auger.py:190-193) and test_ns_dir_falls_back_to_the_legacy_default_without_the_override (:196-201) both PASS."
+              },
+              {
+                "criterion": "when the API serves 0 of the declared tables, init exits non-zero with a message naming the resolved declarations directory and the DUCKBRAIN_NAMESPACES_PATH knob \u2014 a misplaced-declarations run can never print a green init",
+                "status": "PASS",
+                "detail": "auger.py:3231-3239: `if not have:` raises SystemExit(f\"declared: 0/{len(COLS)} tables \u2014 nothing visible to the API under {d}; namespaces base resolved from {NAMESPACES_PATH_ENV}\"), where d=os.path.join(ns_dir(ns),\"tables\") (auger.py:3198) is the resolved declarations dir. The raise happens before any success print, so a 0/N run cannot print green. test_init_refuses_a_zero_declared_tally (tests/test_auger.py:204-241) asserts code==1, \"declared: 0/\" in msg, auger.ns_dir(ns) in msg, and auger.NAMESPACES_PATH_ENV in msg \u2014 PASSED."
+              },
+              {
+                "criterion": "the ordinary path is unchanged: init against a default-base substrate declares 14/14 tables and exits 0",
+                "status": "PASS",
+                "detail": "auger.py:114 COLS has 14 entries (verified: python -c \"import auger; print(len(auger.COLS))\" -> 14). tests/test_auger.py:181-183 test_init_tolerates_namespace_created_before_init asserts rc==0 and \"declared: 14/14 tables\" in out against a live default-base substrate; it PASSED. Full gate `bash tests/gate.sh` -> \"212 passed in 1708.51s\", smoke \"passed 21, failed 0\", \"GATE PASS\"."
+              },
+              {
+                "criterion": "regression tests cover the override, the fallback and the 0/N refusal, and they pass on the current tree",
+                "status": "PASS",
+                "detail": "tests/test_auger.py:190-193 (override), :196-201 (fallback), :204-241 (0/N refusal), :244-259 (partial-tally still exit 0). Ran `python -m pytest tests/test_auger.py -k \"ns_dir or zero_declared or partial_tally\" -q` -> \"4 passed, 208 deselected in 0.09s\". Full gate `bash tests/gate.sh` -> syntax OK, ruff \"All checks passed!\", \"212 passed in 1708.51s (0:28:28)\", smoke \"passed 21, failed 0\", \"LIVE ARMS: ran 2; skipped 0\", \"GATE PASS\"."
+              }
+            ],
+            "summary": "All four AUG-074 criteria are implemented in auger.py (ns_dir env override + fallback, 0/N SystemExit refusal naming the resolved dir and knob) and covered by passing regression tests; the full gate is green (212 passed, smoke 21/21, GATE PASS)."
+          }
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: AUG-074\n\nStage tier1: PASS\n    \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 ns_dir resolves the namespaces base from DUCKBRAIN_NAMESPACES_PATH when it is set and non-empty, and falls back to the legacy ~/duckbrain/namespaces otherwise: auger.py:325 defines NAMESPACES_PATH_ENV=\"DUCKBRAIN_NAMESPACES_PATH\"; auger.py:328-332 ns_dir() does base=os.environ.get(NAMESPACES_PATH_ENV,\"\").strip(); if not base: base=os.path.join(os.path.expanduser(\"~\"),\"duckbrain\",\"namespaces\"); return os.path.join(base,ns). The .strip() makes a whitespace-only value fall back too. Tests test_ns_dir_honors_the_namespaces_path_override (tests/test_auger.py:190-193) and test_ns_dir_falls_back_to_the_legacy_default_without_the_override (:196-201) both PASS.\n  \u2713 when the API serves 0 of the declared tables, init exits non-zero with a message naming the resolved declarations directory and the DUCKBRAIN_NAMESPACES_PATH knob \u2014 a misplaced-declarations run can never print a green init: auger.py:3231-3239: `if not have:` raises SystemExit(f\"declared: 0/{len(COLS)} tables \u2014 nothing visible to the API under {d}; namespaces base resolved from {NAMESPACES_PATH_ENV}\"), where d=os.path.join(ns_dir(ns),\"tables\") (auger.py:3198) is the resolved declarations dir. The raise happens before any success print, so a 0/N run cannot print green. test_init_refuses_a_zero_declared_tally (tests/test_auger.py:204-241) asserts code==1, \"declared: 0/\" in msg, auger.ns_dir(ns) in msg, and auger.NAMESPACES_PATH_ENV in msg \u2014 PASSED.\n  \u2713 the ordinary path is unchanged: init against a default-base substrate declares 14/14 tables and exits 0: auger.py:114 COLS has 14 entries (verified: python -c \"import auger; print(len(auger.COLS))\" -> 14). tests/test_auger.py:181-183 test_init_tolerates_namespace_created_before_init asserts rc==0 and \"declared: 14/14 tables\" in out against a live default-base substrate; it PASSED. Full gate `bash tests/gate.sh` -> \"212 passed in 1708.51s\", smoke \"passed 21, failed 0\", \"GATE PASS\".\n  \u2713 regression tests cover the override, the fallback and the 0/N refusal, and they pass on the current tree: tests/test_auger.py:190-193 (override), :196-201 (fallback), :204-241 (0/N refusal), :244-259 (partial-tally still exit 0). Ran `python -m pytest tests/test_auger.py -k \"ns_dir or zero_declared or partial_tally\" -q` -> \"4 passed, 208 deselected in 0.09s\". Full gate `bash tests/gate.sh` -> syntax OK, ruff \"All checks passed!\", \"212 passed in 1708.51s (0:28:28)\", smoke \"passed 21, failed 0\", \"LIVE ARMS: ran 2; skipped 0\", \"GATE PASS\".\nAll four AUG-074 criteria are implemented in auger.py (ns_dir env override + fallback, 0/N SystemExit refusal naming the resolved dir and knob) and covered by passing regression tests; the full gate is green (212 passed, smoke 21/21, GATE PASS).\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-09-26T15:44:49.643701",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-09-26T15:44:49.663256+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 11999,
+        "truncated": false,
+        "source": "git show 6b7acc3e19a3"
+      }
+    ],
+    "task_id": "AUG-074"
+  }
+}

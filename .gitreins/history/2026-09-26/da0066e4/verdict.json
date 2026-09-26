@@ -1,0 +1,122 @@
+{
+  "task_id": "AUG-082",
+  "task_title": "Project scoped semantic recall",
+  "task_criteria": [
+    "When recall is invoked with a project id, every returned semantic hit belongs to that project and cross-project hits are excluded before ranking or limiting.",
+    "Without a project filter, recall keeps current namespace-wide behavior.",
+    "Regression tests create two projects in one namespace, seed evidence for both, and prove each filtered recall returns only its own evidence with no cross-project leakage.",
+    "The focused tests and the project gate pass, and the committed change is limited to the implementation and regression tests for AUG-082."
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "725d60147e49326b62b850747dd57f017e3a3953",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": false,
+      "any_failed": true,
+      "summary": "  \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2717 tests: FAIL (tests/test_auger.py::test_recall_cli_scopes_semantic_hits_to_the_selected_project [first faili",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260926T132927.154142Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: scanners=gitleaks+builtin cross-check\n11:47AM INF scanned ~876957 bytes (876.96 KB) in 300ms\n11:47AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 46 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260926T132927.154142Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": false,
+          "output": "== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [ 33%]\n..F..................................................................... [ 67%]\n......................................................................   [100%]\n=================================== FAILURES ===================================\n_________ test_recall_cli_scopes_semantic_hits_to_the_selected_project _________\n\nns = 'auger-pytest-9abbdb2b2b62'\n\n    def test_recall_cli_scopes_semantic_hits_to_the_selected_project(ns: str):\n        \"\"\"Each `-p` arm sees only its seed; the no-`-p` control still sees both.\"\"\"\n        query = \"shared project scope probe quartz falcon\"\n        projects = {\n            \"P-AUG082-ALPHA\": f\"{query}. Alpha evidence says the ledger is amber.\",\n            \"P-AUG082-BETA\": f\"{query}. Beta evidence says the ledger is cobalt.\",\n        }\n        for pid, seed in projects.items():\n            rc, out = run_cli(\n                [\"-n\", ns, \"start\", \"--id\", pid, \"--name\", pid.lower(), \"--seed\", seed]\n            )\n            assert rc == 0 and f\"project {pid}\" in out, out\n    \n>       all_hits = auger.recall(ns, query, limit=10)\n                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\ntests/test_auger.py:1783: \n_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ \n\nns = 'auger-pytest-9abbdb2b2b62', q = 'shared project scope probe quartz falcon'\nlimit = 10, missing_ok = False, project_id = None\n\n    def recall(\n        ns: str,\n        q: str,\n        limit: int = 5,\n        missing_ok: bool = False,\n        project_id: str | None = None,\n    ) -> list:\n        \"\"\"Semantic search over a namespace's embedded rows.\n    \n        AUG-075, fail closed: \"the store has nothing\" and \"the store cannot be asked\"\n        are different answers, and only the first is `[]`. A transport failure arrives\n        as st == 0 (the `_req` contract, untouched here) and any other refusal as its\n        HTTP status; both raise `SubstrateError` naming the substrate's own words. An\n        EMPTY store \u2014 a real 200 \u2014 still returns `[]`, so a caller that sees no rows\n        may believe them.\n    \n        `missing_ok` is the ONE documented carve-out (SPEC-002 section 2.1): a\n\n\u2026 [256 chars omitted \u2014 3 line(s)] \u2026\n        told so, not handed silence.\n    \n        When `project_id` is present, its `/auger/<project>/` key prefix is sent to\n        the substrate in the same request as the semantic query. That constrains the\n        candidate set before ranking and limiting; the result filter is a fail-closed\n        backstop if a substrate ever returns a key outside the requested prefix.\n        \"\"\"\n        project_prefix = f\"/auger/{project_id}/\" if project_id is not None else None\n        prefix_query = (\n            f\"&prefix={quote(project_prefix, safe=_QUERY_VALUE_SAFE)}\"\n            if project_prefix\n            else \"\"\n        )\n        st, body, _ = db(\n            f\"/api/memories?namespace={url_seg(ns)}{prefix_query}&q={quote(q)}&limit={limit}\",\n            timeout=60,\n        )\n        if st != 200:\n            if missing_ok and st == 404:\n                return []\n            detail = body.get(\"error\", body) if isinstance(body, dict) else body\n>           raise SubstrateError(\n                f\"substrate read failed for {ns!r} (status {st}): {detail} \u2014 a failed \"\n                \"read is NOT an empty store\"\n            )\nE           auger.SubstrateError: substrate read failed for 'auger-pytest-9abbdb2b2b62' (status 0): transport: timed out \u2014 a failed read is NOT an empty store\n\nauger.py:1142: SubstrateError\n=========================== short test summary info ============================\nFAILED tests/test_auger.py::test_recall_cli_scopes_semantic_hits_to_the_selected_project\n1 failed, 213 passed in 2088.03s (0:34:48)\n",
+          "error": "",
+          "data": {
+            "exit_code": 1,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260926T170005.270978Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": false,
+      "any_failed": true,
+      "summary": "INCOMPLETE\n  \u2717 When recall is invoked with a project id, every returned semantic hit belongs to that project and cross-project hits are excluded before ranking or limiting.: Criterion 0 (project filter excludes cross-project hits before ranking/limiting): auger.py:1128-1153 \u2014 recall() builds project_prefix `/auger/<pid>/`, sends `&prefix=<encoded>` in the SAME /api/memories request as q+limit (so the substrate constrains candidates before top-N), and post-filters items by key.startswith(project_prefix) as fail-closed backstop. cmd_recall (auger.py:4865) passes project_id=a.project_id. Test test_recall_sends_project_prefix_with_semantic_limit_and_rejects_foreign_hits (tests/test_auger.py:4449) asserts URL contains prefix before q/limit and that a foreign higher-scored row is dropped. NOTE: substrate-side `prefix` param support unverified (no substrate source in repo) \u2014 see criterion 3 live test.\n  \u2717 Without a project filter, recall keeps current namespace-wide behavior.: Criterion 1 (no project filter => namespace-wide): auger.py:1128 project_prefix is None when project_id is None; prefix_query = \"\" so URL is unchanged `/api/memories?namespace=..&q=..&limit=..`; auger.py:1147-1153 returns items unfiltered. Existing test test_recall_sends_an_encoded_namespace (tests/test_auger.py:4433) asserts exact URL with no prefix param. Also test_recall_cli_scopes_semantic_hits_to_the_selected_project asserts no-`-p` control sees both projects' seeds.\n  \u2717 Regression tests create two projects in one namespace, seed evidence for both, and prove each filtered recall returns only its own evidence with no cross-project leakage.: Criterion 2 (regression test: two projects in one namespace, seed both, prove no leakage): tests/test_auger.py:1766-1795 test_recall_cli_scopes_semantic_hits_to_the_selected_project(ns) \u2014 creates P-AUG082-ALPHA and P-AUG082-BETA in ONE namespace via `start --seed` (both seeds share the query phrase), asserts unfiltered recall returns exactly both `/auger/<pid>/seed` keys, then for each selected project runs `-p <pid> recall` and asserts own seed key present and other's absent. LIVE RUN: `python3 -m pytest tests/test_auger.py -q -k recall_cli_scopes -v` => \"1 passed, 213 deselected in 38.35s\" (exit 0). Also `-k \"recall\"` => \"11 passed, 203 deselected in 48.84s\".\n  \u2717 The focused tests and the project gate pass, and the committed change is limited to the implementation and regression tests for AUG-082.: Not verified \u2014 evaluation terminated before this criterion was checked\nPartial verdict \u2014 evaluation hit resource cap before all criteria verified",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": false,
+          "output": "INCOMPLETE\n  \u2717 When recall is invoked with a project id, every returned semantic hit belongs to that project and cross-project hits are excluded before ranking or limiting.: Criterion 0 (project filter excludes cross-project hits before ranking/limiting): auger.py:1128-1153 \u2014 recall() builds project_prefix `/auger/<pid>/`, sends `&prefix=<encoded>` in the SAME /api/memories request as q+limit (so the substrate constrains candidates before top-N), and post-filters items by key.startswith(project_prefix) as fail-closed backstop. cmd_recall (auger.py:4865) passes project_id=a.project_id. Test test_recall_sends_project_prefix_with_semantic_limit_and_rejects_foreign_hits (tests/test_auger.py:4449) asserts URL contains prefix before q/limit and that a foreign higher-scored row is dropped. NOTE: substrate-side `prefix` param support unverified (no substrate source in repo) \u2014 see criterion 3 live test.\n  \u2717 Without a project filter, recall keeps current namespace-wide behavior.: Criterion 1 (no project filter => namespace-wide): auger.py:1128 project_prefix is None when project_id is None; prefix_query = \"\" so URL is unchanged `/api/memories?namespace=..&q=..&limit=..`; auger.py:1147-1153 returns items unfiltered. Existing test test_recall_sends_an_encoded_namespace (tests/test_auger.py:4433) asserts exact URL with no prefix param. Also test_recall_cli_scopes_semantic_hits_to_the_selected_project asserts no-`-p` control sees both projects' seeds.\n  \u2717 Regression tests create two projects in one namespace, seed evidence for both, and prove each filtered recall returns only its own evidence with no cross-project leakage.: Criterion 2 (regression test: two projects in one namespace, seed both, prove no leakage): tests/test_auger.py:1766-1795 test_recall_cli_scopes_semantic_hits_to_the_selected_project(ns) \u2014 creates P-AUG082-ALPHA and P-AUG082-BETA in ONE namespace via `start --seed` (both seeds share the query phrase), asserts unfiltered recall returns exactly both `/auger/<pid>/seed` keys, then for each selected project runs `-p <pid> recall` and asserts own seed key present and other's absent. LIVE RUN: `python3 -m pytest tests/test_auger.py -q -k recall_cli_scopes -v` => \"1 passed, 213 deselected in 38.35s\" (exit 0). Also `-k \"recall\"` => \"11 passed, 203 deselected in 48.84s\".\n  \u2717 The focused tests and the project gate pass, and the committed change is limited to the implementation and regression tests for AUG-082.: Not verified \u2014 evaluation terminated before this criterion was checked\nPartial verdict \u2014 evaluation hit resource cap before all criteria verified",
+          "error": "",
+          "data": {
+            "verdict": "INCOMPLETE",
+            "items": [
+              {
+                "criterion": "When recall is invoked with a project id, every returned semantic hit belongs to that project and cross-project hits are excluded before ranking or limiting.",
+                "status": "FAIL",
+                "detail": "Criterion 0 (project filter excludes cross-project hits before ranking/limiting): auger.py:1128-1153 \u2014 recall() builds project_prefix `/auger/<pid>/`, sends `&prefix=<encoded>` in the SAME /api/memories request as q+limit (so the substrate constrains candidates before top-N), and post-filters items by key.startswith(project_prefix) as fail-closed backstop. cmd_recall (auger.py:4865) passes project_id=a.project_id. Test test_recall_sends_project_prefix_with_semantic_limit_and_rejects_foreign_hits (tests/test_auger.py:4449) asserts URL contains prefix before q/limit and that a foreign higher-scored row is dropped. NOTE: substrate-side `prefix` param support unverified (no substrate source in repo) \u2014 see criterion 3 live test."
+              },
+              {
+                "criterion": "Without a project filter, recall keeps current namespace-wide behavior.",
+                "status": "FAIL",
+                "detail": "Criterion 1 (no project filter => namespace-wide): auger.py:1128 project_prefix is None when project_id is None; prefix_query = \"\" so URL is unchanged `/api/memories?namespace=..&q=..&limit=..`; auger.py:1147-1153 returns items unfiltered. Existing test test_recall_sends_an_encoded_namespace (tests/test_auger.py:4433) asserts exact URL with no prefix param. Also test_recall_cli_scopes_semantic_hits_to_the_selected_project asserts no-`-p` control sees both projects' seeds."
+              },
+              {
+                "criterion": "Regression tests create two projects in one namespace, seed evidence for both, and prove each filtered recall returns only its own evidence with no cross-project leakage.",
+                "status": "FAIL",
+                "detail": "Criterion 2 (regression test: two projects in one namespace, seed both, prove no leakage): tests/test_auger.py:1766-1795 test_recall_cli_scopes_semantic_hits_to_the_selected_project(ns) \u2014 creates P-AUG082-ALPHA and P-AUG082-BETA in ONE namespace via `start --seed` (both seeds share the query phrase), asserts unfiltered recall returns exactly both `/auger/<pid>/seed` keys, then for each selected project runs `-p <pid> recall` and asserts own seed key present and other's absent. LIVE RUN: `python3 -m pytest tests/test_auger.py -q -k recall_cli_scopes -v` => \"1 passed, 213 deselected in 38.35s\" (exit 0). Also `-k \"recall\"` => \"11 passed, 203 deselected in 48.84s\"."
+              },
+              {
+                "criterion": "The focused tests and the project gate pass, and the committed change is limited to the implementation and regression tests for AUG-082.",
+                "status": "FAIL",
+                "detail": "Not verified \u2014 evaluation terminated before this criterion was checked"
+              }
+            ],
+            "summary": "Partial verdict \u2014 evaluation hit resource cap before all criteria verified"
+          }
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: AUG-082\n\nStage tier1: FAIL\n    \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2717 tests: FAIL (tests/test_auger.py::test_recall_cli_scopes_semantic_hits_to_the_selected_project [first faili\n\nStage tier2: FAIL\n  INCOMPLETE\n  \u2717 When recall is invoked with a project id, every returned semantic hit belongs to that project and cross-project hits are excluded before ranking or limiting.: Criterion 0 (project filter excludes cross-project hits before ranking/limiting): auger.py:1128-1153 \u2014 recall() builds project_prefix `/auger/<pid>/`, sends `&prefix=<encoded>` in the SAME /api/memories request as q+limit (so the substrate constrains candidates before top-N), and post-filters items by key.startswith(project_prefix) as fail-closed backstop. cmd_recall (auger.py:4865) passes project_id=a.project_id. Test test_recall_sends_project_prefix_with_semantic_limit_and_rejects_foreign_hits (tests/test_auger.py:4449) asserts URL contains prefix before q/limit and that a foreign higher-scored row is dropped. NOTE: substrate-side `prefix` param support unverified (no substrate source in repo) \u2014 see criterion 3 live test.\n  \u2717 Without a project filter, recall keeps current namespace-wide behavior.: Criterion 1 (no project filter => namespace-wide): auger.py:1128 project_prefix is None when project_id is None; prefix_query = \"\" so URL is unchanged `/api/memories?namespace=..&q=..&limit=..`; auger.py:1147-1153 returns items unfiltered. Existing test test_recall_sends_an_encoded_namespace (tests/test_auger.py:4433) asserts exact URL with no prefix param. Also test_recall_cli_scopes_semantic_hits_to_the_selected_project asserts no-`-p` control sees both projects' seeds.\n  \u2717 Regression tests create two projects in one namespace, seed evidence for both, and prove each filtered recall returns only its own evidence with no cross-project leakage.: Criterion 2 (regression test: two projects in one namespace, seed both, prove no leakage): tests/test_auger.py:1766-1795 test_recall_cli_scopes_semantic_hits_to_the_selected_project(ns) \u2014 creates P-AUG082-ALPHA and P-AUG082-BETA in ONE namespace via `start --seed` (both seeds share the query phrase), asserts unfiltered recall returns exactly both `/auger/<pid>/seed` keys, then for each selected project runs `-p <pid> recall` and asserts own seed key present and other's absent. LIVE RUN: `python3 -m pytest tests/test_auger.py -q -k recall_cli_scopes -v` => \"1 passed, 213 deselected in 38.35s\" (exit 0). Also `-k \"recall\"` => \"11 passed, 203 deselected in 48.84s\".\n  \u2717 The focused tests and the project gate pass, and the committed change is limited to the implementation and regression tests for AUG-082.: Not verified \u2014 evaluation terminated before this criterion was checked\nPartial verdict \u2014 evaluation hit resource cap before all criteria verified\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-09-26T18:32:35.531991",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-09-26T18:32:35.556554+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 262176,
+        "truncated": true,
+        "source": "git show 725d60147e49"
+      }
+    ],
+    "task_id": "AUG-082"
+  }
+}
