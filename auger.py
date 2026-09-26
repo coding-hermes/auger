@@ -314,8 +314,21 @@ def facet_set() -> tuple:
     return DEFAULT_FACETS
 
 
+# ---------------------------------------------------------------- the namespaces base (AUG-074)
+# The base directory is the SUBSTRATE's config, not this repo's assumption: DuckBrain honors
+# DUCKBRAIN_NAMESPACES_PATH for its namespaces directory, so a substrate running from a
+# non-default path made the legacy guess write declaration files into a tree the API never
+# reads (proven 2026-09-25: 0/14 declared files under ~, substrate serving /tmp/...).
+# First choice is the env var when it is set and non-empty; the legacy default stays the
+# fallback so a plain setup resolves exactly as before.
+NAMESPACES_PATH_ENV = "DUCKBRAIN_NAMESPACES_PATH"
+
+
 def ns_dir(ns: str) -> str:
-    return os.path.join(os.path.expanduser("~"), "duckbrain", "namespaces", ns)
+    base = os.environ.get(NAMESPACES_PATH_ENV, "").strip()
+    if not base:
+        base = os.path.join(os.path.expanduser("~"), "duckbrain", "namespaces")
+    return os.path.join(base, ns)
 
 
 # ---------------------------------------------------------------- the 429 budget
@@ -3213,6 +3226,16 @@ def cmd_init(a):
     missing = sorted(set(COLS) - set(have))
     if missing:
         print(f"WARNING not visible to the API yet: {', '.join(missing)}")
+    if not have:
+        # A full miss is not a slow mirror: it means the API serves no table where the
+        # declarations were just written, and `start` on this namespace would die on its
+        # very first insert ("Table 'project' not found"). Fail here, naming where the
+        # declarations went and which knob moves that place, so the next run is a fix
+        # rather than the same false success. A PARTIAL tally keeps the WARNING above.
+        raise SystemExit(
+            f"declared: 0/{len(COLS)} tables — nothing visible to the API under {d}; "
+            f"namespaces base resolved from {NAMESPACES_PATH_ENV}"
+        )
     if a.seed_domains:
         # The one row-writing arm of `init`, and it belongs here because `init` owns namespace
         # setup: the 44-domain grid is the shape of the namespace, not an answer about a project.
@@ -3248,6 +3271,13 @@ def _project(ns, pid=None):
 def cmd_start(a):
     ns = a.namespace
     pid = a.id or f"P-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
+    if a.project_id is not None:
+        # The top-level --project-id/-p resolves a project row for verbs that READ one;
+        # `start` never consumes it — it takes --id or mints its own. Name the flag
+        # instead of silently swallowing it (AUG-074: `start -p X` used to run as if
+        # the flag had never been given).
+        action = f"using --id {pid}" if a.id else f"minting {pid}"
+        print(f"note: -p/--project-id is not honored by start; {action}")
     seed = a.seed or ""
     if a.seed_file:
         with open(a.seed_file, errors="replace") as f:

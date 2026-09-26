@@ -184,6 +184,96 @@ def test_init_tolerates_namespace_created_before_init(live_service: str):
         assert teardown_namespace(ns) == []
 
 
+# AUG-074: the substrate's namespaces base is configurable (DUCKBRAIN_NAMESPACES_PATH), so
+# `ns_dir` must follow it, and `init` must refuse — never report success on — a namespace
+# where nothing it declared is visible to the API.
+def test_ns_dir_honors_the_namespaces_path_override(monkeypatch):
+    """`ns_dir` builds inside DUCKBRAIN_NAMESPACES_PATH when the substrate sets it."""
+    monkeypatch.setenv(auger.NAMESPACES_PATH_ENV, "/tmp/aug074-ns")
+    assert auger.ns_dir("demo") == "/tmp/aug074-ns/demo"
+
+
+def test_ns_dir_falls_back_to_the_legacy_default_without_the_override(monkeypatch):
+    """Without DUCKBRAIN_NAMESPACES_PATH the legacy ~/duckbrain/namespaces stays the base."""
+    monkeypatch.delenv(auger.NAMESPACES_PATH_ENV, raising=False)
+    assert auger.ns_dir("demo") == os.path.join(
+        os.path.expanduser("~"), "duckbrain", "namespaces", "demo"
+    )
+
+
+def test_init_refuses_a_zero_declared_tally(monkeypatch, tmp_path):
+    """A 0/N tally exits non-zero naming the resolved directory and the override."""
+    ns = "auger-worker074-unit"  # never touched: db is stubbed
+    calls: list[tuple[str, str]] = []
+
+    def fake_db(path, method="GET", body=None, timeout=45, retries=auger.RETRIES):
+        calls.append((method, path))
+        if path == "/api/namespaces":
+            if method == "GET":
+                return 200, {"namespaces": []}, None  # registry does not list it yet
+            return 201, {"name": ns}, None  # the create itself succeeds
+        return 200, {"tables": []}, None  # the API serves no declared table
+
+    monkeypatch.setattr(auger, "db", fake_db)
+    # The override points the declaration writes at tmp_path: the refusal path still
+    # writes its 14 files, and they must land in the test's own tree, never in the
+    # real ~/duckbrain namespaces base.
+    monkeypatch.setenv(auger.NAMESPACES_PATH_ENV, str(tmp_path / "ns"))
+
+    code, msg, out = run_cli_exit(["-n", ns, "init"])
+
+    assert code == 1, out
+    assert calls == [
+        ("GET", "/api/namespaces"),
+        ("POST", "/api/namespaces"),
+        ("GET", auger.ns_tables_path(ns)),
+    ], calls
+    assert "declared: 0/" in msg, msg
+    assert auger.ns_dir(ns) in msg, msg
+    assert auger.NAMESPACES_PATH_ENV in msg, msg
+
+
+def test_init_partial_tally_still_warns_and_exits_zero(monkeypatch, tmp_path):
+    """The refusal is a 0/N gate: some tables visible keeps today's WARNING + exit 0."""
+    ns = "auger-worker074-unit"  # never touched: db is stubbed
+
+    def fake_db(path, method="GET", body=None, timeout=45, retries=auger.RETRIES):
+        if path == "/api/namespaces":
+            if method == "GET":
+                return 200, {"namespaces": []}, None
+            return 201, {"name": ns}, None
+        # Exactly one declared table visible: partial, not zero.
+        first = sorted(auger.COLS)[0]
+        return 200, {"tables": [{"name": first}]}, None
+
+    monkeypatch.setattr(auger, "db", fake_db)
+    monkeypatch.setenv(auger.NAMESPACES_PATH_ENV, str(tmp_path / "ns"))
+
+    rc, out = run_cli(["-n", ns, "init"])
+
+    assert rc == 0, out
+    assert "WARNING not visible to the API yet:" in out, out
+
+
+def test_start_prints_the_ignored_project_id_hint(monkeypatch):
+    """`start -p` names the flag it cannot honor instead of silently swallowing it."""
+    monkeypatch.setattr(
+        auger, "insert", lambda ns_, table, rows: {"table": table, "row": rows}
+    )
+    monkeypatch.setattr(auger, "remember", lambda *args, **kwargs: {})
+    ns = "auger-worker074-unit"  # never touched: insert and remember are stubbed
+
+    rc, out = run_cli(["-n", ns, "-p", "P-IGNORED", "start", "--id", "P-NAMED"])
+    assert rc == 0, out
+    assert "note: -p/--project-id is not honored by start; using --id P-NAMED" in out, (
+        out
+    )
+
+    rc, out = run_cli(["-n", ns, "-p", "P-IGNORED", "start"])
+    assert rc == 0, out
+    assert "note: -p/--project-id is not honored by start; minting P-" in out, out
+
+
 # ================================================================= start / answer -> stored rows
 def test_start_stores_the_project_row_and_embeds_the_seed(project: dict):
     """The seed is in the `project` row and in the embedding index, not only in stdout."""

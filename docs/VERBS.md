@@ -35,10 +35,16 @@ path: `init` verifies the namespace resource itself and treats a confirmed creat
 there is nothing beyond the top-level `--namespace`.
 
 **Writes:** the namespace itself, when it does not exist yet, and one declaration file
-per table in `COLS` — 14 today — under `~/duckbrain/namespaces/<ns>/tables/<table>.table.json`.
-Idempotent: a declaration file whose content already matches is not rewritten. The run states
-the tally itself (`declared: 14/14 tables -> ...`), which is how the count the README repeats is
-checked against the code rather than trusted.
+per table in `COLS` — 14 today — under `<ns>/tables/<table>.table.json` inside the
+namespaces base: `DUCKBRAIN_NAMESPACES_PATH` when it is set and non-empty (the substrate
+honors the same variable, so the declarations land in the tree the API actually reads),
+else the legacy `~/duckbrain/namespaces`. Idempotent: a declaration file whose content
+already matches is not rewritten. The run states the tally itself (`declared: 14/14
+tables -> ...`), which is how the count the README repeats is checked against the code
+rather than trusted. A 0/N tally — no declared table visible to the API at all — REFUSES
+with a non-zero exit naming the resolved directory and the override: `start` on such a
+namespace would die on its first insert anyway. A partial tally keeps the WARNING, on the
+assumption the API has not caught up yet.
 With `--seed-domains`, a further 44 `domain` rows — one per domain of the method's grid,
 4.01-4.44 — read from the skill's own `design/02-domains/` files (the default path is the
 dogfood artifact under `~/.hermes/skills/`; `AUGER_DOMAIN_GRID` moves it) rather than copied
