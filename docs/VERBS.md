@@ -134,8 +134,9 @@ one supplied option by full option id, option label, or bare option suffix such 
 `--id` (defaults to the next `D-` number), `--option` (repeatable — every alternative,
 chosen ones included), `--why-not`,
 `--domain`, `--question-id`, `--reversal-cost`, `--confidence` (float), `--status`
-(defaults `decided`), `--scope` (`project` | `bundle`, default `project`), `--supersedes`
-(repeatable decision id), `--supersedes-why`.
+(defaults `decided`), `--scope` (`project` | `bundle`, default `project`), `--invalidates`
+(repeatable decision id), `--invalidates-why` (alias `--why`; only with `--invalidates`),
+`--supersedes` (repeatable decision id), `--supersedes-why`.
 
 A supplied `--chosen` that matches no option, or matches more than one option label, is
 refused before any decision or option row is written. The resolver does not guess between
@@ -149,10 +150,40 @@ never listing the chosen option as rejected. With `--question-id`: a `closes` ed
 (`decision` → `question`) and the question moved to `answered`, its reason recorded on
 its `facet` rows. With `--scope bundle` (as stored): the bundle impact pass — `affects`
 or `breaks` edges naming each sibling's bundle-scoped decision the answer touches, and
-an `escalation` row for every break, recorded with a default action. With `--supersedes`,
+an `escalation` row for every break, recorded with a default action. With `--invalidates`,
+one local `breaks` edge per target, the reason recorded on the edge's note — see below.
+With `--supersedes`,
 one local `supersedes` edge per target, the old decision's status is patched to
 `superseded`, and the old decision's answered questions have their facet rows refreshed
 with the new decision and reason.
+
+**Invalidating an earlier decision.** `--invalidates D-00X` records that the answer being
+written kills a decision that is ALREADY on this project's record, by writing one LOCAL
+`breaks` edge (source `human`, the default asserted confidence, note
+"`<did> invalidates <target>`") per target. The flag is repeatable, but every target must
+already be stored in this project's namespace: a decision that is not stored is refused by
+name, a sibling's decision is refused (ids are per namespace — a break reaching a sibling's
+decision belongs to the bundle impact pass, whose edge carries `dst_project`), and a
+decision cannot invalidate itself (the walk would moot the questions the answer just
+closed). A `--invalidates-why` with no `--invalidates` target is refused too — the reason
+belongs on a break edge. Nothing is rewritten: the target's rows keep their status, options,
+and answered questions; the trigger sits on the record instead. `propagate` performs the
+cascade — it moots the questions the invalidated decision answered and reopens their stale
+children. The refusals happen before anything is stored, so a refused run leaves the whole
+invocation — the answer included — unwritten. Example:
+
+```
+auger answer --id D-003 --chosen O2 --invalidates D-001 --invalidates-why 'new evidence rules out the earlier decision'
+```
+
+This records D-003 plus the local break edge `D-003 invalidates D-001: new evidence rules
+out the earlier decision`, and prints the trigger line naming `propagate` as the walk that
+fires it. D-001 must already exist on this project's record — the command refuses with
+`refused: decision 'D-001' does not exist in project <pid> — a LOCAL break names a decision
+this project already recorded` otherwise — and D-001 itself is not rewritten; run
+`auger propagate` afterwards to moot the questions D-001 answered and reopen their stale
+children. `--invalidates-why` is valid only together with `--invalidates` (`--why` is the
+same option); the reason is recorded on the break edge's note, never on the dead decision.
 
 **Never writes:** anything into a sibling project's namespace — a break in a member's
 contract is recorded as an edge and an escalation HERE, naming the sibling there; the
