@@ -366,6 +366,69 @@ def test_answer_writes_every_decision_field_to_the_row(decided: dict):
     assert d["evidence_key"] == f"/auger/{decided['pid']}/D-001"
 
 
+@pytest.mark.parametrize(
+    "confidence",
+    [
+        pytest.param("1.5", id="above-one"),
+        pytest.param("-0.1", id="below-zero"),
+        pytest.param("nan", id="nan"),
+        pytest.param("inf", id="infinity"),
+    ],
+)
+def test_answer_refuses_invalid_confidence_without_storing_rows(
+    project: dict, confidence: str
+):
+    """A non-finite or out-of-range confidence refuses before any table changes."""
+    ns = project["ns"]
+    before = {table: rows(ns, table, "order=id.asc") for table in auger.COLS}
+
+    rc, message, out = run_cli_exit(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-083",
+            "--chosen",
+            "invalid confidence must not be stored",
+            "--confidence",
+            confidence,
+        ]
+    )
+
+    assert rc == 1
+    assert "refused" in message.lower(), message
+    assert "confidence" in message.lower(), message
+    assert "between 0 and 1 inclusive" in message, message
+    assert "nothing was stored" in message.lower(), message
+    assert out == ""
+    after = {table: rows(ns, table, "order=id.asc") for table in auger.COLS}
+    assert after == before, "a refused answer changed stored rows"
+
+
+@pytest.mark.parametrize("confidence", [0.0, 1.0])
+def test_answer_accepts_confidence_boundaries(project: dict, confidence: float):
+    """Both endpoints of the inclusive confidence range remain valid answers."""
+    ns = project["ns"]
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-083",
+            "--chosen",
+            "boundary confidence is valid",
+            "--confidence",
+            str(confidence),
+        ]
+    )
+
+    assert rc == 0, out
+    assert "D-083 recorded" in out, out
+    assert row(ns, "decision", "id=eq.D-083")["confidence"] == pytest.approx(confidence)
+
+
 def test_answer_makes_the_chosen_option_the_only_active_one(decided: dict):
     """The `active` flags are derived when the option rows are written."""
     ns, did = decided["ns"], "D-001"

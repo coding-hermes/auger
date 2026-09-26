@@ -36,6 +36,7 @@ import argparse
 import contextlib
 import io
 import json
+import math
 import os
 import re
 import sqlite3
@@ -3937,6 +3938,13 @@ def bundle_impact(ns: str, project_id: str, dec_row: dict) -> dict:
 
 
 def cmd_answer(a):
+    if a.confidence is not None and (
+        not math.isfinite(a.confidence) or not 0 <= a.confidence <= 1
+    ):
+        raise SystemExit(
+            f"refused: confidence must be between 0 and 1 inclusive; "
+            f"nothing was stored (received {a.confidence!r})"
+        )
     ns, pid = a.namespace, a.project_id
     p = _project(ns, pid)
     pid = p["id"]
