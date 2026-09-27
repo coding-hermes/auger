@@ -264,6 +264,41 @@ COLS = {
 }
 PRIMARY = {t: "id" for t in COLS}
 
+# One explicit export order: it is a readable spec, not an incidental rendering of dict insertion
+# order. Every declared table is present even when the namespace holds no rows.
+EXPORT_TABLES = (
+    "project",
+    "domain",
+    "question",
+    "decision",
+    "option",
+    "break",
+    "escalation",
+    "assumption",
+    "unknown",
+    "edge",
+    "facet",
+    "bundle",
+    "bundle_member",
+    "verdict",
+)
+EXPORT_HEADINGS = {
+    "project": "Projects",
+    "domain": "Domains",
+    "question": "Questions",
+    "decision": "Decisions",
+    "option": "Options",
+    "break": "Break records",
+    "escalation": "Escalations",
+    "assumption": "Assumptions",
+    "unknown": "Unknowns",
+    "edge": "Graph edges",
+    "facet": "Question facets",
+    "bundle": "Bundles",
+    "bundle_member": "Bundle members",
+    "verdict": "Verdicts",
+}
+
 # ---------------------------------------------------------------- the graph's closed sets
 # Edge kinds and sources are sets the ENGINE switches on, so they live in code. The facet set is
 # the deliberate exception — SPEC-001 section 3 makes it DATA so a project can extend it.
@@ -4913,6 +4948,55 @@ def cmd_toggle(a):
     return 0
 
 
+def _export_value(value: object) -> str:
+    """A stable, readable scalar for the namespace export (empty is explicit, never omitted)."""
+    if value is None or value == "":
+        text = "—"
+    elif isinstance(value, bool):
+        text = "true" if value else "false"
+    elif isinstance(value, (dict, list)):
+        text = json.dumps(
+            value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+    else:
+        text = str(value)
+    return text.replace("\n", "\n    ")
+
+
+def render_export(ns: str, project_id: str | None = None) -> str:
+    """Render every declared table in one deterministic, read-only namespace document.
+
+    `-p/--project-id` remains the CLI's optional project context, but cannot filter this
+    command: the export contract is the whole namespace, including cross-project bundle and
+    graph rows. Reads go through `select`, so page-sized API responses cannot truncate the spec.
+    """
+    lines = [
+        f"# Auger spec export — namespace {ns}",
+        "",
+        "Read-only deterministic rendering of every declared table.",
+        "Scope: whole namespace (no rows are written).",
+    ]
+    if project_id:
+        lines.append(f"Project context: {project_id} (not a filter).")
+    for table in EXPORT_TABLES:
+        rows = select(ns, table, "order=id.asc")
+        lines.extend(("", f"## {EXPORT_HEADINGS[table]} ({len(rows)} rows)"))
+        if not rows:
+            lines.append("### (none stored)")
+            continue
+        fields = [name for name, _kind in COLS[table]]
+        for row in rows:
+            lines.append(f"### {row.get('id') or '(missing id)'}")
+            for field in fields:
+                lines.append(f"- {field}: {_export_value(row.get(field))}")
+    return "\n".join(lines)
+
+
+def cmd_export(a):
+    print(render_export(a.namespace, a.project_id))
+    return 0
+
+
 def cmd_dump(a):
     """Render the system as it looks with a given option set.
 
@@ -5445,6 +5529,12 @@ def main(argv=None):
         ),
     )
     s.set_defaults(fn=cmd_dump)
+
+    s = sub.add_parser(
+        "export",
+        help="render every namespace table as one deterministic, read-only spec",
+    )
+    s.set_defaults(fn=cmd_export)
 
     s = sub.add_parser(
         "propagate", help="close/moot/reopen and re-gate (SPEC-001 BEAT 4)"

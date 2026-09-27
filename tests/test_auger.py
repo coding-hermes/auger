@@ -7151,3 +7151,147 @@ def test_confidence_sentinel_renders_n_a_in_ask_seats_and_verdict_list(
     assert rc == 0, out
     assert "conf —" in out, out
     assert "-1" not in out, out
+
+
+# ================================================================= export (AUG-005)
+def test_export_renders_every_namespace_table_deterministically_without_writes(
+    decided: dict,
+):
+    """`export` is one readable, complete, read-only artifact — not the `dump` projection."""
+    ns, pid = decided["ns"], decided["pid"]
+    supporting = {
+        "domain": {
+            "id": "DM-001",
+            "project_id": pid,
+            "num": "4.05",
+            "name": "storage",
+            "triage": 2,
+            "ring_floor": 1,
+            "terminating_ring": 3,
+            "status": "reached",
+            "owner": "engineering",
+            "trigger": "first decision",
+            "containment": "recorded",
+        },
+        "question": {
+            "id": "Q-000001",
+            "project_id": pid,
+            "domain": "4.05",
+            "text": "Which durable store preserves the record?",
+            "ring": 1,
+            "qclass": "follow_up",
+            "status": "answered",
+            "jev_already_answered": 0.82,
+            "jev_checked_at": "2026-09-27T00:00:00Z",
+        },
+        "break": {
+            "id": "BR-000001",
+            "decision_id": "D-001",
+            "breaks_what": "an external database",
+            "consequence": "needs an extra service",
+            "applied": False,
+        },
+        "escalation": {
+            "id": "ES-000001",
+            "project_id": pid,
+            "question": "Who accepts the operational risk?",
+            "options": "owner|defer",
+            "default_action": "defer",
+            "risk": "service dependency",
+            "status": "open",
+        },
+        "assumption": {
+            "id": "A-000001",
+            "project_id": pid,
+            "text": "One host is sufficient.",
+            "falsifier": "load exceeds host capacity",
+            "monitoring": "weekly capacity review",
+        },
+        "unknown": {
+            "id": "U-000001",
+            "project_id": pid,
+            "text": "Recovery time after a host failure.",
+            "owner": "operations",
+            "trigger": "first production incident",
+            "containment": "manual recovery runbook",
+        },
+        "edge": {
+            "id": "E-000001",
+            "project_id": pid,
+            "kind": "closes",
+            "src_kind": "decision",
+            "src_id": "D-001",
+            "dst_kind": "question",
+            "dst_id": "Q-000001",
+            "src_project": "",
+            "dst_project": "",
+            "confidence": 0.82,
+            "source": "human",
+            "note": "D-001 closes Q-000001",
+            "created_at": "2026-09-27T00:00:00Z",
+        },
+        "facet": {
+            "id": "F-000001",
+            "project_id": pid,
+            "question_id": "Q-000001",
+            "facet": "risk",
+            "status": "closed",
+            "closed_by": "D-001",
+            "note": "resolved by the storage decision",
+        },
+        "bundle": {
+            "id": "B-000001",
+            "name": "storage-core",
+            "description": "storage contract readers",
+            "contract": "specs/STORAGE.md",
+            "status": "confirmed",
+        },
+        "bundle_member": {
+            "id": "BM-000001",
+            "bundle_id": "B-000001",
+            "project": "pytesttest",
+            "role": "owner",
+            "note": "owns the contract",
+        },
+        "verdict": {
+            "id": "V-000001",
+            "project_id": pid,
+            "config_summary": "D-001=single SQLite file",
+            "verdict": "good",
+            "reasons": "one box, no service",
+            "judged_by": "human",
+            "confidence": 0.91,
+            "source": "human",
+            "note": "ready to implement",
+            "created_at": "2026-09-27T00:00:00Z",
+        },
+    }
+    for table, stored in supporting.items():
+        auger.insert(ns, table, stored)
+
+    before = {table: rows(ns, table, "order=id.asc") for table in auger.COLS}
+    rc, first = run_cli(["-n", ns, "-p", pid, "export"])
+    assert rc == 0, first
+    rc, second = run_cli(["-n", ns, "-p", pid, "export"])
+    assert rc == 0, second
+    assert second == first, "unchanged namespace produced a different export"
+    after = {table: rows(ns, table, "order=id.asc") for table in auger.COLS}
+    assert after == before, "export wrote or changed namespace rows"
+
+    assert f"# Auger spec export — namespace {ns}" in first
+    for table in auger.EXPORT_TABLES:
+        assert f"## {auger.EXPORT_HEADINGS[table]} (" in first, table
+    for row_id in ("P-PYTEST", "D-001", "D-001-O1", "E-000001", "A-000001", "V-000001"):
+        assert f"### {row_id}" in first, first
+    assert "single SQLite file" in first
+    assert "D-001 closes Q-000001" in first
+    assert "One host is sufficient." in first
+
+
+def test_export_names_empty_tables_instead_of_omitting_them(ns: str):
+    """An empty namespace remains an explicit, complete export rather than an empty document."""
+    rc, out = run_cli(["-n", ns, "export"])
+    assert rc == 0, out
+    for table in auger.EXPORT_TABLES:
+        assert f"## {auger.EXPORT_HEADINGS[table]} (0 rows)" in out, table
+    assert out.count("### (none stored)") == len(auger.EXPORT_TABLES), out

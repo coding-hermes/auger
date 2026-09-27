@@ -51,6 +51,7 @@
 | R8 | DuckBrain pre-loaded with specs, choices, and why-not-that-choice | `decision.why_not` + `option` rows + embedded evidence per decision |
 | R9 | Toggle choices on/off to see what the system looks like | `auger toggle` (PATCH by primary key) |
 | R10 | A dump script: "give me output with option 1 4 95 234 11" | `auger dump --config D-001=O2 D-003=O1 …` (hypothetical, non-mutating) |
+| R10a | One readable deterministic document for the entire stored namespace | `auger export` (all declared tables, explicit empty sections, non-mutating) |
 | R11 | Send a good/bad configuration to an agent for judgement | `dump` renders text; piping it to a model is the next step |
 | R12 | A feedback engine that asks deeper questions based on what we have | `ask` + low-confidence surfacing; the engine proper is v0.2 |
 | R13 | JEV to tell us confidence, amount of data, range of data, subjects next | `ask` reports completeness + next_subject + `status` reports spread |
@@ -92,7 +93,7 @@ completeness was partial and the next subject was deployment/alerts — the actu
 ```
         ┌──────────── auger (CLI, stdlib only) ────────────┐
         │                                                   │
-   init │ start │ ask │ check │ answer │ status │ toggle │ dump
+   init │ start │ ask │ check │ answer │ status │ toggle │ dump │ export
         └───┬──────────────┬───────────────────┬────────────┘
             │              │                   │
    DuckBrain HTTP      JEV decisions       DuckBrain embedding
@@ -146,5 +147,4 @@ The dump is a projection of it, never a parallel artifact.
   the skill's rule.
 - `auger verdict` — pipe a dump to a model (or JEV) and record good/bad with reasons.
 - Domain grid seeding — the 44 domains from the skill as `domain` rows, with triage scores.
-- `auger export` — render the whole namespace to a single readable spec document.
 - A pytest suite that runs against an ephemeral namespace and cleans up.

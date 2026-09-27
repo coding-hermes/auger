@@ -5,11 +5,11 @@ write. This is the contract — the verb names are public, and every argument li
 exists in the verb's `add_parser` definition in `auger.py`. If the code and this file
 disagree, the code wins and this file is a bug.
 
-The 13 top-level verbs — one `add_parser` registration each in `auger.py`, and the count here is
+The 14 top-level verbs — one `add_parser` registration each in `auger.py`, and the count here is
 the registry's own, not a hand-kept tally — in the order `auger --help` lists them:
 
 ```
-init  start  bundle  ask  answer  check  status  toggle  dump  propagate  feedback  recall  verdict
+init  start  bundle  ask  answer  check  status  toggle  dump  export  propagate  feedback  recall  verdict
 ```
 
 Conventions every verb shares:
@@ -265,6 +265,33 @@ With `--out`, a local file. That is the whole write surface.
 
 **Never writes:** any table or memory entry, ever. A hypothesis that contradicts the
 recorded reasons is named in the output ("CONTRADICTIONS WITH THE RECORD"), not repaired.
+
+## export
+
+Render the whole namespace as one readable spec document. Unlike `dump`, this is not a
+configuration projection: it includes every declared register, including empty ones.
+
+**Arguments:** none beyond the shared `--namespace/-n` and optional `--project-id/-p`.
+`-p` is printed as reader context only; it never filters rows, because the export contract is
+the whole selected namespace.
+
+**Output contract:** sections have a fixed order — projects, domains, questions, decisions,
+options, break records, escalations, assumptions, unknowns, graph edges, facets, bundles,
+bundle members, and verdicts. Rows are ordered by id; each row prints every column declared in
+`COLS`; an empty table is rendered as `### (none stored)`. No generation timestamp is included,
+so repeated exports of unchanged rows are byte-identical.
+
+**Example:**
+
+```
+auger -n crier export > crier-spec.md
+```
+
+**Writes:** nothing. It reads every table through the namespace HTTP table API and prints the
+render to stdout.
+
+**Never writes:** any namespace table, memory entry, or local output file. Shell redirection in
+the example is outside auger.
 
 ## propagate
 
