@@ -65,6 +65,7 @@ auger propagate   run the graph walks: moot, reopen, cascade — and re-gate the
 auger feedback    turn thin decisions into the next question batch (model proposes, JEV gates)
 auger recall "Q"  semantic search over everything the project has embedded
 auger verdict     judge a configuration good/bad with reasons, on the record (DESIGN R11)
+auger record ...  write the registers: break, assumption, unknown, option costs/breaks
 ```
 
 Every verb is documented — arguments, what it writes, what it must never write — in

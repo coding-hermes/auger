@@ -7295,3 +7295,308 @@ def test_export_names_empty_tables_instead_of_omitting_them(ns: str):
     for table in auger.EXPORT_TABLES:
         assert f"## {auger.EXPORT_HEADINGS[table]} (0 rows)" in out, table
     assert out.count("### (none stored)") == len(auger.EXPORT_TABLES), out
+
+
+# ================================================================= record: the register write paths (AUG-019)
+# The `break`, `assumption` and `unknown` tables and the `option.costs` / `option.breaks`
+# columns were DECLARED and read by status/dump/export, but no verb could write them.
+# `record` is that write path. These cases drive the production CLI in-process and re-read
+# the stored rows over the API — a helper-only test could pass while the verb itself stayed
+# unwired, which is exactly the defect the row names.
+
+
+def test_record_break_stores_the_row_and_export_reads_it(decided: dict):
+    ns = decided["ns"]
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "record",
+            "break",
+            "--decision",
+            "D-001",
+            "--breaks-what",
+            "an external database",
+            "--consequence",
+            "needs an extra service",
+        ]
+    )
+    assert rc == 0, out
+    assert "BR-000001 recorded" in out
+    stored = row(ns, "break", "id=eq.BR-000001")
+    assert stored["decision_id"] == "D-001"
+    assert stored["breaks_what"] == "an external database"
+    assert stored["consequence"] == "needs an extra service"
+    assert stored["applied"] is False
+
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "record",
+            "break",
+            "--decision",
+            "D-002",
+            "--breaks-what",
+            "write throughput",
+            "--consequence",
+            "concurrent writers serialize",
+            "--applied",
+        ]
+    )
+    assert rc == 0, out
+    assert "BR-000002 recorded" in out and "applied true" in out
+    assert row(ns, "break", "id=eq.BR-000002")["applied"] is True
+
+    rc, rendered = run_cli(["-n", ns, "export"])
+    assert rc == 0, rendered
+    assert "### BR-000001" in rendered and "### BR-000002" in rendered
+
+
+def test_record_break_refuses_a_decision_that_is_not_stored(decided: dict):
+    ns = decided["ns"]
+    code, msg, _ = run_cli_exit(
+        [
+            "-n",
+            ns,
+            "record",
+            "break",
+            "--decision",
+            "D-099",
+            "--breaks-what",
+            "anything",
+            "--consequence",
+            "anything",
+        ]
+    )
+    assert code != 0
+    assert "D-099" in msg and "does not exist" in msg
+    # A refusal is atomic: not even a partial row is left behind.
+    assert rows(ns, "break", "") == []
+
+
+def test_record_break_refuses_empty_fields(decided: dict):
+    ns = decided["ns"]
+    code, msg, _ = run_cli_exit(
+        [
+            "-n",
+            ns,
+            "record",
+            "break",
+            "--decision",
+            "D-001",
+            "--breaks-what",
+            "   ",
+            "--consequence",
+            "a real consequence",
+        ]
+    )
+    assert code != 0
+    assert "--breaks-what" in msg
+    assert rows(ns, "break", "") == []
+
+
+def test_record_assumption_stores_every_column(project: dict):
+    ns = project["ns"]
+    pid = project["pid"]
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "record",
+            "assumption",
+            "--text",
+            "One host is sufficient.",
+            "--falsifier",
+            "load exceeds host capacity",
+            "--monitoring",
+            "weekly capacity review",
+        ]
+    )
+    assert rc == 0, out
+    assert "A-000001 recorded" in out
+    stored = row(ns, "assumption", "id=eq.A-000001")
+    assert stored["project_id"] == pid
+    assert stored["text"] == "One host is sufficient."
+    assert stored["falsifier"] == "load exceeds host capacity"
+    assert stored["monitoring"] == "weekly capacity review"
+
+    # `monitoring` is the one optional column: absent travels as the empty string.
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "record",
+            "assumption",
+            "--text",
+            "Disk growth stays under the volume.",
+            "--falsifier",
+            "volume fills",
+        ]
+    )
+    assert rc == 0, out
+    assert "A-000002 recorded" in out
+    assert row(ns, "assumption", "id=eq.A-000002")["monitoring"] == ""
+
+
+def test_record_assumption_refuses_without_a_falsifier(project: dict):
+    ns = project["ns"]
+    # argparse refuses a missing required flag (exit 2) before any verb code runs.
+    code, _msg, _ = run_cli_exit(
+        ["-n", ns, "record", "assumption", "--text", "One host is sufficient."]
+    )
+    assert code == 2
+    # ... and a whitespace-only falsifier is refused by the verb itself.
+    code, msg, _ = run_cli_exit(
+        [
+            "-n",
+            ns,
+            "record",
+            "assumption",
+            "--text",
+            "One host is sufficient.",
+            "--falsifier",
+            "  ",
+        ]
+    )
+    assert code != 0
+    assert "--falsifier" in msg
+    assert rows(ns, "assumption", "") == []
+
+
+def test_record_unknown_stores_the_row_and_status_counts_it(project: dict):
+    ns = project["ns"]
+    pid = project["pid"]
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "record",
+            "unknown",
+            "--text",
+            "Recovery time after a host failure.",
+            "--owner",
+            "operations",
+            "--trigger",
+            "first production incident",
+            "--containment",
+            "manual recovery runbook",
+        ]
+    )
+    assert rc == 0, out
+    assert "U-000001 recorded" in out
+    stored = row(ns, "unknown", "id=eq.U-000001")
+    assert stored["project_id"] == pid
+    assert stored["text"] == "Recovery time after a host failure."
+    assert stored["owner"] == "operations"
+    assert stored["trigger"] == "first production incident"
+    assert stored["containment"] == "manual recovery runbook"
+
+    # The register's reading half already existed: status and export must now see the row.
+    rc, status = run_cli(["-n", ns, "status"])
+    assert rc == 0, status
+    assert "unknowns 1" in status
+    rc, rendered = run_cli(["-n", ns, "export"])
+    assert rc == 0, rendered
+    assert "### U-000001" in rendered
+
+
+def test_record_option_patches_costs_and_breaks(decided: dict):
+    ns = decided["ns"]
+    # The option row as `answer` wrote it: the two columns are declared but empty.
+    before = row(ns, "option", "id=eq.D-001-O2")
+    assert before["costs"] == "" and before["breaks"] == ""
+
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "record",
+            "option",
+            "D-001-O2",
+            "--costs",
+            "needs a running service",
+            "--breaks",
+            "the one-box rule",
+        ]
+    )
+    assert rc == 0, out
+    assert "D-001-O2 recorded" in out
+    stored = row(ns, "option", "id=eq.D-001-O2")
+    assert stored["costs"] == "needs a running service"
+    assert stored["breaks"] == "the one-box rule"
+    # The PATCH touches the two text columns only — never the selection flags.
+    assert bool(stored.get("active")) is bool(before.get("active"))
+
+    # The token grammar is toggle's: a unique label resolves to the same row.
+    rc, out = run_cli(
+        ["-n", ns, "record", "option", "row locking", "--costs", "deadlock risk"]
+    )
+    assert rc == 0, out
+    assert "D-002-O2 recorded" in out
+    assert row(ns, "option", "id=eq.D-002-O2")["costs"] == "deadlock risk"
+
+
+def test_record_option_refusals_write_nothing(decided: dict):
+    ns = decided["ns"]
+    # An unresolvable token is refused by name before any PATCH.
+    code, msg, _ = run_cli_exit(
+        ["-n", ns, "record", "option", "D-099-O1", "--costs", "x"]
+    )
+    assert code != 0 and "no such option" in msg
+
+    # Neither --costs nor --breaks: there is nothing to write, so the call is refused.
+    code, msg, _ = run_cli_exit(["-n", ns, "record", "option", "D-001-O2"])
+    assert code != 0 and "--costs" in msg and "--breaks" in msg
+
+    # A record whose values are already stored is a no-op, refused loudly instead of
+    # being reported as a successful write.
+    rc, out = run_cli(
+        ["-n", ns, "record", "option", "D-001-O1", "--costs", "local disk only"]
+    )
+    assert rc == 0, out
+    code, msg, _ = run_cli_exit(
+        ["-n", ns, "record", "option", "D-001-O1", "--costs", "local disk only"]
+    )
+    assert code != 0 and "already holds" in msg
+    assert row(ns, "option", "id=eq.D-001-O1")["costs"] == "local disk only"
+
+
+def test_record_option_refuses_an_option_of_another_project(decided: dict):
+    ns = decided["ns"]
+    # A second project in the same namespace: the option rows carry no project_id, so the
+    # ownership check goes through the decision — and D-001 is not on P-SECOND's record.
+    rc, out = run_cli(["-n", ns, "start", "--id", "P-SECOND", "--seed", "second seed"])
+    assert rc == 0, out
+    code, msg, _ = run_cli_exit(
+        [
+            "-n",
+            ns,
+            "-p",
+            "P-SECOND",
+            "record",
+            "option",
+            "D-001-O2",
+            "--costs",
+            "x",
+        ]
+    )
+    assert code != 0
+    assert "not on project P-SECOND's record" in msg
+    assert row(ns, "option", "id=eq.D-001-O2")["costs"] == ""
+    # The owning project records it without friction.
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "-p",
+            "P-PYTEST",
+            "record",
+            "option",
+            "D-001-O2",
+            "--costs",
+            "x",
+        ]
+    )
+    assert rc == 0, out
+    assert row(ns, "option", "id=eq.D-001-O2")["costs"] == "x"

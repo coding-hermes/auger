@@ -5,11 +5,11 @@ write. This is the contract — the verb names are public, and every argument li
 exists in the verb's `add_parser` definition in `auger.py`. If the code and this file
 disagree, the code wins and this file is a bug.
 
-The 14 top-level verbs — one `add_parser` registration each in `auger.py`, and the count here is
+The 15 top-level verbs — one `add_parser` registration each in `auger.py`, and the count here is
 the registry's own, not a hand-kept tally — in the order `auger --help` lists them:
 
 ```
-init  start  bundle  ask  answer  check  status  toggle  dump  export  propagate  feedback  recall  verdict
+init  start  bundle  ask  answer  check  status  toggle  dump  export  propagate  feedback  recall  verdict  record
 ```
 
 Conventions every verb shares:
@@ -400,3 +400,36 @@ was judged, and the two arms name it differently:
 **Never writes:** anything when both or neither of `--good`/`--bad` is given; anything
 when an invalid word is named (the word set is closed in code — `good`, `bad`); a verdict
 row when `--ask-jev` cannot reach JEV; a `--config` hypothetical without `--ask-jev`.
+
+## record
+
+Write the declared registers — `break`, `assumption`, `unknown`, and an option's
+`costs`/`breaks` columns — which the CLI declared and `status`/`dump`/`export` read, but no
+verb could previously write (AUG-019). One verb with four subcommands, the `bundle` shape:
+
+- `auger record break --decision D-001 --breaks-what TEXT --consequence TEXT [--applied]`
+- `auger record assumption --text TEXT --falsifier TEXT [--monitoring TEXT]`
+- `auger record unknown --text TEXT [--owner X] [--trigger Y] [--containment Z]`
+- `auger record option OPTION [--costs TEXT] [--breaks TEXT]`
+
+**Writes:** `record break` inserts one `break` row (id `BR-000001`…) naming a decision that
+must ALREADY be on this project's record — a break pointing at a decision that is not stored
+is refused by name, and the refusal happens before the id is minted, so nothing partial
+remains. `record assumption` inserts one `assumption` row (id `A-000001`…) bound to the
+project; `--falsifier` is required (an unfalsifiable assumption is a wish, per DESIGN's
+"what we are resting on, with a falsifier"), and every required text field is refused when
+empty or whitespace-only. `record unknown` inserts one `unknown` row (id `U-000001`…) bound
+to the project, with owner/trigger/containment optional. `record option` PATCHes the
+`costs`/`breaks` columns of an EXISTING option row — the option rows themselves still come
+from `answer`. Its OPTION token grammar is `toggle`'s (full id `D-001-O2`, label, or bare
+index `O2`); an unresolvable or ambiguous token is refused before any PATCH, the option's
+decision must belong to this project, and a call whose values are already stored is refused
+as the no-op it is — a successful-looking record must never be a silent zero-row write. All
+four subcommands go through the shared DuckBrain helpers (`select`/`insert`/`patch`/
+`next_id`), so the 429-retry and failure behaviour is the transport's own.
+
+**Never writes:** a break row for a decision that is not on this project's record; a row
+with an empty required field; an assumption without a falsifier; a `record option` call with
+neither `--costs` nor `--breaks`; a PATCH that changes nothing; anything in any other table —
+`record` never touches decisions, questions, edges, facets, or the `active` selection flags
+(a costs/breaks record is not a toggle).

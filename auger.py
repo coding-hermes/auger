@@ -5374,6 +5374,158 @@ def cmd_verdict_dispatch(a):
     return cmd_verdict_list(a) if a.list else cmd_verdict(a)
 
 
+# ---------------------------------------------------------------- the register write paths (AUG-019)
+# The `break`, `assumption` and `unknown` tables (and `option.costs` / `option.breaks`) were
+# DECLARED and READ by `status`/`dump`/`export`, but no verb could write them. `record` is the
+# operator's write path. DuckBrain enforces nothing, so every relationship is validated HERE,
+# before any row is written: a refused run stores nothing at all.
+
+
+def _required_text(value: object, flag: str, what: str) -> str:
+    """A non-empty register field, refused by name — argparse's `required` sees presence, not content."""
+    text = (value or "").strip()
+    if not text:
+        raise SystemExit(
+            f"refused: {flag} must not be empty — a {what} row with no {flag.lstrip('-')} "
+            "is not a record; nothing was written"
+        )
+    return text
+
+
+def cmd_record_break(a):
+    """Record what a decision BREAKS and what it changes — the `break` register's write path.
+
+    The target decision must already be on THIS project's record: a break row names a decision,
+    and one pointing at a decision that is not stored is an orphan claim (the same referential
+    doctrine the edge write path states). Validated before the id is minted, so a refusal leaves
+    no row behind.
+    """
+    ns = a.namespace
+    pid = _project(ns, a.project_id)["id"]
+    did = (a.decision or "").strip()
+    breaks_what = _required_text(a.breaks_what, "--breaks-what", "break")
+    consequence = _required_text(a.consequence, "--consequence", "break")
+    if not select(ns, "decision", f"id=eq.{did}&project_id=eq.{pid}&select=id&limit=1"):
+        raise SystemExit(
+            f"refused: decision {did!r} does not exist in project {pid} — a break record names "
+            "a decision this project already recorded; nothing was written"
+        )
+    row = {
+        "id": next_id(ns, "break", "BR"),
+        "decision_id": did,
+        "breaks_what": breaks_what,
+        "consequence": consequence,
+        "applied": bool(a.applied),
+    }
+    insert(ns, "break", row)
+    print(
+        f"{row['id']} recorded  (break on {did}, applied {str(row['applied']).lower()})"
+    )
+    print(f"  breaks_what: {breaks_what}")
+    print(f"  consequence: {consequence}")
+    return 0
+
+
+def cmd_record_assumption(a):
+    """Record what the project is resting on — the `assumption` register's write path.
+
+    A falsifier is required: an assumption that cannot name what would prove it wrong is not an
+    assumption, it is a wish (DESIGN: "what we are resting on, with a falsifier").
+    """
+    ns = a.namespace
+    pid = _project(ns, a.project_id)["id"]
+    text = _required_text(a.text, "--text", "assumption")
+    falsifier = _required_text(a.falsifier, "--falsifier", "assumption")
+    row = {
+        "id": next_id(ns, "assumption", "A"),
+        "project_id": pid,
+        "text": text,
+        "falsifier": falsifier,
+        "monitoring": (a.monitoring or "").strip(),
+    }
+    insert(ns, "assumption", row)
+    print(f"{row['id']} recorded  (assumption on {pid})")
+    print(f"  text: {text}")
+    print(f"  falsifier: {falsifier}")
+    if row["monitoring"]:
+        print(f"  monitoring: {row['monitoring']}")
+    return 0
+
+
+def cmd_record_unknown(a):
+    """Record what the project knows it does not know — the `unknown` register's write path."""
+    ns = a.namespace
+    pid = _project(ns, a.project_id)["id"]
+    text = _required_text(a.text, "--text", "unknown")
+    row = {
+        "id": next_id(ns, "unknown", "U"),
+        "project_id": pid,
+        "text": text,
+        "owner": (a.owner or "").strip(),
+        "trigger": (a.trigger or "").strip(),
+        "containment": (a.containment or "").strip(),
+    }
+    insert(ns, "unknown", row)
+    print(f"{row['id']} recorded  (unknown on {pid})")
+    print(f"  text: {text}")
+    for field in ("owner", "trigger", "containment"):
+        if row[field]:
+            print(f"  {field}: {row[field]}")
+    return 0
+
+
+def cmd_record_option(a):
+    """Record an option's `costs` / `breaks` text — the declared columns' only write path.
+
+    The option rows themselves come from `answer`; this subcommand PATCHES the two columns
+    `answer` leaves empty. The token grammar is `toggle`'s (full id, label, or bare index), an
+    unresolvable or ambiguous token is refused before any PATCH, and a call whose values are
+    already stored is refused as the no-op it is — a successful-looking record must never be a
+    silent zero-row write.
+    """
+    ns = a.namespace
+    pid = _project(ns, a.project_id)["id"]
+    opts = select(ns, "option", "order=id.asc")
+    opt = resolve_option(opts, a.option)
+    # The option must belong to THIS project's record: option rows carry no project_id, so the
+    # check goes through the decision they hang off — recording costs on a sibling project's
+    # option would write a claim this project's record cannot vouch for.
+    if not select(
+        ns,
+        "decision",
+        f"id=eq.{opt['decision_id']}&project_id=eq.{pid}&select=id&limit=1",
+    ):
+        raise SystemExit(
+            f"refused: option {opt['id']!r} belongs to decision {opt['decision_id']!r}, which "
+            f"is not on project {pid}'s record; nothing was written"
+        )
+    updates = {}
+    if a.costs is not None:
+        updates["costs"] = a.costs
+    if a.breaks is not None:
+        updates["breaks"] = a.breaks
+    if not updates:
+        raise SystemExit(
+            "refused: record option needs --costs and/or --breaks (got none) — "
+            "nothing was written"
+        )
+    unchanged = [k for k, v in updates.items() if (opt.get(k) or "") == v]
+    if len(unchanged) == len(updates):
+        raise SystemExit(
+            f"refused: {opt['id']} already holds exactly those {', '.join(sorted(updates))} "
+            "value(s) — a record that changes nothing is refused, not reported as written"
+        )
+    n = patch(ns, "option", opt["id"], updates).get("updated", 0)
+    if n != 1:
+        raise SystemExit(
+            f"record option {opt['id']}: patched {n} rows (expected 1) — nothing changed; "
+            "the option id named no row"
+        )
+    changed = ", ".join(f"{k} -> {updates[k]!r}" for k in sorted(updates))
+    print(f"{opt['id']} recorded  ({changed})")
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="auger", description="spec drilling backed by DuckBrain"
@@ -5610,6 +5762,64 @@ def main(argv=None):
         "--list", action="store_true", help="show every recorded verdict, newest first"
     )
     s.set_defaults(fn=cmd_verdict_dispatch)
+
+    s = sub.add_parser(
+        "record",
+        help="write the declared registers: break, assumption, unknown, option costs/breaks (AUG-019)",
+    )
+    record_sub = s.add_subparsers(dest="record_cmd", required=True)
+
+    r = record_sub.add_parser(
+        "break", help="record what a stored decision breaks, and the consequence"
+    )
+    r.add_argument(
+        "--decision",
+        required=True,
+        metavar="D-00X",
+        help="the decision this break names; must already be on this project's record",
+    )
+    r.add_argument("--breaks-what", required=True, help="what the decision breaks")
+    r.add_argument("--consequence", required=True, help="what that break changes")
+    r.add_argument(
+        "--applied",
+        action="store_true",
+        help="the break has been applied, not just recorded",
+    )
+    r.set_defaults(fn=cmd_record_break)
+
+    r = record_sub.add_parser(
+        "assumption", help="record what the project is resting on, with its falsifier"
+    )
+    r.add_argument("--text", required=True, help="the assumption itself")
+    r.add_argument(
+        "--falsifier",
+        required=True,
+        help="what would prove it wrong (required: an unfalsifiable assumption is a wish)",
+    )
+    r.add_argument("--monitoring", help="how the assumption is watched")
+    r.set_defaults(fn=cmd_record_assumption)
+
+    r = record_sub.add_parser(
+        "unknown", help="record what the project knows it does not know"
+    )
+    r.add_argument("--text", required=True, help="the known unknown")
+    r.add_argument("--owner", help="who owns resolving it")
+    r.add_argument("--trigger", help="what makes it need an answer")
+    r.add_argument("--containment", help="what bounds it meanwhile")
+    r.set_defaults(fn=cmd_record_unknown)
+
+    r = record_sub.add_parser(
+        "option", help="record an option's costs/breaks text (PATCHes the option row)"
+    )
+    r.add_argument(
+        "option",
+        metavar="OPTION",
+        help="option token: full id (D-001-O2), label, or bare index (O2); "
+        "unresolvable or ambiguous tokens are refused without writing",
+    )
+    r.add_argument("--costs", help="what choosing this option costs")
+    r.add_argument("--breaks", help="what choosing this option breaks")
+    r.set_defaults(fn=cmd_record_option)
 
     a = ap.parse_args(argv)
     return a.fn(a)
