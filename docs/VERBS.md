@@ -97,6 +97,14 @@ scheduler project check. It prints a visible warning naming the skipped validati
 same-named namespace. This is for standalone/scratch projects; fleet membership remains validated
 by default.
 
+**Scheduler DB:** the read-only `projects` table `bundle member` validates against is found at
+`AUGER_SCHEDULER_DB` when that variable is set — the override is exclusive (no other location is
+tried) and must point at a scheduler.db with a readable `projects` table — otherwise the first
+readable of `~/coding-hermes-scheduler/coding-herms-scheduler/scheduler.db` and
+`~/.hermes/coding-hermes/scheduler.db` wins. With no readable DB anywhere, membership is refused
+rather than guessed, and the refusal names the variable. Example:
+`AUGER_SCHEDULER_DB=~/alt/scheduler.db auger bundle member B-000001 my-project owner -n auger`.
+
 **Never writes:** a member for a missing bundle, an unknown role, a duplicate membership, or an
 unknown/unverifiable scheduler project without the explicit scratch escape. Neither subcommand
 writes project decisions, evidence, edges, or memories.
@@ -318,6 +326,12 @@ Turn low-confidence decisions into the next question batch, bounded by a governo
 
 **Arguments:** `--budget N` — how many questions ONE run may ask (default 3, env
 `AUGER_QUESTION_BUDGET`). A question the ceiling stopped is recorded, not dropped.
+
+**Proposer model:** the model that proposes follow-up questions is `AUGER_PROPOSER_MODEL` when
+set (whitespace-stripped; an empty or unset value falls through), otherwise the configured
+default `deepseek/deepseek-v3.2` via OpenRouter. An unreachable model is fail-closed — `feedback`
+refuses with no question written — and the chosen model is recorded in `derives_from` edge notes.
+Example: `AUGER_PROPOSER_MODEL=deepseek/deepseek-chat auger feedback -p my-project -n auger`.
 
 **Writes:** follow-up `question` rows (`qclass=follow_up`, the gate's verdict and check
 timestamp carried on the row); a full set of `facet` rows per new question; `opens`
