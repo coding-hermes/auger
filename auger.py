@@ -46,7 +46,7 @@ import urllib.error
 import urllib.request
 from collections import Counter
 from datetime import datetime, timezone
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 DB_URL = os.environ.get("DUCKBRAIN_URL", "http://127.0.0.1:3000")
 JEV_URL = "https://openrouter.ai/api/alpha/decisions"
@@ -279,7 +279,75 @@ EDGE_KINDS = (
 )
 EDGE_SOURCES = ("gate", "impact", "human", "rule")
 SUPERSEDED_STATUS = "superseded"
-# The bundle model's closed sets (SPEC-002 section 1). `status` and `role` are sets the ENGINE
+# Answer writes use this transient status while the matching memory entry is being embedded. DuckBrain
+# has no multi-table transaction, so a provisional row is the durable commit point: readers never treat
+# it as a normal decision, and a retry can finish the same id instead of minting another answer.
+PENDING_MEMORY_STATUS = "pending_memory"
+
+
+def pending_memory_status(
+    final_status: str,
+    scope: str | None = None,
+    invalidates: list[str] | tuple[str, ...] = (),
+    supersedes: list[str] | tuple[str, ...] = (),
+) -> str:
+    """Encode all answer arguments needed to repair a provisional decision.
+
+    The status column is the only decision field available for a durable in-progress marker. Keep the
+    legacy-readable prefix, then percent-encode the requested final status, scope, and graph targets so
+    a retry cannot silently change the side effects that the interrupted answer was going to perform.
+    """
+    fields = (
+        final_status,
+        scope or DEFAULT_SCOPE,
+        ",".join(invalidates),
+        ",".join(supersedes),
+    )
+    return f"{PENDING_MEMORY_STATUS}:" + ":".join(
+        quote(str(field), safe="") for field in fields
+    )
+
+
+def is_pending_memory(row: dict) -> bool:
+    """Whether a decision row is waiting for its evidence memory to be committed."""
+    return str((row or {}).get("status") or "").startswith(f"{PENDING_MEMORY_STATUS}:")
+
+
+def pending_metadata(row: dict) -> dict:
+    """Decode repair metadata, accepting the first provisional format for upgrade safety."""
+    status = str((row or {}).get("status") or "")
+    prefix = f"{PENDING_MEMORY_STATUS}:"
+    if not status.startswith(prefix):
+        return {}
+    fields = status[len(prefix) :].split(":")
+    decoded = [unquote(field) for field in fields]
+    if len(decoded) >= 4:
+        return {
+            "final_status": decoded[0],
+            "scope": decoded[1] or DEFAULT_SCOPE,
+            "invalidates": decoded[2].split(",") if decoded[2] else [],
+            "supersedes": decoded[3].split(",") if decoded[3] else [],
+        }
+    # Rows created by the first partial worker encoded only the final status. Such a row is
+    # repairable with the original answer fields, but never with newly requested graph side effects.
+    return {
+        "final_status": decoded[0] if decoded else "decided",
+        "scope": decision_scope(row),
+        "invalidates": [],
+        "supersedes": [],
+    }
+
+
+def pending_final_status(row: dict) -> str:
+    """Recover the final status requested by an answer that stopped before memory was written."""
+    return pending_metadata(row).get("final_status", "decided")
+
+
+def pending_requested_scope(row: dict) -> str:
+    """Recover the scope requested before a provisional decision was stored."""
+    return pending_metadata(row).get("scope", decision_scope(row))
+
+
 # switches on — a retired bundle is not walked, a test-target does not own the contract — so they
 # live in code and are refused BY NAME when they are wrong: EDGE_KINDS' rule, applied to the two
 # columns that carry a decision about behaviour rather than a label.
@@ -2289,10 +2357,11 @@ def thin_decisions(ns: str, project_id: str) -> list:
     measured_thin = [
         d
         for d in rows
-        if isinstance(d.get("confidence"), (int, float))
+        if not is_pending_memory(d)
+        and isinstance(d.get("confidence"), (int, float))
         and 0 <= d["confidence"] < T_CONFIDENT
     ]
-    unmeasured = [d for d in rows if _is_unmeasured(d)]
+    unmeasured = [d for d in rows if not is_pending_memory(d) and _is_unmeasured(d)]
     return measured_thin + sorted(unmeasured, key=lambda d: d["id"])
 
 
@@ -3963,6 +4032,57 @@ def bundle_impact(ns: str, project_id: str, dec_row: dict) -> dict:
     return rep
 
 
+def pending_answer_candidates(ns: str, project_id: str) -> list[dict]:
+    """Return unfinished answers for one project, regardless of the requested final status."""
+    return [
+        decision
+        for decision in select(
+            ns, "decision", f"project_id=eq.{project_id}&order=id.asc"
+        )
+        if is_pending_memory(decision)
+    ]
+
+
+def pending_answer_matches(
+    ns: str,
+    pending: dict,
+    expected: dict,
+    option_labels: list[str],
+    invalidates: list[str],
+    supersedes: list[str],
+) -> bool:
+    """Match a retry to its provisional answer without adding another active decision."""
+    for field in (
+        "project_id",
+        "domain",
+        "question_id",
+        "chosen",
+        "why_not",
+        "reversal_cost",
+        "confidence",
+    ):
+        if pending.get(field) != expected.get(field):
+            return False
+    if pending_requested_scope(pending) != (expected.get("scope") or DEFAULT_SCOPE):
+        return False
+    metadata = pending_metadata(pending)
+    if metadata.get("invalidates", []) != invalidates:
+        return False
+    if metadata.get("supersedes", []) != supersedes:
+        return False
+    if pending_final_status(pending) != expected["final_status"]:
+        return False
+    stored_options = select(
+        ns, "option", f"decision_id=eq.{pending['id']}&order=id.asc"
+    )
+    stored_labels = [option.get("label") for option in stored_options]
+    # A substrate death can happen while the option rows are being inserted too. The writer is
+    # ordered, so a retry may see an empty or prefix subset; validate every row that did land and
+    # let the retry insert only the missing suffix. An arbitrary subset or an extra row is refused
+    # rather than silently changing the logical answer.
+    return stored_labels == option_labels[: len(stored_labels)]
+
+
 def cmd_answer(a):
     if a.confidence is not None and (
         not math.isfinite(a.confidence) or not 0 <= a.confidence <= 1
@@ -3979,32 +4099,44 @@ def cmd_answer(a):
         raise SystemExit(
             f"unknown decision scope {a.scope!r}: expected one of {', '.join(DECISION_SCOPES)}"
         )
-    # AUG-069: the default id is derived from the HIGHEST stored decision id, never from a row
-    # count. `len(select(...)) + 1` was the count: DuckBrain's declared-table selects cap at 100
-    # rows with no truncation signal (AUG-068), so past the 100th decision the mint stuck at D-101
-    # and the `node_exists` guard below then refused EVERY `answer` — a permanent write lockout
-    # whose only escape was an explicit --id. `next_id` does the page-safe read (limit=1, highest
-    # first) and `decision_id_width` keeps the live three-digit width (D-101 -> D-102), because the
-    # ids in the real namespaces are three digits and a six-digit row would sort below them all.
     # The id is namespace-scoped, so the read is too: a sibling project's rows are exactly what a
-    # per-project count could not see.
-    did = a.id or next_id(ns, "decision", "D", width=decision_id_width(ns))
+    # per-project count could not see. An unfinished answer is different: it owns its id and is the
+    # only retry target, whether the caller repeats --id or lets the CLI find the one pending answer.
+    pending = None
+    repairing = False
+    if a.id:
+        pending_rows = pending_answer_candidates(ns, pid)
+        pending = next((d for d in pending_rows if d.get("id") == a.id), None)
+        if pending is not None:
+            did = pending["id"]
+            repairing = True
+        else:
+            did = a.id
+    else:
+        # Keep the established auto-mint read first. The pending scan follows it so the hot path
+        # retains its page-safe highest-id query and its existing query/order contract.
+        did = next_id(ns, "decision", "D", width=decision_id_width(ns))
+        pending_rows = pending_answer_candidates(ns, pid)
+        if pending_rows:
+            if len(pending_rows) != 1:
+                raise SystemExit(
+                    "refused: more than one answer is pending memory repair in this project; "
+                    "pass --id for the specific provisional decision before recording another answer"
+                )
+            pending = pending_rows[0]
+            did = pending["id"]
+            repairing = True
     # Refuse every precondition that can be decided from the requested IDs before inserting the
     # decision or any of its options. `close_question` still defends its own public contract below,
     # but discovering a missing question there is too late for `answer`: the answer rows already
     # exist by then. The same ordering makes an explicit retry idempotently loud instead of allowing
     # duplicate decision and option IDs into stores that do not enforce primary-key uniqueness.
     qid = (a.question_id or "").strip()
-    if not a.id:
+    if not repairing and not a.id:
         # AUG-070: the mint read happens-before other writers' writes, so the id `next_id` derived
         # can already be stored by the time this process checks — or by the time its own INSERT
-        # lands. DuckBrain enforces NO uniqueness (the comment above `next_id` says it: referential
-        # integrity is OURS), so a losing writer's duty is to RE-MINT from the live highest id and
-        # retry, never to exit with the answer lost. Bounded: the mint cannot be allowed to spin on
-        # a namespace that holds the id before the mint even runs (the serial case below), and
-        # three attempts cover the observed two-writer race with room for one more. Everything that
-        # captured the previous did — the option ids, the evidence key, the row itself — is
-        # recomputed inside the loop, because ids are embedded in rows, not carried by reference.
+        # lands. DuckBrain enforces NO uniqueness, so a losing writer's duty is to RE-MINT from the
+        # live highest id and retry, never to exit with the answer lost.
         for attempt in range(1, AUG070_ID_ATTEMPTS + 1):
             if not node_exists(ns, "decision", did):
                 break
@@ -4016,12 +4148,7 @@ def cmd_answer(a):
                 f"(concurrent writers); NOTHING was stored. Remedy: retry `answer` once the other "
                 f"writer settles, or pass an explicit --id."
             )
-    elif node_exists(ns, "decision", did):
-        # The explicit-id path keeps the terminal refusal (a caller that NAMED the id must decide
-        # what to do about the collision), but the message now says what the refusal actually
-        # guarantees: nothing was written (AUG-034's atomic-refusal doctrine, stated in the message
-        # so a reader does not have to trust the code), and that the auto-minted path is the one
-        # that survives a concurrent writer.
+    elif not repairing and a.id and node_exists(ns, "decision", did):
         raise SystemExit(
             f"refused: decision {did!r} already exists — answer decision IDs must be unique, and "
             f"NOTHING was stored (no decision, no options, no evidence, no edges). The "
@@ -4065,6 +4192,7 @@ def cmd_answer(a):
         resolve_option(option_rows, a.chosen, did) if option_rows else None
     )
     chosen = resolved_option["label"] if resolved_option else a.chosen
+    final_status = a.status or "decided"
     row = {
         "id": did,
         "project_id": pid,
@@ -4074,15 +4202,40 @@ def cmd_answer(a):
         "why_not": a.why_not or "",
         "reversal_cost": a.reversal_cost or "",
         "confidence": float(a.confidence if a.confidence is not None else -1),
-        "status": a.status or "decided",
+        "status": final_status,
         "evidence_key": f"/auger/{pid}/{did}",
     }
     # `scope` is sent only when it is NOT the default: see insert_decision for why the default
     # travels as an absent key rather than as the word "project".
     if scope and scope != DEFAULT_SCOPE:
         row["scope"] = scope
-    warning = insert_decision(ns, row)
-    if not a.id:
+    expected = {**row, "final_status": final_status}
+    if repairing:
+        if not pending_answer_matches(
+            ns,
+            pending,
+            expected,
+            list(a.option or []),
+            break_targets,
+            supersede_target_ids,
+        ):
+            raise SystemExit(
+                f"refused: provisional decision {did!r} belongs to a different answer; "
+                "retry with the original arguments or choose a new answer explicitly"
+            )
+        warning = ""
+    else:
+        provisional = {
+            **row,
+            "status": pending_memory_status(
+                final_status,
+                scope,
+                break_targets,
+                supersede_target_ids,
+            ),
+        }
+        warning = insert_decision(ns, provisional)
+    if not a.id and not repairing:
         # AUG-070, the residual insert-insert window: the pre-insert check can pass for BOTH
         # writers and both inserts then land — DuckBrain enforces NO uniqueness. The read-back is
         # BOUNDED (`limit=2`: one row is ours, two is ours plus a sibling's) and DELETES NOTHING —
@@ -4095,11 +4248,20 @@ def cmd_answer(a):
                 f"{WARN_DUPLICATE_IDS}: {did} x{len(readback)}+ — concurrent writers collided; "
                 f"dedupe before trusting this config"
             )
+    existing_options = (
+        {
+            option["id"]: option
+            for option in select(ns, "option", f"decision_id=eq.{did}&order=id.asc")
+        }
+        if repairing
+        else {}
+    )
     for option in option_rows:
         option["active"] = bool(
             resolved_option and option["id"] == resolved_option["id"]
         )
-        insert(ns, "option", option)
+        if option["id"] not in existing_options:
+            insert(ns, "option", option)
     # The embedded evidence must not contradict itself: the chosen option is CHOSEN, and the
     # rejected list is the other options. Writing all options as "rejected" (the first version
     # of this) produced evidence reading "chose X. Rejected: X, Y, Z" — which made the
@@ -4109,20 +4271,47 @@ def cmd_answer(a):
         for option in option_rows
         if not resolved_option or option["id"] != resolved_option["id"]
     ]
-    remember(
-        ns,
-        row["evidence_key"],
-        f"Question: {a.domain or ''} {a.question_id or ''}".strip()
-        + f". Decision {did}: we chose {row['chosen']}. "
-        + (
-            f"Rejected alternatives: {'; '.join(others)}. "
-            if others
-            else "No alternative was recorded. "
+    try:
+        remember(
+            ns,
+            row["evidence_key"],
+            f"Question: {a.domain or ''} {a.question_id or ''}".strip()
+            + f". Decision {did}: we chose {row['chosen']}. "
+            + (
+                f"Rejected alternatives: {'; '.join(others)}. "
+                if others
+                else "No alternative was recorded. "
+            )
+            + f"Reason the alternatives were rejected: {a.why_not or 'not stated'}. "
+            + f"Reversal cost: {row['reversal_cost'] or 'not stated'}.",
         )
-        + f"Reason the alternatives were rejected: {a.why_not or 'not stated'}. "
-        + f"Reversal cost: {row['reversal_cost'] or 'not stated'}.",
+    except SystemExit as exc:
+        raise SystemExit(
+            f"answer {did} remains provisional until its memory is written; "
+            f"retry the same answer to repair it: {exc}"
+        ) from exc
+    try:
+        patch(ns, "decision", did, {"status": final_status})
+    except SystemExit as exc:
+        raise SystemExit(
+            f"answer {did} remains provisional after memory was written; "
+            f"retry the same answer to finalize it: {exc}"
+        ) from exc
+    row["status"] = final_status
+    # A legacy namespace may have downgraded a requested bundle scope because its cached declaration
+    # lacks the column. On repair, preserve the scope that was actually stored rather than re-running
+    # the impact pass as if the requested scope had landed.
+    stored_scope = (
+        decision_scope(pending)
+        if repairing
+        else DEFAULT_SCOPE
+        if warning
+        else decision_scope(row)
     )
-    # SPEC-002 section 2.2: an answer that is a CONTRACT walks its bundle. The hook sits here — after
+    if stored_scope == DEFAULT_SCOPE:
+        row.pop("scope", None)
+    else:
+        row["scope"] = stored_scope
     # the evidence is embedded and before this verb's own report — and it never changes the exit
     # code: a model that is down skips a member and says so, it does not undo the answer. The scope
     # read below is the scope that was STORED: a namespace that could not hold `bundle` (see
@@ -4147,7 +4336,6 @@ def cmd_answer(a):
     supersessions = record_supersessions(
         ns, pid, did, supersede_target_ids, a.supersedes_why or ""
     )
-    stored_scope = DEFAULT_SCOPE if warning else decision_scope(row)
     impact = bundle_impact(ns, pid, {**row, "scope": stored_scope})
     active_count = 1 if resolved_option else 0
     print(
@@ -4268,17 +4456,25 @@ def cmd_status(a):
     esc = select(ns, "escalation", f"project_id=eq.{pid}")
     unk = select(ns, "unknown", f"project_id=eq.{pid}")
     cov = domain_coverage(ns, pid)
+    # AUG-076: a provisional decision is durable but not yet configuration, so its confidence is
+    # withheld from every aggregate until its memory lands — the same exclusion `feedback`'s thin
+    # list and `dump`'s ACTIVE CONFIGURATION line apply. The row itself stays counted above: it IS
+    # stored, and the pending warning names it.
+    active_dec = [d for d in dec if not is_pending_memory(d)]
     by_dom = {}
-    for d in dec:
+    for d in active_dec:
         by_dom.setdefault(d.get("domain") or "(none)", []).append(d)
     print(f"project {pid} — {p.get('name')}  [{p.get('status')}]")
     print(
         f"decisions {len(dec)} | options {len(opt)} | escalations {len(esc)} | unknowns {len(unk)} | domains {cov['rows']}"
     )
-    if dec:
+    pending_lines = pending_memory_warning_lines(dec)
+    if pending_lines:
+        print("\n" + "\n".join(pending_lines))
+    if active_dec:
         # AUG-062: the sentinel is a NON-measurement, so it is excluded from every aggregate —
         # min/mean/max describe the decisions somebody actually scored.
-        confs = _conf_values(dec)
+        confs = _conf_values(active_dec)
         if confs:
             print(
                 f"confidence: min {min(confs):.2f}  mean {sum(confs) / len(confs):.2f}  max {max(confs):.2f}"
@@ -4350,11 +4546,12 @@ def cmd_status(a):
     thin = [
         d
         for d in dec
-        if (
+        if not is_pending_memory(d)
+        and (
             isinstance(d.get("confidence"), (int, float))
             and 0 <= d["confidence"] < T_CONFIDENT
+            or _is_unmeasured(d)
         )
-        or _is_unmeasured(d)
     ]
     if thin:
         print(
@@ -4451,6 +4648,20 @@ WARN_ACTIVATION = (
 )
 
 
+def pending_memory_warning_lines(dec: list[dict]) -> list[str]:
+    """Name decisions that are repairable but not ready to count as active configuration."""
+    pending = [d for d in dec if is_pending_memory(d)]
+    if not pending:
+        return []
+    lines = ["WARNING: PENDING MEMORY REPAIR (not part of the active configuration):"]
+    lines.extend(
+        f"  {d['id']}  requested status {pending_final_status(d)} — "
+        "retry the original answer arguments to finalize it"
+        for d in pending
+    )
+    return lines
+
+
 def options_by_decision(opts: list[dict]) -> dict[str, list[dict]]:
     """Every option row grouped under the decision it belongs to."""
     by_dec: dict[str, list[dict]] = {}
@@ -4524,7 +4735,7 @@ def activation_warning_lines(
     by_dec = options_by_decision(opts)
     lines = []
     for d in dec:
-        if d.get("status") == SUPERSEDED_STATUS:
+        if d.get("status") == SUPERSEDED_STATUS or is_pending_memory(d):
             continue
         cand = by_dec.get(d["id"], [])
         if not cand:
@@ -4605,6 +4816,8 @@ def chosen_active_contradiction_lines(
     by_dec = options_by_decision(opts)
     lines = []
     for d in dec:
+        if is_pending_memory(d):
+            continue
         live = set(live_by_dec.get(d["id"]) or set())
         cand = by_dec.get(d["id"], [])
         if len(live) != 1 or not cand:
@@ -4766,11 +4979,17 @@ def cmd_dump(a):
     )
     lines.append(f"seed: {p.get('seed', '')[:300]}")
     lines.append("")
-    confs, shadows, live_by_dec = [], [], {}
+    confs, shadows, live_by_dec, pending_lines = [], [], {}, []
     for d in dec:
         cand = by_dec.get(d["id"], [])
         superseders = superseded_by.get(d["id"], [])
-        if d.get("status") == SUPERSEDED_STATUS or superseders:
+        if is_pending_memory(d):
+            live_ids = set()
+            pending_lines.append(
+                f"{d['id']}: pending memory repair — requested status "
+                f"{pending_final_status(d)}; not part of the active configuration"
+            )
+        elif d.get("status") == SUPERSEDED_STATUS or superseders:
             live_ids = set()
             if d["id"] in overrides:
                 names = ", ".join(superseders) if superseders else "another decision"
@@ -4800,11 +5019,15 @@ def cmd_dump(a):
         lines.append(
             f"## {d['id']}  ({d.get('domain') or '—'})  conf {_conf_render(d.get('confidence'))}"
             + (
-                f"  [SUPERSEDED by {', '.join(superseders)}]"
-                if superseders
-                else "  [SUPERSEDED]"
-                if d.get("status") == SUPERSEDED_STATUS
-                else ""
+                f"  [PENDING MEMORY REPAIR — requested status {pending_final_status(d)}]"
+                if is_pending_memory(d)
+                else (
+                    f"  [SUPERSEDED by {', '.join(superseders)}]"
+                    if superseders
+                    else "  [SUPERSEDED]"
+                    if d.get("status") == SUPERSEDED_STATUS
+                    else ""
+                )
             )
         )
         lines.append(f"   chosen   : {d.get('chosen')}")
@@ -4828,6 +5051,10 @@ def cmd_dump(a):
     lines.append(
         f"ACTIVE CONFIGURATION: {', '.join(confs) if confs else '(nothing active)'}"
     )
+    if pending_lines:
+        lines.append("")
+        lines.append("PENDING MEMORY REPAIR:")
+        lines.extend(f"  - {line}" for line in pending_lines)
     if shadows:
         lines.append("")
         lines.append("CONTRADICTIONS WITH THE RECORD:")

@@ -354,6 +354,198 @@ def test_start_with_a_seed_stores_and_embeds_exactly_once(monkeypatch):
     assert "seed stored (10 chars) + embedded" in out, out
 
 
+def test_answer_memory_failure_leaves_a_repairable_provisional(
+    decided: dict, monkeypatch
+):
+    """A failed memory write never presents its decision/options as a normal answer."""
+    ns, pid = decided["ns"], decided["pid"]
+
+    def fail_memory(*args, **kwargs):
+        raise SystemExit("remember /auger/P-AUG076/D-076 failed (503): substrate down")
+
+    monkeypatch.setattr(auger, "remember", fail_memory)
+    rc, message, out = run_cli_exit(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-076",
+            "--chosen",
+            "AUG-076 chosen answer",
+            "--option",
+            "AUG-076 chosen answer",
+            "--option",
+            "AUG-076 rejected answer",
+            "--confidence",
+            "0.8",
+        ]
+    )
+
+    assert rc == 1
+    assert "provisional" in message.lower(), message
+    assert out == ""
+    decision = row(ns, "decision", "id=eq.D-076")
+    assert decision["status"].startswith(auger.PENDING_MEMORY_STATUS), decision
+    assert rows(ns, "option", "decision_id=eq.D-076")
+    status_rc, status_out = run_cli(["-n", ns, "status"])
+    assert status_rc == 0, status_out
+    assert "PENDING MEMORY REPAIR" in status_out, status_out
+    dump_rc, dump_out = run_cli(["-n", ns, "dump"])
+    assert dump_rc == 0, dump_out
+    assert "PENDING MEMORY REPAIR" in dump_out, dump_out
+    active_line = next(
+        line
+        for line in dump_out.splitlines()
+        if line.startswith("ACTIVE CONFIGURATION:")
+    )
+    assert "D-076=" not in active_line, dump_out
+    hits = auger.recall(ns, "AUG-076 chosen answer", project_id=pid, limit=5)
+    assert not any(h.get("key") == f"/auger/{pid}/D-076" for h in hits), hits
+
+
+def test_answer_retry_repairs_the_same_provisional_decision(decided: dict, monkeypatch):
+    """Retrying after memory failure finalizes one decision instead of minting a duplicate."""
+    ns, pid = decided["ns"], decided["pid"]
+    original_remember = auger.remember
+    calls = []
+
+    def fail_once_then_remember(*args, **kwargs):
+        calls.append(args)
+        if len(calls) == 1:
+            raise SystemExit("remember failed (503): substrate down")
+        return original_remember(*args, **kwargs)
+
+    monkeypatch.setattr(auger, "remember", fail_once_then_remember)
+    answer_args = [
+        "-n",
+        ns,
+        "answer",
+        "--chosen",
+        "AUG-076 retry answer",
+        "--option",
+        "AUG-076 retry answer",
+        "--option",
+        "AUG-076 retry alternative",
+        "--confidence",
+        "0.8",
+    ]
+
+    rc, message, out = run_cli_exit(answer_args)
+    assert rc == 1
+    assert "provisional" in message.lower(), message
+
+    rc, out = run_cli(answer_args)
+    assert rc == 0, out
+    decisions = rows(ns, "decision", "project_id=eq." + pid)
+    repaired = [d for d in decisions if d["chosen"] == "AUG-076 retry answer"]
+    assert len(repaired) == 1, decisions
+    assert repaired[0]["status"] == "decided", repaired[0]
+    assert len(rows(ns, "option", "decision_id=eq." + repaired[0]["id"])) == 2
+    assert len(calls) == 2
+    hits = auger.recall(ns, "AUG-076 retry answer", project_id=pid, limit=5)
+    assert any(h.get("key") == f"/auger/{pid}/{repaired[0]['id']}" for h in hits), hits
+
+
+def test_status_aggregates_exclude_the_pending_decision(decided: dict, monkeypatch):
+    """A provisional row stays counted as stored but out of every confidence aggregate."""
+    ns = decided["ns"]
+    rc, before = run_cli(["-n", ns, "status"])
+    assert rc == 0, before
+    mean_before = f"mean {sum(d['confidence'] for d in (D001, D002)) / 2:.2f}"
+    assert mean_before in before, before
+
+    def fail_memory(*args, **kwargs):
+        raise SystemExit("remember /auger/P-AUG076/D-076 failed (503): substrate down")
+
+    monkeypatch.setattr(auger, "remember", fail_memory)
+    rc, message, _ = run_cli_exit(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-076",
+            "--domain",
+            "4.05",
+            "--chosen",
+            "AUG-076 aggregate answer",
+            "--option",
+            "AUG-076 aggregate answer",
+            "--confidence",
+            "0.9",
+        ]
+    )
+    assert rc == 1
+    assert "provisional" in message.lower(), message
+
+    rc, after = run_cli(["-n", ns, "status"])
+    assert rc == 0, after
+    assert "decisions 3 |" in after, after  # the row is stored, so it is counted
+    assert "PENDING MEMORY REPAIR" in after, after
+    # The provisional 0.9 never touches min/mean/max: the max stays D-001's 0.82 and the mean
+    # is still the two active rows'.
+    assert "0.90" not in after, after
+    assert mean_before in after, after
+    domain_line = next(
+        line for line in after.splitlines() if line.strip().startswith("4.05")
+    )
+    # D-001 only; the pending row adds nothing (D-076 shares its domain but is excluded).
+    assert domain_line.split()[1] == "1", domain_line
+
+
+def test_answer_retry_with_changed_arguments_is_refused(decided: dict, monkeypatch):
+    """A pending answer is finished only by ITS arguments; a different answer cannot adopt it."""
+    ns = decided["ns"]
+
+    def fail_memory(*args, **kwargs):
+        raise SystemExit("remember /auger/P-AUG076/D-076 failed (503): substrate down")
+
+    monkeypatch.setattr(auger, "remember", fail_memory)
+    original = [
+        "-n",
+        ns,
+        "answer",
+        "--id",
+        "D-076",
+        "--chosen",
+        "AUG-076 original answer",
+        "--option",
+        "AUG-076 original answer",
+        "--option",
+        "AUG-076 original alternative",
+        "--confidence",
+        "0.8",
+    ]
+    rc, message, out = run_cli_exit(original)
+    assert rc == 1
+    assert "provisional" in message.lower(), message
+
+    # Same id, a different chosen answer (chosen text and its option label changed together, or
+    # the pre-existing chosen-vs-options refusal fires first): adopting the provisional would
+    # silently rewrite an answer somebody else interrupted, so the retry is refused with nothing
+    # changed.
+    changed = [
+        part.replace("AUG-076 original answer", "AUG-076 changed answer")
+        for part in original
+    ]
+    rc, message, out = run_cli_exit(changed)
+    assert rc == 1
+    assert "belongs to a different answer" in message, message
+    assert out == "", out
+
+    stored = row(ns, "decision", "id=eq.D-076")
+    assert auger.is_pending_memory(stored), stored
+    assert stored["chosen"] == "AUG-076 original answer", stored
+    # The unchanged retry still repairs: the refusal changed nothing on the record.
+    monkeypatch.undo()
+    rc, out = run_cli(original)
+    assert rc == 0, out
+    repaired = row(ns, "decision", "id=eq.D-076")
+    assert repaired["status"] == "decided", repaired
+    assert len(rows(ns, "option", "decision_id=eq.D-076")) == 2
+
+
 def test_answer_writes_every_decision_field_to_the_row(decided: dict):
     """Every field `answer` was given comes back off the STORED row."""
     d = row(decided["ns"], "decision", "id=eq.D-001")
@@ -2261,6 +2453,7 @@ def drive_answer(
     )
     monkeypatch.setattr(auger, "insert", lambda ns, table, rows: {})
     monkeypatch.setattr(auger, "remember", lambda *a, **k: {})
+    monkeypatch.setattr(auger, "patch", lambda *a, **k: {})
     monkeypatch.setattr(
         auger,
         "bundle_impact",
@@ -2452,6 +2645,7 @@ def race_stubs(monkeypatch) -> None:
         auger, "_project", lambda ns, pid=None: {"id": MINT_PID, "name": "race"}
     )
     monkeypatch.setattr(auger, "remember", lambda *a, **k: {})
+    monkeypatch.setattr(auger, "patch", lambda *a, **k: {})
     monkeypatch.setattr(
         auger,
         "bundle_impact",

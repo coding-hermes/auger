@@ -143,6 +143,8 @@ refused before any decision or option row is written. The resolver does not gues
 ambiguous values. Omitting `--option` remains valid and records a decision with no option
 rows; its success report states `0 of 0 active`.
 
+**Crash consistency:** DuckBrain does not provide a transaction spanning table rows and memory. `answer` therefore writes the decision with a repairable `pending_memory:<encoded repair metadata>` status and its options before embedding the evidence. That provisional pair is explicitly marked pending, excluded from the active configuration, from the status confidence aggregates, and absent from memory recall; `status` and `dump` still count the stored row and name it under a `PENDING MEMORY REPAIR` warning with the retry instruction. If embedding or finalization fails, retrying the same answer (with or without its original `--id` when it is the only pending answer) repairs that decision and finalizes its requested status; a retry with different answer or graph-side-effect fields is refused. A successful answer still ends with its requested status (normally `decided`), its options, and its memory as before.
+
 **Writes:** one `decision` row; one `option` row per `--option` (id `<D-###>-O<n>`,
 `active` on exactly the chosen one); one embedded memory under
 `/auger/<pid>/<did>` stating the choice, the rejected alternatives, and the reason —
