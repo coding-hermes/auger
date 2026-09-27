@@ -5,11 +5,15 @@ the reasons the alternatives lost, and a what-if toggle.
 
 ## Before you open a PR
 
-- **The verbs are the API.** `init`, `start`, `ask`, `answer`, `check`, `status`, `toggle`,
-  `dump` are what others build on. Changing a verb's name or its output shape is a breaking
-  change — say so explicitly in the PR.
-- **Run the smoke test.** `bash tests/smoke.sh` runs the whole loop against a throwaway
-  DuckBrain namespace with real assertions and exits non-zero on any failure. Paste the tail.
+- **The verbs are the API.** The public CLI surface is `init`, `start`, `bundle`, `ask`, `answer`,
+  `check`, `status`, `toggle`, `dump`, `propagate`, `feedback`, `recall`, and `verdict`. Changing
+  a verb's name or its output shape is a breaking change — say so explicitly in the PR. Adding a
+  verb requires updating this contract list.
+- **Run the substrate-free pre-PR gate.** `bash tests/gate.sh` runs the syntax, lint, and tests
+  that do not require live DuckBrain/JEV; live-dependent arms skip explicitly when unavailable.
+- **Optionally run the live smoke test.** `bash tests/smoke.sh` runs the whole loop against a
+  throwaway DuckBrain namespace with real assertions and exits non-zero on any failure. Paste the
+  tail.
 - **It is stdlib-only on purpose.** No dependencies. If a PR needs one, explain why the
   standard library cannot do it.
 - **Never build a request body by string interpolation.** An apostrophe in a JSON value inside

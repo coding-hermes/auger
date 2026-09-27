@@ -48,6 +48,7 @@ from collections import Counter
 from datetime import datetime, timezone
 from urllib.parse import quote, unquote
 
+AUGER_VERSION = "0.1"
 DB_URL = os.environ.get("DUCKBRAIN_URL", "http://127.0.0.1:3000")
 JEV_URL = "https://openrouter.ai/api/alpha/decisions"
 JEV_MODEL = "typesafe/jev-1.13"
@@ -5292,6 +5293,11 @@ def cmd_verdict_dispatch(a):
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="auger", description="spec drilling backed by DuckBrain"
+    )
+    ap.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s v{AUGER_VERSION}",
     )
     ap.add_argument("--namespace", "-n", default=os.environ.get("AUGER_NS", "auger"))
     ap.add_argument("--project-id", "-p", default=None)
