@@ -119,7 +119,7 @@ COLS = {
         ("seed", "varchar"),
         ("core_statement", "varchar"),
         ("status", "varchar"),
-        ("created_at", "timestamp"),
+        ("created_at", "varchar"),
     ],
     "question": [
         ("id", "varchar"),
@@ -218,7 +218,7 @@ COLS = {
         ("confidence", "double"),
         ("source", "varchar"),
         ("note", "varchar"),
-        ("created_at", "timestamp"),
+        ("created_at", "varchar"),
     ],
     "facet": [
         ("id", "varchar"),
@@ -259,7 +259,7 @@ COLS = {
         ("confidence", "double"),
         ("source", "varchar"),
         ("note", "varchar"),
-        ("created_at", "timestamp"),
+        ("created_at", "varchar"),
     ],
 }
 PRIMARY = {t: "id" for t in COLS}

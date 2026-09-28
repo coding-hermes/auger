@@ -31,6 +31,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -283,11 +284,11 @@ def test_start_stores_the_project_row_and_embeds_the_seed(project: dict):
     assert p["status"] == "open"
     assert p["seed"].strip() == project["seed"].strip()
 
-    # SUBSTRATE QUIRK (observed, not assumed): DuckBrain renders a declared `timestamp`
-    # column as `{}` over the API while the JSONL on disk holds the real ISO value. Assert
-    # the column is projected here, and assert the VALUE where the storage of record keeps
-    # it — the design leans on the namespace being readable as plain JSONL.
+    # The declared storage type is text because the engine writes an ISO-8601 string. The
+    # substrate's timestamp projection is `{}` over the API, so keeping the declaration and
+    # write format aligned is part of the round-trip contract.
     assert "created_at" in p
+    assert isinstance(p["created_at"], str) and p["created_at"], p
     disk_row = None
     with open(os.path.join(ns_path(ns), "tables", "project.jsonl")) as fh:
         for line in fh:
@@ -302,6 +303,147 @@ def test_start_stores_the_project_row_and_embeds_the_seed(project: dict):
     assert any(h.get("key") == f"/auger/{project['pid']}/seed" for h in hits), (
         f"the seed evidence key was not retrievable: {[h.get('key') for h in hits]}"
     )
+
+
+def test_created_at_round_trips_for_every_declared_created_at_table(project: dict):
+    """Every engine-created timestamp is text on disk, in raw reads, export, and list output."""
+    ns, pid = project["ns"], project["pid"]
+    created_tables = {
+        table
+        for table, columns in auger.COLS.items()
+        if any(name == "created_at" for name, _kind in columns)
+    }
+    assert created_tables == {"project", "edge", "verdict"}
+
+    auger.insert(
+        ns,
+        "decision",
+        {
+            "id": "D-CREATED-AT",
+            "project_id": pid,
+            "domain": "created-at",
+            "question_id": "",
+            "chosen": "text",
+            "why_not": "timestamp projection is empty",
+            "reversal_cost": "none",
+            "confidence": 1.0,
+            "status": "decided",
+            "evidence_key": "",
+            "scope": "project",
+        },
+    )
+    edge_row = auger.edge(
+        ns,
+        pid,
+        "references",
+        "decision",
+        "D-CREATED-AT",
+        "decision",
+        "D-CREATED-AT",
+        source="human",
+        note="created_at round-trip regression",
+    )
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "verdict",
+            "--good",
+            "created-at-round-trip",
+            "--reasons",
+            "stored as text",
+        ]
+    )
+    assert rc == 0, out
+
+    expected_ids = {
+        "project": project["pid"],
+        "edge": edge_row["id"],
+        "verdict": "V-000001",
+    }
+    values = {}
+    for table, item_id in expected_ids.items():
+        status, raw_rows, _ = auger.db(auger.tbl(ns, table))
+        assert status == 200, raw_rows
+        stored = next(item for item in raw_rows if item["id"] == item_id)
+        value = stored["created_at"]
+        assert isinstance(value, str) and value and value != "{}", stored
+        values[table] = value
+
+        disk_rows = []
+        with open(os.path.join(ns_path(ns), "tables", f"{table}.jsonl")) as fh:
+            disk_rows = [json.loads(line) for line in fh]
+        disk = next(item for item in disk_rows if item["id"] == item_id)
+        assert disk["created_at"] == value
+
+    exported = auger.render_export(ns)
+    assert "created_at: {}" not in exported
+    for value in values.values():
+        assert f"- created_at: {value}" in exported
+
+    rc, listed = run_cli(["-n", ns, "verdict", "--list"])
+    assert rc == 0, listed
+    assert values["verdict"][:19] in listed
+    assert "{}" not in listed
+
+
+def test_init_migrates_existing_timestamp_created_at_declarations(project: dict):
+    """Re-running init changes an existing timestamp declaration to the text contract."""
+    ns, pid = project["ns"], project["pid"]
+    declaration_path = os.path.join(ns_path(ns), "tables", "project.table.json")
+    with open(declaration_path) as fh:
+        declaration = json.load(fh)
+    for column in declaration["columns"]:
+        if column["name"] == "created_at":
+            column["type"] = "timestamp"
+    with open(declaration_path, "w") as fh:
+        json.dump(declaration, fh, indent=1)
+
+    assert row(ns, "project", f"id=eq.{pid}")["created_at"] == {}
+    rc, out = run_cli(["-n", ns, "init"])
+    assert rc == 0, out
+    migrated = row(ns, "project", f"id=eq.{pid}")["created_at"]
+    assert isinstance(migrated, str) and migrated and migrated != "{}", migrated
+    with open(declaration_path) as fh:
+        assert next(c for c in json.load(fh)["columns"] if c["name"] == "created_at")[
+            "type"
+        ] == "varchar"
+
+
+def test_created_at_desc_is_newest_first_for_projects_and_verdicts(ns: str):
+    """Text ISO timestamps preserve newest-first ordering at every created_at reader."""
+    for pid in ("P-ORDER-OLD", "P-ORDER-NEW"):
+        rc, out = run_cli(["-n", ns, "start", "--id", pid, "--name", pid])
+        assert rc == 0, out
+        if pid == "P-ORDER-OLD":
+            time.sleep(1.1)
+
+    assert auger._latest_project_id(ns) == "P-ORDER-NEW"
+    project_rows = auger.select(ns, "project", "order=created_at.desc")
+    assert [item["id"] for item in project_rows[:2]] == [
+        "P-ORDER-NEW",
+        "P-ORDER-OLD",
+    ], project_rows[:2]
+
+    for verdict_args in (
+        ["--good", "old-config", "--reasons", "old"],
+        ["--bad", "new-config", "--reasons", "new"],
+    ):
+        rc, out = run_cli(["-n", ns, "verdict", *verdict_args])
+        assert rc == 0, out
+        if verdict_args[0] == "--good":
+            time.sleep(1.1)
+
+    verdict_rows = auger.select(ns, "verdict", "order=created_at.desc,id.desc")
+    assert [item["config_summary"] for item in verdict_rows[:2]] == [
+        "new-config",
+        "old-config",
+    ], verdict_rows[:2]
+    rc, listed = run_cli(["-n", ns, "verdict", "--list"])
+    assert rc == 0, listed
+    listed_rows = [line for line in listed.splitlines() if line.startswith("V-")]
+    assert listed_rows[0].split()[0] == verdict_rows[0]["id"], listed
+    assert listed_rows[1].split()[0] == verdict_rows[1]["id"], listed
 
 
 # AUG-072: an empty seed has nothing to store or embed. DuckBrain's required-content
