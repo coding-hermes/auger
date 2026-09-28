@@ -956,6 +956,79 @@ def test_answer_tolerates_an_apostrophe_in_the_reason(decided: dict):
     assert row(decided["ns"], "decision", "id=eq.D-003")["why_not"] == tricky
 
 
+def test_answer_repeated_why_not_records_each_rejected_option_and_dump_renders_it(
+    project: dict,
+):
+    """Repeated reasons stay paired with the rejected option, never with the chosen one."""
+    ns = project["ns"]
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-057",
+            "--chosen",
+            "chosen option",
+            "--option",
+            "first rejected",
+            "--option",
+            "chosen option",
+            "--option",
+            "second rejected",
+            "--why-not",
+            "first rejected because of latency",
+            "--why-not",
+            "second rejected because of cost",
+            "--confidence",
+            "0.8",
+        ]
+    )
+    assert rc == 0, out
+
+    stored = row(ns, "decision", "id=eq.D-057")
+    assert "first rejected because of latency" in stored["why_not"]
+    assert "second rejected because of cost" in stored["why_not"]
+
+    rc, dump = run_cli(["-n", ns, "dump"])
+    assert rc == 0, dump
+    assert "D-057-O1 (first rejected) — first rejected because of latency" in dump, dump
+    assert "D-057-O3 (second rejected) — second rejected because of cost" in dump, dump
+    assert "D-057-O2 (chosen option) —" not in dump, dump
+
+
+def test_answer_repeated_why_not_with_wrong_arity_is_refused(project: dict):
+    """An extra repeated reason is loud instead of silently replacing the previous value."""
+    ns = project["ns"]
+    rc, message, out = run_cli_exit(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-058",
+            "--chosen",
+            "chosen option",
+            "--option",
+            "chosen option",
+            "--option",
+            "only rejected",
+            "--why-not",
+            "first reason",
+            "--why-not",
+            "second reason",
+            "--why-not",
+            "third reason",
+            "--confidence",
+            "0.8",
+        ]
+    )
+    assert rc != 0
+    assert "--why-not" in message
+    assert out == ""
+    assert rows(ns, "decision", "id=eq.D-058") == []
+
+
 def test_answer_without_a_project_is_refused(live_service: str):
     """With no project row the verb refuses explicitly instead of writing a dangling decision."""
     ns = new_bare_ns()

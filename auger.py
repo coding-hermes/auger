@@ -398,6 +398,7 @@ DECISION_SCOPES = ("project", "bundle")
 # name when wrong.
 VERDICT_WORDS = ("good", "bad")
 DEFAULT_SCOPE = "project"
+WHY_NOT_PREFIX = "per-option-v1:"
 # src_kind/dst_kind -> the table that must ALREADY hold that id (this is the referential check).
 NODE_TABLES = {
     "decision": "decision",
@@ -4166,6 +4167,85 @@ def pending_answer_matches(
     return stored_labels == option_labels[: len(stored_labels)]
 
 
+def encode_why_not(
+    raw: str | list[str] | None, option_rows: list[dict], chosen: dict | None
+) -> str:
+    """Keep legacy reasons scalar, but preserve each repeated reason with its rejected option."""
+    values = raw if isinstance(raw, list) else [raw] if raw is not None else []
+    if not values:
+        return ""
+    rejected = [
+        option for option in option_rows if not chosen or option["id"] != chosen["id"]
+    ]
+    if len(values) == 1:
+        return values[0]
+    if len(values) != len(rejected):
+        raise SystemExit(
+            f"refused: --why-not was repeated {len(values)} times, but this answer has "
+            f"{len(rejected)} rejected options; provide exactly one reason per rejected "
+            "option (in option order), or pass --why-not once for a shared reason; "
+            "nothing was written"
+        )
+    return WHY_NOT_PREFIX + json.dumps(
+        [
+            {"option_id": option["id"], "label": option["label"], "reason": reason}
+            for option, reason in zip(rejected, values)
+        ],
+        separators=(",", ":"),
+    )
+
+
+def why_not_records(value: str | None, options: list[dict]) -> list[dict]:
+    """Decode the structured repeated-reason form, using current option labels for rendering."""
+    if not isinstance(value, str) or not value.startswith(WHY_NOT_PREFIX):
+        return []
+    try:
+        encoded = json.loads(value[len(WHY_NOT_PREFIX) :])
+    except (TypeError, ValueError):
+        return []
+    if not isinstance(encoded, list):
+        return []
+    by_id = {option.get("id"): option for option in options}
+    records = []
+    for item in encoded:
+        if not isinstance(item, dict) or not item.get("option_id"):
+            return []
+        option = by_id.get(item["option_id"], item)
+        records.append(
+            {
+                "option_id": item["option_id"],
+                "label": option.get("label") or item.get("label") or "",
+                "reason": item.get("reason") or "",
+            }
+        )
+    return records
+
+
+def why_not_display(value: str | None, options: list[dict]) -> str:
+    """Render one stored reason, or every structured reason with its option identity."""
+    records = why_not_records(value, options)
+    if not records:
+        return value or "none"
+    return "; ".join(
+        f"{record['option_id']} ({record['label']}) — {record['reason']}"
+        for record in records
+    )
+
+
+def why_not_dump_lines(value: str | None, options: list[dict]) -> list[str]:
+    """Render per-option reasons as indented dump lines; legacy values keep their old shape."""
+    records = why_not_records(value, options)
+    if not records:
+        return [f"   why not  : {value or '(not recorded)'}"]
+    return [
+        "   why not  :",
+        *[
+            f"     {record['option_id']} ({record['label']}) — {record['reason']}"
+            for record in records
+        ],
+    ]
+
+
 def cmd_answer(a):
     if a.confidence is not None and (
         not math.isfinite(a.confidence) or not 0 <= a.confidence <= 1
@@ -4281,6 +4361,7 @@ def cmd_answer(a):
         resolve_option(option_rows, a.chosen, did) if option_rows else None
     )
     chosen = resolved_option["label"] if resolved_option else a.chosen
+    why_not_value = encode_why_not(a.why_not, option_rows, resolved_option)
     final_status = a.status or "decided"
     row = {
         "id": did,
@@ -4288,7 +4369,7 @@ def cmd_answer(a):
         "domain": a.domain or "",
         "question_id": a.question_id or "",
         "chosen": chosen,
-        "why_not": a.why_not or "",
+        "why_not": why_not_value,
         "reversal_cost": a.reversal_cost or "",
         "confidence": float(a.confidence if a.confidence is not None else -1),
         "status": final_status,
@@ -4371,7 +4452,7 @@ def cmd_answer(a):
                 if others
                 else "No alternative was recorded. "
             )
-            + f"Reason the alternatives were rejected: {a.why_not or 'not stated'}. "
+            + f"Reason the alternatives were rejected: {why_not_display(why_not_value, option_rows)}. "
             + f"Reversal cost: {row['reversal_cost'] or 'not stated'}.",
         )
     except SystemExit as exc:
@@ -4928,7 +5009,8 @@ def chosen_active_contradiction_lines(
             continue  # a selection this pass cannot attribute: report nothing, guess nothing
         lines.append(
             f"{d['id']}: active {active['id']} ({active['label']}) contradicts the recorded "
-            f"choice ({recorded}) — reason on file: {d.get('why_not') or 'none'}"
+            f"choice ({recorded}) — reason on file: "
+            f"{why_not_display(d.get('why_not'), by_dec.get(d['id'], []))}"
         )
     return lines
 
@@ -5154,7 +5236,8 @@ def cmd_dump(a):
             if o["id"] in override_ids and o["label"] != d.get("chosen"):
                 shadows.append(
                     f"{d['id']}: choosing {o['label']} contradicts the recorded choice "
-                    f"({d.get('chosen')}) — reason on file: {d.get('why_not') or 'none'}"
+                    f"({d.get('chosen')}) — reason on file: "
+                    f"{why_not_display(d.get('why_not'), cand)}"
                 )
         lines.append(
             f"## {d['id']}  ({d.get('domain') or '—'})  conf {_conf_render(d.get('confidence'))}"
@@ -5171,7 +5254,7 @@ def cmd_dump(a):
             )
         )
         lines.append(f"   chosen   : {d.get('chosen')}")
-        lines.append(f"   why not  : {d.get('why_not') or '(not recorded)'}")
+        lines.extend(why_not_dump_lines(d.get("why_not"), cand))
         if cand:
             lines.append("   options  :")
             for o in cand:
@@ -5642,7 +5725,7 @@ def main(argv=None):
     s.add_argument("--id")
     s.add_argument("--chosen", required=True)
     s.add_argument("--option", action="append")
-    s.add_argument("--why-not")
+    s.add_argument("--why-not", action="append", metavar="REASON")
     s.add_argument("--domain")
     s.add_argument("--question-id")
     s.add_argument("--reversal-cost")

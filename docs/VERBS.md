@@ -144,11 +144,19 @@ Record a decision with its rejected alternatives.
 **Arguments:** `--chosen` (required; when `--option` is supplied it must resolve to exactly
 one supplied option by full option id, option label, or bare option suffix such as `O2`),
 `--id` (defaults to the next `D-` number), `--option` (repeatable — every alternative,
-chosen ones included), `--why-not`,
+chosen ones included), `--why-not REASON` (optional; one reason for all rejected options),
 `--domain`, `--question-id`, `--reversal-cost`, `--confidence` (float), `--status`
 (defaults `decided`), `--scope` (`project` | `bundle`, default `project`), `--invalidates`
 (repeatable decision id), `--invalidates-why` (alias `--why`; only with `--invalidates`),
 `--supersedes` (repeatable decision id), `--supersedes-why`.
+
+`--why-not REASON` may be supplied once as a shared reason, preserving the legacy behavior. To
+record separate reasons, repeat it exactly once for each rejected option, in the order those
+rejected options appear among the repeatable `--option` values (the chosen option is skipped).
+Each repeated reason is stored with that generated option ID and label, and `dump` renders the
+pair as `D-###-O# (label) — reason`; the chosen option is never rendered as rejected. A repeated
+count that does not equal the number of rejected options is refused by name before any rows are
+written, rather than silently retaining only the last value.
 
 A supplied `--chosen` that matches no option, or matches more than one option label, is
 refused before any decision or option row is written. The resolver does not guess between
