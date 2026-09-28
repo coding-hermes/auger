@@ -405,9 +405,12 @@ def test_init_migrates_existing_timestamp_created_at_declarations(project: dict)
     migrated = row(ns, "project", f"id=eq.{pid}")["created_at"]
     assert isinstance(migrated, str) and migrated and migrated != "{}", migrated
     with open(declaration_path) as fh:
-        assert next(c for c in json.load(fh)["columns"] if c["name"] == "created_at")[
-            "type"
-        ] == "varchar"
+        assert (
+            next(c for c in json.load(fh)["columns"] if c["name"] == "created_at")[
+                "type"
+            ]
+            == "varchar"
+        )
 
 
 def test_created_at_desc_is_newest_first_for_projects_and_verdicts(ns: str):
@@ -1158,7 +1161,9 @@ def test_a_bundle_scoped_decision_round_trips_through_the_api(project: dict):
             "--id",
             "D-010",
             "--domain",
-            "9.01",
+            # The answer is about the shared wire envelope, so use canonical
+            # Services & protocols rather than the retired legacy fixture.
+            "4.18",
             "--chosen",
             "one message envelope",
             "--option",
@@ -1177,6 +1182,7 @@ def test_a_bundle_scoped_decision_round_trips_through_the_api(project: dict):
     assert "scope bundle" in out, out
 
     stored = row(ns, "decision", "id=eq.D-010")
+    assert stored["domain"] == "4.18", stored
     assert stored["scope"] == "bundle"
     assert auger.decision_scope(stored) == "bundle"
     with open(os.path.join(ns_path(ns), "tables", "decision.jsonl")) as fh:
@@ -3586,7 +3592,8 @@ def break_cli(
         "--id",
         did,
         "--domain",
-        "9.02",
+        # This fixture invalidates a stale meter reading: canonical Metrics.
+        "4.14",
         "--chosen",
         chosen or "keep what the old meter read",
         "--option",
@@ -3665,6 +3672,7 @@ def test_answer_invalidates_writes_a_local_breaks_edge(project: dict, monkeypatc
     dead = row(ns, "decision", "id=eq.D-008")
     assert dead["chosen"] == "the July bench meter read the peak"
     assert dead["status"] == "decided"
+    assert row(ns, "decision", "id=eq.D-009")["domain"] == "4.14"
     assert e["id"] in out, out
 
 
@@ -5176,7 +5184,9 @@ def sibling_decision(ns: str, pid: str, did: str, chosen: str) -> dict:
     spec = {
         "id": did,
         "project_id": pid,
-        "domain": "9.01",
+        # The sibling's decision compares message envelopes across a bundle;
+        # 4.18 is the canonical Services & protocols domain.
+        "domain": "4.18",
         "question_id": "",
         "chosen": chosen,
         "why_not": "the siblings must agree on the wire shape",
@@ -5202,7 +5212,8 @@ def record_decision(
         "--id",
         did,
         "--domain",
-        "9.01",
+        # All record_decision fixtures discuss the shared message envelope.
+        "4.18",
         "--chosen",
         chosen,
         "--option",
@@ -5291,6 +5302,7 @@ def test_the_gate_links_an_answer_held_in_a_sibling_namespace(
         monkeypatch,
         decision=("D-007", "a sandbox isolates the filesystem per process"),
     )
+    assert row(sibling_ns, "decision", "id=eq.D-007")["domain"] == "4.18"
     store_questions(
         ns, "P-HOME", ("Q-000001", Q_WATCH, "answered"), ("Q-000002", Q_STORE, "open")
     )
@@ -7792,7 +7804,9 @@ def test_answer_refuses_a_malformed_domain_the_same_way(project, tmp_path, monke
     """A value the grid could never carry (unpadded, out of range, non-numeric): refused."""
     ns = project["ns"]
     monkeypatch.setenv(auger.DOMAIN_GRID_ENV, str(tmp_path))
-    for bad in ("4.5", "4.99", "45", "data", ""):
+    # The retired 9.xx identifiers are user-input regressions, not graph fixtures: they
+    # remain refused rather than becoming an undocumented compatibility mode.
+    for bad in ("4.5", "4.99", "9.01", "9.02", "45", "data", ""):
         if not bad:
             continue  # the empty value keeps its existing contract (tested below)
         with pytest.raises(SystemExit) as ei:
