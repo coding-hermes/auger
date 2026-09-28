@@ -2961,6 +2961,33 @@ def domain_numbers() -> list:
     return [f"4.{n:02d}" for n in range(1, DOMAIN_GRID_SIZE + 1)]
 
 
+def resolve_answer_domain(raw: str) -> tuple[str, str]:
+    """Validate an `answer --domain` value against the canonical grid (AUG-038).
+
+    Returns (canonical_num, grid_name). Refuses — before anything is written — a value
+    that is not one of the grid's numbers: the grid read here is THE one source of truth
+    (no second table), so an unknown or malformed value can only mean a mistyped one,
+    and silently storing it would fake a coverage claim the store cannot see.
+    """
+    value = (raw or "").strip()
+    try:
+        grid = read_domain_grid()
+    except (SystemExit, OSError) as exc:
+        raise SystemExit(
+            f"refused: --domain {raw!r} cannot be validated — the canonical domain grid "
+            f"is unreadable, and no domain may be stored unverified: {exc}"
+        ) from exc
+    by_num = {e["num"]: e for e in grid}
+    entry = by_num.get(value)
+    if entry is None:
+        allowed = f"{grid[0]['num']}-{grid[-1]['num']} ({len(grid)} domains)"
+        raise SystemExit(
+            f"refused: unknown domain {raw!r} — --domain takes one of the canonical grid "
+            f"numbers {allowed}; nothing was stored (e.g. {grid[4]['num']}={grid[4]['name']})"
+        )
+    return entry["num"], entry["name"]
+
+
 def _triage_product(path: str, hit) -> int:
     """The triage score, after proving the header's own arithmetic. The product IS the score.
 
@@ -4135,6 +4162,12 @@ def cmd_answer(a):
         raise SystemExit(
             f"unknown decision scope {a.scope!r}: expected one of {', '.join(DECISION_SCOPES)}"
         )
+    # AUG-038, fail closed BEFORE any decision/options/evidence write: a domain that is not one
+    # of the canonical grid's numbers is refused here, while refusing is still free. The empty
+    # value keeps its existing contract (a decision may name no domain at all).
+    domain_name = ""
+    if (a.domain or "").strip():
+        a.domain, domain_name = resolve_answer_domain(a.domain)
     # The id is namespace-scoped, so the read is too: a sibling project's rows are exactly what a
     # per-project count could not see. An unfinished answer is different: it owns its id and is the
     # only retry target, whether the caller repeats --id or lets the CLI find the one pending answer.
@@ -4374,8 +4407,10 @@ def cmd_answer(a):
     )
     impact = bundle_impact(ns, pid, {**row, "scope": stored_scope})
     active_count = 1 if resolved_option else 0
+    domain_note = f"domain {row['domain']} = {domain_name}, " if domain_name else ""
     print(
-        f"{did} recorded  (confidence {_conf_render(row['confidence'])}, "
+        f"{did} recorded  ({domain_note}"
+        f"confidence {_conf_render(row['confidence'])}, "
         f"{active_count} of {len(option_rows)} active, "
         f"embedded, scope {decision_scope(row)}{closed})"
     )

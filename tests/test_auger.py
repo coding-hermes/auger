@@ -7742,3 +7742,176 @@ def test_record_option_refuses_an_option_of_another_project(decided: dict):
     )
     assert rc == 0, out
     assert row(ns, "option", "id=eq.D-001-O2")["costs"] == "x"
+
+
+# ================================================================= answer --domain validation (AUG-038)
+# `answer --domain` used to accept ANY string (4.99 included) and store it verbatim, so a
+# typo'd domain faked a coverage claim the grid could not see. The fix validates against the
+# ONE canonical grid — the same `read_domain_grid()` the seeder and the coverage report read,
+# never a second copy of the numbers — and refuses BEFORE any decision/options/evidence write.
+# Every case here builds its own grid in `tmp_path` (or uses a stub one), so it runs on any
+# host, and asserts on the STORED rows or the exact line, not on a helper constant.
+def test_answer_refuses_an_unknown_domain_and_writes_nothing(
+    project, tmp_path, monkeypatch
+):
+    """4.99 is not one of the 44: refused by name, with the allowed range, and NOTHING stored."""
+    ns = project["ns"]
+    monkeypatch.setenv(auger.DOMAIN_GRID_ENV, str(tmp_path))
+    # a complete stub grid (distinct names, no dots in slugs) so the refusal is the DOMAIN
+    # check, not an unreadable grid — but the check is grid-driven either way, fail closed.
+    for n in range(1, 45):
+        write_grid_file(str(tmp_path), f"4.{n:02d}-stub{n}", GRID_KV_HEADER)
+    argv = [
+        "-n",
+        ns,
+        "answer",
+        "--id",
+        "D-401",
+        "--domain",
+        "4.99",
+        "--chosen",
+        "typo'd domain",
+        "--option",
+        "typo'd domain",
+        "--why-not",
+        "n/a",
+    ]
+    rc, message, out = run_cli_exit(argv)
+    assert "4.99" in message, message
+    assert "4.01-4.44" in message and "44" in message, message
+    assert "nothing was stored" in message, message
+    # the refusal happened BEFORE any write: no decision, no option, no evidence memory
+    assert rows(ns, "decision", "") == [], rows(ns, "decision", "")
+    assert rows(ns, "option", "") == []
+    # the evidence memory is keyed /auger/<pid>/<decision-id>: none was written either
+    items = auger.recall(ns, "D-401", limit=10)
+    assert not any("D-401" in str(it) for it in items), items
+
+
+def test_answer_refuses_a_malformed_domain_the_same_way(project, tmp_path, monkeypatch):
+    """A value the grid could never carry (unpadded, out of range, non-numeric): refused."""
+    ns = project["ns"]
+    monkeypatch.setenv(auger.DOMAIN_GRID_ENV, str(tmp_path))
+    for bad in ("4.5", "4.99", "45", "data", ""):
+        if not bad:
+            continue  # the empty value keeps its existing contract (tested below)
+        with pytest.raises(SystemExit) as ei:
+            auger.main(
+                [
+                    "-n",
+                    ns,
+                    "answer",
+                    "--id",
+                    "D-402",
+                    "--domain",
+                    bad,
+                    "--chosen",
+                    "x",
+                    "--option",
+                    "x",
+                ]
+            )
+        assert "refused" in str(ei.value), (bad, str(ei.value))
+    assert rows(ns, "decision", "") == []
+
+
+def test_answer_confirmation_names_the_canonical_grid_name(
+    project, tmp_path, monkeypatch
+):
+    """Success: the stored row keeps the numeric contract and the report names the domain."""
+    ns = project["ns"]
+    monkeypatch.setenv(auger.DOMAIN_GRID_ENV, str(tmp_path))
+    grid = grid_or_skip()
+    name = {e["num"]: e["name"] for e in grid}["4.05"]
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-403",
+            "--domain",
+            "4.05",
+            "--chosen",
+            "single SQLite file",
+            "--option",
+            "single SQLite file",
+            "--why-not",
+            "the seed forbids a service",
+        ]
+    )
+    assert rc == 0, out
+    assert f"domain 4.05 = {name}" in out, out
+    stored = row(ns, "decision", "id=eq.D-403")
+    assert stored["domain"] == "4.05", stored
+
+
+def test_answer_without_a_domain_keeps_its_existing_contract(
+    project, tmp_path, monkeypatch
+):
+    """No --domain: no grid read required, no name printed, empty stored domain."""
+    ns = project["ns"]
+    monkeypatch.setenv(auger.DOMAIN_GRID_ENV, str(tmp_path))
+    rc, out = run_cli(
+        ["-n", ns, "answer", "--id", "D-404", "--chosen", "y", "--option", "y"]
+    )
+    assert rc == 0, out
+    assert "domain " not in out.split("recorded")[0].split("\n")[-1], out
+    stored = row(ns, "decision", "id=eq.D-404")
+    assert stored["domain"] == "", stored
+
+
+def test_status_coverage_names_the_grid_domain_each_row_belongs_to(
+    project, tmp_path, monkeypatch
+):
+    """AUG-038's off-by-one proof: 4.05 and 4.27 are ADJACENT-structure domains whose grid
+    names differ (`data` vs `audio`), and each status line must carry its OWN pair — an
+    index shift would put 4.05's name on 4.27's line or 4.27's evidence on 4.05's."""
+    ns = project["ns"]
+    monkeypatch.setenv(auger.DOMAIN_GRID_ENV, str(tmp_path))
+    # a temporary stub grid with the canonical 44 numbers and DISTINCT names per number:
+    # the name embedded in the file name is the only name source, so any index shift or
+    # name reuse in the report would show up here immediately.
+    for n in range(1, 45):
+        num = f"4.{n:02d}"
+        write_grid_file(
+            str(tmp_path), f"{num}-domain-{num.replace('.', '-')}", GRID_KV_HEADER
+        )
+    seed_grid(ns)
+    for did, dom in (("D-405", "4.05"), ("D-406", "4.27")):
+        rc, out = run_cli(
+            [
+                "-n",
+                ns,
+                "answer",
+                "--id",
+                did,
+                "--domain",
+                dom,
+                "--chosen",
+                "c",
+                "--option",
+                "c",
+                "--why-not",
+                "n/a",
+            ]
+        )
+        assert rc == 0, out
+    rc, out = run_cli(["-n", ns, "status"])
+    assert rc == 0, out
+    reported = coverage_lines(out)
+    assert len(reported) == 44, f"{len(reported)} domain line(s):\n{out}"
+    line_405 = next(ln for ln in reported if ln.strip().startswith("4.05 "))
+    line_427 = next(ln for ln in reported if ln.strip().startswith("4.27 "))
+    assert "domain-4-05" in line_405, line_405
+    assert "domain-4-27" not in line_405, line_405
+    assert "domain-4-27" in line_427, line_427
+    assert "domain-4-05" not in line_427, line_427
+    # each number's own evidence stays on its own line too
+    assert "decisions/questions 1" in line_405, line_405
+    assert "decisions/questions 1" in line_427, line_427
+    # and the STORED rows pair number/name exactly as the grid files name them
+    stored = {r["num"]: r for r in rows(ns, "domain", "")}
+    assert len(stored) == 44
+    assert stored["4.05"]["name"] == "domain-4-05", stored["4.05"]
+    assert stored["4.27"]["name"] == "domain-4-27", stored["4.27"]
