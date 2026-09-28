@@ -3419,11 +3419,24 @@ def cmd_init(a):
 
 
 def _project(ns, pid=None):
-    rows = select(ns, "project", "order=created_at.desc&limit=1")
     if pid:
-        rows = [r for r in select(ns, "project", f"id=eq.{pid}")]
+        rows = select(ns, "project", f"id=eq.{pid}")
+        if not rows:
+            raise SystemExit(
+                "no project row — run: auger start --seed-file <f> [--name N]"
+            )
+        return rows[0]
+
+    rows = select(ns, "project", "order=created_at.desc")
     if not rows:
         raise SystemExit("no project row — run: auger start --seed-file <f> [--name N]")
+    if len(rows) > 1:
+        current = rows[0]
+        raise SystemExit(
+            f"refused: namespace {ns!r} has multiple projects; implicit selection would choose "
+            f"newest project {current['id']} ({current.get('name', '')!r}). "
+            "Pass -p/--project-id to choose explicitly; nothing was written"
+        )
     return rows[0]
 
 
@@ -3441,9 +3454,16 @@ def cmd_start(a):
     if a.seed_file:
         with open(a.seed_file, errors="replace") as f:
             seed = f.read()
+    name = a.name or ns
+    existing = select(ns, "project", f"name=eq.{name}&limit=1")
+    if existing:
+        raise SystemExit(
+            f"refused: project name {name!r} already exists as {existing[0]['id']}; "
+            "nothing was written"
+        )
     row = {
         "id": pid,
-        "name": a.name or ns,
+        "name": name,
         "seed": seed,
         "core_statement": "",
         "status": "open",

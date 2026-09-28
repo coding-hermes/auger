@@ -261,6 +261,7 @@ def test_start_prints_the_ignored_project_id_hint(monkeypatch):
     monkeypatch.setattr(
         auger, "insert", lambda ns_, table, rows: {"table": table, "row": rows}
     )
+    monkeypatch.setattr(auger, "select", lambda *args, **kwargs: [])
     monkeypatch.setattr(auger, "remember", lambda *args, **kwargs: {})
     ns = "auger-worker074-unit"  # never touched: insert and remember are stubbed
 
@@ -273,6 +274,49 @@ def test_start_prints_the_ignored_project_id_hint(monkeypatch):
     rc, out = run_cli(["-n", ns, "-p", "P-IGNORED", "start"])
     assert rc == 0, out
     assert "note: -p/--project-id is not honored by start; minting P-" in out, out
+
+
+def test_start_refuses_duplicate_project_name_before_writing(project: dict):
+    """A duplicate name is refused and leaves the existing project as the only row."""
+    ns, pid = project["ns"], project["pid"]
+
+    code, message, out = run_cli_exit(
+        ["-n", ns, "start", "--name", "pytesttest", "--id", "P-DUPLICATE"]
+    )
+
+    assert code != 0
+    assert "pytesttest" in message
+    assert pid in message
+    assert "nothing was written" in message
+    assert out == ""
+    assert [p["id"] for p in rows(ns, "project", "order=id.asc")] == [pid]
+
+
+def test_no_flag_project_read_refuses_after_second_project(project: dict):
+    """A one-project default remains valid, but a second project requires -p."""
+    ns, first_pid = project["ns"], project["pid"]
+
+    rc, out = run_cli(["-n", ns, "status"])
+    assert rc == 0, out
+    assert f"project {first_pid} — pytesttest" in out, out
+
+    second_pid = "P-SECOND"
+    rc, out = run_cli(
+        ["-n", ns, "start", "--name", "second-project", "--id", second_pid]
+    )
+    assert rc == 0, out
+
+    code, message, out = run_cli_exit(["-n", ns, "status"])
+
+    assert code != 0
+    assert second_pid in message
+    assert "second-project" in message
+    assert "-p/--project-id" in message
+    assert out == ""
+
+    rc, out = run_cli(["-n", ns, "-p", first_pid, "status"])
+    assert rc == 0, out
+    assert f"project {first_pid} — pytesttest" in out, out
 
 
 # ================================================================= start / answer -> stored rows
@@ -432,7 +476,7 @@ def test_created_at_desc_is_newest_first_for_projects_and_verdicts(ns: str):
         ["--good", "old-config", "--reasons", "old"],
         ["--bad", "new-config", "--reasons", "new"],
     ):
-        rc, out = run_cli(["-n", ns, "verdict", *verdict_args])
+        rc, out = run_cli(["-n", ns, "-p", "P-ORDER-NEW", "verdict", *verdict_args])
         assert rc == 0, out
         if verdict_args[0] == "--good":
             time.sleep(1.1)
@@ -442,7 +486,7 @@ def test_created_at_desc_is_newest_first_for_projects_and_verdicts(ns: str):
         "new-config",
         "old-config",
     ], verdict_rows[:2]
-    rc, listed = run_cli(["-n", ns, "verdict", "--list"])
+    rc, listed = run_cli(["-n", ns, "-p", "P-ORDER-NEW", "verdict", "--list"])
     assert rc == 0, listed
     listed_rows = [line for line in listed.splitlines() if line.startswith("V-")]
     assert listed_rows[0].split()[0] == verdict_rows[0]["id"], listed
@@ -467,6 +511,7 @@ def test_start_with_empty_seed_never_calls_remember(monkeypatch, capsys):
     monkeypatch.setattr(
         auger, "insert", lambda ns_, table, rows: {"table": table, "row": rows}
     )
+    monkeypatch.setattr(auger, "select", lambda *args, **kwargs: [])
 
     rc, out = run_cli(["-n", ns, "start", "--id", pid])
 
@@ -490,6 +535,7 @@ def test_start_with_a_seed_stores_and_embeds_exactly_once(monkeypatch):
     monkeypatch.setattr(
         auger, "insert", lambda ns_, table, rows: {"table": table, "row": rows}
     )
+    monkeypatch.setattr(auger, "select", lambda *args, **kwargs: [])
 
     rc, out = run_cli(["-n", ns, "start", "--id", pid, "--seed", "hello seed"])
 

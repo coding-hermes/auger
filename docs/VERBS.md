@@ -16,7 +16,10 @@ Conventions every verb shares:
 
 - `--namespace/-n` selects the DuckBrain namespace (default `$AUGER_NS`, else `auger`);
   `--project-id/-p` names the project row. Verbs that need a project resolve it from
-  `--project-id`, or fall back to the most recent `project` row in the namespace.
+  `--project-id`, or use the only project in the namespace implicitly. Once a namespace has
+  multiple projects, an implicit project-targeted verb refuses instead of silently following the
+  newest project: the refusal names the project it would have selected and tells the user to pass
+  `-p`.
 - "Writes" means rows in the declared tables and/or entries in DuckBrain's embedded
   memory store (`/auger/<project>/<thing>` keys). Nothing is ever stored in this repo.
 - A refused write exits non-zero and says why. A model call that fails is fail-closed:
@@ -70,7 +73,8 @@ Register the project and store + embed its seed.
 `P-<timestamp>`), `--seed` (inline text), `--seed-file` (path; wins over `--seed`).
 
 **Writes:** one `project` row (id, name, seed, status `open`), and one embedded memory
-under `/auger/<pid>/seed`.
+under `/auger/<pid>/seed`. A duplicate `--name` is refused before the row or memory write,
+and the refusal names the existing project id.
 
 **Never writes:** nothing else — no question, decision, or edge rows. A project that has
 only run `start` has exactly one table row and one memory.
