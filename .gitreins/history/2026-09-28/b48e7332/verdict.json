@@ -1,0 +1,112 @@
+{
+  "task_id": "AUG-084",
+  "task_title": "Make implicit project targeting explicit and reject duplicate names",
+  "task_criteria": [
+    "No-flag verbs must not silently retarget when a second project starts; duplicate project names must be refused; add regression tests and docs, with full gate green."
+  ],
+  "passed": true,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "d318669c1a5e2d7e4dbf7cb8b57f898878c559c8",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260928T174011.372290Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: scanners=gitleaks+builtin cross-check\n12:55PM INF scanned ~970455 bytes (970.46 KB) in 561ms\n12:55PM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 49 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260928T174011.372290Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [ 30%]\n........................................................................ [ 60%]\n........................................................................ [ 90%]\n....................s..                                                  [100%]\n238 passed, 1 skipped in 755.96s (0:12:35)\n== end-to-end smoke ==\nnamespace: auger-smoke-1705780\nnamespace sweep: no stale auger-smoke-*/auger-eval-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n  PASS toggle changed the stored configuration\n== verdict: record + list round-trip ==\n  PASS a good verdict is recorded\n  PASS a bad verdict is recorded\n  PASS the good verdict shows in the list\n  PASS the bad verdict's reasons show in the list\n  PASS both --good and --bad refuse\n  PASS the refused pair wrote nothing\n\nnamespace auger-smoke-1705780 removed\npassed 21, failed 0\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260928T174011.372290Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 No-flag verbs must not silently retarget when a second project starts; duplicate project names must be refused; add regression tests and docs, with full gate green.: (1) No silent retarget: auger.py:3421-3438 `_project(ns, pid=None)` now selects `order=created_at.desc` with no limit and, when len(rows)>1, raises SystemExit 'refused: namespace {ns!r} has multiple projects; implicit selection would choose newest project {id} ({name!r}). Pass -p/--project-id to choose explicitly; nothing was written'. Every project-targeted no-flag verb routes through it: cmd_propagate(2086), feedback(2595), cmd_ask(3647), cmd_answer(4178), cmd_status(4543), cmd_dump(5073), verdict(5355/5378), record_option(5491/5513/5542); export is namespace-scoped by contract (render_export docstring 5021-5027) and recall uses project_id only as an optional key-prefix filter. (2) Duplicate name refused: auger.py:3454-3465 cmd_start computes `name = a.name or ns`, queries `select(ns,'project',f'name=eq.{name}&limit=1')`, and raises SystemExit 'refused: project name {name!r} already exists as {existing[0][\"id\"]}; nothing was written' BEFORE insert()/remember(), so no row and no memory is written. (3) Regression tests: tests/test_auger.py:279 test_start_refuses_duplicate_project_name_before_writing and tests/test_auger.py:295 test_no_flag_project_read_refuses_after_second_project; focused run `python3 -m pytest tests/test_auger.py -q -k 'duplicate_project_name or no_flag_project_read'` -> '2 passed, 237 deselected in 11.58s'. (4) Docs: docs/VERBS.md conventions section documents the implicit-refusal rule and the `start` section documents 'A duplicate `--name` is refused before the row or memory write, and the refusal names the existing project id.' (5) Full gate green: fresh `bash tests/gate.sh` (repo's configured test_command) -> '== syntax ==' OK, '== lint == All checks passed!', '== pytest == 238 passed, 1 skipped in 835.91s (0:13:55)', '== end-to-end smoke == ... passed 21, failed 0', 'LIVE ARMS: ran 2; skipped 0', 'GATE PASS'.\nImplicit project targeting now refuses when a namespace holds multiple projects, duplicate project names are refused before any write, regression tests and docs were added, and the full gate (syntax + ruff + 238 pytest + 21-assertion smoke) is green.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 No-flag verbs must not silently retarget when a second project starts; duplicate project names must be refused; add regression tests and docs, with full gate green.: (1) No silent retarget: auger.py:3421-3438 `_project(ns, pid=None)` now selects `order=created_at.desc` with no limit and, when len(rows)>1, raises SystemExit 'refused: namespace {ns!r} has multiple projects; implicit selection would choose newest project {id} ({name!r}). Pass -p/--project-id to choose explicitly; nothing was written'. Every project-targeted no-flag verb routes through it: cmd_propagate(2086), feedback(2595), cmd_ask(3647), cmd_answer(4178), cmd_status(4543), cmd_dump(5073), verdict(5355/5378), record_option(5491/5513/5542); export is namespace-scoped by contract (render_export docstring 5021-5027) and recall uses project_id only as an optional key-prefix filter. (2) Duplicate name refused: auger.py:3454-3465 cmd_start computes `name = a.name or ns`, queries `select(ns,'project',f'name=eq.{name}&limit=1')`, and raises SystemExit 'refused: project name {name!r} already exists as {existing[0][\"id\"]}; nothing was written' BEFORE insert()/remember(), so no row and no memory is written. (3) Regression tests: tests/test_auger.py:279 test_start_refuses_duplicate_project_name_before_writing and tests/test_auger.py:295 test_no_flag_project_read_refuses_after_second_project; focused run `python3 -m pytest tests/test_auger.py -q -k 'duplicate_project_name or no_flag_project_read'` -> '2 passed, 237 deselected in 11.58s'. (4) Docs: docs/VERBS.md conventions section documents the implicit-refusal rule and the `start` section documents 'A duplicate `--name` is refused before the row or memory write, and the refusal names the existing project id.' (5) Full gate green: fresh `bash tests/gate.sh` (repo's configured test_command) -> '== syntax ==' OK, '== lint == All checks passed!', '== pytest == 238 passed, 1 skipped in 835.91s (0:13:55)', '== end-to-end smoke == ... passed 21, failed 0', 'LIVE ARMS: ran 2; skipped 0', 'GATE PASS'.\nImplicit project targeting now refuses when a namespace holds multiple projects, duplicate project names are refused before any write, regression tests and docs were added, and the full gate (syntax + ruff + 238 pytest + 21-assertion smoke) is green.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "No-flag verbs must not silently retarget when a second project starts; duplicate project names must be refused; add regression tests and docs, with full gate green.",
+                "status": "PASS",
+                "detail": "(1) No silent retarget: auger.py:3421-3438 `_project(ns, pid=None)` now selects `order=created_at.desc` with no limit and, when len(rows)>1, raises SystemExit 'refused: namespace {ns!r} has multiple projects; implicit selection would choose newest project {id} ({name!r}). Pass -p/--project-id to choose explicitly; nothing was written'. Every project-targeted no-flag verb routes through it: cmd_propagate(2086), feedback(2595), cmd_ask(3647), cmd_answer(4178), cmd_status(4543), cmd_dump(5073), verdict(5355/5378), record_option(5491/5513/5542); export is namespace-scoped by contract (render_export docstring 5021-5027) and recall uses project_id only as an optional key-prefix filter. (2) Duplicate name refused: auger.py:3454-3465 cmd_start computes `name = a.name or ns`, queries `select(ns,'project',f'name=eq.{name}&limit=1')`, and raises SystemExit 'refused: project name {name!r} already exists as {existing[0][\"id\"]}; nothing was written' BEFORE insert()/remember(), so no row and no memory is written. (3) Regression tests: tests/test_auger.py:279 test_start_refuses_duplicate_project_name_before_writing and tests/test_auger.py:295 test_no_flag_project_read_refuses_after_second_project; focused run `python3 -m pytest tests/test_auger.py -q -k 'duplicate_project_name or no_flag_project_read'` -> '2 passed, 237 deselected in 11.58s'. (4) Docs: docs/VERBS.md conventions section documents the implicit-refusal rule and the `start` section documents 'A duplicate `--name` is refused before the row or memory write, and the refusal names the existing project id.' (5) Full gate green: fresh `bash tests/gate.sh` (repo's configured test_command) -> '== syntax ==' OK, '== lint == All checks passed!', '== pytest == 238 passed, 1 skipped in 835.91s (0:13:55)', '== end-to-end smoke == ... passed 21, failed 0', 'LIVE ARMS: ran 2; skipped 0', 'GATE PASS'."
+              }
+            ],
+            "summary": "Implicit project targeting now refuses when a namespace holds multiple projects, duplicate project names are refused before any write, regression tests and docs were added, and the full gate (syntax + ruff + 238 pytest + 21-assertion smoke) is green."
+          }
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: AUG-084\n\nStage tier1: PASS\n    \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 No-flag verbs must not silently retarget when a second project starts; duplicate project names must be refused; add regression tests and docs, with full gate green.: (1) No silent retarget: auger.py:3421-3438 `_project(ns, pid=None)` now selects `order=created_at.desc` with no limit and, when len(rows)>1, raises SystemExit 'refused: namespace {ns!r} has multiple projects; implicit selection would choose newest project {id} ({name!r}). Pass -p/--project-id to choose explicitly; nothing was written'. Every project-targeted no-flag verb routes through it: cmd_propagate(2086), feedback(2595), cmd_ask(3647), cmd_answer(4178), cmd_status(4543), cmd_dump(5073), verdict(5355/5378), record_option(5491/5513/5542); export is namespace-scoped by contract (render_export docstring 5021-5027) and recall uses project_id only as an optional key-prefix filter. (2) Duplicate name refused: auger.py:3454-3465 cmd_start computes `name = a.name or ns`, queries `select(ns,'project',f'name=eq.{name}&limit=1')`, and raises SystemExit 'refused: project name {name!r} already exists as {existing[0][\"id\"]}; nothing was written' BEFORE insert()/remember(), so no row and no memory is written. (3) Regression tests: tests/test_auger.py:279 test_start_refuses_duplicate_project_name_before_writing and tests/test_auger.py:295 test_no_flag_project_read_refuses_after_second_project; focused run `python3 -m pytest tests/test_auger.py -q -k 'duplicate_project_name or no_flag_project_read'` -> '2 passed, 237 deselected in 11.58s'. (4) Docs: docs/VERBS.md conventions section documents the implicit-refusal rule and the `start` section documents 'A duplicate `--name` is refused before the row or memory write, and the refusal names the existing project id.' (5) Full gate green: fresh `bash tests/gate.sh` (repo's configured test_command) -> '== syntax ==' OK, '== lint == All checks passed!', '== pytest == 238 passed, 1 skipped in 835.91s (0:13:55)', '== end-to-end smoke == ... passed 21, failed 0', 'LIVE ARMS: ran 2; skipped 0', 'GATE PASS'.\nImplicit project targeting now refuses when a namespace holds multiple projects, duplicate project names are refused before any write, regression tests and docs were added, and the full gate (syntax + ruff + 238 pytest + 21-assertion smoke) is green.\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-09-28T18:25:09.453555",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-09-28T18:25:09.476711+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 7960,
+        "truncated": false,
+        "source": "git show d318669c1a5e"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 6084,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-084"
+  }
+}
