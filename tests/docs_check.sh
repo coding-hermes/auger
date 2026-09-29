@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # docs_check.sh — README-003: execute the README's claims against the code instead of
-# reading them. Three arms:
+# reading it. Four arms:
 #
 #   A) init-tally  — the README's "one command checks this section against the code"
 #      procedure (README "The tables" section) runs `init` and prints
@@ -17,6 +17,10 @@
 #      full registry: `bundle` and `export` intentionally live only in VERBS.md today.
 #   C) env/paths   — every path/env var the README names as something auger reads must
 #      have a real reference in auger.py. Fail loudly naming the missing one.
+#   D) fence syntax — every fenced block the README LABELS bash/sh must parse under
+#      `bash -n`. Bare fences are tables and output samples (the loop list, the error
+#      samples), not bash, and are not parsed. Syntax only: no block is ever executed,
+#      so live-service commands (node bin/duckbrain.js http, pnpm build) never run.
 #
 # Quiet on success (one PASS line), loud on drift (which arm, which item).
 # AUGER_README=<path> checks a copy of the README instead of the tree's (red-proof a
@@ -36,7 +40,7 @@ fail() { echo "FAIL [$1]: $2" >&2; DRIFT=1; }
 SUMMARY=""
 PYSTATUS=0
 SUMMARY="$(python3 - "$README_FILE" <<'PY'
-import ast, re, subprocess, sys
+import ast, re, shutil, subprocess, sys
 
 readme_path = sys.argv[1]
 readme = open(readme_path, encoding="utf-8").read()
@@ -49,7 +53,32 @@ def fail(arm, msg):
 
 drift = False
 
-fences = re.findall(r"```[^\n]*\n(.*?)```", readme, re.S)
+labeled_fences = re.findall(r"```([^\n]*)\n(.*?)```", readme, re.S)
+fences = [body for _, body in labeled_fences]
+
+# --- Arm D: bash-labeled fences must parse under `bash -n` --------------------------
+# Only fences the README itself labels bash/sh: a ```bash fence promises the text
+# between the fences is bash, so a syntax error there is doc rot. Bare fences are
+# tables and output samples (the loop list, error samples) — not bash, not parsed.
+# Syntax only — nothing is executed, so live-service commands never run here.
+SHELL_LABELS = {"bash", "sh", "shell", "shell-script", "zsh"}
+def _label_word(info):
+    parts = info.strip().split()
+    return parts[0].lower() if parts else ""
+bash_fences = [(info, body) for info, body in labeled_fences
+               if _label_word(info) in SHELL_LABELS]
+bash_bin = shutil.which("bash")
+if bash_bin is None:
+    fail("syntax", "bash not on PATH — fence syntax arm cannot run (not passed)")
+else:
+    for i, (info, block) in enumerate(bash_fences, 1):
+        chk = subprocess.run([bash_bin, "-n"], input=block, text=True,
+                             capture_output=True)
+        if chk.returncode != 0:
+            first = (block.strip().splitlines() or ["<empty block>"])[0][:72]
+            detail = (chk.stderr.strip().splitlines() or ["syntax error"])[-1]
+            fail("syntax", f"bash fence {i}/{len(bash_fences)} "
+                           f"(first line: {first}) fails `bash -n`: {detail}")
 
 # --- COLS: the tally section's stated source of truth (auger.py) ------------------
 cols = None
@@ -139,7 +168,10 @@ else:
         if c not in loop_verbs and c not in reg_verbs:
             fail("verbs", f"CLI verb '{c}' is in neither the README loop nor docs/VERBS.md")
 
-print(f"loop verbs ok ({len(loop_verbs)} listed, {len(choices)} shipped), "
+live_blocks = sum(1 for _, f in bash_fences if "duckbrain.js" in f or "pnpm" in f)
+print(f"fences ok ({len(bash_fences)}/{len(fences)} bash-labeled parse under bash -n; "
+      f"{live_blocks} live-service parsed only — never executed), "
+      f"loop verbs ok ({len(loop_verbs)} listed, {len(choices)} shipped), "
       f"VERBS.md registry ok, tally ok ({len(cols)} tables)")
 sys.exit(1 if drift else 0)
 PY
