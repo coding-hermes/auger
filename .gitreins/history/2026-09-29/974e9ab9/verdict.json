@@ -1,0 +1,112 @@
+{
+  "task_id": "AUG-057",
+  "task_title": "Preserve every repeated --why-not reason against its rejected option",
+  "task_criteria": [
+    "A decision rejecting two alternatives preserves and renders two reasons against the correct options; repeated --why-not is honored or refused loudly; docs and regression tests cover the arity."
+  ],
+  "passed": true,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "66e6539a900c0195064cff54a678c800aea58348",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260928T233446.881056Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: scanners=gitleaks+builtin cross-check\n6:38PM INF scanned ~981623 bytes (981.62 KB) in 930ms\n6:38PM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 49 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260928T233446.881056Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [ 29%]\n........................................................................ [ 59%]\n........................................................................ [ 89%]\n......................s..                                                [100%]\n240 passed, 1 skipped in 1515.87s (0:25:15)\n== end-to-end smoke ==\nnamespace: auger-smoke-3405323\nnamespace sweep: no stale auger-smoke-*/auger-eval-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n  PASS toggle changed the stored configuration\n== verdict: record + list round-trip ==\n  PASS a good verdict is recorded\n  PASS a bad verdict is recorded\n  PASS the good verdict shows in the list\n  PASS the bad verdict's reasons show in the list\n  PASS both --good and --bad refuse\n  PASS the refused pair wrote nothing\n\nnamespace auger-smoke-3405323 removed\npassed 21, failed 0\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260928T233446.881056Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 A decision rejecting two alternatives preserves and renders two reasons against the correct options; repeated --why-not is honored or refused loudly; docs and regression tests cover the arity.: auger.py:4170 encode_why_not() keeps a single --why-not as the legacy scalar but stores repeated values as WHY_NOT_PREFIX ('per-option-v1:') + JSON list of {option_id,label,reason} zipped against the rejected options (those whose id != chosen id); an arity mismatch raises SystemExit 'refused: --why-not was repeated N times, but this answer has M rejected options ... nothing was written' at auger.py:4184, and this call (auger.py:4364) precedes insert_decision (auger.py:4407) so nothing is written. why_not_records/why_not_display/why_not_dump_lines (auger.py:4198/4224/4235) decode and render each pair as 'D-###-O# (label) \u2014 reason'; dump uses why_not_dump_lines at auger.py:5257. --why-not is action='append' (auger.py:5728). docs/VERBS.md:150-160 documents the arity (one shared reason, or repeat exactly once per rejected option in option order; mismatch refused by name before any rows written). Regression tests tests/test_auger.py test_answer_repeated_why_not_records_each_rejected_option_and_dump_renders_it (asserts D-057-O1/O3 pairs rendered and chosen O2 NOT rendered as rejected) and test_answer_repeated_why_not_with_wrong_arity_is_refused (rc!=0, '--why-not' in message, no D-058 row). TEST RUN: `python -m pytest tests/test_auger.py -k \"why_not\" -x -q` -> exit_code 0, '2 passed, 239 deselected in 8.42s'. Independent direct verification: encode_why_not(['a','b','c'], 2 options, chosen O1) -> 'REFUSED: refused: --why-not was repeated 3 times, but this answer has 1 rejected options ... nothing was written'; encode_why_not(['r1','r2'], 3 options, chosen O2) -> per-option-v1:[{\"option_id\":\"D-1-O1\",\"label\":\"x\",\"reason\":\"r1\"},{\"option_id\":\"D-1-O3\",\"label\":\"z\",\"reason\":\"r2\"}] and display 'D-1-O1 (x) \u2014 r1; D-1-O3 (z) \u2014 r2'; single value -> 'only' (legacy scalar).\nRepeated --why-not is preserved per rejected option with correct pairing, arity mismatch is refused loudly before any write, and docs plus passing regression tests cover the arity.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 A decision rejecting two alternatives preserves and renders two reasons against the correct options; repeated --why-not is honored or refused loudly; docs and regression tests cover the arity.: auger.py:4170 encode_why_not() keeps a single --why-not as the legacy scalar but stores repeated values as WHY_NOT_PREFIX ('per-option-v1:') + JSON list of {option_id,label,reason} zipped against the rejected options (those whose id != chosen id); an arity mismatch raises SystemExit 'refused: --why-not was repeated N times, but this answer has M rejected options ... nothing was written' at auger.py:4184, and this call (auger.py:4364) precedes insert_decision (auger.py:4407) so nothing is written. why_not_records/why_not_display/why_not_dump_lines (auger.py:4198/4224/4235) decode and render each pair as 'D-###-O# (label) \u2014 reason'; dump uses why_not_dump_lines at auger.py:5257. --why-not is action='append' (auger.py:5728). docs/VERBS.md:150-160 documents the arity (one shared reason, or repeat exactly once per rejected option in option order; mismatch refused by name before any rows written). Regression tests tests/test_auger.py test_answer_repeated_why_not_records_each_rejected_option_and_dump_renders_it (asserts D-057-O1/O3 pairs rendered and chosen O2 NOT rendered as rejected) and test_answer_repeated_why_not_with_wrong_arity_is_refused (rc!=0, '--why-not' in message, no D-058 row). TEST RUN: `python -m pytest tests/test_auger.py -k \"why_not\" -x -q` -> exit_code 0, '2 passed, 239 deselected in 8.42s'. Independent direct verification: encode_why_not(['a','b','c'], 2 options, chosen O1) -> 'REFUSED: refused: --why-not was repeated 3 times, but this answer has 1 rejected options ... nothing was written'; encode_why_not(['r1','r2'], 3 options, chosen O2) -> per-option-v1:[{\"option_id\":\"D-1-O1\",\"label\":\"x\",\"reason\":\"r1\"},{\"option_id\":\"D-1-O3\",\"label\":\"z\",\"reason\":\"r2\"}] and display 'D-1-O1 (x) \u2014 r1; D-1-O3 (z) \u2014 r2'; single value -> 'only' (legacy scalar).\nRepeated --why-not is preserved per rejected option with correct pairing, arity mismatch is refused loudly before any write, and docs plus passing regression tests cover the arity.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "A decision rejecting two alternatives preserves and renders two reasons against the correct options; repeated --why-not is honored or refused loudly; docs and regression tests cover the arity.",
+                "status": "PASS",
+                "detail": "auger.py:4170 encode_why_not() keeps a single --why-not as the legacy scalar but stores repeated values as WHY_NOT_PREFIX ('per-option-v1:') + JSON list of {option_id,label,reason} zipped against the rejected options (those whose id != chosen id); an arity mismatch raises SystemExit 'refused: --why-not was repeated N times, but this answer has M rejected options ... nothing was written' at auger.py:4184, and this call (auger.py:4364) precedes insert_decision (auger.py:4407) so nothing is written. why_not_records/why_not_display/why_not_dump_lines (auger.py:4198/4224/4235) decode and render each pair as 'D-###-O# (label) \u2014 reason'; dump uses why_not_dump_lines at auger.py:5257. --why-not is action='append' (auger.py:5728). docs/VERBS.md:150-160 documents the arity (one shared reason, or repeat exactly once per rejected option in option order; mismatch refused by name before any rows written). Regression tests tests/test_auger.py test_answer_repeated_why_not_records_each_rejected_option_and_dump_renders_it (asserts D-057-O1/O3 pairs rendered and chosen O2 NOT rendered as rejected) and test_answer_repeated_why_not_with_wrong_arity_is_refused (rc!=0, '--why-not' in message, no D-058 row). TEST RUN: `python -m pytest tests/test_auger.py -k \"why_not\" -x -q` -> exit_code 0, '2 passed, 239 deselected in 8.42s'. Independent direct verification: encode_why_not(['a','b','c'], 2 options, chosen O1) -> 'REFUSED: refused: --why-not was repeated 3 times, but this answer has 1 rejected options ... nothing was written'; encode_why_not(['r1','r2'], 3 options, chosen O2) -> per-option-v1:[{\"option_id\":\"D-1-O1\",\"label\":\"x\",\"reason\":\"r1\"},{\"option_id\":\"D-1-O3\",\"label\":\"z\",\"reason\":\"r2\"}] and display 'D-1-O1 (x) \u2014 r1; D-1-O3 (z) \u2014 r2'; single value -> 'only' (legacy scalar)."
+              }
+            ],
+            "summary": "Repeated --why-not is preserved per rejected option with correct pairing, arity mismatch is refused loudly before any write, and docs plus passing regression tests cover the arity."
+          }
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: AUG-057\n\nStage tier1: PASS\n    \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 A decision rejecting two alternatives preserves and renders two reasons against the correct options; repeated --why-not is honored or refused loudly; docs and regression tests cover the arity.: auger.py:4170 encode_why_not() keeps a single --why-not as the legacy scalar but stores repeated values as WHY_NOT_PREFIX ('per-option-v1:') + JSON list of {option_id,label,reason} zipped against the rejected options (those whose id != chosen id); an arity mismatch raises SystemExit 'refused: --why-not was repeated N times, but this answer has M rejected options ... nothing was written' at auger.py:4184, and this call (auger.py:4364) precedes insert_decision (auger.py:4407) so nothing is written. why_not_records/why_not_display/why_not_dump_lines (auger.py:4198/4224/4235) decode and render each pair as 'D-###-O# (label) \u2014 reason'; dump uses why_not_dump_lines at auger.py:5257. --why-not is action='append' (auger.py:5728). docs/VERBS.md:150-160 documents the arity (one shared reason, or repeat exactly once per rejected option in option order; mismatch refused by name before any rows written). Regression tests tests/test_auger.py test_answer_repeated_why_not_records_each_rejected_option_and_dump_renders_it (asserts D-057-O1/O3 pairs rendered and chosen O2 NOT rendered as rejected) and test_answer_repeated_why_not_with_wrong_arity_is_refused (rc!=0, '--why-not' in message, no D-058 row). TEST RUN: `python -m pytest tests/test_auger.py -k \"why_not\" -x -q` -> exit_code 0, '2 passed, 239 deselected in 8.42s'. Independent direct verification: encode_why_not(['a','b','c'], 2 options, chosen O1) -> 'REFUSED: refused: --why-not was repeated 3 times, but this answer has 1 rejected options ... nothing was written'; encode_why_not(['r1','r2'], 3 options, chosen O2) -> per-option-v1:[{\"option_id\":\"D-1-O1\",\"label\":\"x\",\"reason\":\"r1\"},{\"option_id\":\"D-1-O3\",\"label\":\"z\",\"reason\":\"r2\"}] and display 'D-1-O1 (x) \u2014 r1; D-1-O3 (z) \u2014 r2'; single value -> 'only' (legacy scalar).\nRepeated --why-not is preserved per rejected option with correct pairing, arity mismatch is refused loudly before any write, and docs plus passing regression tests cover the arity.\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-09-29T00:09:59.379653",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-09-29T00:09:59.421371+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 12213,
+        "truncated": false,
+        "source": "git show 66e6539a900c"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 262176,
+        "truncated": true,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-057"
+  }
+}
