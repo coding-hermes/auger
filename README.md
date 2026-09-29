@@ -195,6 +195,34 @@ edge     facet     bundle    bundle_member  verdict
 bash tests/smoke.sh          # full loop against a scratch namespace
 ```
 
+## Limits and known gaps
+
+Auger v0.1 is a day-one proof, deliberately small: one standard-library Python file (`auger.py`),
+no daemon, no auth layer of its own — it expects a substrate you control, a DuckBrain you started
+with tokens you placed (see **Quick start → Authentication**), and it works on one namespace at a
+time (the `-n` flag every verb takes). The dogfood integration reports under
+[docs/dogfood/](docs/dogfood/) have graded the loop PROMISING-BUT-ROUGH run after run; the rough
+edges below are the ones still live at this writing. Current known gaps are tracked in the
+project's public issue tracker.
+
+- **JEV scores carry model noise near thresholds.** The already-answered gate is a code constant
+  (`T_ANSWERED = 0.55` in `auger.py`), but the score under it comes from the configured judge
+  model: identical evidence graded ALREADY ANSWERED (0.55) and then NOT YET ANSWERED (0.53) three
+  seconds apart (docs/dogfood/2026-09-26-error-surface-integration.md, AUG-086).
+- **A green CI run proves the offline suite, not the live loop.** The arms that need a reachable
+  DuckBrain and JEV keys are skipped by name under `AUGER_CI=1`, with a visible marker instead of
+  a pass (.github/workflows/ci.yml, tests/gate.sh).
+- **A second substrate on a shared host is not isolated by data-dir env alone.** With
+  `DUCKBRAIN_DATA_DIR` + `DUCKBRAIN_NAMESPACES_PATH` pointed at a scratch dir, the instance still
+  lists a co-located production DuckBrain's namespaces (review-lane finding AUG-090).
+- **Bundle membership is validated against a fleet scheduler DB.** `bundle member` checks the
+  project against a read-only `projects` table (docs/VERBS.md, section *bundle*); on a standalone
+  box membership needs the documented `AUGER_ALLOW_SCRATCH_MEMBERS=1` escape, and membership
+  management stays CLI-light.
+- **This README can lag the CLI.** The loop block above lists 13 verbs; the CLI ships 15
+  (`bundle` and `export` are missing from it — REVIEW-AUGER-003). Every verb is
+  documented in docs/VERBS.md, which is the complete surface.
+
 ## Scratch files
 
 Scratch scripts (tick probes, one-off checks) never live in this repo — write them under
