@@ -25,6 +25,14 @@ Conventions every verb shares:
 - A refused write exits non-zero and says why. A model call that fails is fail-closed:
   no verdict is invented, no question is made up, nothing is written on an answer the
   model did not give.
+- Every verb authenticates to DuckBrain the same way: the `DUCKBRAIN_API_KEY` environment
+  variable wins; if it is unset or empty, the token files `~/.duckbrain/foreman-status.token`
+  then `~/.duckbrain/token` are tried in that order and the first non-empty one is used.
+  Nothing creates these files for you — a fresh install does not ship with
+  `~/.duckbrain/foreman-status.token` (AUG-039: on a fresh boot the first command dies),
+  so set the env var or write one of the token files yourself. When nothing resolves,
+  the command exits non-zero with
+  `no DuckBrain token: set DUCKBRAIN_API_KEY or ~/.duckbrain/foreman-status.token`.
 
 ---
 
