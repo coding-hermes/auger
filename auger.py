@@ -675,6 +675,21 @@ def _select_paged(ns: str, table: str, query: str, strict: bool) -> list:
         st, body, _ = db(tbl(ns, table, _page_query(query, want, offset)))
         if st != 200:
             if strict:
+                # AUG-085: a 404 NOT_FOUND body is a namespace (or its declared table) that does
+                # not exist — the one refusal a caller's OWN namespace hits, by typo or before
+                # `auger init`. The raw dict repr is a diagnostic for a substrate defect, not for
+                # this; every other non-200 stays loud and detailed below.
+                if (
+                    st == 404
+                    and isinstance(body, dict)
+                    and (
+                        body.get("code") == "NOT_FOUND"
+                        or "not found in namespace" in str(body.get("error", ""))
+                    )
+                ):
+                    raise SystemExit(
+                        f"namespace '{ns}' does not exist — run: auger init first"
+                    )
                 raise SystemExit(f"select {table} failed ({st}): {body}")
             return []
         page = body if isinstance(body, list) else []

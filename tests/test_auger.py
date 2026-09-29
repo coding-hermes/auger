@@ -3622,6 +3622,67 @@ def test_the_page_safe_mint_reads_the_highest_id_through_the_real_paged_select(
     assert len(server.requests) == 1, server.requests
 
 
+# ============================================================ AUG-085: a missing namespace reads clean
+# `check` (AUG-075) fails closed with a sentence; `status`/`dump` on the SAME condition printed the
+# substrate's raw dict repr — `select project failed (404): {'error': "Table 'project' not found in
+# namespace 'x'", 'code': 'NOT_FOUND'}`. The 404 NOT_FOUND body is a missing namespace/table — the
+# one refusal a user's own namespace hits by typo or before `auger init` — so the strict read turns
+# it into a clean hint; every other non-200 keeps the loud detailed message, because a 5xx or a
+# transport surprise is a defect to diagnose, not a hint to paraphrase.
+
+
+def test_status_on_a_missing_namespace_prints_the_clean_message(monkeypatch):
+    """AUG-085: `status` against a namespace that does not exist names the fix, no dict repr."""
+    monkeypatch.setattr(
+        auger,
+        "db",
+        _substrate(
+            404,
+            {
+                "error": "Table 'project' not found in namespace 'nosuchns_xyz'",
+                "code": "NOT_FOUND",
+            },
+        ),
+    )
+    code, msg, out = run_cli_exit(["-n", "nosuchns_xyz", "status"])
+    assert code != 0, msg
+    assert "nosuchns_xyz" in msg and "does not exist" in msg, msg
+    assert "auger init" in msg, msg
+    assert "NOT_FOUND" not in msg and "{" not in msg, msg
+    assert "{" not in out, out
+
+
+def test_dump_on_a_missing_namespace_prints_the_clean_message(monkeypatch):
+    """AUG-085: `dump` rides the same strict read and must print the same clean sentence."""
+    monkeypatch.setattr(
+        auger,
+        "db",
+        _substrate(
+            404,
+            {
+                "error": "Table 'project' not found in namespace 'nosuchns_xyz'",
+                "code": "NOT_FOUND",
+            },
+        ),
+    )
+    code, msg, out = run_cli_exit(["-n", "nosuchns_xyz", "dump"])
+    assert code != 0, msg
+    assert "nosuchns_xyz" in msg and "does not exist" in msg, msg
+    assert "auger init" in msg, msg
+    assert "NOT_FOUND" not in msg and "{" not in msg and "{" not in out, out + msg
+
+
+def test_a_non_404_failure_keeps_the_raw_detailed_message(monkeypatch):
+    """AUG-085 keeps a 5xx loud: the raw status and body are exactly the diagnostic text."""
+    monkeypatch.setattr(auger, "db", _substrate(500, {"error": "boom", "code": "X"}))
+    with pytest.raises(SystemExit) as ei:
+        auger.select(MINT_NS, "project", "order=created_at.desc")
+    msg = str(ei.value)
+    assert "select project failed (500)" in msg, msg
+    assert "boom" in msg and "X" in msg, msg
+    assert "does not exist" not in msg, msg
+
+
 def test_status_and_dump_report_a_namespace_holding_more_than_a_page(project: dict):
     """AUG-068 criterion 2, against the real store: the 180-option shape the row measured.
 
