@@ -115,8 +115,14 @@ the number and the name), all 44 of `4.01`–`4.44` and nothing else; anything s
 refused by name rather than seeded partially.
 
 Requirements: a running DuckBrain on `127.0.0.1:3000` (`~/duckbrain`, `node bin/duckbrain.js http`)
-with its token at `~/.duckbrain/foreman-status.token`, and an OpenRouter key in `~/.hermes/.env`
+with authentication set up (see below), and an OpenRouter key in `~/.hermes/.env`
 for JEV. Python 3, standard library only — no dependencies.
+
+**Authentication.** auger checks `DUCKBRAIN_API_KEY` first; if unset it falls back to
+token files in order: `~/.duckbrain/foreman-status.token`, then `~/.duckbrain/token`.
+On a fresh box, set the env var (`export DUCKBRAIN_API_KEY=<your-key>`) or create one
+of the token files before running `init` — without either, every command exits rc=1
+with `no DuckBrain token: set DUCKBRAIN_API_KEY or ~/.duckbrain/foreman-status.token`.
 
 ## Where the data lives
 
