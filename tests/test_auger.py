@@ -7186,10 +7186,167 @@ def test_status_reports_coverage_and_the_terminating_ring_per_domain(decided: di
     for num, r in stored.items():
         assert r["triage"] == by_num[num]["triage"], (num, r)
         assert r["ring_floor"] == by_num[num]["ring_floor"], (num, r)
-    # a domain holding an answer still carries the seed's own status word, and the line says so
-    # rather than letting a reader believe the status column was updated by an answer
-    assert stored["4.05"]["status"] == "NOT-REACHED"
-    assert "(row status NOT-REACHED)" in answered, answered
+    # AUG-059: an answer ADVANCES the domain row's status — the seeded NOT-REACHED is the seed's
+    # own word about a domain with no rows, and a decision landing in the domain retires it, so
+    # the stored row and the derived evidence word agree instead of contradicting on one line.
+    assert stored["4.05"]["status"] == auger.DOMAIN_REACHED_STATUS, stored["4.05"]
+    assert "NOT-REACHED" not in answered, answered
+
+
+def test_a_decision_advances_the_domain_row_status_and_the_line_agrees(
+    project, monkeypatch
+):
+    """AUG-059: `answer --domain` retires the seeded NOT-REACHED on that domain's row.
+
+    The coverage line derives `answered` from the decision/question rows carrying the num, but
+    printed the row's own status column beside it — and nothing advanced that column, so the
+    one line said "answered" and "(row status NOT-REACHED)" at once. The writing verb is what
+    advances the row (status never writes), so after a decision lands in 4.NN the stored row
+    reads REACHED and the line renders `answered` with NO drift note; a domain no answer
+    touched still carries the seed's own NOT-REACHED.
+    """
+    grid_or_skip()
+    ns = project["ns"]
+    seed_grid(ns)
+    untouched = next(
+        ln
+        for ln in coverage_lines(run_cli(["-n", ns, "status"])[1])
+        if ln.strip().startswith("4.01")
+    )
+    assert "NOT-REACHED" in untouched, untouched
+    assert "(row status" not in untouched, untouched
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-059",
+            "--domain",
+            "4.09",
+            "--chosen",
+            "c",
+            "--option",
+            "c",
+            "--why-not",
+            "n/a",
+        ]
+    )
+    assert rc == 0, out
+    # the stored row moved, and the answer says so
+    assert row(ns, "domain", "num=eq.4.09")["status"] == auger.DOMAIN_REACHED_STATUS
+    assert "domain     4.09 -> REACHED (seed status retired)" in out, out
+    # the line: `answered` with no parenthetical after it
+    rc, out = run_cli(["-n", ns, "status"])
+    assert rc == 0, out
+    answered = next(ln for ln in coverage_lines(out) if ln.strip().startswith("4.09"))
+    assert "answered" in answered, answered
+    assert "(row status" not in answered, answered
+    # the untouched neighbour keeps the seed's own word, both in the row and on the line
+    assert row(ns, "domain", "num=eq.4.01")["status"] == auger.DOMAIN_SEED_STATUS
+    untouched = next(ln for ln in coverage_lines(out) if ln.strip().startswith("4.01"))
+    assert "NOT-REACHED" in untouched, untouched
+    assert "(row status" not in untouched, untouched
+    # the summary's answered/NOT-REACHED tally now counts from the rows themselves
+    assert "answered 1" in out, out
+    assert "NOT-REACHED 43" in out, out
+    # the still-seeded tally names 43, not 44: the reached row is no longer described by it
+    assert "43 row(s) still carry the seed's status" in out, out
+
+
+def test_a_question_landing_in_a_domain_advances_its_row_too(project, monkeypatch):
+    """AUG-059: a question row carrying the num retires NOT-REACHED the same way a decision does.
+
+    A follow-up question inherits its parent decision's domain, so `feedback`'s write path
+    advances the row too — the coverage word counts questions as evidence, and the row must
+    not contradict the count.
+    """
+    grid_or_skip()
+    ns, pid = project["ns"], project["pid"]
+    seed_grid(ns)
+    monkeypatch.setattr(auger, "recall", recall_hits(ns, pid, "D-002"))
+    monkeypatch.setattr(auger, "jev", gate_stub(0.10, []))
+    monkeypatch.setattr(auger, "propose_question", proposer_stub([FOLLOWUP_Q], []))
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-002",
+            "--domain",
+            "4.06",
+            "--chosen",
+            "staging table",
+            "--option",
+            "staging table",
+            "--why-not",
+            "no concurrent writer",
+            "--confidence",
+            "0.41",
+        ]
+    )
+    assert rc == 0, out
+    rc, out = run_cli(["-n", ns, "feedback", "--budget", "1"])
+    assert rc == 0, out
+    assert "ASKED" in out, out
+    [q] = rows(ns, "question", "qclass=eq.follow_up")
+    assert q["domain"] == "4.06", q
+    # the decision already retired the row; the question's advance is idempotent
+    assert row(ns, "domain", "num=eq.4.06")["status"] == auger.DOMAIN_REACHED_STATUS
+
+
+def test_domain_advance_is_a_reach_not_a_regress(project):
+    """AUG-059: the advance moves ONLY the seed word — never a row someone moved past it.
+
+    A row a person (or a future verb) moved to CASCADED is not dragged back to REACHED, and
+    a domain with no stored row at all advances nothing and prints nothing.
+    """
+    ns = project["ns"]
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-059b",
+            "--domain",
+            "4.10",
+            "--chosen",
+            "c",
+            "--option",
+            "c",
+            "--why-not",
+            "n/a",
+        ]
+    )
+    assert rc == 0, out  # no domain ROW exists; nothing to advance, nothing printed
+    assert "domain 4.10 ->" not in out, out
+    seed_grid(ns)
+    d = row(ns, "domain", "num=eq.4.10")
+    d["status"] = "CASCADED"
+    auger.patch(ns, "domain", d["id"], {"status": "CASCADED"})
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-059c",
+            "--domain",
+            "4.10",
+            "--chosen",
+            "c2",
+            "--option",
+            "c2",
+            "--why-not",
+            "n/a",
+        ]
+    )
+    assert rc == 0, out
+    # a row that left the seed word is never dragged back to REACHED
+    assert row(ns, "domain", "num=eq.4.10")["status"] == "CASCADED"
+    assert "domain     4.10 ->" not in out, out
 
 
 def test_a_domain_whose_row_is_gone_is_reported_absent_not_skipped(project: dict):
