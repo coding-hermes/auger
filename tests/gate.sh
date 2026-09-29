@@ -92,6 +92,17 @@ else
   bash tests/smoke.sh || exit 1
 fi
 
+echo "== docs check =="
+# README-003: execute the README's claims instead of reading them — the loop verb list
+# vs real subparsers, the init tally vs COLS, and every env/path the README names vs a
+# real reference in auger.py. Needs only the checkout (python3 + greps): no live
+# DuckBrain, no JEV key, so it runs in BOTH gate modes.
+if [ -f README.md ] && [ -f docs/VERBS.md ] && [ -f auger.py ]; then
+  bash tests/docs_check.sh || exit 1
+else
+  skip_arm "docs-check" "README.md/docs/VERBS.md/auger.py missing from the checkout — arm NOT run, NOT passed"
+fi
+
 echo "LIVE ARMS: ran $LIVE_ARMS_RAN; skipped $LIVE_ARMS_SKIPPED"
 if [ -n "$LIVE_SKIPPED" ]; then
   echo "  live arms SKIPPED (not passed): $LIVE_SKIPPED"
