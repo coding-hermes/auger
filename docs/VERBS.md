@@ -64,6 +64,8 @@ seeded 43 would be the silent-domain failure the rule exists to forbid.
 **Never writes:** without `--seed-domains`, no rows in any table at all; and nothing in the
 memory store either way. `init` shapes the namespace — its declarations, plus the grid's 44
 `NOT-REACHED` rows when asked — and it never records an answer, a decision, or a question.
+A number that already carries a decision/question row for the bound project seeds `REACHED`
+(AUG-059) instead of one answer stale; every other row starts `NOT-REACHED`.
 
 ## start
 
@@ -168,7 +170,10 @@ rows; its success report states `0 of 0 active`.
 **Writes:** one `decision` row; one `option` row per `--option` (id `<D-###>-O<n>`,
 `active` on exactly the chosen one); one embedded memory under
 `/auger/<pid>/<did>` stating the choice, the rejected alternatives, and the reason —
-never listing the chosen option as rejected. With `--question-id`: a `closes` edge
+never listing the chosen option as rejected. With a `--domain` whose seeded `domain` row
+still reads `NOT-REACHED`, that row's status advances to `REACHED` (AUG-059) and the run
+says so — never a row already past the seed word, and never fatal when the grid was not
+seeded. With `--question-id`: a `closes` edge
 (`decision` → `question`) and the question moved to `answered`, its reason recorded on
 its `facet` rows. With `--scope bundle` (as stored): the bundle impact pass — `affects`
 or `breaks` edges naming each sibling's bundle-scoped decision the answer touches, and
@@ -251,7 +256,10 @@ against — instead of printing a silent zero.
 
 **Never writes:** anything. A drifted record (a decision with zero or several active
 options) is named in the output, not "fixed" — and a `domain` row still reading `NOT-REACHED`
-while a decision carries its number is reported as exactly that, not quietly promoted.
+while a decision carries its number is reported as exactly that, not quietly promoted. That
+contradiction should not occur on a record this program writes: `answer` advances the row
+(AUG-059), so the note now names drift a pre-AUG-059 record, a skipped advance, or a hand-made
+row — the one line still says both words so the disagreement is never smoothed over.
 
 ## toggle
 

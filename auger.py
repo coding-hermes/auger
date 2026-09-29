@@ -2540,6 +2540,12 @@ def record_followup(
         "jev_checked_at": checked_at,
     }
     insert(ns, "question", row)
+    # AUG-059: the question carries the decision's domain, so it retires the seed word too —
+    # normally a no-op (the parent decision already advanced the row), but the advance keeps
+    # the row and the evidence count in agreement however the question arrived.
+    reached = advance_domain_status(ns, project_id, row["domain"])
+    if reached and warnings is not None:
+        warnings.append(f"domain {row['domain']} -> {reached}")
     for name in facet_set():
         facet(ns, project_id, qid, name)
     edges = [
@@ -2929,6 +2935,13 @@ DOMAIN_ID_PREFIX = "DM"  # D- is the decision register; a domain row is not a de
 # that claimed an owner it never assigned would read as a commitment.
 DOMAIN_SEED_STATUS = "NOT-REACHED"
 DOMAIN_SEED_REASON = "not reached: no rows yet"
+# AUG-059: the status a decision or question landing in the domain ADVANCES the seed word to.
+# It is deliberately a reach word, not "answered": the coverage map's "answered" counts
+# evidence (rows carrying the num), while a row's own column says whether the seed's
+# not-reached sentence still describes it — one word each, and the advance keeps them from
+# contradicting each other on the same line. Anything already past NOT-REACHED (a grid header's
+# CASCADED, a word a person wrote) is never dragged back to it.
+DOMAIN_REACHED_STATUS = "REACHED"
 DOMAIN_SEED_OWNER = "unassigned"
 DOMAIN_SEED_TRIGGER = "first question in domain"
 DOMAIN_SEED_CONTAINMENT = "none"
@@ -3146,6 +3159,12 @@ def seed_domains(ns: str, project_id: str = "", grid_dir: str | None = None) -> 
 
     The 44 rows go in ONE insert (one request, not 44): three trip a rate limiter where one does
     not, and a half-seeded grid is worse than an unseeded one — it reads as a coverage result.
+
+    A number that ALREADY carries evidence (a decision or question row with that domain) seeds at
+    REACHED, not at the seed word (AUG-059): the row is born in agreement with the coverage map
+    instead of one answer stale — `bind` may have answered into the grid before anyone seeded it.
+    The evidence read is the same shape `domain_coverage` counts from, and a read that fails
+    leaves every row at the seed word rather than guessing.
     """
     grid = read_domain_grid(grid_dir)
     bind = project_id or _latest_project_id(ns)
@@ -3157,9 +3176,27 @@ def seed_domains(ns: str, project_id: str = "", grid_dir: str | None = None) -> 
         num = str(r.get("num") or "")
         if num:
             have.add(num)
+    reached: set = set()
+    try:
+        for rows_ in (
+            select(ns, "decision", f"project_id=eq.{bind}&select=domain"),
+            select(ns, "question", f"project_id=eq.{bind}&select=domain"),
+        ):
+            for r in rows_:
+                num = str(r.get("domain") or "")
+                if num:
+                    reached.add(num)
+    except SystemExit:
+        reached = set()  # no evidence read, no advance claim — the seed word stands
     missing = [e for e in grid if e["num"] not in have]
     if not missing:
-        return {"grid": len(grid), "written": 0, "present": len(grid), "ids": []}
+        return {
+            "grid": len(grid),
+            "written": 0,
+            "present": len(grid),
+            "ids": [],
+            "reached": 0,
+        }
     start = int(
         re.search(r"(\d+)\s*$", next_id(ns, "domain", DOMAIN_ID_PREFIX)).group(1)
     )
@@ -3172,7 +3209,9 @@ def seed_domains(ns: str, project_id: str = "", grid_dir: str | None = None) -> 
             "name": entry["name"],
             "triage": entry["triage"],
             "ring_floor": entry["ring_floor"],
-            "status": DOMAIN_SEED_STATUS,
+            "status": (
+                DOMAIN_REACHED_STATUS if entry["num"] in reached else DOMAIN_SEED_STATUS
+            ),
             "owner": DOMAIN_SEED_OWNER,
             "trigger": DOMAIN_SEED_TRIGGER,
             "containment": DOMAIN_SEED_CONTAINMENT,
@@ -3186,7 +3225,52 @@ def seed_domains(ns: str, project_id: str = "", grid_dir: str | None = None) -> 
         "written": len(rows),
         "present": len(grid) - len(rows),
         "ids": [r["id"] for r in rows],
+        "reached": sum(1 for r in rows if r["status"] == DOMAIN_REACHED_STATUS),
     }
+
+
+def advance_domain_status(ns: str, project_id: str, num: str) -> str:
+    """Retire the seed word on one domain row: NOT-REACHED -> REACHED (AUG-059).
+
+    The coverage line derives `answered` from the decision/question rows carrying the num, but
+    prints the row's OWN status column beside it — and before this advance nothing ever moved
+    that column, so a domain that held an answer read `answered ... (row status NOT-REACHED)`
+    and contradicted itself on one line. The WRITE verb is where the column moves (`status`
+    never writes), because the seed word's own sentence — "not reached: no rows yet" — stopped
+    being true the moment a row carrying the num landed.
+
+    The row is chosen the way `domain_coverage` reads them (the API cannot filter on an empty
+    value, and a pre-`start` seed leaves the rows unbound): the slice is read whole, a row
+    bound to this project outranks an unbound one, and a sibling project's row is skipped.
+
+    The guard is equality with the seed word, and it does double duty: a row already past
+    NOT-REACHED (a grid header's CASCADED, a word a person wrote) is never dragged back to
+    REACHED, and a second decision in the same domain is idempotent. Every failure here is
+    SKIPPED — never fatal: an answer must land even where the grid was never seeded or the
+    row could not be written, and a coverage row that stayed behind is surfaced by `status`'s
+    own drift note on the next render, not lost silently.
+
+    Returns the new status when the row moved ("" when there was nothing to move), so the
+    calling verb can say one honest line about what changed.
+    """
+    target = (num or "").strip()
+    if not target:
+        return ""
+    try:
+        rows = select(ns, "domain", f"num=eq.{target}&select=id,status,project_id")
+    except SystemExit:
+        return ""
+    row = next(
+        (r for r in rows if r.get("project_id") == project_id),
+        next((r for r in rows if not r.get("project_id")), None),
+    )
+    if row is None or str(row.get("status") or "") != DOMAIN_SEED_STATUS:
+        return ""
+    try:
+        patch(ns, "domain", row["id"], {"status": DOMAIN_REACHED_STATUS})
+    except SystemExit:
+        return ""
+    return DOMAIN_REACHED_STATUS
 
 
 def domain_coverage(ns: str, project_id: str) -> dict:
@@ -3282,9 +3366,12 @@ def domain_line(ln: dict) -> str:
 
     The STATE is the derived coverage word — ABSENT (no row), `answered` (a decision or question
     row carries the number), or the stored row status when neither holds — and when the stored
-    status disagrees with it, the line says so rather than choosing one and hiding the other: a row
-    still reading NOT-REACHED while it holds an answer is a status nobody updated, which is a fact
-    about the record and not something a report gets to smooth over.
+    status GENUINELY disagrees with it, the line says so rather than choosing one and hiding the
+    other: a row still reading NOT-REACHED while it holds an answer is a status nobody updated,
+    which is a fact about the record and not something a report gets to smooth over (AUG-059;
+    `answer` advances the row precisely so this note is never that contradiction). REACHED with
+    evidence is the pair the advance CREATES — the same agreement `answered` states, so it is
+    rendered as the plain word, not narrated back with a parenthetical.
 
     Three cases, kept apart on purpose. A SEEDED row prints the ring it holds — or
     `none (not opened)` when the grid recorded that the domain was never opened. An ABSENT domain
@@ -3300,7 +3387,12 @@ def domain_line(ln: dict) -> str:
         state = "answered"
     else:
         state = stored or DOMAIN_SEED_STATUS
-    drift = f"  (row status {stored})" if stored and stored != state else ""
+    # the note is for DISAGREEMENT only: the advance's own REACHED-with-evidence pair agrees,
+    # and a seed-status row without evidence needs no echo of its own status word either
+    agrees = bool(ln["evidence"]) and stored == DOMAIN_REACHED_STATUS
+    drift = (
+        f"  (row status {stored})" if stored and stored != state and not agrees else ""
+    )
     ring = r.get("terminating_ring") if r else (g or {}).get("terminating_ring")
     ring_txt = (
         str(ring) if isinstance(ring, int) else ("none (not opened)" if r else "none")
@@ -3422,10 +3514,17 @@ def cmd_init(a):
             f"{tally['present']} already present"
         )
         if tally["written"]:
+            if tally["reached"]:
+                # AUG-059: the evidence the project already held seeded those rows REACHED
+                print(
+                    f"  {tally['reached']} new row(s) start {DOMAIN_REACHED_STATUS} — the "
+                    f"project already holds decision/question rows carrying those numbers"
+                )
             print(
-                f"  each new row starts {DOMAIN_SEED_STATUS}: owner {DOMAIN_SEED_OWNER!r}, "
-                f"trigger {DOMAIN_SEED_TRIGGER!r}, containment {DOMAIN_SEED_CONTAINMENT!r} "
-                f"('{DOMAIN_SEED_REASON}' — the `domain` table has no reason column)"
+                f"  each other new row starts {DOMAIN_SEED_STATUS}: owner "
+                f"{DOMAIN_SEED_OWNER!r}, trigger {DOMAIN_SEED_TRIGGER!r}, containment "
+                f"{DOMAIN_SEED_CONTAINMENT!r} ('{DOMAIN_SEED_REASON}' — the `domain` table "
+                f"has no reason column)"
             )
             print(f"  ids: {tally['ids'][0]} … {tally['ids'][-1]}")
         print(
@@ -4521,6 +4620,13 @@ def cmd_answer(a):
     supersessions = record_supersessions(
         ns, pid, did, supersede_target_ids, a.supersedes_why or ""
     )
+    # AUG-059: a decision carrying a grid domain number is the event the seed word was waiting
+    # for — "not reached: no rows yet" stopped being true when this row landed. The row's own
+    # status advances here (NOT-REACHED -> REACHED, never regressing a row already past the
+    # seed word), so `status`'s coverage line stops contradicting itself. The advance is
+    # SKIPPED, never fatal: an answer lands even where the grid was never seeded, and the
+    # drift note names a row left behind on the next render.
+    reached = advance_domain_status(ns, pid, row["domain"])
     impact = bundle_impact(ns, pid, {**row, "scope": stored_scope})
     active_count = 1 if resolved_option else 0
     domain_note = f"domain {row['domain']} = {domain_name}, " if domain_name else ""
@@ -4552,6 +4658,14 @@ def cmd_answer(a):
                 f"  facets    {target}: refreshed {len(questions)} question(s) with "
                 f"closed_by {did}"
             )
+    # AUG-059: a decision carrying a grid domain number is the event the seed word was waiting
+    # for — "not reached: no rows yet" stopped being true when this row landed. The row's own
+    # status advanced with the answer (NOT-REACHED -> REACHED, never regressing a row already
+    # past the seed word), so `status`'s coverage line stops contradicting itself. The advance
+    # itself is SKIPPED, never fatal: an answer lands even where the grid was never seeded, and
+    # the drift note names a row left behind on the next render.
+    if reached:
+        print(f"  domain     {row['domain']} -> {reached} (seed status retired)")
     # The walk's own report (AUG-027): `impact["lines"]` carries one line per member the pass
     # WALKED — its decision, the verdict word and the score — so that an 'unchanged' member and a
     # skipped one are both visible in the verb's output. Without that the answer to a run where
