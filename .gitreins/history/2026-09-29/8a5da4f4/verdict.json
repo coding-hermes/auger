@@ -1,0 +1,104 @@
+{
+  "task_id": "AUG-083-VERDICT-BACKFILL",
+  "task_title": "Backfill verdict artifact for closed AUG-083 (confidence range validation, commit 841ee7e)",
+  "task_criteria": [
+    "Working tree at HEAD contains 841ee7e: answer rejects non-finite and out-of-range confidence before any writes, with boundary tests; pytest full suite passes"
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "4a777c8a5b885b0dab5c1659f4cfb722f22049c9",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": false,
+      "any_failed": true,
+      "summary": "  \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2717 tests: FAIL (tests/test_auger.py::test_answer_memory_failure_leaves_a_repairable_provisional [first failing",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260929T145010.786757Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: scanners=gitleaks+builtin cross-check\n10:12AM INF scanned ~1030856 bytes (1.03 MB) in 764ms\n10:12AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 52 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260929T145010.786757Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": false,
+          "output": "== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n................F....................................................... [ 29%]\n........................................................................ [ 58%]\n........................................................................ [ 87%]\n............................s..                                          [100%]\n=================================== FAILURES ===================================\n__________ test_answer_memory_failure_leaves_a_repairable_provisional __________\n\ndecided = {'ns': 'auger-pytest-0403fdd2e3b4', 'pid': 'P-PYTEST', 'seed': 'One small CLI that watches directories, records what i..., no extra services.\\n', 'seed_file': '/tmp/pytest-of-kara/pytest-17921/test_answer_memory_failure_lea0/seed.txt', ...}\nmonkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x77aaca6616d0>\n\n    def test_answer_memory_failure_leaves_a_repairable_provisional(\n        decided: dict, monkeypatch\n    ):\n        \"\"\"A failed memory write never presents its decision/options as a normal answer.\"\"\"\n        ns, pid = decided[\"ns\"], decided[\"pid\"]\n    \n        def fail_memory(*args, **kwargs):\n            raise SystemExit(\"remember /auger/P-AUG076/D-076 failed (503): substrate down\")\n    \n        monkeypatch.setattr(auger, \"remember\", fail_memory)\n        rc, message, out = run_cli_exit(\n            [\n                \"-n\",\n                ns,\n                \"answer\",\n                \"--id\",\n                \"D-076\",\n                \"--chosen\",\n                \"AUG-076 chosen answer\",\n                \"--option\",\n                \"AUG-076 chosen answer\",\n                \"--option\",\n                \"AUG-076 rejected answer\",\n                \"--confidence\",\n                \"0.8\",\n            ]\n        )\n    \n        assert rc == 1\n        assert \"provisional\" in message.lower(), message\n        assert out == \"\"\n        decision = row(ns, \"decision\", \"id=eq.D-076\")\n        assert decision[\"status\"].startswith(auger.PENDING_MEMORY_STATUS), decision\n        assert rows(ns, \"option\", \"decision_id=eq.D-076\")\n        status_rc, status_out = run_cli([\"-n\", ns, \"status\"])\n        assert status_rc == 0, status_out\n        assert \"PENDING MEMORY REPAIR\" in status_out, status_out\n        dump_rc, dump_out = run_cli([\"-n\", ns, \"dump\"])\n\n\u2026 [1723 chars omitted \u2014 37 line(s)] \u2026\n        told so, not handed silence.\n    \n        When `project_id` is present, its `/auger/<project>/` key prefix is sent to\n        the substrate in the same request as the semantic query. That constrains the\n        candidate set before ranking and limiting; the result filter is a fail-closed\n        backstop if a substrate ever returns a key outside the requested prefix.\n        \"\"\"\n        project_prefix = f\"/auger/{project_id}/\" if project_id is not None else None\n        prefix_query = (\n            f\"&prefix={quote(project_prefix, safe=_QUERY_VALUE_SAFE)}\"\n            if project_prefix\n            else \"\"\n        )\n        st, body, _ = db(\n            f\"/api/memories?namespace={url_seg(ns)}{prefix_query}&q={quote(q)}&limit={limit}\",\n            timeout=60,\n        )\n        if st != 200:\n            if missing_ok and st == 404:\n                return []\n            detail = body.get(\"error\", body) if isinstance(body, dict) else body\n>           raise SubstrateError(\n                f\"substrate read failed for {ns!r} (status {st}): {detail} \u2014 a failed \"\n                \"read is NOT an empty store\"\n            )\nE           auger.SubstrateError: substrate read failed for 'auger-pytest-0403fdd2e3b4' (status 0): transport: timed out \u2014 a failed read is NOT an empty store\n\nauger.py:1262: SubstrateError\n=========================== short test summary info ============================\nFAILED tests/test_auger.py::test_answer_memory_failure_leaves_a_repairable_provisional\n1 failed, 245 passed, 1 skipped in 1564.82s (0:26:04)\n",
+          "error": "",
+          "data": {
+            "exit_code": 1,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260929T151322.511678Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 Working tree at HEAD contains 841ee7e: answer rejects non-finite and out-of-range confidence before any writes, with boundary tests; pytest full suite passes: 841ee7e is an ancestor of HEAD (`git merge-base --is-ancestor 841ee7e HEAD` => IS_ANCESTOR). Guard present at auger.py:4363-4370 as the FIRST statements of cmd_answer, before `_project()`/any table write: `if a.confidence is not None and (not math.isfinite(a.confidence) or not 0 <= a.confidence <= 1): raise SystemExit(\"refused: confidence must be between 0 and 1 inclusive; nothing was stored (received {a.confidence!r})\")`; `import math` at auger.py:39. Boundary tests at tests/test_auger.py:761-810: `test_answer_refuses_invalid_confidence_without_storing_rows` parametrized over 1.5/-0.1/nan/inf asserting rc==1, 'refused'/'confidence'/'between 0 and 1 inclusive'/'nothing was stored' in message, empty stdout, and `after == before` row snapshots across all auger.COLS; `test_answer_accepts_confidence_boundaries` parametrized over 0.0/1.0 asserting rc==0 and stored confidence == approx(boundary). Test evidence (fresh runs, no cache): focused `python -m pytest tests/test_auger.py -k confidence -q` => '13 passed, 234 deselected in 85.74s'; full suite `python -m pytest -q` => '246 passed, 1 skipped in 1431.37s (0:23:51)', exit_code 0.\nCommit 841ee7e is in HEAD with the pre-write confidence guard in cmd_answer and its boundary tests, and the full pytest suite passes (246 passed, 1 skipped).",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 Working tree at HEAD contains 841ee7e: answer rejects non-finite and out-of-range confidence before any writes, with boundary tests; pytest full suite passes: 841ee7e is an ancestor of HEAD (`git merge-base --is-ancestor 841ee7e HEAD` => IS_ANCESTOR). Guard present at auger.py:4363-4370 as the FIRST statements of cmd_answer, before `_project()`/any table write: `if a.confidence is not None and (not math.isfinite(a.confidence) or not 0 <= a.confidence <= 1): raise SystemExit(\"refused: confidence must be between 0 and 1 inclusive; nothing was stored (received {a.confidence!r})\")`; `import math` at auger.py:39. Boundary tests at tests/test_auger.py:761-810: `test_answer_refuses_invalid_confidence_without_storing_rows` parametrized over 1.5/-0.1/nan/inf asserting rc==1, 'refused'/'confidence'/'between 0 and 1 inclusive'/'nothing was stored' in message, empty stdout, and `after == before` row snapshots across all auger.COLS; `test_answer_accepts_confidence_boundaries` parametrized over 0.0/1.0 asserting rc==0 and stored confidence == approx(boundary). Test evidence (fresh runs, no cache): focused `python -m pytest tests/test_auger.py -k confidence -q` => '13 passed, 234 deselected in 85.74s'; full suite `python -m pytest -q` => '246 passed, 1 skipped in 1431.37s (0:23:51)', exit_code 0.\nCommit 841ee7e is in HEAD with the pre-write confidence guard in cmd_answer and its boundary tests, and the full pytest suite passes (246 passed, 1 skipped).",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "Working tree at HEAD contains 841ee7e: answer rejects non-finite and out-of-range confidence before any writes, with boundary tests; pytest full suite passes",
+                "status": "PASS",
+                "detail": "841ee7e is an ancestor of HEAD (`git merge-base --is-ancestor 841ee7e HEAD` => IS_ANCESTOR). Guard present at auger.py:4363-4370 as the FIRST statements of cmd_answer, before `_project()`/any table write: `if a.confidence is not None and (not math.isfinite(a.confidence) or not 0 <= a.confidence <= 1): raise SystemExit(\"refused: confidence must be between 0 and 1 inclusive; nothing was stored (received {a.confidence!r})\")`; `import math` at auger.py:39. Boundary tests at tests/test_auger.py:761-810: `test_answer_refuses_invalid_confidence_without_storing_rows` parametrized over 1.5/-0.1/nan/inf asserting rc==1, 'refused'/'confidence'/'between 0 and 1 inclusive'/'nothing was stored' in message, empty stdout, and `after == before` row snapshots across all auger.COLS; `test_answer_accepts_confidence_boundaries` parametrized over 0.0/1.0 asserting rc==0 and stored confidence == approx(boundary). Test evidence (fresh runs, no cache): focused `python -m pytest tests/test_auger.py -k confidence -q` => '13 passed, 234 deselected in 85.74s'; full suite `python -m pytest -q` => '246 passed, 1 skipped in 1431.37s (0:23:51)', exit_code 0."
+              }
+            ],
+            "summary": "Commit 841ee7e is in HEAD with the pre-write confidence guard in cmd_answer and its boundary tests, and the full pytest suite passes (246 passed, 1 skipped)."
+          }
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: AUG-083-VERDICT-BACKFILL\n\nStage tier1: FAIL\n    \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2717 tests: FAIL (tests/test_auger.py::test_answer_memory_failure_leaves_a_repairable_provisional [first failing\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 Working tree at HEAD contains 841ee7e: answer rejects non-finite and out-of-range confidence before any writes, with boundary tests; pytest full suite passes: 841ee7e is an ancestor of HEAD (`git merge-base --is-ancestor 841ee7e HEAD` => IS_ANCESTOR). Guard present at auger.py:4363-4370 as the FIRST statements of cmd_answer, before `_project()`/any table write: `if a.confidence is not None and (not math.isfinite(a.confidence) or not 0 <= a.confidence <= 1): raise SystemExit(\"refused: confidence must be between 0 and 1 inclusive; nothing was stored (received {a.confidence!r})\")`; `import math` at auger.py:39. Boundary tests at tests/test_auger.py:761-810: `test_answer_refuses_invalid_confidence_without_storing_rows` parametrized over 1.5/-0.1/nan/inf asserting rc==1, 'refused'/'confidence'/'between 0 and 1 inclusive'/'nothing was stored' in message, empty stdout, and `after == before` row snapshots across all auger.COLS; `test_answer_accepts_confidence_boundaries` parametrized over 0.0/1.0 asserting rc==0 and stored confidence == approx(boundary). Test evidence (fresh runs, no cache): focused `python -m pytest tests/test_auger.py -k confidence -q` => '13 passed, 234 deselected in 85.74s'; full suite `python -m pytest -q` => '246 passed, 1 skipped in 1431.37s (0:23:51)', exit_code 0.\nCommit 841ee7e is in HEAD with the pre-write confidence guard in cmd_answer and its boundary tests, and the full pytest suite passes (246 passed, 1 skipped).\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-09-29T16:05:20.823792",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-09-29T16:05:20.842536+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 5668,
+        "truncated": false,
+        "source": "git show 4a777c8a5b88"
+      }
+    ],
+    "task_id": "AUG-083-VERDICT-BACKFILL"
+  }
+}

@@ -1,0 +1,40 @@
+diff --git a/docs/SPEC-002-bundles.md b/docs/SPEC-002-bundles.md
+index 952ad6c..ecd610f 100644
+--- a/docs/SPEC-002-bundles.md
++++ b/docs/SPEC-002-bundles.md
+@@ -124,11 +124,34 @@ The `satisfies` edge gains a `src_project`, so a reader can see the answer came
+ 
+ ```
+ for m in bundle_members(bundle_of(answer)):
+-    for D in decisions(m) where D.scope == 'bundle' and D.shared_contract == answer's contract:
++    for D in decisions(m) where D.scope == 'bundle':
+         ask JEV: does this answer leave m's decision unchanged | change | invalidate?
+         write affects/breaks(answer -> D) with dst_project = m
+ ```
+ 
++**Why there is no contract filter (resolved AUG-014).** The first draft of this pseudocode read
++`D.shared_contract == answer's contract` — but `shared_contract` exists in no table. The model of
++section 1 has the contract on `bundle.contract` (one path per bundle), and a decision carries only
++`scope`. Three readings were considered:
++
++(a) add `decision.shared_contract` — a per-decision copy of a bundle-level string: denormalised,
++    drifts from the bundle row, and a decision with no bundle row cannot name one;
++(b) key the walk on `bundle.contract` — filter decisions by the bundle whose contract the answer
++    shares. But a decision row does not name its bundle either (membership is a table; a project
++    may belong to several bundles), so this is the same shape as (a) with an extra join; and it
++    would silently drop every bundle whose contract string is empty (B-02 has none), even though
++    its members are exactly the ones who need deduping.
++(c) drop the clause — the walk compares the answer against **every** bundle-scoped decision of
++    each sibling.
++
++The engine implements (c), and the spec records it as the intended shape. It stays finite by the
++same two rules as before (bundle-scoped only; one JEV call per sibling decision, not per contract
++pair), and the granularity the contract filter wanted is achieved where it actually belongs: the
++JUDGE reads both decisions' chosen text and reasons (see `bundle_impact_verdict`), so a
++decision that has nothing to do with the contract comes back "unchanged" and writes no edge. If
++a future model shows the cost is real, the honest extension is `decision.bundle_id` (which bundle
++the decision constrains) — a new field and a migration, not a re-read of this clause.
++
+ Two rules keep it finite and honest:
+ 
+ - Only **bundle-scoped** decisions cross the boundary. A project-local decision never does — or
