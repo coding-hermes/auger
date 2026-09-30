@@ -407,3 +407,57 @@ namespace with zero loss (matches run 8's durability finding from the other side
 
 Timing walkaway: dump 307ms cold, toggle ~1.2s ± 0.6s, status 8.6s ± 3.5s at two
 decisions (AUG-047 evidence), ask ~6-7s (JEV), answer 1.6-4.4s (embedding-bound).
+
+## Run 12 (2026-09-29/30): the register/bundle/export write surface, a dead embedding provider's effect on retrieval, and the AUG-091 re-verify
+
+Why this run exists: runs 2-11 proved the READ side (check/status/dump/verdict/
+recall/propagate/feedback) excellent and the WRITE side repeatedly broken. Since
+then the foreman merged the fixes and the new verbs (`record`, `bundle` in verb
+form, `export`). Nobody had used any of them — so run 12 used nothing else.
+
+- **How `record` is built (and why it is trustworthy):** every subcommand
+  validates its references BEFORE minting an id — `record break` names a decision
+  that must already exist and refuses with "nothing was written" (run 8's
+  half-write phantom cannot recur here by construction); `--falsifier` is
+  required at the parser because an unfalsifiable assumption is a wish; option
+  costs/breaks land as plain columns that dump/export already knew how to render
+  (AUG-058's «—» era is over). Error = one message, no stack, rc=1.
+- **How `export` differs from `dump`:** dump is a CONFIGURATION projection (what
+  is active, plus the what-if renderer); export is the whole namespace as a
+  readable spec, fixed section order, empty tables as `(none stored)`, no
+  timestamp — hence byte-identical re-runs, which is what makes it usable as a
+  committed spec artifact in review. Measured 245ms for a 100-line namespace.
+- **Bundle verbs vs the old hand-POSTed rows:** the 2026-09-23 recipe (POST to
+  the table API) still describes storage truth, but `bundle add`/`bundle member`
+  now own the write path and mint ids (`B-000001`, `BM-000001`) — there is no
+  `--id` flag and no `show` subcommand; read bundles through export/dump. The
+  scheduler-validation escape hatch (`AUGER_ALLOW_SCRATCH_MEMBERS=1`) prints a
+  loud warning instead of passing silently — the right shape for an escape hatch.
+- **The retrieval trap (new, AUG-092):** this run's substrate was booted WITHOUT
+  any embedding provider on purpose (a fresh box ships none). `start`/`answer`
+  still printed "embedded", and `recall` returned 1.319 — impossible for cosine.
+  The substrate's searcher is hybrid (BM25 lexical + semantic, RRF-fused), so a
+  degraded substrate silently switches the SCORE SEMANTICS to lexical tier while
+  auger's output stays byte-for-byte the same shape. Every cross-run score
+  comparison (~0.99 cosine era vs 1.319 lexical era) is invalid until verbs label
+  the tier. Until fixed: check `/health → embedding.healthy` before trusting any
+  similarity number, and never compare scores across substrate health states.
+- **AUG-091 re-verified the right way:** not by reading the README, but by
+  repeating run 11's failing path on a NEW fresh box with the fixed tree — no env
+  var, token via fallback file only, `init` declared 14/14, ~95s to first
+  success. A fix is closed when the original failure no longer reproduces.
+- **Fresh-box friction that remains (AUG-093):** the README's own `answer
+  --domain 4.05` example cannot run on a gridless box — the 44-domain grid lives
+  in a Hermes skill tree. The refusal is precise and `status` honestly refuses to
+  claim coverage; omitting `--domain` runs the loop. Docs sentence, not code.
+- **The multi-tenant port trap (AUG-060) fired again within 4 seconds of agent
+  boot:** the fresh daemon's first start hit EADDRINUSE on :3000 from a sibling
+  agent's 25-hour-old daemon. Any response from :3000 on a shared bunker host
+  belongs to a stranger's substrate — own port + `DUCKBRAIN_URL` every time,
+  and confirm YOUR pid before reading any response as your daemon's behavior.
+
+Timing walkaway (this run, bare box, no embedding provider): answer 0.19s,
+recall 0.22s cold / 0.43s warm (runs 6-7's 6.5-22s warm are gone on this
+substrate build), check 0.20s, export 0.245s, init <1s, start 0.155s.
+Fresh install: 81s substrate build (pnpm 12.8.1) + ~10s token/auth/boot.
+

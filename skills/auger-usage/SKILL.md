@@ -16,9 +16,12 @@ only. Public repo: `coding-hermes/auger`.
 
 ## Entry points
 
-- CLI: `python3 auger.py -n <namespace> <verb> ...` — 12 verbs: `init start
-  ask answer check status toggle dump propagate feedback recall verdict`. The
-  verb surface is a PUBLIC CONTRACT; renames are breaking.
+- CLI: `python3 auger.py -n <namespace> <verb> ...` — 15 verbs: `init start
+  bundle ask answer check status toggle dump export propagate feedback recall
+  verdict record`. The verb surface is a PUBLIC CONTRACT; renames are breaking.
+  (`export` renders the whole namespace as a deterministic spec — byte-identical
+  across runs; `record` writes the registers; `bundle add|member` manages
+  bundles — recipes below.)
 - Storage: DuckBrain declared tables in namespace `<ns>` — 14 tables
   (project question decision option break escalation assumption unknown domain
   edge facet bundle bundle_member verdict). Files:
@@ -28,15 +31,21 @@ only. Public repo: `coding-hermes/auger`.
 
 ## Environment you need
 
-- DuckBrain HTTP on `127.0.0.1:3000` — **on the working branch
-  `feat/native-s3` of wojons/duckbrain**; the public default branch has NO
-  declared-tables API and auger's happy path 404s on it (AUG-016).
-- Credentials: `DUCKBRAIN_API_KEY` env or `~/.duckbrain/foreman-status.token`
-  — NOTE: a fresh DuckBrain boot creates NO token file (the substrate runs
-  auth=none by default; any non-empty `DUCKBRAIN_API_KEY` value works, see
-  pitfall 5; AUG-039 tracks the README drift);
-  `DUCKBRAIN_URL` overrides the base URL; JEV needs an OpenRouter key in
-  `~/.hermes/.env`.
+- DuckBrain HTTP on `127.0.0.1:3000` (or your own `DUCKBRAIN_URL`). Substrate
+  proven live 2026-09-29 on `feat/native-s3` @ 8f14f52 (fresh-box build 81s,
+  `init` 14/14). The README now claims public `main` also carries the
+  declared-tables API (since 42cea0a) — NOT yet verified by a dogfood run
+  (our transfer leg lands on the pinned branch); if `init` 404s on `main`,
+  fall back to the pinned branch (AUG-016 history).
+- Credentials: `DUCKBRAIN_API_KEY` env, else token files
+  `~/.duckbrain/foreman-status.token` then `~/.duckbrain/token` — the README
+  documents this since AUG-091 (fixed; re-verified live 2026-09-29 on a fresh
+  box: file fallback alone worked, no env var needed). To mint:
+  `node bin/duckbrain.js token` prints a 64-hex admin token on stdout only
+  (with `--auth=apikey` the daemon enforces it; never paste it into notes or
+  artifacts). `DUCKBRAIN_URL` overrides the base URL (undocumented in the
+  README — needed the moment :3000 is not yours); JEV needs an OpenRouter key
+  in `~/.hermes/.env` — without it ask/check fail CLOSED and say so.
 
 ## The right-way patterns
 
@@ -118,12 +127,16 @@ python3 auger.py -n <ns> recall "any seed phrase"   # proves embeddings
   LOCAL `breaks` edge that drives `propagate`'s rule walk (dst_project
   ABSENT = local; a sibling break still routes to an escalation). The old
   hand-POSTed edge shape below still describes the storage truth.
-- **The registers have NO write verbs (AUG-019, confirmed twice by use).**
-  `break`/`assumption`/`unknown`/`escalation` rows are declared and read
-  (status counts unknowns; ask reads them) but no CLI command creates one —
-  only `answer --invalidates` (edges, not rows) and the propagate impact
-  pass (escalations) write anything. A seed that says "X is unknown" will
-  still show `unknowns: 0` until a row is hand-POSTed.
+- **The registers have a WRITE verb now (AUG-019 closed; verified live
+  2026-09-29, 6/6 probes, docs/dogfood/2026-09-29-run12-registers-bundle-export-integration.md).**
+  `record break --decision D-XXX --breaks-what … --consequence … [--applied]`
+  mints BR-NNNNNN — a nonexistent decision is refused rc=1 BEFORE id minting
+  ("nothing was written" is true). `record assumption --text … --falsifier …
+  [--monitoring …]` mints A-NNNNNN (--falsifier required at the parser).
+  `record unknown --text … [--owner X] [--trigger Y] [--containment Z]`
+  mints U-NNNNNN. `record option <label> --costs … --breaks …` fills the
+  costs/breaks columns AUG-058 showed always-empty — now verified rendering
+  in dump/export.
 - **`ask` persists the question it proposes now (AUG-035 merged 2026-09-23).**
   When JEV proposes a question above `T_SUBJECT` that the gate scores NEW,
   `ask` stores it — one `question` row (`status=open`, `qclass=ask_proposed`,
@@ -156,10 +169,22 @@ python3 auger.py -n <ns> recall "any seed phrase"   # proves embeddings
 - **One namespace per member, named exactly the member** (`mccli`, `mcview`).
   This convention is code-only (`member_namespace`, auger.py ~L865); a
   different pairing silently disables every cross-project walk.
-- **Bundle rows have no verb.** Create them via the table API (POST
-  `/api/ns/<ns>/tables/bundle` and `/tables/bundle_member`) — see
-  docs/dogfood/2026-09-23-graph-bundles-integration.md for the working
-  recipe. AUG-029 tracks the missing verbs.
+- **Bundles have verbs now: `bundle add <name> [--contract <path>]` and
+  `bundle member <bundle-id> <project-name> <owner|consumer|test-target>`**
+  (verified live 2026-09-29; run 2's hand-POSTed table-API recipe in
+  docs/dogfood/2026-09-23-graph-bundles-integration.md still works but is no
+  longer needed). Ids are minted (`B-000001`, `BM-000001`) — there is NO
+  `--id` flag and no `bundle show` (read bundles via `export`/`dump`).
+  Cross-repo members normally go through scheduler-project validation; the
+  explicit escape `AUGER_ALLOW_SCRATCH_MEMBERS=1` prints a loud warning rather
+  than passing silently. One namespace per member, named exactly the member.
+- **`recall`/`check` scores change SCALE when the substrate's embedding
+  provider is down (AUG-092, hit live 2026-09-29).** On a healthy substrate
+  scores are cosine (~0.0-1.0). With embedding degraded, the substrate's
+  lexical/BM25 tier answers and the SAME verbs print scores like 1.319 with
+  no tier label — while `start`/`answer` still print "embedded". Do not
+  compare scores across substrate health states, and check
+  `GET /health → embedding.healthy` before trusting any similarity verdict.
 - **`answer --scope bundle` may be silent.** If the sibling walk found
   nothing to flag, the verb prints nothing (AUG-027). Do not assume the pass
   did not run; check the edge table.
@@ -195,13 +220,23 @@ python3 auger.py -n <ns> recall "any seed phrase"   # proves embeddings
   your own. Boot your own substrate on a verified-free port and export
   `DUCKBRAIN_URL`; check with
   `(echo >/dev/tcp/127.0.0.1/<port>) 2>/dev/null && echo BUSY || echo FREE`.
-- **A fresh substrate boot creates NO token file (AUG-039).** `~/.duckbrain/` may not
-  exist at all and auger fails closed with `no DuckBrain token`. Mint one:
-  `node bin/duckbrain.js token --name=<you>` prints the 64-hex token on line 2; also
-  pass a non-empty `DUCKBRAIN_API_KEY` (the substrate runs auth=none by default).
-- **`option.costs` / `option.breaks` are always empty (AUG-058).** `dump` prints
-  `costs=— breaks=—` for every option and no verb can populate them — do not read
-  «—» as "no cost", read it as "not recorded".
+- **Auth bootstrap is now documented and re-verified (AUG-091 closed;
+  live on a fresh box 2026-09-29).** A fresh substrate has no token file;
+  mint one with `node bin/duckbrain.js token` (prints the 64-hex token on
+  stdout — never paste it into artifacts) and auger finds it via the
+  documented fallback (`~/.duckbrain/foreman-status.token`, then
+  `~/.duckbrain/token`); no env var needed. Starting the daemon with
+  `--auth=apikey` makes it enforce tokens (a no-auth probe gets 401); bare
+  boot runs auth=none where any non-empty `DUCKBRAIN_API_KEY` works.
+- **On a gridless box, the README's `answer --domain 4.05` example refuses
+  (AUG-093, hit live 2026-09-29).** The canonical 44-domain grid lives in a
+  Hermes skill tree (`AUGER_DOMAIN_GRID` points at it). The refusal is
+  precise and honest — omit `--domain` and the loop runs; domain rows are
+  the coverage map, not a prerequisite.
+- **`option.costs` / `option.breaks` USED to be always empty (AUG-058,
+  closed): `record option <label> --costs … --breaks …` fills them now**
+  (verified live 2026-09-29 — values render in dump/export). Older rows may
+  still print «—»; read that as "not recorded", not "no cost".
 - **`status`'s domain lines can contradict themselves (AUG-059).** A domain leading
   with "answered" can still end "(row status NOT-REACHED)"; trust the leading word
   and the decisions/questions count, not the parenthetical.
