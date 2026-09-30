@@ -110,6 +110,42 @@ def ns_path(ns: str) -> str:
     return auger.ns_dir(ns)
 
 
+# ---------------------------------------------------------------- the just-deleted lag (AUG-080)
+#: A registry listing can LAG a DELETE that already landed. Observed 2026-09-25 (gate.sh,
+#: 197/198): the audit reported `api: ['auger-pytest-8ff530dda03b']` while `disk` was EMPTY
+#: for the same namespace — deleted, rmtree'd, and already confirmed gone by the
+#: per-namespace re-check inside `teardown_namespace` (no fixture error was raised), yet
+#: still listed seconds later; in isolation the same audit passed clean in 0.29s. That is
+#: an eventual-consistency window of a few seconds, not a leak. The reconciliation lives
+#: HERE, once per audit read, rather than a wait in every teardown finalizer: the window
+#: is rare, and ~200 finalizers would each pay for one stale read.
+LAG_RECHECKS = 3
+#: A few seconds TOTAL, never minutes — the gate has a time budget, and a lag measured in
+#: minutes belongs to teardown's 409 budget, not to an audit that must stay honest.
+LAG_RECHECK_BACKOFF_S = 2.0
+
+
+def _registry_lag_recheck(ns: str) -> bool:
+    """True once `ns` is confirmed no longer listed; False if it persists past the budget.
+
+    A re-LIST, not a per-namespace GET: DuckBrain serves no single-namespace read, and the
+    list endpoint is the same surface the stale read came from. Bounded to
+    LAG_RECHECKS * LAG_RECHECK_BACKOFF_S (~6s), so the audit cannot hang the gate — and a
+    row that survives the whole window is reported as what it is: a leak.
+    """
+    for attempt in range(LAG_RECHECKS):
+        if attempt:
+            time.sleep(LAG_RECHECK_BACKOFF_S)
+        try:
+            if ns not in api_namespaces():
+                return True
+        except SystemExit as exc:
+            # A listing that ERRORS (no token, non-200 after the transport's retries) is
+            # the audit's pre-existing loud failure — never a confirmation of absence.
+            raise SystemExit(f"could not re-check {ns} over the API: {exc}") from exc
+    return False
+
+
 def leftovers(scope: list[str] | None = None) -> dict[str, list[str]]:
     """Every leftover test namespace, split by the two places one can linger.
 
@@ -120,6 +156,11 @@ def leftovers(scope: list[str] | None = None) -> dict[str, list[str]]:
     reports the other run's live, in-flight namespace as a leak of THIS run. That
     race blocked a correct board commit. The property this suite must prove is
     that IT cleaned up, which is exactly and only the names it created.
+
+    A name still listed gets ONE bounded reconciliation (AUG-080): the registry
+    can lag a delete that already landed, so a listed name is re-checked over a
+    few seconds before it counts as a leak. A row that persists past that window
+    is still reported — this tolerance never makes a real leak pass.
     """
     api = [n for n in api_namespaces() if n.startswith(TEST_NS_PREFIX)]
     root = Path(os.path.expanduser("~")) / "duckbrain" / "namespaces"
@@ -132,6 +173,7 @@ def leftovers(scope: list[str] | None = None) -> dict[str, list[str]]:
         want = set(scope)
         api = [n for n in api if n in want]
         disk = [n for n in disk if n in want]
+    api = [n for n in api if n in disk or not _registry_lag_recheck(n)]
     return {"api": api, "disk": disk}
 
 

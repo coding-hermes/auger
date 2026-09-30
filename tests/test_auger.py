@@ -40,10 +40,13 @@ from urllib.parse import parse_qsl, unquote, urlsplit
 import pytest
 
 import auger
+import conftest
 from conftest import (
     CREATED,
     D001,
     D002,
+    LAG_RECHECKS,
+    LAG_RECHECK_BACKOFF_S,
     REPO_ROOT,
     SEED_TEXT,
     TEST_NS_PREFIX,
@@ -5615,6 +5618,110 @@ def test_a_saturated_limiter_is_bounded_and_the_leak_is_reported(offline_duckbra
     )
     assert any("429" in p for p in problems), problems
     assert any("still listed" in p for p in problems), problems
+
+
+# ================================================================= the just-deleted lag on the audit (AUG-080)
+# The gate audit is the surface the 2026-09-25 false-positive fired on: teardown's own
+# re-check had already confirmed the namespace gone, yet the session-wide `leftovers`
+# read still listed it (`api: ['auger-pytest-8ff530dda03b']`, `disk: []`), failing a gate
+# whose other 197 cases passed. The registry can lag a delete that landed; the audit now
+# re-checks a listed name over a bounded window before calling it a leak. These cases are
+# OFFLINE like the 429 ones — the wire, the token and the namespaces ROOT are faked (the
+# disk half of `leftovers` scans the real ~/duckbrain/namespaces, so HOME is pinned to
+# tmp_path), and `sleep` is recorded instead of taken.
+@pytest.fixture
+def audit_env(monkeypatch, tmp_path):
+    """Pin the disk half of `leftovers` to tmp_path; record the re-check's sleeps.
+
+    The ONLY sleeper in these tests: offline_duckbrain also patches the same shared
+    `time` module, so a test that used both recorders would depend on fixture
+    application order for who sees the re-check's sleeps. The wire test therefore
+    asserts request counts only; the lag/persistence tests below fake the LISTING
+    seam (`conftest.api_namespaces`) and own this recorder alone.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+    sleeps: list[float] = []
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    return sleeps
+
+
+def test_a_leftover_listing_that_lags_one_recheck_no_longer_fails_the_audit(
+    offline_duckbrain, audit_env
+):
+    """The AUG-080 shape on the wire, scripted end to end: teardown deletes and confirms
+    gone, then the session audit reads a STALE listing — and the bounded re-check
+    resolves it instead of failing the gate.
+
+    The fake flips `registered` only on DELETE, so the audit's GETs are served EXPLICIT
+    payloads: still listed (the stale window), then not listed (the lag resolved on the
+    re-check's FIRST re-read, so no backoff is taken and `audit_env` stays empty).
+    """
+    fake = offline_duckbrain([])
+    fake.script = [
+        (200, {"deleted": True}, {}),  # the finalizer's DELETE lands
+        (200, REGISTRY, {}),  # the finalizer's re-check: gone
+        (200, {"namespaces": [{"name": fake.ns}]}, {}),  # the audit's read: STALE
+        (200, {"namespaces": []}, {}),  # re-check 1: the lag resolved
+    ]
+    teardown_namespace(fake.ns)
+
+    found = leftovers(scope=[fake.ns])
+
+    assert found == {"api": [], "disk": []}, (
+        f"a stale listing still failed the audit: {found}"
+    )
+    assert fake.count("GET") == 3, fake.requests  # finalizer's + stale + 1 re-check
+    assert len(fake.requests) == 4, fake.requests  # DELETE + 3 GETs, nothing unscripted
+    assert audit_env == [], (
+        f"the re-check resolved on its first re-read, so it took no backoff: {audit_env}"
+    )
+
+
+def test_a_leftover_listing_pays_one_backoff_before_its_recheck(audit_env, monkeypatch):
+    """The bounded reconciliation's timing, at the listing seam: one stale re-read, one
+    recorded backoff, then the row is gone and the audit stays green.
+
+    The fake flips `registered` only on DELETE, so a wire-level lag test would need the
+    offline fixture — whose sleep patch would compete with `audit_env` for the same
+    `time` module. Faking `conftest.api_namespaces` (the one seam the audit and its
+    re-check both read) keeps a single sleep recorder.
+    """
+    ns = TEST_NS_PREFIX + "lagmocked"
+    # audit read: listed; re-check 1: still stale (one backoff paid); re-check 2: resolved
+    listings = iter([[ns], [ns], []])
+    monkeypatch.setattr(conftest, "api_namespaces", lambda: next(listings))
+
+    found = leftovers(scope=[ns])
+
+    assert found == {"api": [], "disk": []}, (
+        f"a listing that lagged one re-check still failed the audit: {found}"
+    )
+    assert audit_env == [LAG_RECHECK_BACKOFF_S], (
+        f"one bounded backoff, not none and not many: {audit_env}"
+    )
+
+
+def test_a_persistently_listed_leftover_namespace_still_fails_the_audit(
+    audit_env, monkeypatch
+):
+    """A row that survives every re-check of the bounded window is a leak, not a lag."""
+    ns = TEST_NS_PREFIX + "leakmocked"
+    listings = iter([[ns]] * (1 + LAG_RECHECKS))  # the audit read + every re-check
+    monkeypatch.setattr(conftest, "api_namespaces", lambda: next(listings))
+
+    found = leftovers(scope=[ns])
+
+    assert found == {"api": [ns], "disk": []}, (
+        f"the tolerance cleared a namespace that persists past the window: {found}"
+    )
+    assert audit_env == [LAG_RECHECK_BACKOFF_S] * (LAG_RECHECKS - 1), audit_env
+
+
+def test_the_leftover_audit_lag_budget_is_bounded():
+    """The reconciliation is a FEW seconds total, never minutes: the gate has a budget."""
+    assert LAG_RECHECKS * LAG_RECHECK_BACKOFF_S <= 10, (
+        f"lag re-check budget grew past ~10s: {LAG_RECHECKS} x {LAG_RECHECK_BACKOFF_S}s"
+    )
 
 
 # ================================================================= the bundle boundary (SPEC-002 2.1/2.2)
