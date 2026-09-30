@@ -2279,7 +2279,10 @@ def _substrate_with_health(health: dict | None, items: list):
         if p == auger.HEALTH_PATH:
             if health is None:
                 return 0, {"error": "transport: connection refused"}, {}
-            return 200, health, {}
+            # GAP-030 wire truth (duckbrain src/cli/http.ts createHealthHandler):
+            # /health answers HTTP 503 when degraded, 200 only when healthy — a
+            # mocked 200 for a degraded body is a substrate that does not exist.
+            return (200 if health.get("status") == "healthy" else 503), health, {}
         if p.startswith("/api/memories?"):
             return 200, {"items": items}, {}
         return 200, [], {}  # a declared-table read: no rows
@@ -2293,7 +2296,12 @@ def _use_health(monkeypatch, health: dict) -> None:
 
     def routed(path, *a, **kw):
         if str(path) == auger.HEALTH_PATH:
-            return 200, health, {}
+            # Same GAP-030 wire truth as _substrate_with_health: degraded = 503.
+            return (
+                (200 if health.get("status") == "healthy" else 503),
+                health,
+                {},
+            )
         return real(path, *a, **kw)
 
     monkeypatch.setattr(auger, "db", routed)
@@ -2409,6 +2417,75 @@ def test_check_labels_the_semantic_tier_when_embedding_is_healthy(monkeypatch):
     assert rc == 0, out
     assert "retrieval tier: semantic" in out, out
     assert "0.992" in out, out
+
+
+def test_recall_labels_lexical_on_the_real_degraded_503_health_wire(monkeypatch):
+    """GAP-030 wire contract: a degraded substrate answers /health with HTTP **503**, not 200.
+
+    DuckBrain's createHealthHandler does `res.status(degraded ? 503 : 200)` where degraded is
+    `!embedding.healthy || keys_error` — so the run-12 substrate (embedding.healthy=false)
+    answered 503 with the body still carrying `embedding.healthy: false`. A tier reader that
+    accepts only st == 200 mislabels that substrate "unknown", and criterion 2's lexical label
+    never prints on the exact defect this task exists for.
+    """
+    monkeypatch.setattr(
+        auger,
+        "db",
+        _substrate_with_health(HEALTH_EMBEDDING_DOWN, [LEXICAL_TIER_HIT]),
+    )
+    seen = {}
+
+    def capturing_db(path, *a, **kw):
+        st, body, hdrs = _substrate_with_health(
+            HEALTH_EMBEDDING_DOWN, [LEXICAL_TIER_HIT]
+        )(path, *a, **kw)
+        if str(path) == auger.HEALTH_PATH:
+            seen["st"] = st
+        return st, body, hdrs
+
+    monkeypatch.setattr(auger, "db", capturing_db)
+    rc, out = run_cli(
+        ["-n", "auger-092-degraded503", "recall", "how is the record stored?"]
+    )
+    assert seen["st"] == 503  # the mock itself serves the real degraded wire status
+    assert rc == 0, out
+    assert "retrieval tier: lexical" in out, out
+    assert "1.319" in out, out
+    assert "retrieval tier: unknown" not in out, out
+
+
+def test_recall_labels_semantic_on_a_keys_degraded_503_with_healthy_embedding(
+    monkeypatch,
+):
+    """A 503 can mean keys-store degradation with the embedding leg HEALTHY.
+
+    `degraded = !embedding.healthy || keysError !== null` — so a corrupt keys store also 503s
+    while `embedding.healthy` stays true and semantic search answers. The tier must be read from
+    the BODY field, never from the HTTP status alone; an unknown-label here would print on a
+    substrate whose semantic ranker is up.
+    """
+    keys_degraded = {
+        "status": "degraded",
+        "embedding": {
+            "provider": "openai",
+            "model": "qwen/qwen3-embedding-8b",
+            "healthy": True,
+            "providers": [{"id": "openai", "healthy": True, "note": "ok"}],
+        },
+        "keys_error": "corrupt keys jsonl",
+    }
+    monkeypatch.setattr(
+        auger,
+        "db",
+        _substrate_with_health(keys_degraded, [SEMANTIC_TIER_HIT]),
+    )
+    rc, out = run_cli(
+        ["-n", "auger-092-keysdegraded", "recall", "how is the record stored?"]
+    )
+    assert rc == 0, out
+    assert "retrieval tier: semantic" in out, out
+    assert "0.992" in out, out
+    assert "retrieval tier: unknown" not in out, out
 
 
 def test_start_suppresses_the_embedded_claim_on_a_lexical_tier(monkeypatch):

@@ -1248,15 +1248,24 @@ def retrieval_tier(timeout: int = HEALTH_TIMEOUT) -> str:
     `embedding.healthy` is the substrate's own statement about its embedding providers, and it is
     what decides whether the keyword-only fallback is the ranker left. The read is ADVISORY — a
     label on a result, never a precondition for one — so every way it can fail to answer (a
-    transport error, `_req`'s st == 0; a non-200; no token for `db`; a body without the field) is
-    reported as TIER_UNKNOWN and never guessed. A tier invented from a health probe that did not
-    answer would put back exactly the ambiguity this label exists to remove.
+    transport error, `_req`'s st == 0; a status that is neither of /health's two answers; no token
+    for `db`; a body without the field) is reported as TIER_UNKNOWN and never guessed. A tier
+    invented from a health probe that did not answer would put back exactly the ambiguity this
+    label exists to remove.
+
+    The status check accepts 200 AND 503, never 200 alone: DuckBrain's health handler answers
+    `503` whenever it is degraded (GAP-030, `src/cli/http.ts`:
+    `res.status(degraded ? 503 : 200)`), and degraded is `!embedding.healthy || keys_error` —
+    so the embedding-down substrate this label exists for answers **503 with
+    `embedding.healthy=false` in the body**, and a keys-store failure answers 503 with the
+    embedding leg still healthy. The field — not the status — decides the tier; an HTTP-200-only
+    reader would label the run-12 substrate "unknown" and never print the lexical tier at all.
     """
     try:
         st, body, _ = db(HEALTH_PATH, timeout=timeout)
     except SystemExit:  # no token: `db` cannot even build the request
         return TIER_UNKNOWN
-    if st != 200 or not isinstance(body, dict):
+    if st not in (200, 503) or not isinstance(body, dict):
         return TIER_UNKNOWN
     embedding = body.get("embedding")
     if not isinstance(embedding, dict) or not isinstance(
