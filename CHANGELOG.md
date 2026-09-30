@@ -3,4 +3,5 @@
 ## v0.1
 
 Initial release of Auger's spec-drilling loop and CLI surface: `init`, `start`, `bundle`, `ask`,
-`answer`, `check`, `status`, `toggle`, `dump`, `propagate`, `feedback`, `recall`, and `verdict`.
+`answer`, `check`, `status`, `toggle`, `dump`, `export`, `propagate`, `feedback`, `recall`,
+`verdict`, and `record`.
