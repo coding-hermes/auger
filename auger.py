@@ -14,8 +14,12 @@ Substrate (verified live 2026-09-20, see docs/SUBSTRATE-VERIFICATION.md):
     GET  /api/ns/<ns>/tables/<t>?col=eq.v      PostgREST select (eq/ne/gt/gte/lt/lte/like/in)
     POST /api/ns/<ns>/tables/<t>               insert (object | array | NDJSON)
     PATCH /api/ns/<ns>/tables/<t>?pk=eq.v      update by primary key   <- the toggle
-    POST /api/memories {key,domain,content}    write + embed
-    GET  /api/memories?namespace=<ns>&q=...    semantic search (cosine + snippets)
+    POST /api/memories {key,domain,content}    write + embed (embedding is a NO-OP with no healthy provider)
+    GET  /api/memories?namespace=<ns>&q=...    hybrid search: the embedding leg fused with the keyword leg
+                                               (RRF) on a healthy substrate; the KEYWORD-ONLY fallback
+                                               answers with raw (unbounded) BM25 when it is not — AUG-092
+    GET  /health                               embedding.healthy — the substrate's own statement about
+                                               which of those two answered
   JEV  POST https://openrouter.ai/api/alpha/decisions  {state, questions{noul|choice|score}}
 
 Hard-won rules encoded here:
@@ -1216,6 +1220,86 @@ class SubstrateError(SystemExit):
     sentinel) is what keeps every caller honest: a caller that forgets to handle a
     failed substrate read cannot silently continue with empty-handed data.
     """
+
+
+# ---------------------------------------------------------------- retrieval tiers (AUG-092)
+# A `?q=` search is answered by ONE of three rankers, and all three report their number in the same
+# `items[].score` field (DuckBrain `src/mcp/tools/recall.ts` + `src/search/fusion.ts`):
+#   * embedding providers healthy      -> the embedding leg answers (fused with the keyword leg
+#     through RRF when the FTS sidecar exists): a bounded similarity / normalized scale
+#   * providers unhealthy or missing   -> the keyword-only fallback answers: RAW BM25, NOT bounded
+#     by 1.0
+# The response never says which ranker ran, so a score on its own is ambiguous. Dogfood run 12
+# (2026-09-29) recorded `recall` 1.319 and `check` 0.477 on a substrate whose /health said
+# embedding.healthy=false — numbers cosine cannot produce — while every run against a healthy
+# substrate recorded the ~0.99x scale, and a reader comparing the two had nothing to tell them
+# apart. auger now reads the substrate's OWN /health and LABELS the tier it believes answered, so
+# two runs are never silently compared as if they were one scale.
+TIER_SEMANTIC = "semantic"
+TIER_LEXICAL = "lexical"
+TIER_UNKNOWN = "unknown"
+HEALTH_PATH = "/health"
+HEALTH_TIMEOUT = 10
+
+
+def retrieval_tier(timeout: int = HEALTH_TIMEOUT) -> str:
+    """The retrieval tier the substrate will answer `?q=` with, read from its /health (AUG-092).
+
+    `embedding.healthy` is the substrate's own statement about its embedding providers, and it is
+    what decides whether the keyword-only fallback is the ranker left. The read is ADVISORY — a
+    label on a result, never a precondition for one — so every way it can fail to answer (a
+    transport error, `_req`'s st == 0; a non-200; no token for `db`; a body without the field) is
+    reported as TIER_UNKNOWN and never guessed. A tier invented from a health probe that did not
+    answer would put back exactly the ambiguity this label exists to remove.
+    """
+    try:
+        st, body, _ = db(HEALTH_PATH, timeout=timeout)
+    except SystemExit:  # no token: `db` cannot even build the request
+        return TIER_UNKNOWN
+    if st != 200 or not isinstance(body, dict):
+        return TIER_UNKNOWN
+    embedding = body.get("embedding")
+    if not isinstance(embedding, dict) or not isinstance(
+        embedding.get("healthy"), bool
+    ):
+        return TIER_UNKNOWN
+    return TIER_SEMANTIC if embedding["healthy"] else TIER_LEXICAL
+
+
+def tier_note(tier: str) -> str:
+    """One line naming the retrieval tier behind the scores printed under it (AUG-092)."""
+    if tier == TIER_LEXICAL:
+        return (
+            f"retrieval tier: {TIER_LEXICAL} (embedding.healthy=false — the substrate's "
+            "keyword/BM25 ranker answered; these scores are NOT cosine similarity and are "
+            "not bounded by 1.0)"
+        )
+    if tier == TIER_SEMANTIC:
+        return f"retrieval tier: {TIER_SEMANTIC} (embedding.healthy=true)"
+    return (
+        f"retrieval tier: {TIER_UNKNOWN} (the substrate's /health did not report "
+        "embedding.healthy — which ranker answered cannot be attributed)"
+    )
+
+
+def embed_claim(tier: str) -> str:
+    """The write verbs' claim about a row's embedding, keyed on the substrate's /health (AUG-092).
+
+    `start`/`answer` printed "embedded" unconditionally, so a substrate carrying
+    embedding.healthy=false — no provider reachable, the write path's own embed attempt a no-op —
+    still reported the row as embedded. The claim is the SUBSTRATE's to make: it is asserted only
+    when /health says the embedding provider is healthy, and a degraded substrate reports the true,
+    weaker state instead. TIER_UNKNOWN keeps the historical wording and marks it UNVERIFIED — a
+    /health that could not be READ is not the substrate saying its provider is down, and the two
+    are never conflated.
+    """
+    if tier == TIER_LEXICAL:
+        return "keyword-searchable only (embedding.healthy=false)"
+    if tier == TIER_UNKNOWN:
+        return (
+            "embedded (unverified: substrate /health did not report embedding.healthy)"
+        )
+    return "embedded"
 
 
 def recall(
@@ -3590,7 +3674,9 @@ def cmd_start(a):
         # required-content gate (DB-GAP-058) 400 the call and abort a fresh start.
         remember(ns, f"/auger/{pid}/seed", seed)
     print(f"project {pid} in namespace {ns}")
-    print(f"seed stored ({len(seed)} chars) + embedded")
+    # AUG-092: the "embedded" claim belongs to the substrate, not to us — read its /health and
+    # report the state it actually asserts, so a degraded substrate never reports a row as embedded.
+    print(f"seed stored ({len(seed)} chars) + {embed_claim(retrieval_tier())}")
     return 0
 
 
@@ -4630,11 +4716,13 @@ def cmd_answer(a):
     impact = bundle_impact(ns, pid, {**row, "scope": stored_scope})
     active_count = 1 if resolved_option else 0
     domain_note = f"domain {row['domain']} = {domain_name}, " if domain_name else ""
+    # AUG-092: "embedded" is the substrate's claim to make — a substrate whose /health carries
+    # embedding.healthy=false stored this row lexically and says so instead.
     print(
         f"{did} recorded  ({domain_note}"
         f"confidence {_conf_render(row['confidence'])}, "
         f"{active_count} of {len(option_rows)} active, "
-        f"embedded, scope {decision_scope(row)}{closed})"
+        f"{embed_claim(retrieval_tier())}, scope {decision_scope(row)}{closed})"
     )
     # The local break, surfaced in the same grammar `propagate` reports its walk in (AUG-028): the
     # trigger is a claim about a decision that is now DEAD, and the user needs to see both that it is
@@ -4707,8 +4795,13 @@ def cmd_check(a):
     AUG-075, fail closed: a substrate that cannot be asked is an error with exit 1,
     never "no stored evidence matched — treat as a new question" — that sentence is
     reserved for a store that was asked and genuinely holds nothing.
+
+    AUG-092: the scores of the rows this prints are on ONE of two scales depending on
+    the substrate's embedding health (see `tier_note`), so the tier is read from /health
+    BEFORE the retrieval and named with the rows, whenever there are rows to attribute.
     """
     ns = a.namespace
+    tier = retrieval_tier()
     try:
         hits = recall(ns, a.question, limit=a.limit)
     except SubstrateError as exc:  # AUG-075: the store could not be asked
@@ -4734,6 +4827,7 @@ def cmd_check(a):
         },
     )
     print(f"nearest stored rows ({len(hits)}):")
+    print(tier_note(tier))  # AUG-092: which ranker's scale the scores below are on
     for h in hits:
         print(f"  {h.get('score'):.3f}  {h.get('key')}")
     if err:
@@ -5439,7 +5533,13 @@ SUPERSEDED_MARKER_NO_SUCCESSOR = RECALL_SNIPPET_INDENT + "[superseded]"
 
 
 def cmd_recall(a):
-    """AUG-075, fail closed: a store that cannot be asked is an error, not an empty list."""
+    """AUG-075, fail closed: a store that cannot be asked is an error, not an empty list.
+
+    AUG-092: the scores printed below are on ONE of two scales depending on the substrate's
+    embedding health (see `tier_note`), so the tier is read from /health BEFORE the retrieval and
+    named once above the scores, whenever there is a score to attribute.
+    """
+    tier = retrieval_tier()
     try:
         hits = recall(a.namespace, a.query, a.limit, project_id=a.project_id)
     except SubstrateError as exc:  # AUG-075: the store could not be asked
@@ -5465,6 +5565,10 @@ def cmd_recall(a):
             1 if marks.get(decision_named(h.get("key", "")), (False, ""))[0] else 0,
         ),
     )
+    # AUG-092: the label rides with the scores, and only where there is a score to attribute — a
+    # genuine empty result keeps the verb's contract exactly (rc 0, nothing printed).
+    if hits:
+        print(tier_note(tier))
     for h in hits:
         superseded, successor = marks.get(decision_named(h.get("key", "")), (False, ""))
         marker = (

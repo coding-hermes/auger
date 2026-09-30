@@ -2222,6 +2222,253 @@ def test_gate_question_reports_a_dead_substrate_as_an_error(monkeypatch):
     assert err and "substrate" in err, err
 
 
+# ============================================================ AUG-092: retrieval-tier labels
+# Dogfood run 12 (2026-09-29, substrate booted with NO embedding provider — /health reported
+# embedding.healthy=false) recorded `recall` score 1.319 and `check` 0.477: numbers cosine cannot
+# produce, because the substrate's keyword/BM25-only fallback answered, while every prior run
+# against a healthy substrate recorded the ~0.99x scale. Same verb, two score semantics, never
+# labeled — and `start`/`answer` printed "embedded" either way. These pin the label on BOTH sides
+# of the substrate's own /health statement, and pin the write verbs' embedding claim to it.
+#
+# Every case below mocks at the `db()` boundary and DISPATCHES that mock by path: `/health` answers
+# the health body, the memories read answers the hits, and a table read answers an empty page (a
+# recall hit's supersession decoration reads through `select_or_empty`). So the real verb code —
+# including the probe — runs all the way down; nothing here re-implements the labeling.
+
+HEALTH_EMBEDDING_UP = {
+    "status": "healthy",
+    "embedding": {
+        "provider": "openai",
+        "model": "qwen/qwen3-embedding-8b",
+        "healthy": True,
+        "providers": [{"id": "openai", "healthy": True, "note": "ok"}],
+    },
+    "keys_error": None,
+}
+HEALTH_EMBEDDING_DOWN = {
+    "status": "degraded",
+    "embedding": {
+        "provider": None,
+        "model": None,
+        "healthy": False,
+        "providers": [{"id": "openai", "healthy": False, "note": "missing key"}],
+    },
+    "keys_error": None,
+}
+#: The number run 12 actually recorded — impossible for cosine, and the reason the label exists.
+LEXICAL_TIER_HIT = {
+    "key": "/auger/P-092/D-001",
+    "score": 1.319,
+    "content": "a keyword/BM25-scale score",
+}
+SEMANTIC_TIER_HIT = {
+    "key": "/auger/P-092/D-001",
+    "score": 0.992,
+    "content": "a similarity-scale score",
+}
+
+
+def _substrate_with_health(health: dict | None, items: list):
+    """A `db()` stand-in routing `/health`, the memories read and table reads to their own answers.
+
+    `health=None` is the probe that cannot answer at all (`_req`'s st == 0 transport contract).
+    """
+
+    def fake_db(path, *a, **kw):
+        p = str(path)
+        if p == auger.HEALTH_PATH:
+            if health is None:
+                return 0, {"error": "transport: connection refused"}, {}
+            return 200, health, {}
+        if p.startswith("/api/memories?"):
+            return 200, {"items": items}, {}
+        return 200, [], {}  # a declared-table read: no rows
+
+    return fake_db
+
+
+def _use_health(monkeypatch, health: dict) -> None:
+    """Wrap the REAL `db()` so only `/health` is overridden — the write path stays live."""
+    real = auger.db
+
+    def routed(path, *a, **kw):
+        if str(path) == auger.HEALTH_PATH:
+            return 200, health, {}
+        return real(path, *a, **kw)
+
+    monkeypatch.setattr(auger, "db", routed)
+
+
+def test_recall_labels_the_lexical_tier_when_embedding_is_unhealthy(monkeypatch):
+    """Criterion 2: embedding.healthy=false -> the score is named as the lexical tier's."""
+    monkeypatch.setattr(
+        auger, "db", _substrate_with_health(HEALTH_EMBEDDING_DOWN, [LEXICAL_TIER_HIT])
+    )
+    rc, out = run_cli(
+        ["-n", "auger-092-degraded", "recall", "how is the record stored?"]
+    )
+    assert rc == 0, out
+    assert "retrieval tier: lexical" in out, out
+    assert "embedding.healthy=false" in out, out
+    assert "1.319" in out, out  # the run-12 number the label has to explain
+    assert "retrieval tier: semantic" not in out, out
+
+
+def test_recall_labels_the_semantic_tier_when_embedding_is_healthy(monkeypatch):
+    """Criterion 3: embedding.healthy=true -> the score is named as the semantic tier's."""
+    monkeypatch.setattr(
+        auger, "db", _substrate_with_health(HEALTH_EMBEDDING_UP, [SEMANTIC_TIER_HIT])
+    )
+    rc, out = run_cli(
+        ["-n", "auger-092-healthy", "recall", "how is the record stored?"]
+    )
+    assert rc == 0, out
+    assert "retrieval tier: semantic" in out, out
+    assert "embedding.healthy=true" in out, out
+    assert "0.992" in out, out
+    assert "retrieval tier: lexical" not in out, out
+
+
+def test_recall_labels_an_unknown_tier_when_health_cannot_answer(monkeypatch):
+    """A /health that does not answer is neither tier — the label says so instead of guessing.
+
+    Two ways to not answer are pinned: the probe is unreachable (transport), and the body is a 200
+    that carries no usable `embedding.healthy` (an older substrate). Guessing either way would
+    re-introduce the exact ambiguity this label removes.
+    """
+    monkeypatch.setattr(auger, "db", _substrate_with_health(None, [LEXICAL_TIER_HIT]))
+    rc, out = run_cli(
+        ["-n", "auger-092-deadhealth", "recall", "how is the record stored?"]
+    )
+    assert rc == 0, out
+    assert "retrieval tier: unknown" in out, out
+
+    monkeypatch.setattr(
+        auger, "db", _substrate_with_health({"status": "ok"}, [LEXICAL_TIER_HIT])
+    )
+    rc, out = run_cli(
+        ["-n", "auger-092-noField", "recall", "how is the record stored?"]
+    )
+    assert rc == 0, out
+    assert "retrieval tier: unknown" in out, out
+    for tier in (auger.TIER_SEMANTIC, auger.TIER_LEXICAL):
+        assert f"retrieval tier: {tier}" not in out, out
+
+
+def test_recall_prints_no_tier_note_when_there_is_no_score_to_label(monkeypatch):
+    """The label rides WITH the scores: a genuine empty read keeps `recall`'s silent rc=0."""
+    monkeypatch.setattr(auger, "db", _substrate_with_health(HEALTH_EMBEDDING_DOWN, []))
+    rc, out = run_cli(
+        ["-n", "auger-092-emptyRead", "recall", "how is the record stored?"]
+    )
+    assert rc == 0, out
+    assert out == "", out
+
+
+def test_check_labels_the_lexical_tier_when_embedding_is_unhealthy(monkeypatch):
+    """Criterion 1+2 on `check`: the probe runs before the retrieval and the label prints with rows."""
+    monkeypatch.setattr(
+        auger, "db", _substrate_with_health(HEALTH_EMBEDDING_DOWN, [LEXICAL_TIER_HIT])
+    )
+    monkeypatch.setattr(
+        auger,
+        "jev",
+        lambda *a, **k: (
+            {
+                "answers": {"already_answered": {"type": "noul", "noul": 0.9}},
+                "usage": {"cost": 0.0},
+            },
+            None,
+        ),
+    )
+    rc, out = run_cli(
+        ["-n", "auger-092-degraded", "check", "how is the record stored?"]
+    )
+    assert rc == 0, out
+    assert "nearest stored rows (1):" in out, out
+    assert "retrieval tier: lexical" in out, out
+    assert "1.319" in out, out
+
+
+def test_check_labels_the_semantic_tier_when_embedding_is_healthy(monkeypatch):
+    monkeypatch.setattr(
+        auger, "db", _substrate_with_health(HEALTH_EMBEDDING_UP, [SEMANTIC_TIER_HIT])
+    )
+    monkeypatch.setattr(
+        auger,
+        "jev",
+        lambda *a, **k: (
+            {
+                "answers": {"already_answered": {"type": "noul", "noul": 0.9}},
+                "usage": {"cost": 0.0},
+            },
+            None,
+        ),
+    )
+    rc, out = run_cli(["-n", "auger-092-healthy", "check", "how is the record stored?"])
+    assert rc == 0, out
+    assert "retrieval tier: semantic" in out, out
+    assert "0.992" in out, out
+
+
+def test_start_suppresses_the_embedded_claim_on_a_lexical_tier(monkeypatch):
+    """Criterion 4 on `start`: a degraded substrate must not report a seed as embedded."""
+    monkeypatch.setattr(auger, "db", _substrate_with_health(HEALTH_EMBEDDING_DOWN, []))
+    monkeypatch.setattr(auger, "remember", lambda *a, **k: {})
+    monkeypatch.setattr(
+        auger, "insert", lambda ns_, table, rows: {"table": table, "row": rows}
+    )
+    monkeypatch.setattr(auger, "select", lambda *a, **k: [])
+
+    rc, out = run_cli(
+        ["-n", "auger-092-degraded", "start", "--id", "P-092", "--seed", "a seed"]
+    )
+    assert rc == 0, out
+    line = next(ln for ln in out.splitlines() if ln.startswith("seed stored"))
+    assert line == (
+        "seed stored (6 chars) + keyword-searchable only (embedding.healthy=false)"
+    ), line
+    assert "embedded" not in line, line
+
+
+def test_start_keeps_the_embedded_claim_on_a_semantic_tier(monkeypatch):
+    """The other side of criterion 4: a healthy substrate keeps its (true) claim, unqualified."""
+    monkeypatch.setattr(auger, "db", _substrate_with_health(HEALTH_EMBEDDING_UP, []))
+    monkeypatch.setattr(auger, "remember", lambda *a, **k: {})
+    monkeypatch.setattr(
+        auger, "insert", lambda ns_, table, rows: {"table": table, "row": rows}
+    )
+    monkeypatch.setattr(auger, "select", lambda *a, **k: [])
+
+    rc, out = run_cli(
+        ["-n", "auger-092-healthy", "start", "--id", "P-092", "--seed", "a seed"]
+    )
+    assert rc == 0, out
+    line = next(ln for ln in out.splitlines() if ln.startswith("seed stored"))
+    assert line == "seed stored (6 chars) + embedded", line
+
+
+def test_answer_suppresses_the_embedded_claim_on_a_lexical_tier(
+    decided: dict, monkeypatch
+):
+    """Criterion 4 on `answer`: the row IS written, it is just not embedded — say which."""
+    _use_health(monkeypatch, HEALTH_EMBEDDING_DOWN)
+    rc, out = answer_cli(decided["ns"], "D-092", "4.09", "a lexically stored answer")
+    assert rc == 0, out
+    line = next(ln for ln in out.splitlines() if "D-092 recorded" in ln)
+    assert "keyword-searchable only (embedding.healthy=false)" in line, line
+    assert "embedded" not in line, line
+
+
+def test_answer_keeps_the_embedded_claim_on_a_semantic_tier(decided: dict, monkeypatch):
+    _use_health(monkeypatch, HEALTH_EMBEDDING_UP)
+    rc, out = answer_cli(decided["ns"], "D-093", "4.09", "a semantically stored answer")
+    assert rc == 0, out
+    line = next(ln for ln in out.splitlines() if "D-093 recorded" in ln)
+    assert "embedded, scope " in line, line
+    assert "keyword-searchable only" not in line, line
+
+
 # ============================================================= AUG-082: project-scoped recall
 # Two projects may deliberately share vocabulary while carrying different evidence. A selected
 # project must constrain the substrate's candidate set before semantic ranking/limiting; filtering
