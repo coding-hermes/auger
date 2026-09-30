@@ -87,7 +87,7 @@ Then the loop:
 ```bash
 python3 auger.py -n myproject init
 python3 auger.py -n myproject start --name myproject --seed-file seed.txt
-python3 auger.py -n myproject answer --id D-001 --domain 4.05 \
+python3 auger.py -n myproject answer --id D-001 \
     --chosen "single SQLite file" \
     --option "single SQLite file" --option "Postgres" --option "flat JSONL only" \
     --why-not "Postgres needs a service the seed forbids" \
@@ -110,6 +110,9 @@ domain grid not found: ~/.hermes/skills/software-development/spec-decomposition-
 
 Point `AUGER_DOMAIN_GRID` at any canonical 44-domain grid, or run `init` without
 `--seed-domains`: the domain rows are the coverage map, not a prerequisite for the loop. The
+same holds for `answer --domain`: on a box without the grid, omit the flag (as the Quick
+start loop above does); once `AUGER_DOMAIN_GRID` points at a grid, add it back (`--domain 4.05`)
+to file the decision under a domain. The
 grid's shape is exact — one `4.NN-<slug>.md` file per domain (`4.05-data.md`; the file name IS
 the number and the name), all 44 of `4.01`–`4.44` and nothing else; anything short of that is
 refused by name rather than seeded partially.
