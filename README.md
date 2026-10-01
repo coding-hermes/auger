@@ -64,6 +64,7 @@ auger dump        render the system under the current set, or a --config hypothe
 auger propagate   run the graph walks: moot, reopen, cascade — and re-gate the children
 auger feedback    turn thin decisions into the next question batch (model proposes, JEV gates)
 auger recall "Q"  semantic search over everything the project has embedded
+auger serve       serve the embedding store over HTTP — semantic search for external agents
 auger verdict     judge a configuration good/bad with reasons, on the record (DESIGN R11)
 auger record ...  write the registers: break, assumption, unknown, option costs/breaks
 ```
@@ -139,7 +140,19 @@ declared tables over git-backed JSONL:
 
 That means the spec is versioned in git, readable as plain files, queryable over HTTP, and
 searchable by embedding — and the dump is a *view* of it, not a separate artifact to keep in
-sync.
+sync. The rows are queryable through DuckBrain's declared-table API as they stand; the
+embeddings the write verbs store are published as their own route by `auger serve` (AUG-046):
+
+```bash
+# the namespace you practiced in; AUGER_NS is the env default every verb honours
+AUGER_NS=myproject auger serve --port 8765
+curl "http://127.0.0.1:8765/api/ns/myproject/embeddings/search?q=how+is+the+record+stored&limit=5"
+```
+
+That answers ranked, scored hits as JSON — each tagged with the decision its key is evidence of,
+and with the retrieval tier the substrate's own `/health` reports. See
+[docs/VERBS.md](docs/VERBS.md), section *serve*, for the routes, the refusals, and what the
+score scale means.
 
 ## The tables
 
@@ -222,7 +235,7 @@ project's public issue tracker.
   project against a read-only `projects` table (docs/VERBS.md, section *bundle*); on a standalone
   box membership needs the documented `AUGER_ALLOW_SCRATCH_MEMBERS=1` escape, and membership
   management stays CLI-light.
-- **This README can lag the CLI.** The loop block above lists 13 verbs; the CLI ships 15
+- **This README can lag the CLI.** The loop block above lists 14 verbs; the CLI ships 16
   (`bundle` and `export` are missing from it — REVIEW-AUGER-003). Every verb is
   documented in docs/VERBS.md, which is the complete surface.
 

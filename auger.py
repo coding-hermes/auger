@@ -22,6 +22,13 @@ Substrate (verified live 2026-09-20, see docs/SUBSTRATE-VERIFICATION.md):
                                                which of those two answered
   JEV  POST https://openrouter.ai/api/alpha/decisions  {state, questions{noul|choice|score}}
 
+auger's OWN surface — `auger serve`, for an external agent with no shell (AUG-046):
+  GET  /api/ns/<ns>/embeddings/search?q=<q>&limit=<n>[&project=<id>]  ranked embedding hits, JSON
+  GET  /api/embeddings/search?q=...                                   the same, on `-n`'s namespace
+  GET  /health                                                        the substrate's embedding status
+Every hit carries the kind of row its key names (`decision` / `seed` / `memory`) and the tier the
+substrate's /health reports, so a caller never compares a similarity with a raw BM25 score.
+
 Hard-won rules encoded here:
   * JSON payloads go to the HTTP layer as BYTES FROM A FILE, never shell-interpolated
     (an apostrophe in "seed's rule" silently truncates a quoted curl body).
@@ -50,7 +57,8 @@ import urllib.error
 import urllib.request
 from collections import Counter
 from datetime import datetime, timezone
-from urllib.parse import quote, unquote
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 AUGER_VERSION = "0.2"
 DB_URL = os.environ.get("DUCKBRAIN_URL", "http://127.0.0.1:3000")
@@ -1242,16 +1250,20 @@ HEALTH_PATH = "/health"
 HEALTH_TIMEOUT = 10
 
 
-def retrieval_tier(timeout: int = HEALTH_TIMEOUT) -> str:
-    """The retrieval tier the substrate will answer `?q=` with, read from its /health (AUG-092).
+def embedding_status(timeout: int = HEALTH_TIMEOUT) -> dict:
+    """The substrate's own statement about its embedding leg, as FIELDS (AUG-046).
+
+    `retrieval_tier` is this read reduced to one word; the HTTP route needs the same read as data —
+    it reports the tier AND the provider that answered — so the read happens here ONCE and both
+    callers share one decision about which ranker is left.
 
     `embedding.healthy` is the substrate's own statement about its embedding providers, and it is
     what decides whether the keyword-only fallback is the ranker left. The read is ADVISORY — a
     label on a result, never a precondition for one — so every way it can fail to answer (a
     transport error, `_req`'s st == 0; a status that is neither of /health's two answers; no token
-    for `db`; a body without the field) is reported as TIER_UNKNOWN and never guessed. A tier
-    invented from a health probe that did not answer would put back exactly the ambiguity this
-    label exists to remove.
+    for `db`; a body without the field) reports TIER_UNKNOWN with `healthy` None, which is NOT the
+    substrate saying its embedding leg is down. A tier invented from a health probe that did not
+    answer would put back exactly the ambiguity this label exists to remove.
 
     The status check accepts 200 AND 503, never 200 alone: DuckBrain's health handler answers
     `503` whenever it is degraded (GAP-030, `src/cli/http.ts`:
@@ -1259,20 +1271,37 @@ def retrieval_tier(timeout: int = HEALTH_TIMEOUT) -> str:
     so the embedding-down substrate this label exists for answers **503 with
     `embedding.healthy=false` in the body**, and a keys-store failure answers 503 with the
     embedding leg still healthy. The field — not the status — decides the tier; an HTTP-200-only
-    reader would label the run-12 substrate "unknown" and never print the lexical tier at all.
+    reader would label the run-12 substrate "unknown" and never report the lexical tier at all.
     """
+    unknown = {"tier": TIER_UNKNOWN, "healthy": None, "provider": None, "model": None}
     try:
         st, body, _ = db(HEALTH_PATH, timeout=timeout)
     except SystemExit:  # no token: `db` cannot even build the request
-        return TIER_UNKNOWN
+        return dict(unknown)
     if st not in (200, 503) or not isinstance(body, dict):
-        return TIER_UNKNOWN
+        return dict(unknown)
     embedding = body.get("embedding")
     if not isinstance(embedding, dict) or not isinstance(
         embedding.get("healthy"), bool
     ):
-        return TIER_UNKNOWN
-    return TIER_SEMANTIC if embedding["healthy"] else TIER_LEXICAL
+        return dict(unknown)
+    healthy = embedding["healthy"]
+    provider, model = embedding.get("provider"), embedding.get("model")
+    return {
+        "tier": TIER_SEMANTIC if healthy else TIER_LEXICAL,
+        "healthy": healthy,
+        "provider": provider if isinstance(provider, str) else None,
+        "model": model if isinstance(model, str) else None,
+    }
+
+
+def retrieval_tier(timeout: int = HEALTH_TIMEOUT) -> str:
+    """The retrieval tier the substrate will answer `?q=` with, read from its /health (AUG-092).
+
+    The read itself — which /health answers count, and why — lives in `embedding_status`, which the
+    HTTP route shares; this is that read reduced to the one word the CLI prints above its scores.
+    """
+    return embedding_status(timeout)["tier"]
 
 
 def tier_note(tier: str) -> str:
@@ -1365,6 +1394,239 @@ def recall(
             and str(item.get("key", "")).startswith(project_prefix)
         ]
     return items
+
+
+# ---------------------------------------------------------------- the embedding store over HTTP (AUG-046)
+# The README promises the spec is "queryable over HTTP, and searchable by embedding", and only the ROW
+# half of that was true for an integrator: the embedding index answered inside auger's own verbs
+# (`recall`, `check`) and nowhere an external agent could call it (dogfood 2026-09-23, 4th run —
+# `/api/ns/<ns>/memories` -> 404 ROUTE_NOT_FOUND, and `memories` is not one of the declared tables).
+# `auger serve` publishes the SAME retrieval those verbs use — DuckBrain's `/api/memories?q=` over its
+# embedding index — as JSON, carrying the two things this file adds to a raw store read: the tier
+# label (AUG-092, so a caller never compares a bounded similarity with a raw BM25 number) and the
+# key -> row classification the store's own keys already encode (`/auger/<project>/<thing>`).
+EMBEDDINGS_SEARCH_ROUTE = re.compile(r"^/api/ns/(?P<ns>[^/]+)/embeddings/search$")
+EMBEDDINGS_ALIAS_PATH = "/api/embeddings/search"  # the same search, on the server's --namespace
+EMBEDDINGS_HEALTH_ROUTE = "/health"  # the same fact as HEALTH_PATH, on auger's own socket
+EMBEDDINGS_DEFAULT_LIMIT = 5
+EMBEDDINGS_MAX_LIMIT = 1000  # the store's own hard page cap; a bigger `limit` is refused, not clamped
+SERVE_DEFAULT_HOST = "127.0.0.1"
+SERVE_DEFAULT_PORT = 8765
+#: The route list a caller is handed when it asks for one that does not exist (and printed at boot).
+EMBEDDINGS_ROUTES = (
+    "/api/ns/<namespace>/embeddings/search?q=<query>&limit=<n>[&project=<id>]",
+    "/api/embeddings/search?q=<query>&limit=<n>[&project=<id>]  (the server's --namespace)",
+    "/health",
+)
+
+
+def embedding_hit_kind(key: str) -> tuple:
+    """(kind, decision id) for one stored key, read from the key's own shape.
+
+    auger writes exactly two shapes into the memory store: the project seed under
+    `/auger/<project>/seed`, and each decision's evidence under `/auger/<project>/<decision-id>`
+    (`remember` in `cmd_start` / `cmd_answer`). The key is therefore how a hit says WHICH decision it
+    is evidence of, which is the question an external agent actually asks. Anything else is another
+    writer's row in a shared namespace — a plain `memory`, never guessed at. Pure parse: a search
+    must not become one declared-table read per hit.
+    """
+    m = re.match(r"^/auger/(?P<project>[^/]+)/(?P<tail>[^/]+)$", key or "")
+    if not m:
+        return "memory", ""
+    tail = m.group("tail")
+    # `/auger/<project>/seed` also matches the shape above, and is the ONE key that names no decision.
+    return ("seed", "") if tail == "seed" else ("decision", tail)
+
+
+def embedding_search(
+    ns: str,
+    q: str,
+    limit: int = EMBEDDINGS_DEFAULT_LIMIT,
+    project_id: str | None = None,
+) -> dict:
+    """The ranked, tier-labelled answer an external agent receives over HTTP (AUG-046).
+
+    One read of the substrate's tier, one query of the store, and NO secondary per-hit reads: the
+    caller dereferences a `decision_id` through the declared-table API when it wants the row, because
+    a route that fanned out per hit would turn one search into `limit + 1` requests against a
+    token-bucketed API. FAIL CLOSED (AUG-075): a store that cannot be asked raises `SubstrateError`
+    (the handler answers 502), while a store that genuinely holds nothing answers 200 with `count` 0 —
+    "unaskable" and "empty" are never the same answer here, exactly as in `recall`.
+    """
+    status = embedding_status()
+    hits = recall(ns, q, limit, project_id=project_id)
+    results = []
+    for hit in hits:
+        if not isinstance(hit, dict):
+            continue
+        key = str(hit.get("key") or "")
+        kind, decision_id = embedding_hit_kind(key)
+        results.append(
+            {
+                "key": key,
+                "kind": kind,
+                "decision_id": decision_id or None,
+                "score": hit.get("score"),
+                "domain": hit.get("domain"),
+                "content": hit.get("content"),
+                "snippet": hit.get("snippet"),
+                "timestamp": hit.get("timestamp"),
+            }
+        )
+    # RANKED, whatever order the store returned: the caller asked for the most similar rows first. A
+    # score that is not a number sorts last rather than poisoning the comparison, and `sort` is stable,
+    # so equal scores keep the store's own order.
+    results.sort(
+        key=lambda r: r["score"]
+        if isinstance(r["score"], (int, float))
+        else float("-inf"),
+        reverse=True,
+    )
+    return {
+        "namespace": ns,
+        "query": q,
+        "limit": limit,
+        "project": project_id,
+        "tier": status["tier"],
+        "embedding_healthy": status["healthy"],
+        "count": len(results),
+        "results": results,
+    }
+
+
+class EmbeddingsHTTPHandler(BaseHTTPRequestHandler):
+    """The route's request handler: GET-only, JSON-only, and never a traceback on the wire.
+
+    `protocol_version` is HTTP/1.1 and EVERY response — refusals included — carries a Content-Length,
+    because a 1.1 response without one leaves the client waiting for a body that never comes. Nothing
+    is written outside `_send_json`, which is what makes that guarantee hold for the error paths too.
+    """
+
+    server_version = f"auger/{AUGER_VERSION}"
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, fmt, *args):  # one line per request, on stderr, with the peer named
+        print(
+            f"{self.address_string()} [{self.log_date_time_string()}] {fmt % args}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+    def do_GET(self):
+        try:
+            self._route()
+        except SubstrateError as exc:  # precise: the store refused, in the substrate's own words
+            self._send_json(502, {"error": str(exc)})
+        except SystemExit as exc:  # auger's own fail-closed exit (no token to ask the store with)
+            self._send_json(503, {"error": str(exc) or "auger exited"})
+        except Exception as exc:  # never leak a traceback into a closed socket
+            self._send_json(500, {"error": f"{type(exc).__name__}: {exc}"})
+
+    def do_HEAD(self):
+        """HEAD answers like GET with no body: a monitor probing /health must not be answered with
+        BaseHTTPRequestHandler's HTML `501 Unsupported method` from a JSON surface."""
+        self._head_only = True
+        try:
+            self.do_GET()
+        finally:
+            self._head_only = False
+
+    def do_POST(self):
+        self._send_json(
+            405,
+            {"error": "only GET is served: this surface reads the embedding store", "allow": "GET"},
+            {"Allow": "GET"},
+        )
+
+    do_PUT = do_PATCH = do_DELETE = do_POST
+
+    def _route(self):
+        parts = urlsplit(self.path)
+        params = parse_qs(parts.query, keep_blank_values=True)
+        m = EMBEDDINGS_SEARCH_ROUTE.match(parts.path)
+        if m:
+            # The path segment arrives percent-ENCODED (`urlsplit` does not decode), and the store's
+            # namespace is the decoded name; `recall` re-encodes it exactly once when it builds the
+            # upstream request (AUG-061's one boundary), so a spaced name must be decoded HERE or the
+            # store is asked for the literal `a%20b`.
+            return self._search(unquote(m.group("ns")), params)
+        if parts.path == EMBEDDINGS_ALIAS_PATH:
+            return self._search(self.server.namespace, params)
+        if parts.path == EMBEDDINGS_HEALTH_ROUTE:
+            status = embedding_status()
+            return self._send_json(
+                200,
+                {
+                    "tier": status["tier"],
+                    "embedding_healthy": status["healthy"],
+                    "provider": status["provider"],
+                    "model": status["model"],
+                },
+            )
+        # Discovery is part of the fix: a caller who guessed the path is told the real ones.
+        return self._send_json(
+            404,
+            {
+                "error": f"no such route: {parts.path}",
+                "routes": list(EMBEDDINGS_ROUTES),
+            },
+        )
+
+    def _search(self, ns: str, params: dict):
+        q = (params.get("q") or [""])[0].strip()
+        if not q:
+            return self._send_json(
+                400, {"error": f"q is required: {EMBEDDINGS_ROUTES[0]}"}
+            )
+        raw_limit = (params.get("limit") or [str(EMBEDDINGS_DEFAULT_LIMIT)])[0].strip()
+        try:
+            limit = int(raw_limit)
+        except ValueError:
+            return self._send_json(
+                400, {"error": f"limit must be an integer, got {raw_limit!r}"}
+            )
+        if not 1 <= limit <= EMBEDDINGS_MAX_LIMIT:
+            return self._send_json(
+                400,
+                {
+                    "error": f"limit must be between 1 and {EMBEDDINGS_MAX_LIMIT}, "
+                    f"got {limit}"
+                },
+            )
+        project = (params.get("project") or [""])[0].strip() or None
+        self._send_json(200, embedding_search(ns, q, limit, project_id=project))
+
+    def _send_json(self, status: int, payload: dict, headers: dict | None = None):
+        raw = json.dumps(payload).encode()
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(raw)))
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
+            self.end_headers()
+            if not getattr(self, "_head_only", False):
+                self.wfile.write(raw)
+        except OSError:
+            # The caller hung up mid-response: there is nothing left to say, and a traceback from a
+            # client that is already gone is noise, not a failure of the route.
+            pass
+
+
+class EmbeddingsHTTPServer(ThreadingHTTPServer):
+    """The embedding route's server: one thread per request, and the alias route's namespace.
+
+    `daemon_threads` matters — a client that opens a connection and never finishes it must not pin
+    the process (or a test's teardown) on a request thread that will never return.
+    `allow_reuse_address` keeps a restart after Ctrl-C from failing on TIME_WAIT.
+    """
+
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def __init__(self, address, handler_class, namespace: str):
+        self.namespace = namespace
+        super().__init__(address, handler_class)
 
 
 # ---------------------------------------------------------------- the bundle walk (SPEC-002 section 2)
@@ -5593,6 +5855,37 @@ def cmd_recall(a):
     return 0
 
 
+def cmd_serve(a):
+    """Serve the embedding store over HTTP — the route an external agent can call (AUG-046).
+
+    Read-only and long-lived: it publishes `embedding_search` plus the substrate's own embedding
+    status, and never writes a row. `--port 0` binds an ephemeral port and the banner names it, which
+    is how a caller behind a proxy (or a test) learns the address without guessing.
+    """
+    try:
+        server = EmbeddingsHTTPServer(
+            (a.host, a.port), EmbeddingsHTTPHandler, namespace=a.namespace
+        )
+    except OSError as exc:
+        print(f"cannot serve on {a.host}:{a.port}: {exc}")
+        return 1
+    host, port = server.server_address[0], server.server_address[1]
+    print(f"auger {AUGER_VERSION} embedding HTTP surface: http://{host}:{port}")
+    for route in EMBEDDINGS_ROUTES:
+        print(f"  GET {route}")
+    print(
+        f"substrate: {DB_URL} — default namespace: {a.namespace} (Ctrl-C stops; reads only)"
+    )
+    sys.stdout.flush()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("stopping (interrupt)")
+    finally:
+        server.server_close()
+    return 0
+
+
 def render_dump(
     ns: str, project_id: str | None, overrides_spec: list[str] | None = None
 ) -> str:
@@ -6100,6 +6393,24 @@ def main(argv=None):
     s.add_argument("query")
     s.add_argument("--limit", type=int, default=5)
     s.set_defaults(fn=cmd_recall)
+
+    s = sub.add_parser(
+        "serve",
+        help="serve the embedding store over HTTP (semantic search for external agents)",
+    )
+    s.add_argument(
+        "--host",
+        default=SERVE_DEFAULT_HOST,
+        help=f"bind address (default {SERVE_DEFAULT_HOST}: reachable only from this host)",
+    )
+    s.add_argument(
+        "--port",
+        type=int,
+        default=SERVE_DEFAULT_PORT,
+        help=f"TCP port (default {SERVE_DEFAULT_PORT}; 0 binds an ephemeral one, and the "
+        "banner names it)",
+    )
+    s.set_defaults(fn=cmd_serve)
 
     s = sub.add_parser(
         "verdict", help="record good/bad on a configuration, with reasons (R11)"

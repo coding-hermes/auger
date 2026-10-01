@@ -5,11 +5,11 @@ write. This is the contract — the verb names are public, and every argument li
 exists in the verb's `add_parser` definition in `auger.py`. If the code and this file
 disagree, the code wins and this file is a bug.
 
-The 15 top-level verbs — one `add_parser` registration each in `auger.py`, and the count here is
+The 16 top-level verbs — one `add_parser` registration each in `auger.py`, and the count here is
 the registry's own, not a hand-kept tally — in the order `auger --help` lists them:
 
 ```
-init  start  bundle  ask  answer  check  status  toggle  dump  export  propagate  feedback  recall  verdict  record
+init  start  bundle  ask  answer  check  status  toggle  dump  export  propagate  feedback  recall  serve  verdict  record
 ```
 
 Conventions every verb shares:
@@ -385,6 +385,57 @@ Semantic search over everything the namespace has embedded.
 **Never writes:** anything. When the store cannot be read (AUG-075) it fails
 closed: the substrate error is printed and the exit is non-zero — an unreachable
 store is never printed as an empty result.
+
+## serve
+
+Serve the embedding store over HTTP, so an external agent can run the same semantic search
+`recall` runs without a shell (AUG-046). Long-lived and read-only: it binds a socket, answers
+until interrupted, and never writes a row, a table, or a memory. The route returns the store's
+ranked hits as JSON, each tagged with the kind of row its key names, plus the retrieval tier
+read from the substrate's own `/health` (AUG-092) — so a caller can tell a bounded similarity
+from a raw keyword/BM25 score instead of comparing the two by accident.
+
+**Arguments:** `--host` (default `127.0.0.1` — reachable only from the host it runs on; there is
+no authentication on this surface, so do not bind it to a wider address without one in front),
+`--port` (default `8765`; `0` binds an ephemeral port and the boot banner names the real one).
+The namespace default is the same `--namespace/-n` every other verb takes.
+
+**Routes** (all `GET`, all JSON; anything else is refused). Boot prints this list, and so does
+a 404, so a caller who guessed a path is told the real one:
+
+```
+GET /api/ns/<namespace>/embeddings/search?q=<query>&limit=<n>[&project=<id>]
+GET /api/embeddings/search?q=<query>&limit=<n>[&project=<id>]   # the server's -n namespace
+GET /health                                                     # the substrate's embedding status
+```
+
+- `q` is required. Missing or blank is refused with `400` naming the route — the search never
+  runs with nothing to search for, and no request reaches the store.
+- `limit` defaults to 5, and is a validated integer from 1 to 1000 (the store's own page cap).
+  Anything else is refused with `400` naming the limit; an oversized limit is refused rather
+  than silently clamped, because a caller cannot count rows it never sees.
+- `project` narrows the search to one project's own evidence (`/auger/<project>/…` keys). A
+  prefix with no hits answers `200` with `count: 0` — an honest empty answer, not an error.
+- The response is `{namespace, query, limit, project, tier, embedding_healthy, count, results}`,
+  with `results` ranked by score, highest first, and each row carrying `key`, `kind`
+  (`decision` | `seed` | `memory`), `decision_id`, `score`, `domain`, `content`, `snippet`,
+  `timestamp`. `tier` is `semantic` (the embedding leg answered), `lexical` (the substrate's
+  keyword-only fallback answered, and its scores are NOT bounded by 1.0), or `unknown` (the
+  substrate's `/health` did not report `embedding.healthy`, so which ranker answered is
+  unattributable).
+- A store that **cannot be asked** answers `502` with the substrate's own error and NO `results`
+  key (AUG-075): "unaskable" is never reported as "nothing similar". A store that genuinely
+  holds nothing answers `200` with `count: 0`.
+- `POST`/`PUT`/`PATCH`/`DELETE` are refused with `405` and `Allow: GET`. This surface reads.
+  `HEAD` is answered like `GET` with no body, so a monitor probing `/health` gets this surface's
+  response headers rather than a bare `501`.
+
+**Writes:** nothing, ever. It is the same retrieval `recall` performs, over a socket instead of
+stdout; every write still goes through the verbs above (and over the declared tables).
+
+**Never writes:** any row, table, namespace, or memory entry; and it never sends a request that
+could write one — the handler issues only the two reads the search needs (the substrate's
+`/health` and `/api/memories?q=`).
 
 ## verdict
 

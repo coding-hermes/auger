@@ -31,6 +31,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -8697,3 +8698,466 @@ def test_status_coverage_names_the_grid_domain_each_row_belongs_to(
     assert len(stored) == 44
     assert stored["4.05"]["name"] == "domain-4-05", stored["4.05"]
     assert stored["4.27"]["name"] == "domain-4-27", stored["4.27"]
+
+
+# ================================================================= the embedding store over HTTP (AUG-046)
+# The promise under test is the README's: the spec is "queryable over HTTP, and searchable by
+# embedding". The ROW half of that was true; the embedding half was not — the index answered inside
+# auger's own verbs (`recall`, `check`) and nowhere an external agent could call it (dogfood
+# 2026-09-23, 4th run: `/api/ns/<ns>/memories` -> 404 ROUTE_NOT_FOUND, and `memories` is not one of
+# the declared tables). These cases drive the published route the way an integrator does — a real
+# socket, a real HTTP client, and the JSON that comes back — in two arms:
+#
+#   * OFFLINE: `db()` is scripted, so the ranking, the tier label, the fail-closed 502 and every
+#     refusal run under gate.sh's quiet arm with no DuckBrain on the host at all.
+#   * LIVE: the same route against the real embedding index of an ephemeral namespace.
+EMBEDDINGS_OFFLINE_NS = "auger-pytest-offline"
+
+
+def http_call(base: str, path: str, method: str = "GET") -> tuple[int, dict, str]:
+    """One request over a real socket: (status, headers, body). 4xx/5xx are RETURNED, never raised.
+
+    `urllib.request` would turn every refusal into an exception, which is exactly the shape that
+    makes a test assert on the wrong thing (the client's error, not the route's answer), so the
+    status line is read from the raw connection instead. The timeout is generous on purpose: the
+    route's read of the store is one substrate call, and a busy substrate has been measured at
+    tens of seconds on a large namespace, so a tight client budget here would fail the ROUTE for
+    the STORE's latency.
+    """
+    host, port = base.split("://", 1)[1].rsplit(":", 1)
+    conn = http.client.HTTPConnection(host, int(port), timeout=180)
+    try:
+        conn.request(method, path)
+        resp = conn.getresponse()
+        raw = resp.read().decode()
+        return resp.status, {k.lower(): v for k, v in resp.getheaders()}, raw
+    finally:
+        conn.close()
+
+
+def json_call(base: str, path: str, method: str = "GET") -> tuple[int, dict, dict]:
+    status, headers, raw = http_call(base, path, method)
+    return status, headers, (json.loads(raw) if raw else {})
+
+
+class RouteSubstrate:
+    """`db()` as the route sees it: every path RECORDED, /health and the memories read answered.
+
+    Recording the paths is the point. A refusal must be provable as "no upstream request was made",
+    and a search must be provable as one that carried the caller's own q/limit/prefix to the store —
+    neither is visible from the response alone.
+    """
+
+    def __init__(
+        self,
+        health: dict | None = None,
+        items: list | None = None,
+        memories_status: int = 200,
+        memories_body: dict | None = None,
+        health_unreachable: bool = False,
+    ):
+        self.health = HEALTH_EMBEDDING_UP if health is None else health
+        self.items = list(items or [])
+        self.memories_status = memories_status
+        self.memories_body = memories_body
+        self.health_unreachable = health_unreachable
+        self.paths: list[str] = []
+
+    def __call__(self, path, *a, **kw):  # noqa: ARG002 - mirrors `db`'s signature
+        p = str(path)
+        self.paths.append(p)
+        if p == auger.HEALTH_PATH:
+            if self.health_unreachable:
+                return 0, {"error": "transport: connection refused"}, {}
+            # GAP-030 wire truth: /health answers 503 when degraded, 200 only when healthy.
+            return (
+                200 if self.health.get("status") == "healthy" else 503,
+                self.health,
+                {},
+            )
+        if p.startswith("/api/memories?"):
+            if self.memories_body is not None:
+                return self.memories_status, self.memories_body, {}
+            return self.memories_status, {"items": self.items}, {}
+        return 200, [], {}  # a declared-table read: no rows
+
+    def memories_paths(self) -> list[str]:
+        return [p for p in self.paths if p.startswith("/api/memories?")]
+
+
+def start_embeddings_server(namespace: str) -> tuple:
+    """The route's REAL server on an ephemeral port: (server, thread, base_url)."""
+    server = auger.EmbeddingsHTTPServer(
+        ("127.0.0.1", 0), auger.EmbeddingsHTTPHandler, namespace=namespace
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread, f"http://127.0.0.1:{server.server_address[1]}"
+
+
+@pytest.fixture
+def embeddings_server():
+    """A factory for the route's real server, on an ephemeral port, stopped even when a case fails.
+
+    No live DuckBrain is required to start one: the cases that script `db()` never let a request
+    reach the substrate, so the route's own HTTP behaviour is covered in the quiet CI arm too.
+    """
+    started: list = []
+
+    def start(namespace: str = EMBEDDINGS_OFFLINE_NS) -> str:
+        server, thread, base = start_embeddings_server(namespace)
+        started.append((server, thread))
+        return base
+
+    yield start
+    for server, thread in started:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=10)
+
+
+def test_embedding_search_route_ranks_the_store_and_names_each_hit(
+    embeddings_server, monkeypatch
+):
+    """Criterion 3: ranked rows with their scores, and the decision each hit is evidence of.
+
+    The scripted store answers OUT of score order on purpose: "ranked" is the route's own guarantee,
+    not an accident of the order the store happened to return.
+    """
+    hits = [
+        {
+            "key": "/auger/P-PYTEST/D-001",
+            "score": 0.41,
+            "content": "the weaker match",
+            "domain": "concept",
+        },
+        {
+            "key": "/auger/P-PYTEST/seed",
+            "score": 0.9,
+            "content": "the seed text",
+            "domain": "concept",
+        },
+        {
+            "key": "/fleet/someone-elses-key",
+            "score": 0.75,
+            "content": "another writer's row",
+            "domain": "event",
+        },
+    ]
+    fake = RouteSubstrate(items=hits)
+    monkeypatch.setattr(auger, "db", fake)
+    base = embeddings_server()
+
+    status, headers, body = json_call(
+        base, "/api/ns/ns-x/embeddings/search?q=single%20SQLite%20file&limit=3"
+    )
+    assert status == 200, body
+    assert headers["content-type"] == "application/json", headers
+    assert body["namespace"] == "ns-x"
+    assert body["query"] == "single SQLite file", body
+    assert body["limit"] == 3
+    assert body["project"] is None
+    assert body["tier"] == auger.TIER_SEMANTIC and body["embedding_healthy"] is True, body
+    assert body["count"] == 3 and len(body["results"]) == 3, body
+    assert [r["score"] for r in body["results"]] == [0.9, 0.75, 0.41], body
+    assert [r["key"] for r in body["results"]] == [
+        "/auger/P-PYTEST/seed",
+        "/fleet/someone-elses-key",
+        "/auger/P-PYTEST/D-001",
+    ], body
+
+    by_key = {r["key"]: r for r in body["results"]}
+    assert by_key["/auger/P-PYTEST/seed"]["kind"] == "seed", by_key
+    assert by_key["/auger/P-PYTEST/seed"]["decision_id"] is None, by_key
+    assert by_key["/auger/P-PYTEST/D-001"]["kind"] == "decision", by_key
+    assert by_key["/auger/P-PYTEST/D-001"]["decision_id"] == "D-001", by_key
+    assert by_key["/fleet/someone-elses-key"]["kind"] == "memory", by_key
+    assert by_key["/fleet/someone-elses-key"]["decision_id"] is None, by_key
+    # the content travels with the hit: an agent searching by embedding is looking for the text
+    assert by_key["/auger/P-PYTEST/seed"]["content"] == "the seed text", by_key
+
+    # and the store was asked EXACTLY once, with the caller's namespace, query and limit on it
+    paths = fake.memories_paths()
+    assert len(paths) == 1, paths
+    assert "namespace=ns-x" in paths[0], paths[0]
+    assert "q=single%20SQLite%20file" in paths[0], paths[0]
+    assert "limit=3" in paths[0], paths[0]
+
+
+def test_embedding_search_route_labels_the_keyword_fallback(embeddings_server, monkeypatch):
+    """Criterion 4: the tier is the substrate's own `embedding.healthy`, never assumed.
+
+    A degraded substrate answers the search with its keyword-only ranker, whose scores are raw BM25
+    and NOT bounded by 1.0 — the label is what stops a caller comparing the two scales (AUG-092).
+    """
+    fake = RouteSubstrate(health=HEALTH_EMBEDDING_DOWN, items=[LEXICAL_TIER_HIT])
+    monkeypatch.setattr(auger, "db", fake)
+    base = embeddings_server()
+
+    status, _, body = json_call(base, "/api/ns/ns-degraded/embeddings/search?q=anything")
+    assert status == 200, body
+    assert body["tier"] == auger.TIER_LEXICAL, body
+    assert body["embedding_healthy"] is False, body
+    assert body["count"] == 1 and body["results"][0]["score"] == 1.319, body
+
+
+def test_embedding_search_route_fails_closed_when_the_store_cannot_be_asked(
+    embeddings_server, monkeypatch
+):
+    """AUG-075: "the store cannot be asked" is not "the store is empty" — so it is a 502, not [].
+
+    The distinction is the whole reason `recall` raises; a route that answered `{"results": []}` here
+    would tell an agent the store holds nothing similar, which is a different (and false) claim.
+    """
+    fake = RouteSubstrate(memories_status=500, memories_body={"error": "INTERNAL_ERROR"})
+    monkeypatch.setattr(auger, "db", fake)
+    base = embeddings_server()
+
+    status, _, body = json_call(base, "/api/ns/ns-broken/embeddings/search?q=x")
+    assert status == 502, body
+    assert "ns-broken" in body["error"] and "502" not in body["error"], body
+    assert "NOT an empty store" in body["error"], body
+    assert "results" not in body and "count" not in body, body
+
+
+def test_embedding_search_route_answers_a_genuinely_empty_store_with_zero(
+    embeddings_server, monkeypatch
+):
+    """The control for the case above: a real 200 with no rows IS an empty result, at 200."""
+    fake = RouteSubstrate(items=[])
+    monkeypatch.setattr(auger, "db", fake)
+    base = embeddings_server()
+
+    status, _, body = json_call(base, "/api/ns/ns-empty/embeddings/search?q=x")
+    assert status == 200, body
+    assert body["count"] == 0 and body["results"] == [], body
+    assert body["tier"] == auger.TIER_SEMANTIC, body
+
+
+def test_embedding_search_route_refuses_a_missing_or_blank_query_before_asking(
+    embeddings_server, monkeypatch
+):
+    """A search with nothing to search for is refused BY NAME, and never becomes an upstream read."""
+    fake = RouteSubstrate()
+    monkeypatch.setattr(auger, "db", fake)
+    base = embeddings_server()
+
+    for path in (
+        "/api/ns/ns-q/embeddings/search",
+        "/api/ns/ns-q/embeddings/search?q=",
+        "/api/ns/ns-q/embeddings/search?q=%20%20",
+    ):
+        status, _, body = json_call(base, path)
+        assert status == 400, (path, body)
+        assert "q is required" in body["error"], (path, body)
+        assert "results" not in body, body
+    assert fake.paths == [], fake.paths  # refused without a single request to the substrate
+
+
+def test_embedding_search_route_refuses_a_bad_limit_by_name(embeddings_server, monkeypatch):
+    """`limit` is validated, not passed through: the store clamps what it likes and says nothing."""
+    fake = RouteSubstrate()
+    monkeypatch.setattr(auger, "db", fake)
+    base = embeddings_server()
+
+    for bad in ("banana", "0", "-3", str(auger.EMBEDDINGS_MAX_LIMIT + 1), "1.5"):
+        status, _, body = json_call(base, f"/api/ns/ns-l/embeddings/search?q=x&limit={bad}")
+        assert status == 400, (bad, body)
+        assert "limit" in body["error"], (bad, body)
+    assert fake.paths == [], fake.paths
+
+    # no `limit` at all is the documented default, and the ceiling itself is served rather than refused
+    status, _, body = json_call(base, "/api/ns/ns-l/embeddings/search?q=x")
+    assert status == 200 and body["limit"] == auger.EMBEDDINGS_DEFAULT_LIMIT, body
+    status, _, body = json_call(
+        base, f"/api/ns/ns-l/embeddings/search?q=x&limit={auger.EMBEDDINGS_MAX_LIMIT}"
+    )
+    assert status == 200 and body["limit"] == auger.EMBEDDINGS_MAX_LIMIT, body
+
+
+def test_embedding_search_route_scopes_to_one_project(embeddings_server, monkeypatch):
+    """`project=` narrows the search to that project's own evidence (and sends the prefix UPSTREAM).
+
+    The scripted store ignores the prefix parameter, so what this pins is the fail-closed BACKSTOP in
+    `recall`: a hit outside the requested prefix is dropped rather than handed to a caller who asked
+    about a different project. The path assertion pins the other half — the narrowing is not done by
+    filtering a full-namespace answer after the fact.
+    """
+    fake = RouteSubstrate(
+        items=[
+            {"key": "/auger/P-A/D-001", "score": 0.9, "content": "mine"},
+            {"key": "/auger/P-B/D-007", "score": 0.8, "content": "someone else's"},
+        ]
+    )
+    monkeypatch.setattr(auger, "db", fake)
+    base = embeddings_server()
+
+    status, _, body = json_call(base, "/api/ns/ns-p/embeddings/search?q=x&project=P-A")
+    assert status == 200, body
+    assert body["project"] == "P-A", body
+    assert [r["key"] for r in body["results"]] == ["/auger/P-A/D-001"], body
+    assert body["count"] == 1, body
+    path = fake.memories_paths()[0]
+    assert "prefix=%2Fauger%2FP-A%2F" in path, path
+
+
+def test_embeddings_route_404s_an_unknown_path_and_405s_a_write(embeddings_server, monkeypatch):
+    """Discovery is part of the fix: a wrong path says what the right ones are, and GET is the only verb."""
+    fake = RouteSubstrate()
+    monkeypatch.setattr(auger, "db", fake)
+    base = embeddings_server()
+
+    status, _, body = json_call(base, "/api/ns/ns-r/embeddings")
+    assert status == 404, body
+    assert "no such route" in body["error"], body
+    assert any(
+        r.startswith("/api/ns/<namespace>/embeddings/search") for r in body["routes"]
+    ), body
+
+    status, headers, body = json_call(base, "/api/ns/ns-r/embeddings/search?q=x", "POST")
+    assert status == 405, body
+    assert headers["allow"] == "GET", headers
+    assert "GET" in body["error"], body
+    assert fake.paths == [], fake.paths
+
+
+def test_embedding_search_route_decodes_a_percent_encoded_namespace(embeddings_server, monkeypatch):
+    """A spaced namespace is DECODED once on the way in and re-encoded once on the way out (AUG-061).
+
+    Passing the raw segment through would ask the store for a namespace literally named `a%20b`,
+    which is not the namespace the caller named — and would answer "empty" for it.
+    """
+    fake = RouteSubstrate()
+    monkeypatch.setattr(auger, "db", fake)
+    base = embeddings_server()
+
+    status, _, body = json_call(base, "/api/ns/ns%20with%20space/embeddings/search?q=x")
+    assert status == 200, body
+    assert body["namespace"] == "ns with space", body
+    path = fake.memories_paths()[0]
+    assert "namespace=ns%20with%20space" in path, path
+    assert "%2520" not in path, path  # encoded ONCE, never twice
+
+
+def test_embeddings_health_route_answers_head_without_a_body(embeddings_server, monkeypatch):
+    """A monitor HEADs a health route: it gets this surface's JSON headers, not an HTML 501."""
+    monkeypatch.setattr(auger, "db", RouteSubstrate())
+    base = embeddings_server()
+
+    status, headers, raw = http_call(base, "/health", "HEAD")
+    assert status == 200, headers
+    assert raw == "", raw
+    assert headers["content-type"] == "application/json", headers
+    assert int(headers["content-length"]) > 0, headers  # the length a GET would return
+
+
+def test_the_route_alias_and_health_readout_use_the_servers_own_namespace(
+    embeddings_server, monkeypatch
+):
+    """`-n <ns> serve` is not decoration: the alias route searches THAT namespace, and /health is
+    the substrate's embedding statement as fields — including the honest `unknown` when it cannot
+    be read (which is NOT the substrate reporting a dead embedding leg)."""
+    monkeypatch.setattr(auger, "db", RouteSubstrate(items=[SEMANTIC_TIER_HIT]))
+    base = embeddings_server("ns-alias")
+
+    status, _, body = json_call(base, "/api/embeddings/search?q=how%20is%20it%20stored")
+    assert status == 200, body
+    assert body["namespace"] == "ns-alias" and body["count"] == 1, body
+
+    status, _, body = json_call(base, "/health")
+    assert status == 200, body
+    assert body["tier"] == auger.TIER_SEMANTIC and body["embedding_healthy"] is True, body
+    assert body["model"] == "qwen/qwen3-embedding-8b", body
+
+    monkeypatch.setattr(auger, "db", RouteSubstrate(health_unreachable=True))
+    status, _, body = json_call(base, "/health")
+    assert status == 200, body
+    assert body["tier"] == auger.TIER_UNKNOWN and body["embedding_healthy"] is None, body
+
+
+def test_live_embedding_search_route_finds_the_embedded_decisions(
+    decided, embeddings_server
+):
+    """The LIVE arm: the route over the real index, answering the question AUG-046 was filed for.
+
+    "What decisions are semantically similar to X?" — the answer must name the decision, not just a
+    score, and a foreign project must answer empty rather than error.
+    """
+    ns = decided["ns"]
+    base = embeddings_server(ns)
+
+    status, _, body = json_call(
+        base, f"/api/ns/{ns}/embeddings/search?q=single%20SQLite%20file&limit=5"
+    )
+    assert status == 200, body
+    assert body["namespace"] == ns, body
+    assert body["query"] == "single SQLite file", body
+    assert body["tier"] in (
+        auger.TIER_SEMANTIC,
+        auger.TIER_LEXICAL,
+        auger.TIER_UNKNOWN,
+    ), body
+    assert body["count"] >= 1, body
+    assert len(body["results"]) == body["count"], body
+    scores = [r["score"] for r in body["results"]]
+    assert all(isinstance(s, (int, float)) for s in scores), scores
+    assert scores == sorted(scores, reverse=True), scores
+    for hit in body["results"]:
+        assert hit["key"].startswith(f"/auger/{decided['pid']}/"), hit
+    # the hit is usable as a decision, and the row it names really is on the project's record
+    ids = {h["decision_id"] for h in body["results"] if h["decision_id"]}
+    assert "D-001" in ids, body
+    assert row(ns, "decision", "id=eq.D-001")["id"] == "D-001"
+
+    status, _, scoped = json_call(
+        base, f"/api/ns/{ns}/embeddings/search?q=single%20SQLite%20file&project=P-OTHER"
+    )
+    assert status == 200, scoped
+    assert scoped["count"] == 0 and scoped["results"] == [], scoped
+
+
+def test_live_serve_verb_serves_the_route_end_to_end(decided):
+    """Wiring: `auger serve` really binds a port, names it, and answers the documented route.
+
+    The offline cases prove the handler; this one proves the VERB — a route that exists in the module
+    but is not reachable from the CLI an operator runs is not shipped.
+    """
+    ns = decided["ns"]
+    proc = subprocess.Popen(
+        [sys.executable, "auger.py", "-n", ns, "serve", "--port", "0"],
+        cwd=REPO_ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        banner: list[str] = []
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            line = proc.stdout.readline()
+            if not line:
+                break
+            banner.append(line)
+            if "http://" in line and ":" in line.rsplit("http://", 1)[1].strip():
+                break
+        base = None
+        for line in banner:
+            if "http://" in line:
+                base = "http://" + line.rsplit("http://", 1)[1].strip()
+        assert base, f"serve printed no banner naming a URL: {banner!r}"
+
+        status, _, body = json_call(base, f"/api/ns/{ns}/embeddings/search?q=SQLite&limit=2")
+        assert status == 200, body
+        assert body["count"] >= 1 and body["count"] <= 2, body
+        assert any(h["decision_id"] == "D-001" for h in body["results"]), body
+
+        status, _, body = json_call(base, "/health")
+        assert status == 200, body
+        assert body["tier"] in (auger.TIER_SEMANTIC, auger.TIER_LEXICAL, auger.TIER_UNKNOWN), body
+    finally:
+        proc.terminate()
+        try:
+            proc.communicate(timeout=20)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()

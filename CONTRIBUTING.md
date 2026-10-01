@@ -6,7 +6,8 @@ the reasons the alternatives lost, and a what-if toggle.
 ## Before you open a PR
 
 - **The verbs are the API.** The public CLI surface is `init`, `start`, `bundle`, `ask`, `answer`,
-  `check`, `status`, `toggle`, `dump`, `propagate`, `feedback`, `recall`, and `verdict`. Changing
+  `check`, `status`, `toggle`, `dump`, `export`, `propagate`, `feedback`, `recall`, `serve`,
+  `verdict`, and `record`. Changing
   a verb's name or its output shape is a breaking change — say so explicitly in the PR. Adding a
   verb requires updating this contract list.
 - **Run the substrate-free pre-PR gate.** `bash tests/gate.sh` runs the syntax, lint, and tests
