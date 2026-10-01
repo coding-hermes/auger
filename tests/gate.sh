@@ -76,7 +76,10 @@ echo "== pytest =="
 # arm needs no venv beyond the system python3 the other arms already use.
 # Cases needing DuckBrain/JEV skip themselves loudly and name the reason (`-ra` prints them in
 # CI); the cases that need no live API still run, and still fail the gate when they break.
-if [ "$GATE_MODE" = "hosted-ci-skip" ]; then
+# A fresh box without pytest skips this arm loudly below instead of dying in a traceback.
+if ! python3 -c 'import pytest' 2>/dev/null; then
+  skip_arm "pytest" "pytest not importable by python3 (pip install pytest) — suite arm NOT run, NOT passed"
+elif [ "$GATE_MODE" = "hosted-ci-skip" ]; then
   skip_live_arm "pytest-live" "cases needing the live DuckBrain/JEV APIs SKIP — reasons in the summary"
   python3 -m pytest tests/test_auger.py -q -ra || exit 1
 else
