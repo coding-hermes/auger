@@ -237,6 +237,15 @@ Is this question already answered by what we hold?
 
 **Writes:** nothing. It retrieves the nearest stored evidence and makes one JEV call.
 
+**The verdict:** the model returns one `noul`; `noul >= T_ANSWERED` (0.55) answers ALREADY
+ANSWERED and below it NOT YET ANSWERED — except within `T_ANSWERED_BAND` (0.03) of the threshold,
+where the score is too noisy to decide the verdict at all (run 10 read 0.55 and then 0.53 for
+identical evidence, AUG-086). There the stored `question` rows decide instead: a settled question
+(`answered` or `linked`) whose text matches this one — case and surrounding whitespace ignored —
+reads ALREADY ANSWERED, and with no settled match it reads NOT YET ANSWERED. The line under the
+verdict names which of the two grounds decided it. A question that is still `open`, or
+`moot`/`budget_thin` (closed without ever being answered), is not a settled match.
+
 **Never writes:** anything. On a JEV failure it prints UNKNOWN and exits non-zero —
 "unknown" is never turned into "already answered" or "new". The same holds for the
 store itself (AUG-075): when the memory substrate cannot be read, `check` prints

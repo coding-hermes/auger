@@ -69,6 +69,14 @@ JEV_MODEL = "typesafe/jev-1.13"
 T_ANSWERED = (
     0.55  # noul >= this  -> the question is already answered by stored evidence
 )
+# AUG-086. A noul is a MODEL score, and the same evidence does not come back identical: run 10
+# read ALREADY ANSWERED at noul 0.55 and, three seconds later on the same question, NOT YET
+# ANSWERED at noul 0.53. No threshold on a score with that much noise can be deterministic, so
+# within this band of the threshold the score does NOT decide — the STORE does (check_verdict).
+# Outside the band the score decides, exactly as it always has.
+T_ANSWERED_BAND = (
+    0.03  # |noul - T_ANSWERED| < this -> the stored question decides, not the score
+)
 T_CONFIDENT = 0.60  # decision confidence below this is surfaced as "needs drilling"
 T_SUBJECT = (
     0.45  # choice confidence below this -> we do not trust the "next subject" pick
@@ -5075,6 +5083,87 @@ def cmd_answer(a):
     return 0
 
 
+# ---------------------------------------------------------------- AUG-086: the boundary band
+# Run 10 (docs/dogfood/2026-09-26-error-surface-integration.md): `check` on a just-closed Q-000001
+# printed ALREADY ANSWERED (noul 0.55, threshold 0.55); three seconds later the SAME question
+# printed NOT YET ANSWERED (noul 0.53, threshold 0.55). A user told "genuinely new, ask it" about a
+# question they answered a minute ago stops trusting the gate, so the verdict inside the band is
+# read off the STORE — a stored question whose text matches — and not off the score. Every input
+# to that decision is a stored row, so identical evidence gives identical verdicts.
+def question_text_key(text) -> str:
+    """The identity of a question's TEXT: case- and surrounding-whitespace-insensitive."""
+    return str(text or "").strip().casefold()
+
+
+def settled_question_with_text(ns: str, text: str) -> str:
+    """The id of a question in `ns` whose text is this one and which is SETTLED — "" for none.
+
+    SETTLED_STATES, not CLOSED_STATES: `moot` and `budget_thin` are closed without ever being
+    answered (a withdrawn question was never answered, so a blocker on it is still unresolved —
+    see `unresolved_blockers`), and neither may make `check` call a question "already answered".
+
+    The read is `select_or_empty` on purpose: a namespace whose `question` table was never
+    declared holds no settled question — "no rows here", not an error — and the direction that
+    leaves the verdict on is NOT YET ANSWERED, the same one an empty store has always given. The
+    substrate's own unreachability is already fail-closed upstream (AUG-075, `recall`).
+    """
+    want = question_text_key(text)
+    for q in select_or_empty(ns, "question", "order=id.asc"):
+        if (
+            q.get("status") in SETTLED_STATES
+            and question_text_key(q.get("text")) == want
+        ):
+            return str(q.get("id") or "")
+    return ""
+
+
+def in_answered_band(noul) -> bool:
+    """Whether a score sits too close to T_ANSWERED for the score itself to decide the verdict.
+
+    Half-open at the top (`< T_ANSWERED + T_ANSWERED_BAND`): the upper edge belongs to the score,
+    so a noul that clears the threshold by the full band is ALREADY ANSWERED without consulting
+    the store, and the band can only ever move a verdict toward the record's reading.
+    """
+    if noul is None:
+        return False
+    v = float(noul)
+    return T_ANSWERED - T_ANSWERED_BAND <= v < T_ANSWERED + T_ANSWERED_BAND
+
+
+def check_verdict(noul, settled_match: bool) -> str:
+    """`check`'s verdict for one JEV score (AUG-086).
+
+    Outside the band the SCORE decides, exactly as it did before this change. Inside it the score
+    is not a distinction the model can actually make, so the RECORD decides: `settled_match` —
+    whether a stored question with this text is settled (`settled_question_with_text`) — is the
+    whole input. Identical rows therefore give identical verdicts however the score drifts inside
+    the band, including the exactly-at-threshold tie, which reads ALREADY ANSWERED when the record
+    holds the question.
+
+    A missing score (`None`) is not a verdict at all: it is not in the band and lands on
+    NOT YET ANSWERED, the direction this verb has always taken for it.
+    """
+    v = 0.0 if noul is None else float(noul)
+    if v >= T_ANSWERED + T_ANSWERED_BAND:
+        return "ALREADY ANSWERED"
+    if v < T_ANSWERED - T_ANSWERED_BAND:
+        return "NOT YET ANSWERED"
+    return "ALREADY ANSWERED" if settled_match else "NOT YET ANSWERED"
+
+
+def check_band_note(matched_id: str) -> str:
+    """The line `check` prints under a verdict the band decided — it names what decided it."""
+    what = (
+        f"settled question {matched_id} matches this text"
+        if matched_id
+        else "no settled question matches this text"
+    )
+    return (
+        f"  inside the +/-{T_ANSWERED_BAND} band around the threshold: {what} — "
+        "the record decides here, not the score"
+    )
+
+
 def cmd_check(a):
     """Before asking: is this already answered by what we hold?
 
@@ -5085,6 +5174,10 @@ def cmd_check(a):
     AUG-092: the scores of the rows this prints are on ONE of two scales depending on
     the substrate's embedding health (see `tier_note`), so the tier is read from /health
     BEFORE the retrieval and named with the rows, whenever there are rows to attribute.
+
+    AUG-086: when the model's noul lands within `T_ANSWERED_BAND` of the threshold the score
+    cannot decide the verdict — it flipped between two checks of identical evidence — so the
+    stored `question` rows do, and the line under the verdict says so. See `check_verdict`.
     """
     ns = a.namespace
     tier = retrieval_tier()
@@ -5122,8 +5215,14 @@ def cmd_check(a):
         )
         return 1
     v = _noul(ans["answers"], "already_answered")
-    verdict = "ALREADY ANSWERED" if (v or 0) >= T_ANSWERED else "NOT YET ANSWERED"
+    band = in_answered_band(
+        v
+    )  # AUG-086: inside the band the record decides, not the score
+    matched = settled_question_with_text(ns, a.question) if band else ""
+    verdict = check_verdict(v, bool(matched))
     print(f"\n{verdict}  (noul {v}, threshold {T_ANSWERED})")
+    if band:
+        print(check_band_note(matched))
     print(f"jev cost: {ans.get('usage', {}).get('cost')}")
     return 0
 

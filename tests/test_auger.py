@@ -2084,6 +2084,145 @@ def test_check_maps_the_model_answer_to_the_threshold_verdict(ns: str, monkeypat
     assert "NOT YET ANSWERED" in out, out
 
 
+# ---------------------------------------------- AUG-086: the check verdict is deterministic
+# Run 10 (docs/dogfood/2026-09-26-error-surface-integration.md): `check` on a just-closed question
+# printed ALREADY ANSWERED (noul 0.55 = threshold 0.55) and, three seconds later on the SAME
+# question, NOT YET ANSWERED (noul 0.53). A score with that much noise cannot decide a verdict, so
+# inside `T_ANSWERED_BAND` of the threshold the stored rows decide instead.
+Q_CHECKED = "How should we store the record of files we have seen?"
+
+
+def check_stub(scores):
+    """A JEV stub answering `already_answered` with `scores` in order (the last one repeats)."""
+    remaining = list(scores)
+
+    def _stub(*a, **k):
+        value = remaining[0] if len(remaining) == 1 else remaining.pop(0)
+        return (
+            {
+                "answers": {"already_answered": {"type": "noul", "noul": value}},
+                "usage": {"cost": 1e-05},
+                "model": "stub",
+            },
+            None,
+        )
+
+    return _stub
+
+
+def test_check_verdict_band_rule_is_exact():
+    """The pure rule (AUG-086): inside the band the record decides, outside it the score does.
+
+    No service is involved, so this pins the arithmetic the two live cases below depend on:
+    which nouls are in the band, and what each combination resolves to.
+    """
+    T, B = auger.T_ANSWERED, auger.T_ANSWERED_BAND
+    # Inside the band the stored row is the whole input — including the exactly-at-threshold tie.
+    assert auger.in_answered_band(T)
+    assert auger.check_verdict(T, settled_match=True) == "ALREADY ANSWERED"
+    assert auger.check_verdict(T, settled_match=False) == "NOT YET ANSWERED"
+    # The lower edge is inside the band, the upper edge belongs to the score (half-open at the top).
+    assert auger.in_answered_band(T - B)
+    assert auger.check_verdict(T - B, settled_match=True) == "ALREADY ANSWERED"
+    assert auger.check_verdict(T + B - 0.001, settled_match=False) == "NOT YET ANSWERED"
+    assert not auger.in_answered_band(T + B)
+    assert not auger.in_answered_band(T - B - 0.001)
+    # Outside it the score decides and the record is never consulted.
+    assert auger.check_verdict(T + B, settled_match=False) == "ALREADY ANSWERED"
+    assert auger.check_verdict(T + B, settled_match=True) == "ALREADY ANSWERED"
+    assert auger.check_verdict(T - B - 0.001, settled_match=True) == "NOT YET ANSWERED"
+    assert auger.check_verdict(0.91, settled_match=False) == "ALREADY ANSWERED"
+    # A score the model never returned is not a verdict at all — the None arm of `_noul`.
+    assert not auger.in_answered_band(None)
+    assert auger.check_verdict(None, settled_match=True) == "NOT YET ANSWERED"
+
+
+def test_settled_question_with_text_reads_only_settled_rows(ns: str):
+    """The store half of the band (AUG-086): a question's STATE and its TEXT decide, not its order.
+
+    `moot` and `budget_thin` are closed without ever being answered — a withdrawn question was
+    never answered — so neither may be what makes `check` call a question already answered.
+    """
+    assert auger.settled_question_with_text(ns, Q_CHECKED) == ""  # nothing stored yet
+    store_questions(
+        ns,
+        "P-PYTEST",
+        ("Q-000001", Q_CHECKED, "moot"),
+        ("Q-000002", Q_CHECKED, "budget_thin"),
+        ("Q-000003", Q_CHECKED, "open"),
+    )
+    assert auger.settled_question_with_text(ns, Q_CHECKED) == "", (
+        "a closed-but-unanswered or still-open row is not an answer"
+    )
+    store_questions(ns, "P-PYTEST", ("Q-000004", Q_CHECKED, "linked"))
+    assert auger.settled_question_with_text(ns, Q_CHECKED) == "Q-000004"
+    # Case and surrounding whitespace are not part of a question's identity; the words are.
+    assert (
+        auger.settled_question_with_text(ns, f"  {Q_CHECKED.upper()}  ") == "Q-000004"
+    )
+    assert auger.settled_question_with_text(ns, f"{Q_CHECKED}?") == ""
+    # One row, one answer, always: the lowest settled id wins when more than one matches.
+    store_questions(ns, "P-PYTEST", ("Q-000005", Q_CHECKED, "answered"))
+    assert auger.settled_question_with_text(ns, Q_CHECKED) == "Q-000004"
+
+
+def test_check_is_deterministic_inside_the_threshold_band(decided: dict, monkeypatch):
+    """AUG-086, run 10's reproduction: answer a question, then check its text twice in a row.
+
+    The two scores that flipped the live verdict (0.55, exactly the threshold, then 0.53) are both
+    inside the band, and with the question settled in the record BOTH reads — back to back, inside
+    run 10's three-second window — say ALREADY ANSWERED and name the row that decided it.
+    """
+    ns, pid = decided["ns"], decided["pid"]
+    auger.remember(
+        ns,
+        "/probe/evidence",
+        "We chose a single SQLite file for the record of files we have seen.",
+    )
+    store_questions(ns, pid, ("Q-000001", Q_CHECKED, "answered"))
+    monkeypatch.setattr(
+        auger, "jev", check_stub([auger.T_ANSWERED, auger.T_ANSWERED - 0.02])
+    )
+    for attempt in ("first", "second"):
+        rc, out = run_cli(["-n", ns, "check", Q_CHECKED])
+        assert rc == 0, out
+        assert "ALREADY ANSWERED" in out, f"{attempt} check: {out}"
+        assert "NOT YET ANSWERED" not in out, f"{attempt} check flipped: {out}"
+        assert "Q-000001" in out, (
+            f"{attempt} check did not name the row the band decided on: {out}"
+        )
+
+
+def test_check_in_band_defers_to_the_record_when_nothing_is_settled(
+    decided: dict, monkeypatch
+):
+    """The band's other direction (AUG-086): a matching question that is still OPEN is the record
+    saying "not answered yet", so an in-band score that clears the bare threshold (0.57) still
+    reads NOT YET ANSWERED — deterministically, both times. Outside the band the score wins:
+    the control below is the same store at 0.91, which is answered before the record is read."""
+    ns, pid = decided["ns"], decided["pid"]
+    auger.remember(
+        ns,
+        "/probe/evidence",
+        "The store for the record of files we have seen is still undecided.",
+    )
+    store_questions(ns, pid, ("Q-000001", Q_CHECKED, "open"))
+    monkeypatch.setattr(
+        auger, "jev", check_stub([auger.T_ANSWERED + 0.02, auger.T_ANSWERED])
+    )
+    for attempt in ("first", "second"):
+        rc, out = run_cli(["-n", ns, "check", Q_CHECKED])
+        assert rc == 0, out
+        assert "NOT YET ANSWERED" in out, f"{attempt} check: {out}"
+        assert "ALREADY ANSWERED" not in out, f"{attempt} check: {out}"
+
+    # The control: the same open row does not hold a score that is clear of the band.
+    monkeypatch.setattr(auger, "jev", check_stub([0.91]))
+    rc, out = run_cli(["-n", ns, "check", Q_CHECKED])
+    assert rc == 0, out
+    assert "ALREADY ANSWERED" in out, out
+
+
 # ============================================================ AUG-075: recall fails closed
 # A dead substrate used to be indistinguishable from an empty store: `recall`
 # collapsed every non-200 — including `_req`'s transport contract, st == 0 with an

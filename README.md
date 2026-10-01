@@ -221,10 +221,15 @@ time (the `-n` flag every verb takes). The dogfood integration reports under
 edges below are the ones still live at this writing. Current known gaps are tracked in the
 project's public issue tracker.
 
-- **JEV scores carry model noise near thresholds.** The already-answered gate is a code constant
-  (`T_ANSWERED = 0.55` in `auger.py`), but the score under it comes from the configured judge
-  model: identical evidence graded ALREADY ANSWERED (0.55) and then NOT YET ANSWERED (0.53) three
-  seconds apart (docs/dogfood/2026-09-26-error-surface-integration.md, AUG-086).
+- **JEV scores carry model noise near thresholds; the `check` verdict does not.** The
+  already-answered gate is a code constant (`T_ANSWERED = 0.55` in `auger.py`), but the score under
+  it comes from the configured judge model: run 10 read identical evidence as ALREADY ANSWERED
+  (0.55) and then NOT YET ANSWERED (0.53) three seconds apart
+  (docs/dogfood/2026-09-26-error-surface-integration.md, AUG-086). Inside `T_ANSWERED_BAND` (0.03)
+  of the threshold the score no longer decides: `check` reads the stored `question` rows instead —
+  a settled question (`answered`/`linked`) whose text matches reads ALREADY ANSWERED whatever the
+  score drifted to, and with no settled match it reads NOT YET ANSWERED — and prints which of the
+  two decided it. Outside the band the score still decides, as it always has.
 - **A green CI run proves the offline suite, not the live loop.** The arms that need a reachable
   DuckBrain and JEV keys are skipped by name under `AUGER_CI=1`, with a visible marker instead of
   a pass (.github/workflows/ci.yml, tests/gate.sh).
