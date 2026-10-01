@@ -1406,10 +1406,16 @@ def recall(
 # label (AUG-092, so a caller never compares a bounded similarity with a raw BM25 number) and the
 # key -> row classification the store's own keys already encode (`/auger/<project>/<thing>`).
 EMBEDDINGS_SEARCH_ROUTE = re.compile(r"^/api/ns/(?P<ns>[^/]+)/embeddings/search$")
-EMBEDDINGS_ALIAS_PATH = "/api/embeddings/search"  # the same search, on the server's --namespace
-EMBEDDINGS_HEALTH_ROUTE = "/health"  # the same fact as HEALTH_PATH, on auger's own socket
+EMBEDDINGS_ALIAS_PATH = (
+    "/api/embeddings/search"  # the same search, on the server's --namespace
+)
+EMBEDDINGS_HEALTH_ROUTE = (
+    "/health"  # the same fact as HEALTH_PATH, on auger's own socket
+)
 EMBEDDINGS_DEFAULT_LIMIT = 5
-EMBEDDINGS_MAX_LIMIT = 1000  # the store's own hard page cap; a bigger `limit` is refused, not clamped
+EMBEDDINGS_MAX_LIMIT = (
+    1000  # the store's own hard page cap; a bigger `limit` is refused, not clamped
+)
 SERVE_DEFAULT_HOST = "127.0.0.1"
 SERVE_DEFAULT_PORT = 8765
 #: The route list a caller is handed when it asks for one that does not exist (and printed at boot).
@@ -1477,9 +1483,9 @@ def embedding_search(
     # score that is not a number sorts last rather than poisoning the comparison, and `sort` is stable,
     # so equal scores keep the store's own order.
     results.sort(
-        key=lambda r: r["score"]
-        if isinstance(r["score"], (int, float))
-        else float("-inf"),
+        key=lambda r: (
+            r["score"] if isinstance(r["score"], (int, float)) else float("-inf")
+        ),
         reverse=True,
     )
     return {
@@ -1505,7 +1511,9 @@ class EmbeddingsHTTPHandler(BaseHTTPRequestHandler):
     server_version = f"auger/{AUGER_VERSION}"
     protocol_version = "HTTP/1.1"
 
-    def log_message(self, fmt, *args):  # one line per request, on stderr, with the peer named
+    def log_message(
+        self, fmt, *args
+    ):  # one line per request, on stderr, with the peer named
         print(
             f"{self.address_string()} [{self.log_date_time_string()}] {fmt % args}",
             file=sys.stderr,
@@ -1515,9 +1523,13 @@ class EmbeddingsHTTPHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             self._route()
-        except SubstrateError as exc:  # precise: the store refused, in the substrate's own words
+        except (
+            SubstrateError
+        ) as exc:  # precise: the store refused, in the substrate's own words
             self._send_json(502, {"error": str(exc)})
-        except SystemExit as exc:  # auger's own fail-closed exit (no token to ask the store with)
+        except (
+            SystemExit
+        ) as exc:  # auger's own fail-closed exit (no token to ask the store with)
             self._send_json(503, {"error": str(exc) or "auger exited"})
         except Exception as exc:  # never leak a traceback into a closed socket
             self._send_json(500, {"error": f"{type(exc).__name__}: {exc}"})
@@ -1534,7 +1546,10 @@ class EmbeddingsHTTPHandler(BaseHTTPRequestHandler):
     def do_POST(self):
         self._send_json(
             405,
-            {"error": "only GET is served: this surface reads the embedding store", "allow": "GET"},
+            {
+                "error": "only GET is served: this surface reads the embedding store",
+                "allow": "GET",
+            },
             {"Allow": "GET"},
         )
 

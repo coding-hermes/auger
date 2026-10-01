@@ -27,6 +27,7 @@ import http.client
 import io
 import json
 import os
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -7813,6 +7814,36 @@ def test_a_domain_whose_row_is_gone_is_reported_absent_not_skipped(project: dict
 # read "unmeasured" as "measured high", reporting a decision nobody scored as being at or above
 # the threshold. Every case below proves the sentinel survives in the ROW and never reaches the
 # READER. Deterministic throughout: the models are stubbed, the rows are re-read from DuckBrain.
+
+#: The artifacts below carry their OWN generated-at ISO stamp, and a leak scan for the sentinel must
+#: not read that DATE as a SCORE: `2026-10-01T01:02:10+00:00` contains `-1` (the hyphen before
+#: October's `10`), which turned these scans red for a whole month of days (measured 2026-10-01 on a
+#: pristine 9d9cf19 checkout, both cases). The namespace strip below it exists for the same reason.
+ISO_STAMP = re.compile(r"\d{4}-\d{2}-\d{2}T[\d:.+]+")
+
+
+def without_stamps(text: str) -> str:
+    """The rendered artifact with its own generated-at timestamps removed, for sentinel leak scans."""
+    return ISO_STAMP.sub("<stamp>", text)
+
+
+def test_the_sentinel_scan_still_sees_a_leak_after_the_stamp_strip():
+    """The control for `without_stamps`, so the two scan fixes above are not vacuous.
+
+    A helper that swallowed every "-1" would make both cases pass on a DEFECTIVE render too — they
+    would stop testing anything. This pins both halves: the stamp goes, the leak stays.
+    """
+    rendered = "V-000001  GOOD  by human  conf -1  2026-10-01T01:02:50"
+    scanned = without_stamps(rendered)
+    assert scanned == "V-000001  GOOD  by human  conf -1  <stamp>", scanned
+    assert "-1" in scanned, (
+        scanned
+    )  # the leak survives the strip: the scan is not vacuous
+    assert "-1" not in without_stamps("2026-10-01T01:02:50"), (
+        "the stamp itself must be stripped"
+    )
+
+
 def test_confidence_sentinel_stays_in_the_store_and_never_renders(project: dict):
     """AC1/AC5: a default-confidence answer keeps -1 in the decision row, but neither its own
     echo nor `dump` ever prints the sentinel — an unmeasured confidence renders as n/a."""
@@ -7846,9 +7877,10 @@ def test_confidence_sentinel_stays_in_the_store_and_never_renders(project: dict)
     # AC1: `dump` renders the same decision as "conf n/a", never a bare -1/-1.0.
     rc, dump_out = run_cli(["-n", ns, "dump"])
     assert rc == 0, dump_out
-    # The header embeds the raw namespace name (auger-pytest-<hex>), which can itself
-    # contain "-1" (hex digit 1 after the prefix dash) — strip it before the leak scan.
-    dump_body = dump_out.replace(ns, "<ns>")
+    # The header embeds the raw namespace name (auger-pytest-<hex>) and the artifact's own
+    # generated-at stamp; both can contain "-1" (hex digit 1 after the prefix dash; the "-1" in
+    # October's "2026-10-01") — strip them before the leak scan, for the same reason.
+    dump_body = without_stamps(dump_out.replace(ns, "<ns>"))
     assert "-1" not in dump_body, dump_body
     assert "conf n/a" in dump_out, dump_out
     assert "## D-001  (4.05)  conf n/a" in dump_out, dump_out
@@ -8073,7 +8105,9 @@ def test_confidence_sentinel_renders_n_a_in_ask_seats_and_verdict_list(
     rc, out = run_cli(["-n", ns, "verdict", "--list"])
     assert rc == 0, out
     assert "conf —" in out, out
-    assert "-1" not in out, out
+    # The row carries the verdict's own generated-at timestamp, and that DATE can contain "-1"
+    # (2026-10-01): the sentinel scan reads the rendered ROW, not its stamp.
+    assert "-1" not in without_stamps(out), out
 
 
 # ================================================================= export (AUG-005)
@@ -8857,7 +8891,9 @@ def test_embedding_search_route_ranks_the_store_and_names_each_hit(
     assert body["query"] == "single SQLite file", body
     assert body["limit"] == 3
     assert body["project"] is None
-    assert body["tier"] == auger.TIER_SEMANTIC and body["embedding_healthy"] is True, body
+    assert body["tier"] == auger.TIER_SEMANTIC and body["embedding_healthy"] is True, (
+        body
+    )
     assert body["count"] == 3 and len(body["results"]) == 3, body
     assert [r["score"] for r in body["results"]] == [0.9, 0.75, 0.41], body
     assert [r["key"] for r in body["results"]] == [
@@ -8884,7 +8920,9 @@ def test_embedding_search_route_ranks_the_store_and_names_each_hit(
     assert "limit=3" in paths[0], paths[0]
 
 
-def test_embedding_search_route_labels_the_keyword_fallback(embeddings_server, monkeypatch):
+def test_embedding_search_route_labels_the_keyword_fallback(
+    embeddings_server, monkeypatch
+):
     """Criterion 4: the tier is the substrate's own `embedding.healthy`, never assumed.
 
     A degraded substrate answers the search with its keyword-only ranker, whose scores are raw BM25
@@ -8894,7 +8932,9 @@ def test_embedding_search_route_labels_the_keyword_fallback(embeddings_server, m
     monkeypatch.setattr(auger, "db", fake)
     base = embeddings_server()
 
-    status, _, body = json_call(base, "/api/ns/ns-degraded/embeddings/search?q=anything")
+    status, _, body = json_call(
+        base, "/api/ns/ns-degraded/embeddings/search?q=anything"
+    )
     assert status == 200, body
     assert body["tier"] == auger.TIER_LEXICAL, body
     assert body["embedding_healthy"] is False, body
@@ -8909,7 +8949,9 @@ def test_embedding_search_route_fails_closed_when_the_store_cannot_be_asked(
     The distinction is the whole reason `recall` raises; a route that answered `{"results": []}` here
     would tell an agent the store holds nothing similar, which is a different (and false) claim.
     """
-    fake = RouteSubstrate(memories_status=500, memories_body={"error": "INTERNAL_ERROR"})
+    fake = RouteSubstrate(
+        memories_status=500, memories_body={"error": "INTERNAL_ERROR"}
+    )
     monkeypatch.setattr(auger, "db", fake)
     base = embeddings_server()
 
@@ -8951,17 +8993,23 @@ def test_embedding_search_route_refuses_a_missing_or_blank_query_before_asking(
         assert status == 400, (path, body)
         assert "q is required" in body["error"], (path, body)
         assert "results" not in body, body
-    assert fake.paths == [], fake.paths  # refused without a single request to the substrate
+    assert fake.paths == [], (
+        fake.paths
+    )  # refused without a single request to the substrate
 
 
-def test_embedding_search_route_refuses_a_bad_limit_by_name(embeddings_server, monkeypatch):
+def test_embedding_search_route_refuses_a_bad_limit_by_name(
+    embeddings_server, monkeypatch
+):
     """`limit` is validated, not passed through: the store clamps what it likes and says nothing."""
     fake = RouteSubstrate()
     monkeypatch.setattr(auger, "db", fake)
     base = embeddings_server()
 
     for bad in ("banana", "0", "-3", str(auger.EMBEDDINGS_MAX_LIMIT + 1), "1.5"):
-        status, _, body = json_call(base, f"/api/ns/ns-l/embeddings/search?q=x&limit={bad}")
+        status, _, body = json_call(
+            base, f"/api/ns/ns-l/embeddings/search?q=x&limit={bad}"
+        )
         assert status == 400, (bad, body)
         assert "limit" in body["error"], (bad, body)
     assert fake.paths == [], fake.paths
@@ -9001,7 +9049,9 @@ def test_embedding_search_route_scopes_to_one_project(embeddings_server, monkeyp
     assert "prefix=%2Fauger%2FP-A%2F" in path, path
 
 
-def test_embeddings_route_404s_an_unknown_path_and_405s_a_write(embeddings_server, monkeypatch):
+def test_embeddings_route_404s_an_unknown_path_and_405s_a_write(
+    embeddings_server, monkeypatch
+):
     """Discovery is part of the fix: a wrong path says what the right ones are, and GET is the only verb."""
     fake = RouteSubstrate()
     monkeypatch.setattr(auger, "db", fake)
@@ -9014,14 +9064,18 @@ def test_embeddings_route_404s_an_unknown_path_and_405s_a_write(embeddings_serve
         r.startswith("/api/ns/<namespace>/embeddings/search") for r in body["routes"]
     ), body
 
-    status, headers, body = json_call(base, "/api/ns/ns-r/embeddings/search?q=x", "POST")
+    status, headers, body = json_call(
+        base, "/api/ns/ns-r/embeddings/search?q=x", "POST"
+    )
     assert status == 405, body
     assert headers["allow"] == "GET", headers
     assert "GET" in body["error"], body
     assert fake.paths == [], fake.paths
 
 
-def test_embedding_search_route_decodes_a_percent_encoded_namespace(embeddings_server, monkeypatch):
+def test_embedding_search_route_decodes_a_percent_encoded_namespace(
+    embeddings_server, monkeypatch
+):
     """A spaced namespace is DECODED once on the way in and re-encoded once on the way out (AUG-061).
 
     Passing the raw segment through would ask the store for a namespace literally named `a%20b`,
@@ -9039,7 +9093,9 @@ def test_embedding_search_route_decodes_a_percent_encoded_namespace(embeddings_s
     assert "%2520" not in path, path  # encoded ONCE, never twice
 
 
-def test_embeddings_health_route_answers_head_without_a_body(embeddings_server, monkeypatch):
+def test_embeddings_health_route_answers_head_without_a_body(
+    embeddings_server, monkeypatch
+):
     """A monitor HEADs a health route: it gets this surface's JSON headers, not an HTML 501."""
     monkeypatch.setattr(auger, "db", RouteSubstrate())
     base = embeddings_server()
@@ -9066,13 +9122,17 @@ def test_the_route_alias_and_health_readout_use_the_servers_own_namespace(
 
     status, _, body = json_call(base, "/health")
     assert status == 200, body
-    assert body["tier"] == auger.TIER_SEMANTIC and body["embedding_healthy"] is True, body
+    assert body["tier"] == auger.TIER_SEMANTIC and body["embedding_healthy"] is True, (
+        body
+    )
     assert body["model"] == "qwen/qwen3-embedding-8b", body
 
     monkeypatch.setattr(auger, "db", RouteSubstrate(health_unreachable=True))
     status, _, body = json_call(base, "/health")
     assert status == 200, body
-    assert body["tier"] == auger.TIER_UNKNOWN and body["embedding_healthy"] is None, body
+    assert body["tier"] == auger.TIER_UNKNOWN and body["embedding_healthy"] is None, (
+        body
+    )
 
 
 def test_live_embedding_search_route_finds_the_embedded_decisions(
@@ -9146,14 +9206,20 @@ def test_live_serve_verb_serves_the_route_end_to_end(decided):
                 base = "http://" + line.rsplit("http://", 1)[1].strip()
         assert base, f"serve printed no banner naming a URL: {banner!r}"
 
-        status, _, body = json_call(base, f"/api/ns/{ns}/embeddings/search?q=SQLite&limit=2")
+        status, _, body = json_call(
+            base, f"/api/ns/{ns}/embeddings/search?q=SQLite&limit=2"
+        )
         assert status == 200, body
         assert body["count"] >= 1 and body["count"] <= 2, body
         assert any(h["decision_id"] == "D-001" for h in body["results"]), body
 
         status, _, body = json_call(base, "/health")
         assert status == 200, body
-        assert body["tier"] in (auger.TIER_SEMANTIC, auger.TIER_LEXICAL, auger.TIER_UNKNOWN), body
+        assert body["tier"] in (
+            auger.TIER_SEMANTIC,
+            auger.TIER_LEXICAL,
+            auger.TIER_UNKNOWN,
+        ), body
     finally:
         proc.terminate()
         try:
