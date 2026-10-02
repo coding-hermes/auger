@@ -536,6 +536,11 @@ def test_start_with_a_seed_stores_and_embeds_exactly_once(monkeypatch):
 
     ns = "auger-worker072-unit"  # never touched: remember and insert are stubbed
     pid = "P-SEEDED"
+    # Stub the retrieval tier like the AUG-092 pair: cmd_start reads the LIVE
+    # substrate /health since 3b55f40, so an un-stubbed tier makes this unit
+    # test flake on substrate health (QA-AUGER-9). Healthy tier keeps the
+    # unconditional "+ embedded" claim this test asserts.
+    monkeypatch.setattr(auger, "db", _substrate_with_health(HEALTH_EMBEDDING_UP, []))
     monkeypatch.setattr(auger, "remember", fake_remember)
     monkeypatch.setattr(
         auger, "insert", lambda ns_, table, rows: {"table": table, "row": rows}
