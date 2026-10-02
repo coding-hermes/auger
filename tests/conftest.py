@@ -20,6 +20,7 @@ Three rules shape this file, all of them cost-places in the shell suite it repla
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import io
 import os
 import shutil
@@ -230,16 +231,123 @@ def teardown_namespace(ns: str) -> list[str]:
     return problems
 
 
+# ------------------------------------------------- the substrate lock (QA-AUGER-6)
+#: The full suite ran TWICE CONCURRENTLY on one host (a gate.sh pytest arm plus a sibling
+#: leg, loadavg 18-33) and both legs failed the SAME three live-service tests with
+#: `transport: timed out` (status 0): the 45s `auger.db` budget is mostly WAITING while
+#: ~240 sibling tests hammer the same live DuckBrain, and it is a wall-clock budget, so
+#: under fleet load a perfectly healthy substrate can miss it. Deterministic under
+#: concurrency, green solo. Two-layer fix, both here and only here:
+#:
+#: 1. CROSS-PROCESS — `substrate_lock()` takes an EXCLUSIVE `fcntl.flock` on
+#:    AUGER_TEST_LOCK (default under /tmp, overridable) for the fixture's whole
+#:    lifetime, so two concurrent pytest LEGS (separate processes) serialize and
+#:    each leg's namespace create/teardown and test bodies never interleave on the
+#:    live substrate. Blocking flock: there is no timeout kill — a leg that cannot
+#:    take the lock waits for its sibling to finish. The price of this design is
+#:    documented, not hidden: the wait is unbounded, so a leg holding the lock
+#:    while HUNG blocks its sibling until the sibling's own per-call budgets
+#:    (`auger._req`'s timeout) fire; a process never deadlocks ITSELF (the
+#:    re-entrancy rule below).
+#: 2. INTRA-LEG headroom — the fixture widens `auger.db`'s default timeout to
+#:    `SUBSTRATE_TEST_TIMEOUT_S` for every call made while a live test runs
+#:    (restored by the fixture's own teardown ordering, offline tests unaffected).
+SUBSTRATE_TEST_TIMEOUT_S = 120
+_DEFAULT_LOCK_PATH = "/tmp/auger-pytest-substrate.lock"
+
+
+def _substrate_lock_path() -> str:
+    env = os.environ.get("AUGER_TEST_LOCK", "").strip()
+    return env if env else _DEFAULT_LOCK_PATH
+
+
+#: Module-level re-entrancy state: pytest fixtures won't nest `substrate_lock`, but a leg
+#: re-acquiring it in one process must never self-block. Because `fcntl.flock()` locks ride
+#: on the open file DESCRIPTION, the fd must be the SAME one while held (a second open()
+#: creates a second description whose flock would self-deadlock on Linux). The counter is
+#: re-entrancy depth in this process; it is reset defensively in the exception path.
+_SUBSTRATE_LOCK_FD: int | None = None
+_SUBSTRATE_LOCK_DEPTH = 0
+
+
+@contextlib.contextmanager
+def substrate_lock():
+    """Exclusive cross-process lock over the live test substrate, re-entrant in-process.
+
+    Create/teardown of the ephemeral namespace and the test body both run inside it via
+    `ns_created`, so a sibling pytest process never touches DuckBrain mid-test. Blocking
+    `flock` with no timeout kill is the DELIBERATE choice (documented at the class of
+    failure this closes): a healthy-but-slow sibling is waited out, a sibling that dies
+    releases its lock with its fds, and nothing here can deadlock itself.
+    """
+    global _SUBSTRATE_LOCK_FD, _SUBSTRATE_LOCK_DEPTH
+    if _SUBSTRATE_LOCK_DEPTH > 0 and _SUBSTRATE_LOCK_FD is not None:
+        _SUBSTRATE_LOCK_DEPTH += 1
+        try:
+            yield
+        finally:
+            _SUBSTRATE_LOCK_DEPTH -= 1
+        return
+    fd = os.open(_substrate_lock_path(), os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)  # blocking: no timeout kill, by design
+        _SUBSTRATE_LOCK_FD = fd
+        _SUBSTRATE_LOCK_DEPTH = 1
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            _SUBSTRATE_LOCK_FD = None
+            _SUBSTRATE_LOCK_DEPTH = 0
+    finally:
+        os.close(fd)
+
+
+@contextlib.contextmanager
+def _test_transport_budget():
+    """Raise `auger.db`'s default timeout for the fixture's lifetime, restore after.
+
+    Restoring `__defaults__` VERBATIM (never via the module-level RETRIES) means a future
+    change to `auger.RETRIES` cannot be silently pinned by this file's teardown, and a
+    caller like `delete_namespace` that passes an EXPLICIT retries cannot have it quietly
+    dropped. No caller in this repo asserts on `db.__defaults__`.
+
+    The defaults tuple is `db`'s SIGNATURE order: (method, body, timeout, retries) — four
+    slots, the first two non-numeric. Slot-splice, never a two-tuple: assigning a shorter
+    tuple puts the budget into `method` and leaves `method`/`body` REQUIRED, which turns
+    the liveness probe's `db("/api/namespaces", timeout=...)` into a TypeError skip
+    (caught live by AC3 evidence; the substrate was healthy the whole time).
+    """
+    saved = auger.db.__defaults__
+    auger.db.__defaults__ = saved[:2] + (SUBSTRATE_TEST_TIMEOUT_S,) + saved[3:]
+    try:
+        yield
+    finally:
+        auger.db.__defaults__ = saved
+
+
 # ---------------------------------------------------------------- fixtures
 @pytest.fixture(scope="session")
 def live_service() -> str:
-    """The live DuckBrain URL. Skips (loudly) or fails; never passes silently."""
-    return require_live()
+    """The live DuckBrain URL. Skips (loudly) or fails; never passes silently.
+
+    The probe runs inside the substrate lock, so even liveness serializes across legs,
+    and inside the widened timeout budget, so the probe itself cannot be beaten by
+    sibling load. Both are scoped to the fixture: offline tests are unaffected.
+    """
+    with substrate_lock(), _test_transport_budget():
+        url = require_live()
+    yield url
 
 
 @pytest.fixture
 def ns_created(live_service: str) -> str:
-    """A fresh ephemeral namespace, removed in a finalizer even when the test fails."""
+    """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+
+    Depends on `live_service`, so the cross-process substrate lock is held for the whole
+    namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+    every call the fixture and the test make against the live substrate.
+    """
     ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
     status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
     if status not in (200, 201):

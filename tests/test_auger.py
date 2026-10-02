@@ -9371,3 +9371,75 @@ def test_live_serve_verb_serves_the_route_end_to_end(decided):
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.communicate()
+
+
+# ================================================================= the substrate lock (QA-AUGER-6)
+#: Two concurrent pytest LEGS (a gate.sh arm plus a sibling run) failed the same three
+#: live-service tests with `transport: timed out` while each passed in isolation. The fix
+#: in conftest.py serializes legs behind an flock and widens the live tests' timeout
+#: budget. These two cases prove the lock's own contract, offline and in well under 10s:
+#: re-entrancy within one process, and genuine cross-process serialization.
+SUBSTRATE_LOCK_CONTENDER = r"""
+import fcntl
+import json
+import os
+import sys
+import time
+
+path, out = sys.argv[1], sys.argv[2]
+fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+t_before = time.monotonic()
+fcntl.flock(fd, fcntl.LOCK_EX)  # BLOCKS here for as long as the holder keeps the lock
+t_acquired = time.monotonic()
+fcntl.flock(fd, fcntl.LOCK_UN)
+os.close(fd)
+with open(out, "w") as fh:
+    json.dump({"blocked_s": round(t_acquired - t_before, 3)}, fh)
+"""
+
+
+def test_substrate_lock_is_re_entrant_within_one_process():
+    """Nesting `substrate_lock` in ONE process never self-blocks or self-deadlocks.
+
+    A second `open()` would create a second open file description whose flock would
+    deadlock against the first (Linux), so the context manager must hand back the SAME
+    fd while held. The depth counter proves the nesting is counted, not ignored.
+    """
+    with conftest.substrate_lock():
+        assert conftest._SUBSTRATE_LOCK_DEPTH == 1
+        with conftest.substrate_lock():  # must return immediately, never block
+            assert conftest._SUBSTRATE_LOCK_DEPTH == 2
+        assert conftest._SUBSTRATE_LOCK_DEPTH == 1
+    assert conftest._SUBSTRATE_LOCK_DEPTH == 0
+    assert conftest._SUBSTRATE_LOCK_FD is None
+
+
+def test_substrate_lock_serializes_two_processes(tmp_path, monkeypatch):
+    """Two PROCESSES contend for the lock and serialize — the property QA-AUGER-6 needs.
+
+    The parent holds `conftest.substrate_lock()` (the real fixture path, with the lock
+    file redirected via AUGER_TEST_LOCK — the documented override) for a whole second
+    while a separate interpreter process tries to take an exclusive flock on the same
+    file. The contender must still be waiting when the second ends, must record a block
+    no shorter than the hold, and must proceed to a clean exit once the parent releases:
+    a non-blocking fallback would pass the first check and fail the other two.
+    """
+    lock_file = tmp_path / "substrate.lock"
+    contender = tmp_path / "contender.py"
+    contender.write_text(SUBSTRATE_LOCK_CONTENDER)
+    result = tmp_path / "contender.json"
+    monkeypatch.setenv("AUGER_TEST_LOCK", str(lock_file))
+
+    with conftest.substrate_lock():
+        proc = subprocess.Popen(  # noqa: S603 - fixed argv, no shell
+            [sys.executable, str(contender), str(lock_file), str(result)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        time.sleep(1.0)  # the hold: the contender must NOT get the lock inside it
+        assert proc.poll() is None, "contender took the lock while it was still held"
+    out, err = proc.communicate(timeout=10)
+    assert proc.returncode == 0, f"contender failed: {err or out}"
+    blocked_s = json.loads(result.read_text())["blocked_s"]
+    assert blocked_s >= 0.9, f"contender was not serialized (blocked only {blocked_s}s)"
