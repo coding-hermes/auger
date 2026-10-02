@@ -269,6 +269,23 @@ def _substrate_lock_path() -> str:
 _SUBSTRATE_LOCK_FD: int | None = None
 _SUBSTRATE_LOCK_DEPTH = 0
 
+#: The nested-suite inheritance contract (QA-AUGER-6 rework): `test_a_broken_verb_...`
+#: spawns a CHILD pytest whose copied conftest.py also takes `substrate_lock`, and the
+#: child's 4 tests all chain into `live_service`. Under the session-scoped hold that
+#: child would flock against its OWN PARENT's lock — parent waits on the child (a
+#: synchronous `subprocess.run`), child waits on the parent's session end: a
+#: self-deadlock that stalled three guard runs at exactly the nested-suite test
+#: (~170/284). The spawner therefore sets AUGER_TEST_LOCK_INHERITED=1 for the child,
+#: and every acquisition in that process becomes a depth count with NO flock: the
+#: nested suite runs inside the ancestor's hold, which is exactly what it is — the
+#: parent cannot touch the substrate while it waits — while sibling legs still
+#: serialize against the one real flock. A process without the flag is unaffected.
+SUBSTRATE_LOCK_INHERITED_ENV = "AUGER_TEST_LOCK_INHERITED"
+
+
+def _substrate_lock_is_inherited() -> bool:
+    return os.environ.get(SUBSTRATE_LOCK_INHERITED_ENV, "").strip() == "1"
+
 
 @contextlib.contextmanager
 def substrate_lock():
@@ -279,9 +296,16 @@ def substrate_lock():
     `flock` with no timeout kill is the DELIBERATE choice (documented at the class of
     failure this closes): a healthy-but-slow sibling is waited out, a sibling that dies
     releases its lock with its fds, and nothing here can deadlock itself.
+
+    A process launched with AUGER_TEST_LOCK_INHERITED=1 (a nested pytest suite spawned
+    by a test of a session that already holds the lock) never flocks at all: its
+    acquisitions are depth counts under the ancestor's hold. See the constant's comment
+    for why that is correct rather than a bypass.
     """
     global _SUBSTRATE_LOCK_FD, _SUBSTRATE_LOCK_DEPTH
-    if _SUBSTRATE_LOCK_DEPTH > 0 and _SUBSTRATE_LOCK_FD is not None:
+    if _substrate_lock_is_inherited() or (
+        _SUBSTRATE_LOCK_DEPTH > 0 and _SUBSTRATE_LOCK_FD is not None
+    ):
         _SUBSTRATE_LOCK_DEPTH += 1
         try:
             yield
@@ -331,13 +355,20 @@ def _test_transport_budget():
 def live_service() -> str:
     """The live DuckBrain URL. Skips (loudly) or fails; never passes silently.
 
-    The probe runs inside the substrate lock, so even liveness serializes across legs,
-    and inside the widened timeout budget, so the probe itself cannot be beaten by
-    sibling load. Both are scoped to the fixture: offline tests are unaffected.
+    Both the probe and the WHOLE session live on the substrate run inside the substrate
+    lock and the widened timeout budget: the `yield` sits INSIDE the `with`-block, and
+    because the fixture is session-scoped the lock is taken at the first live test's
+    setup and released only at session finalization. Every live test body, every
+    namespace create/teardown, and every API call they make therefore serializes
+    cross-process against a sibling pytest leg; in-process re-entry (the probe's own
+    helpers, a nested acquisition) never self-blocks because the lock is re-entrant on
+    one fd. The hold is deliberately coarse — one session-long critical section per leg
+    rather than per-test — and it applies only to tests that depend on `live_service`;
+    offline tests are unaffected.
     """
     with substrate_lock(), _test_transport_budget():
         url = require_live()
-    yield url
+        yield url
 
 
 @pytest.fixture
