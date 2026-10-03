@@ -1,0 +1,112 @@
+{
+  "task_id": "AUG-080",
+  "task_title": "namespace-leak audit false-positives on teardown race",
+  "task_criteria": [
+    "offline tests pass; audit still fails on persisting registry row; py_compile clean"
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "aug-080",
+  "commit": "7038e196e81e236316f429c3fc237ec14c0b1672",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": false,
+      "any_failed": true,
+      "summary": "  \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2717 tests: == syntax ==",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260930T141849.452450Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: scanners=gitleaks+builtin cross-check\n9:20AM INF scanned ~1079746 bytes (1.08 MB) in 712ms\n9:20AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 54 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260930T141849.452450Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": false,
+          "output": "== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n..........Terminated                 python3 -m pytest tests/test_auger.py -q\n",
+          "error": "",
+          "data": {
+            "exit_code": 1,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20260930T141849.452450Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": false,
+      "any_failed": true,
+      "summary": "INCOMPLETE\n  \u2717 offline tests pass; audit still fails on persisting registry row; py_compile clean: Criterion: \"offline tests pass; audit still fails on persisting registry row; py_compile clean\"\n\nEVIDENCE:\n1. py_compile clean: `python3 -m py_compile auger.py tests/conftest.py tests/test_auger.py` -> exit 0. ruff check -> \"All checks passed!\" exit 0.\n2. Offline tests pass: `pytest -k \"leftover or lag_budget or persists or stale_listing or backoff\"` -> 4 passed in 0.06s.\n   `pytest -k \"teardown or 429 or survives or saturated or limiter\"` -> 8 passed in 12.99s.\n   Total 12 offline tests green.\n3. Audit still fails on persisting registry row: tests/test_auger.py:5704 test_a_persistently_listed_leftover_namespace_still_fails_the_audit asserts found == {\"api\": [ns], \"disk\": []} (the persisting row IS reported as a leak). Passed.\n   Implementation: tests/conftest.py:176 `api = [n for n in api if n in disk or not _registry_lag_recheck(n)]` \u2014 a name still listed after the bounded re-check window stays in the api leak list.\n   _registry_lag_recheck (conftest.py:128-144) re-lists up to LAG_RECHECKS=3 times with LAG_RECHECK_BACKOFF_S=2.0s; returns False (persists) after the window.\n4. Change scope: commit 7038e19 touches only tests/conftest.py (+42) and tests/test_auger.py (+107).\n\nFull live suite still running in background (long, ~2400s worst case).\nPartial verdict \u2014 evaluation hit resource cap before all criteria verified",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": false,
+          "output": "INCOMPLETE\n  \u2717 offline tests pass; audit still fails on persisting registry row; py_compile clean: Criterion: \"offline tests pass; audit still fails on persisting registry row; py_compile clean\"\n\nEVIDENCE:\n1. py_compile clean: `python3 -m py_compile auger.py tests/conftest.py tests/test_auger.py` -> exit 0. ruff check -> \"All checks passed!\" exit 0.\n2. Offline tests pass: `pytest -k \"leftover or lag_budget or persists or stale_listing or backoff\"` -> 4 passed in 0.06s.\n   `pytest -k \"teardown or 429 or survives or saturated or limiter\"` -> 8 passed in 12.99s.\n   Total 12 offline tests green.\n3. Audit still fails on persisting registry row: tests/test_auger.py:5704 test_a_persistently_listed_leftover_namespace_still_fails_the_audit asserts found == {\"api\": [ns], \"disk\": []} (the persisting row IS reported as a leak). Passed.\n   Implementation: tests/conftest.py:176 `api = [n for n in api if n in disk or not _registry_lag_recheck(n)]` \u2014 a name still listed after the bounded re-check window stays in the api leak list.\n   _registry_lag_recheck (conftest.py:128-144) re-lists up to LAG_RECHECKS=3 times with LAG_RECHECK_BACKOFF_S=2.0s; returns False (persists) after the window.\n4. Change scope: commit 7038e19 touches only tests/conftest.py (+42) and tests/test_auger.py (+107).\n\nFull live suite still running in background (long, ~2400s worst case).\nPartial verdict \u2014 evaluation hit resource cap before all criteria verified",
+          "error": "",
+          "data": {
+            "verdict": "INCOMPLETE",
+            "items": [
+              {
+                "criterion": "offline tests pass; audit still fails on persisting registry row; py_compile clean",
+                "status": "FAIL",
+                "detail": "Criterion: \"offline tests pass; audit still fails on persisting registry row; py_compile clean\"\n\nEVIDENCE:\n1. py_compile clean: `python3 -m py_compile auger.py tests/conftest.py tests/test_auger.py` -> exit 0. ruff check -> \"All checks passed!\" exit 0.\n2. Offline tests pass: `pytest -k \"leftover or lag_budget or persists or stale_listing or backoff\"` -> 4 passed in 0.06s.\n   `pytest -k \"teardown or 429 or survives or saturated or limiter\"` -> 8 passed in 12.99s.\n   Total 12 offline tests green.\n3. Audit still fails on persisting registry row: tests/test_auger.py:5704 test_a_persistently_listed_leftover_namespace_still_fails_the_audit asserts found == {\"api\": [ns], \"disk\": []} (the persisting row IS reported as a leak). Passed.\n   Implementation: tests/conftest.py:176 `api = [n for n in api if n in disk or not _registry_lag_recheck(n)]` \u2014 a name still listed after the bounded re-check window stays in the api leak list.\n   _registry_lag_recheck (conftest.py:128-144) re-lists up to LAG_RECHECKS=3 times with LAG_RECHECK_BACKOFF_S=2.0s; returns False (persists) after the window.\n4. Change scope: commit 7038e19 touches only tests/conftest.py (+42) and tests/test_auger.py (+107).\n\nFull live suite still running in background (long, ~2400s worst case)."
+              }
+            ],
+            "summary": "Partial verdict \u2014 evaluation hit resource cap before all criteria verified"
+          }
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: AUG-080\n\nStage tier1: FAIL\n    \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2717 tests: == syntax ==\n\nStage tier2: FAIL\n  INCOMPLETE\n  \u2717 offline tests pass; audit still fails on persisting registry row; py_compile clean: Criterion: \"offline tests pass; audit still fails on persisting registry row; py_compile clean\"\n\nEVIDENCE:\n1. py_compile clean: `python3 -m py_compile auger.py tests/conftest.py tests/test_auger.py` -> exit 0. ruff check -> \"All checks passed!\" exit 0.\n2. Offline tests pass: `pytest -k \"leftover or lag_budget or persists or stale_listing or backoff\"` -> 4 passed in 0.06s.\n   `pytest -k \"teardown or 429 or survives or saturated or limiter\"` -> 8 passed in 12.99s.\n   Total 12 offline tests green.\n3. Audit still fails on persisting registry row: tests/test_auger.py:5704 test_a_persistently_listed_leftover_namespace_still_fails_the_audit asserts found == {\"api\": [ns], \"disk\": []} (the persisting row IS reported as a leak). Passed.\n   Implementation: tests/conftest.py:176 `api = [n for n in api if n in disk or not _registry_lag_recheck(n)]` \u2014 a name still listed after the bounded re-check window stays in the api leak list.\n   _registry_lag_recheck (conftest.py:128-144) re-lists up to LAG_RECHECKS=3 times with LAG_RECHECK_BACKOFF_S=2.0s; returns False (persists) after the window.\n4. Change scope: commit 7038e19 touches only tests/conftest.py (+42) and tests/test_auger.py (+107).\n\nFull live suite still running in background (long, ~2400s worst case).\nPartial verdict \u2014 evaluation hit resource cap before all criteria verified\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-09-30T15:33:57.272207",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-09-30T15:33:57.395073+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 12114,
+        "truncated": false,
+        "source": "git show 7038e196e81e"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 262176,
+        "truncated": true,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-080"
+  }
+}

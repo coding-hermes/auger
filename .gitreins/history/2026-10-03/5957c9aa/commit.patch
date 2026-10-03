@@ -1,0 +1,69 @@
+commit aa7e1cf859512e5c865adc4b8483c9a70c17a869
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Fri Oct 2 19:53:03 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Fri Oct 2 19:53:03 2026 -0500
+
+    docs(readme): document DUCKBRAIN_CONFIG_PATH substrate isolation (AUG-090)
+    
+    DUCKBRAIN_DATA_DIR + DUCKBRAIN_NAMESPACES_PATH alone do not isolate a
+    second substrate on a shared host: the namespace registry is the shared
+    surface, so /api/namespaces still lists the co-located production
+    namespaces and scratch writes can look like production writes. The
+    Substrate pin section now shows the full escape hatch — a scratch config
+    file with its own namespaceMappings via DUCKBRAIN_CONFIG_PATH (env-only,
+    same convention as DUCKBRAIN_NAMESPACES_PATH) — and the post-boot
+    isolation check. The known-gaps bullet now names the registry as the
+    shared surface and points to that section.
+    
+    Addresses AUG-090
+    
+    ch:trace row=AUG-090 spec=README.md#substrate-pin test=none:docs-only-no-test-surface evidence=.gitreins/history/<tier1>/verdict.json witness=live:manual-verification-of-env-override-behavior commit=<this>
+    
+    Co-authored-by: totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+---
+ README.md | 24 +++++++++++++++++++++++-
+ 1 file changed, 23 insertions(+), 1 deletion(-)
+
+diff --git a/README.md b/README.md
+index a477411..c308143 100644
+--- a/README.md
++++ b/README.md
+@@ -50,6 +50,26 @@ mkdir -p ~/dd-data
+ DUCKBRAIN_DATA_DIR=~/dd-data node bin/duckbrain.js http
+ ```
+ 
++**On a box that already runs a production DuckBrain, data-dir env alone does not isolate a
++second instance.** The namespace registry is the shared surface: the `/api/namespaces` census
++is the union of `namespaceMappings` in `duckbrain.config.json` plus the on-disk scan, so
++pointing `DUCKBRAIN_DATA_DIR` and `DUCKBRAIN_NAMESPACES_PATH` at a scratch dir still lists the
++co-located production namespaces (review-lane finding AUG-090). Writes do land in the scratch
++data dir, but the namespace list is wrong, which can mislead you into thinking scratch writes
++reached production. Isolate the config too:
++
++```bash
++mkdir -p ~/dd-scratch
++printf '{"namespaceMappings": {}, "namespacesPath": "~/dd-scratch/namespaces"}' > ~/dd-scratch/config.json
++DUCKBRAIN_DATA_DIR=~/dd-scratch \
++DUCKBRAIN_CONFIG_PATH=~/dd-scratch/config.json \
++node bin/duckbrain.js http
++```
++
++`DUCKBRAIN_CONFIG_PATH` is an env-only runtime override (same pattern as
++`DUCKBRAIN_NAMESPACES_PATH`): it is read at boot and never written back into the config file.
++After boot, confirm isolation by checking that `/api/namespaces` on the new instance is empty.
++
+ ## The loop
+ 
+ ```
+@@ -235,7 +255,9 @@ project's public issue tracker.
+   a pass (.github/workflows/ci.yml, tests/gate.sh).
+ - **A second substrate on a shared host is not isolated by data-dir env alone.** With
+   `DUCKBRAIN_DATA_DIR` + `DUCKBRAIN_NAMESPACES_PATH` pointed at a scratch dir, the instance still
+-  lists a co-located production DuckBrain's namespaces (review-lane finding AUG-090).
++  lists a co-located production DuckBrain's namespaces (review-lane finding AUG-090) — the
++  namespace registry is the shared surface. See the *Substrate pin* section for the
++  `DUCKBRAIN_CONFIG_PATH` escape hatch that isolates the config as well.
+ - **Bundle membership is validated against a fleet scheduler DB.** `bundle member` checks the
+   project against a read-only `projects` table (docs/VERBS.md, section *bundle*); on a standalone
+   box membership needs the documented `AUGER_ALLOW_SCRATCH_MEMBERS=1` escape, and membership

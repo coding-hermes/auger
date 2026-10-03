@@ -1,0 +1,112 @@
+{
+  "task_id": "QA-AUGER-6",
+  "task_title": "Live-service tests fail under full-suite concurrent load: serialize substrate access",
+  "task_criteria": [
+    "conftest.py gains a stdlib-only cross-process serialization mechanism (fcntl.flock) so two concurrent pytest legs never hit the live DuckBrain substrate simultaneously; a regression test proves mutual exclusion; the 3 previously failing tests (test_recall_cli_scopes_semantic_hits_to_the_selected_project, test_ask_stores_a_different_question_after_answer_closes_the_first, test_ask_stores_nothing_when_jev_is_unreachable) pass in isolation at HEAD; no non-stdlib imports; no changes outside tests/."
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "0ddeeeb87b945330476c0aff932092433a963582",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261002T130339.430710Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: scanners=gitleaks+builtin cross-check\n8:10AM INF scanned ~1151473 bytes (1.15 MB) in 761ms\n8:10AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 54 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261002T130339.430710Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [ 25%]\n........................................................................ [ 50%]\n........................................................................ [ 76%]\n.................................................s.................      [100%]\n282 passed, 1 skipped in 966.27s (0:16:06)\n== end-to-end smoke ==\nnamespace: auger-smoke-2608842\nnamespace sweep: no stale auger-smoke-*/auger-eval-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n  PASS toggle changed the stored configuration\n== verdict: record + list round-trip ==\n  PASS a good verdict is recorded\n  PASS a bad verdict is recorded\n  PASS the good verdict shows in the list\n  PASS the bad verdict's reasons show in the list\n  PASS both --good and --bad refuse\n  PASS the refused pair wrote nothing\n\nnamespace auger-smoke-2608842 removed\npassed 21, failed 0\n== docs check ==\nPASS: README claims match code \u2014 fences ok (8/12 bash-labeled parse under bash -n; 4 live-service parsed only \u2014 never executed), loop verbs ok (14 listed, 16 shipped), VERBS.md registry ok, tally ok (14 tables), 5 env/path refs ok\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261002T130339.430710Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": false,
+      "any_failed": true,
+      "summary": "INCOMPLETE\n  \u2717 conftest.py gains a stdlib-only cross-process serialization mechanism (fcntl.flock) so two concurrent pytest legs never hit the live DuckBrain substrate simultaneously; a regression test proves mutual exclusion; the 3 previously failing tests (test_recall_cli_scopes_semantic_hits_to_the_selected_project, test_ask_stores_a_different_question_after_answer_closes_the_first, test_ask_stores_nothing_when_jev_is_unreachable) pass in isolation at HEAD; no non-stdlib imports; no changes outside tests/.: The lock does NOT cover substrate access, so the criterion's central requirement ('two concurrent pytest legs never hit the live DuckBrain substrate simultaneously') is unmet. conftest.py:331-340 defines live_service as `with substrate_lock(), _test_transport_budget(): url = require_live()` then `yield url` OUTSIDE the with-block, so the flock is released before the fixture yields. ns_created (conftest.py:344) depends on live_service but runs namespace create, the test body, and teardown with NO lock held. substrate_lock is referenced only at conftest.py:338 (liveness probe only) and in the two regression tests; there is no autouse fixture. Empirically verified: (a) after the fixture yields, _SUBSTRATE_LOCK_FD is None / depth 0; (b) two concurrent processes emulating the fixture path both reached the 'test body' with lock_held_in_body=False at t=1790947750.464 and t=1790947750.465 (1ms apart) \u2014 not serialized. The docstring at conftest.py:347 falsely claims 'the cross-process substrate lock is held for the whole namespace lifecycle (create, test body, teardown)'. The regression test test_substrate_lock_serializes_two_processes (test_auger.py:9417) proves the lock PRIMITIVE works (2 passed in 1.05s) but calls conftest.substrate_lock() directly, not through live_service, so it does not prove the fixture path holds the lock during substrate access. Sub-requirements that DO pass: stdlib-only fcntl.flock mechanism present (conftest.py:274-303); the 3 named tests pass in isolation at HEAD (pytest -k '...' => '3 passed, 280 deselected in 30.31s'); no non-stdlib imports (AST check: conftest.py imports only contextlib/fcntl/io/os/pathlib/shutil/sys/time/uuid + pytest + local auger); no changes outside tests/ (commit 0ddeeeb touches only tests/conftest.py and tests/test_auger.py).\n",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": false,
+          "output": "INCOMPLETE\n  \u2717 conftest.py gains a stdlib-only cross-process serialization mechanism (fcntl.flock) so two concurrent pytest legs never hit the live DuckBrain substrate simultaneously; a regression test proves mutual exclusion; the 3 previously failing tests (test_recall_cli_scopes_semantic_hits_to_the_selected_project, test_ask_stores_a_different_question_after_answer_closes_the_first, test_ask_stores_nothing_when_jev_is_unreachable) pass in isolation at HEAD; no non-stdlib imports; no changes outside tests/.: The lock does NOT cover substrate access, so the criterion's central requirement ('two concurrent pytest legs never hit the live DuckBrain substrate simultaneously') is unmet. conftest.py:331-340 defines live_service as `with substrate_lock(), _test_transport_budget(): url = require_live()` then `yield url` OUTSIDE the with-block, so the flock is released before the fixture yields. ns_created (conftest.py:344) depends on live_service but runs namespace create, the test body, and teardown with NO lock held. substrate_lock is referenced only at conftest.py:338 (liveness probe only) and in the two regression tests; there is no autouse fixture. Empirically verified: (a) after the fixture yields, _SUBSTRATE_LOCK_FD is None / depth 0; (b) two concurrent processes emulating the fixture path both reached the 'test body' with lock_held_in_body=False at t=1790947750.464 and t=1790947750.465 (1ms apart) \u2014 not serialized. The docstring at conftest.py:347 falsely claims 'the cross-process substrate lock is held for the whole namespace lifecycle (create, test body, teardown)'. The regression test test_substrate_lock_serializes_two_processes (test_auger.py:9417) proves the lock PRIMITIVE works (2 passed in 1.05s) but calls conftest.substrate_lock() directly, not through live_service, so it does not prove the fixture path holds the lock during substrate access. Sub-requirements that DO pass: stdlib-only fcntl.flock mechanism present (conftest.py:274-303); the 3 named tests pass in isolation at HEAD (pytest -k '...' => '3 passed, 280 deselected in 30.31s'); no non-stdlib imports (AST check: conftest.py imports only contextlib/fcntl/io/os/pathlib/shutil/sys/time/uuid + pytest + local auger); no changes outside tests/ (commit 0ddeeeb touches only tests/conftest.py and tests/test_auger.py).\n",
+          "error": "",
+          "data": {
+            "verdict": "INCOMPLETE",
+            "items": [
+              {
+                "criterion": "conftest.py gains a stdlib-only cross-process serialization mechanism (fcntl.flock) so two concurrent pytest legs never hit the live DuckBrain substrate simultaneously; a regression test proves mutual exclusion; the 3 previously failing tests (test_recall_cli_scopes_semantic_hits_to_the_selected_project, test_ask_stores_a_different_question_after_answer_closes_the_first, test_ask_stores_nothing_when_jev_is_unreachable) pass in isolation at HEAD; no non-stdlib imports; no changes outside tests/.",
+                "status": "FAIL",
+                "detail": "The lock does NOT cover substrate access, so the criterion's central requirement ('two concurrent pytest legs never hit the live DuckBrain substrate simultaneously') is unmet. conftest.py:331-340 defines live_service as `with substrate_lock(), _test_transport_budget(): url = require_live()` then `yield url` OUTSIDE the with-block, so the flock is released before the fixture yields. ns_created (conftest.py:344) depends on live_service but runs namespace create, the test body, and teardown with NO lock held. substrate_lock is referenced only at conftest.py:338 (liveness probe only) and in the two regression tests; there is no autouse fixture. Empirically verified: (a) after the fixture yields, _SUBSTRATE_LOCK_FD is None / depth 0; (b) two concurrent processes emulating the fixture path both reached the 'test body' with lock_held_in_body=False at t=1790947750.464 and t=1790947750.465 (1ms apart) \u2014 not serialized. The docstring at conftest.py:347 falsely claims 'the cross-process substrate lock is held for the whole namespace lifecycle (create, test body, teardown)'. The regression test test_substrate_lock_serializes_two_processes (test_auger.py:9417) proves the lock PRIMITIVE works (2 passed in 1.05s) but calls conftest.substrate_lock() directly, not through live_service, so it does not prove the fixture path holds the lock during substrate access. Sub-requirements that DO pass: stdlib-only fcntl.flock mechanism present (conftest.py:274-303); the 3 named tests pass in isolation at HEAD (pytest -k '...' => '3 passed, 280 deselected in 30.31s'); no non-stdlib imports (AST check: conftest.py imports only contextlib/fcntl/io/os/pathlib/shutil/sys/time/uuid + pytest + local auger); no changes outside tests/ (commit 0ddeeeb touches only tests/conftest.py and tests/test_auger.py)."
+              }
+            ],
+            "summary": ""
+          }
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: QA-AUGER-6\n\nStage tier1: PASS\n    \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==\n\nStage tier2: FAIL\n  INCOMPLETE\n  \u2717 conftest.py gains a stdlib-only cross-process serialization mechanism (fcntl.flock) so two concurrent pytest legs never hit the live DuckBrain substrate simultaneously; a regression test proves mutual exclusion; the 3 previously failing tests (test_recall_cli_scopes_semantic_hits_to_the_selected_project, test_ask_stores_a_different_question_after_answer_closes_the_first, test_ask_stores_nothing_when_jev_is_unreachable) pass in isolation at HEAD; no non-stdlib imports; no changes outside tests/.: The lock does NOT cover substrate access, so the criterion's central requirement ('two concurrent pytest legs never hit the live DuckBrain substrate simultaneously') is unmet. conftest.py:331-340 defines live_service as `with substrate_lock(), _test_transport_budget(): url = require_live()` then `yield url` OUTSIDE the with-block, so the flock is released before the fixture yields. ns_created (conftest.py:344) depends on live_service but runs namespace create, the test body, and teardown with NO lock held. substrate_lock is referenced only at conftest.py:338 (liveness probe only) and in the two regression tests; there is no autouse fixture. Empirically verified: (a) after the fixture yields, _SUBSTRATE_LOCK_FD is None / depth 0; (b) two concurrent processes emulating the fixture path both reached the 'test body' with lock_held_in_body=False at t=1790947750.464 and t=1790947750.465 (1ms apart) \u2014 not serialized. The docstring at conftest.py:347 falsely claims 'the cross-process substrate lock is held for the whole namespace lifecycle (create, test body, teardown)'. The regression test test_substrate_lock_serializes_two_processes (test_auger.py:9417) proves the lock PRIMITIVE works (2 passed in 1.05s) but calls conftest.substrate_lock() directly, not through live_service, so it does not prove the fixture path holds the lock during substrate access. Sub-requirements that DO pass: stdlib-only fcntl.flock mechanism present (conftest.py:274-303); the 3 named tests pass in isolation at HEAD (pytest -k '...' => '3 passed, 280 deselected in 30.31s'); no non-stdlib imports (AST check: conftest.py imports only contextlib/fcntl/io/os/pathlib/shutil/sys/time/uuid + pytest + local auger); no changes outside tests/ (commit 0ddeeeb touches only tests/conftest.py and tests/test_auger.py).\n\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-10-02T13:29:18.065700",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-10-02T13:29:18.090279+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 11012,
+        "truncated": false,
+        "source": "git show 0ddeeeb87b94"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 1071,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "QA-AUGER-6"
+  }
+}
