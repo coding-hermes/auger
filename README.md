@@ -138,9 +138,23 @@ grid's shape is exact — one `4.NN-<slug>.md` file per domain (`4.05-data.md`; 
 the number and the name), all 44 of `4.01`–`4.44` and nothing else; anything short of that is
 refused by name rather than seeded partially.
 
-Requirements: a running DuckBrain on `127.0.0.1:3000` (`~/duckbrain`, `node bin/duckbrain.js http`)
-with authentication set up (see below), and an OpenRouter key in `~/.hermes/.env`
-for JEV. Python 3, standard library only — no dependencies.
+Requirements: a running DuckBrain (see below) with authentication set up, and an
+OpenRouter key in `~/.hermes/.env` for JEV. Python 3, standard library only — no
+dependencies.
+
+**Substrate port on shared hosts.** The daemon's default address is
+`127.0.0.1:3000` (`node bin/duckbrain.js http`), and auger reads `DUCKBRAIN_URL`
+(env, default `http://127.0.0.1:3000`). On a box where several people (or agents)
+run DuckBrain, that fixed port collides: your boot can lose the race or lose it
+silently, and the requests meant for your instance get answered by *someone
+else's* daemon — you see another agent's namespaces and wrong-looking 500s. So on
+any multi-user box, boot on a port you verified free and point auger at it:
+
+```bash
+ss -tlnp | grep :3987        # must print nothing before you boot on it
+node bin/duckbrain.js http --port 3987
+export AUGER_DUCKBRAIN_URL=http://127.0.0.1:3987
+```
 
 **Authentication.** auger checks `DUCKBRAIN_API_KEY` first; if unset it falls back to
 token files in order: `~/.duckbrain/foreman-status.token`, then `~/.duckbrain/token`.
