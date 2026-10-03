@@ -1,0 +1,112 @@
+{
+  "task_id": "AUG-060",
+  "task_title": "README Substrate pin: shared-host port safety (non-default port + free check)",
+  "task_criteria": [
+    "README.md Substrate pin gives the boot line a non-default port for shared hosts with the WHY (fixed 127.0.0.1:3000 collides on multi-user boxes and a stranger's daemon answers), a port-free check line, and AUGER_DUCKBRAIN_URL pinning guidance; docs_check still passes"
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "aa857474b350342725afe77dc665e33fb933725e",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": false,
+      "any_failed": true,
+      "summary": "  \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2717 tests: FAIL (tests/test_auger.py::test_no_test_namespace_survives_the_suite [first failing id])",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261003T084347.298112Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: scanners=gitleaks+builtin cross-check\n3:44AM INF scanned ~1168101 bytes (1.17 MB) in 594ms\n3:44AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 54 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261003T084347.298112Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": false,
+          "output": "== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n....................E................................................... [ 24%]\n........................................................................ [ 50%]\n...........................................F............................ [ 75%]\n..................................................s...................   [100%]\n==================================== ERRORS ====================================\n___ ERROR at teardown of test_answer_retry_with_changed_arguments_is_refused ___\n\nlive_service = 'http://127.0.0.1:3000'\n\n    @pytest.fixture\n    def ns_created(live_service: str) -> str:\n        \"\"\"A fresh ephemeral namespace, removed in a finalizer even when the test fails.\n    \n        Depends on `live_service`, so the cross-process substrate lock is held for the whole\n        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to\n        every call the fixture and the test make against the live substrate.\n        \"\"\"\n        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]\n        status, body, _ = auger.db(\"/api/namespaces\", \"POST\", {\"name\": ns})\n        if status not in (200, 201):\n            pytest.fail(f\"could not create test namespace {ns} ({status}): {body}\")\n        CREATED.append(ns)\n        try:\n            yield ns\n        finally:\n            problems = teardown_namespace(ns)\n            if problems:\n                if any(\"429\" in p for p in problems):\n                    # The limiter beat even the transport's own budget on this one namespace.\n                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note \u2014 a\n                    # saturated limiter must not error a passing test, and the leak is stated,\n                    # never silent.\n                    time.sleep(1)\n                    problems = teardown_namespace(ns)\n                    if not problems:\n                        return\n                    print(\n                        f\"auger: teardown of {ns} skipped after one 429 retry: \"\n                        + \"; \".join(problems),\n                        file=sys.stderr,\n                    )\n                else:\n                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.\n\n\u2026 [681 chars omitted \u2014 6 line(s)] \u2026\n\nlive_service = 'http://127.0.0.1:3000'\n\n    def test_no_test_namespace_survives_the_suite(live_service: str):\n        \"\"\"The leak audit. It runs in the gate, so a leaked namespace fails the gate, not a reader.\n    \n        Scoped to the namespaces THIS session created: another process can be running\n        the same suite concurrently in the same workdir (a gitreins judge re-runs it),\n        and its live in-flight namespace is not a leak of this run. The audit still\n        fails the gate for a real leak \u2014 it just cannot be fooled by a sibling's\n        correctly-managed one.\n        \"\"\"\n        found = leftovers(scope=CREATED)\n>       assert found == {\"api\": [], \"disk\": []}, (\n            f\"test namespaces were left behind: {found} (prefix {TEST_NS_PREFIX!r})\"\n        )\nE       AssertionError: test namespaces were left behind: {'api': ['auger-pytest-ac5ec2a5a333'], 'disk': []} (prefix 'auger-pytest-')\nE       assert {'api': ['aug...], 'disk': []} == {'api': [], 'disk': []}\nE         \nE         Omitting 1 identical items, use -vv to show\nE         Differing items:\nE         {'api': ['auger-pytest-ac5ec2a5a333']} != {'api': []}\nE         Use -v to get more diff\n\ntests/test_auger.py:5574: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_auger.py::test_no_test_namespace_survives_the_suite - Asser...\nERROR tests/test_auger.py::test_answer_retry_with_changed_arguments_is_refused\n1 failed, 283 passed, 1 skipped, 1 error in 2380.55s (0:39:40)\n",
+          "error": "",
+          "data": {
+            "exit_code": 1,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261003T084347.298112Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 README.md Substrate pin gives the boot line a non-default port for shared hosts with the WHY (fixed 127.0.0.1:3000 collides on multi-user boxes and a stranger's daemon answers), a port-free check line, and AUGER_DUCKBRAIN_URL pinning guidance; docs_check still passes: README.md:145-156 'Substrate port on shared hosts' block: WHY present (lines 148-150: 'that fixed port collides... the requests meant for your instance get answered by *someone else's* daemon'); non-default boot line README.md:155 'node bin/duckbrain.js http --port 3987'; port-free check README.md:154 'ss -tlnp | grep :3987  # must print nothing before you boot on it'; pinning guidance README.md:156 'export DUCKBRAIN_URL=http://127.0.0.1:3987'. Note: the criterion names AUGER_DUCKBRAIN_URL, but that var is read by nothing (grep finds it nowhere in README/docs/auger.py); auger.py:64 reads DUCKBRAIN_URL, so the rework commit aa85747 deliberately corrected the export to the functional var \u2014 the pinning guidance is present and actually pins auger to the verified-free port, satisfying the criterion's intent. docs_check verified fresh: `bash tests/docs_check.sh` exit_code=0, output 'PASS: README claims match code \u2014 fences ok (10/14 bash-labeled parse under bash -n; 6 live-service parsed only \u2014 never executed), loop verbs ok (14 listed, 16 shipped), VERBS.md registry ok, tally ok (14 tables), 5 env/path refs ok'.\nREADME Substrate pin documents the shared-host non-default port (3987) with the collision WHY, an ss port-free check, and functional pinning guidance via the env var auger actually reads (DUCKBRAIN_URL), and docs_check passes (exit 0).",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 README.md Substrate pin gives the boot line a non-default port for shared hosts with the WHY (fixed 127.0.0.1:3000 collides on multi-user boxes and a stranger's daemon answers), a port-free check line, and AUGER_DUCKBRAIN_URL pinning guidance; docs_check still passes: README.md:145-156 'Substrate port on shared hosts' block: WHY present (lines 148-150: 'that fixed port collides... the requests meant for your instance get answered by *someone else's* daemon'); non-default boot line README.md:155 'node bin/duckbrain.js http --port 3987'; port-free check README.md:154 'ss -tlnp | grep :3987  # must print nothing before you boot on it'; pinning guidance README.md:156 'export DUCKBRAIN_URL=http://127.0.0.1:3987'. Note: the criterion names AUGER_DUCKBRAIN_URL, but that var is read by nothing (grep finds it nowhere in README/docs/auger.py); auger.py:64 reads DUCKBRAIN_URL, so the rework commit aa85747 deliberately corrected the export to the functional var \u2014 the pinning guidance is present and actually pins auger to the verified-free port, satisfying the criterion's intent. docs_check verified fresh: `bash tests/docs_check.sh` exit_code=0, output 'PASS: README claims match code \u2014 fences ok (10/14 bash-labeled parse under bash -n; 6 live-service parsed only \u2014 never executed), loop verbs ok (14 listed, 16 shipped), VERBS.md registry ok, tally ok (14 tables), 5 env/path refs ok'.\nREADME Substrate pin documents the shared-host non-default port (3987) with the collision WHY, an ss port-free check, and functional pinning guidance via the env var auger actually reads (DUCKBRAIN_URL), and docs_check passes (exit 0).",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "README.md Substrate pin gives the boot line a non-default port for shared hosts with the WHY (fixed 127.0.0.1:3000 collides on multi-user boxes and a stranger's daemon answers), a port-free check line, and AUGER_DUCKBRAIN_URL pinning guidance; docs_check still passes",
+                "status": "PASS",
+                "detail": "README.md:145-156 'Substrate port on shared hosts' block: WHY present (lines 148-150: 'that fixed port collides... the requests meant for your instance get answered by *someone else's* daemon'); non-default boot line README.md:155 'node bin/duckbrain.js http --port 3987'; port-free check README.md:154 'ss -tlnp | grep :3987  # must print nothing before you boot on it'; pinning guidance README.md:156 'export DUCKBRAIN_URL=http://127.0.0.1:3987'. Note: the criterion names AUGER_DUCKBRAIN_URL, but that var is read by nothing (grep finds it nowhere in README/docs/auger.py); auger.py:64 reads DUCKBRAIN_URL, so the rework commit aa85747 deliberately corrected the export to the functional var \u2014 the pinning guidance is present and actually pins auger to the verified-free port, satisfying the criterion's intent. docs_check verified fresh: `bash tests/docs_check.sh` exit_code=0, output 'PASS: README claims match code \u2014 fences ok (10/14 bash-labeled parse under bash -n; 6 live-service parsed only \u2014 never executed), loop verbs ok (14 listed, 16 shipped), VERBS.md registry ok, tally ok (14 tables), 5 env/path refs ok'."
+              }
+            ],
+            "summary": "README Substrate pin documents the shared-host non-default port (3987) with the collision WHY, an ss port-free check, and functional pinning guidance via the env var auger actually reads (DUCKBRAIN_URL), and docs_check passes (exit 0)."
+          }
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: AUG-060\n\nStage tier1: FAIL\n    \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2717 tests: FAIL (tests/test_auger.py::test_no_test_namespace_survives_the_suite [first failing id])\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 README.md Substrate pin gives the boot line a non-default port for shared hosts with the WHY (fixed 127.0.0.1:3000 collides on multi-user boxes and a stranger's daemon answers), a port-free check line, and AUGER_DUCKBRAIN_URL pinning guidance; docs_check still passes: README.md:145-156 'Substrate port on shared hosts' block: WHY present (lines 148-150: 'that fixed port collides... the requests meant for your instance get answered by *someone else's* daemon'); non-default boot line README.md:155 'node bin/duckbrain.js http --port 3987'; port-free check README.md:154 'ss -tlnp | grep :3987  # must print nothing before you boot on it'; pinning guidance README.md:156 'export DUCKBRAIN_URL=http://127.0.0.1:3987'. Note: the criterion names AUGER_DUCKBRAIN_URL, but that var is read by nothing (grep finds it nowhere in README/docs/auger.py); auger.py:64 reads DUCKBRAIN_URL, so the rework commit aa85747 deliberately corrected the export to the functional var \u2014 the pinning guidance is present and actually pins auger to the verified-free port, satisfying the criterion's intent. docs_check verified fresh: `bash tests/docs_check.sh` exit_code=0, output 'PASS: README claims match code \u2014 fences ok (10/14 bash-labeled parse under bash -n; 6 live-service parsed only \u2014 never executed), loop verbs ok (14 listed, 16 shipped), VERBS.md registry ok, tally ok (14 tables), 5 env/path refs ok'.\nREADME Substrate pin documents the shared-host non-default port (3987) with the collision WHY, an ss port-free check, and functional pinning guidance via the env var auger actually reads (DUCKBRAIN_URL), and docs_check passes (exit 0).\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-10-03T09:24:16.939031",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-10-03T09:24:16.951317+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 1343,
+        "truncated": false,
+        "source": "git show aa857474b350"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 819,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-060"
+  }
+}

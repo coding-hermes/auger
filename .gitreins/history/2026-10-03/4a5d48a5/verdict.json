@@ -1,0 +1,112 @@
+{
+  "task_id": "AUG-060",
+  "task_title": "README Substrate pin: shared-host port safety (non-default port + free check)",
+  "task_criteria": [
+    "README.md Substrate pin gives the boot line a non-default port for shared hosts with the WHY (fixed 127.0.0.1:3000 collides on multi-user boxes and a stranger's daemon answers), a port-free check line, and AUGER_DUCKBRAIN_URL pinning guidance; docs_check still passes"
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "4d6d7aabb0fc37bb408dbc6e97b88a767339c2c7",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261003T081018.807537Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: scanners=gitleaks+builtin cross-check\n3:10AM INF scanned ~1168101 bytes (1.17 MB) in 773ms\n3:10AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 54 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261003T081018.807537Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [ 25%]\n........................................................................ [ 50%]\n........................................................................ [ 75%]\n.................................................s...................    [100%]\n284 passed, 1 skipped in 806.91s (0:13:26)\n== end-to-end smoke ==\nnamespace: auger-smoke-2191777\nnamespace sweep: no stale auger-smoke-*/auger-eval-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n  PASS toggle changed the stored configuration\n== verdict: record + list round-trip ==\n  PASS a good verdict is recorded\n  PASS a bad verdict is recorded\n  PASS the good verdict shows in the list\n  PASS the bad verdict's reasons show in the list\n  PASS both --good and --bad refuse\n  PASS the refused pair wrote nothing\n\nnamespace auger-smoke-2191777 removed\npassed 21, failed 0\n== docs check ==\nPASS: README claims match code \u2014 fences ok (10/14 bash-labeled parse under bash -n; 6 live-service parsed only \u2014 never executed), loop verbs ok (14 listed, 16 shipped), VERBS.md registry ok, tally ok (14 tables), 5 env/path refs ok\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261003T081018.807537Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": false,
+      "any_failed": true,
+      "summary": "INCOMPLETE\n  \u2717 README.md Substrate pin gives the boot line a non-default port for shared hosts with the WHY (fixed 127.0.0.1:3000 collides on multi-user boxes and a stranger's daemon answers), a port-free check line, and AUGER_DUCKBRAIN_URL pinning guidance; docs_check still passes: Three of four elements are present and correct: non-default port (README.md:155 `node bin/duckbrain.js http --port 3987`), the WHY (README.md:147-151: fixed 127.0.0.1:3000 collides on multi-user boxes, requests 'answered by someone else's daemon \u2014 you see another agent's namespaces and wrong-looking 500s'), and the port-free check line (README.md:154 `ss -tlnp | grep :3987  # must print nothing before you boot on it`). docs_check passes: `bash tests/docs_check.sh` \u2192 exit 0, 'PASS: README claims match code \u2014 ... 5 env/path refs ok'. BUT the AUGER_DUCKBRAIN_URL pinning guidance is functionally broken: README.md:156 tells the user `export AUGER_DUCKBRAIN_URL=http://127.0.0.1:3987`, yet auger.py:64 reads `DB_URL = os.environ.get(\"DUCKBRAIN_URL\", \"http://127.0.0.1:3000\")` \u2014 `grep -c AUGER_DUCKBRAIN_URL auger.py` returns 0, and no alias/wrapper maps the name anywhere in the repo (only DUCKBRAIN_URL is consumed, auger.py:64 and tests/conftest.py:96). Following the guidance is a no-op: auger still targets the default 127.0.0.1:3000, i.e. exactly the collision the section exists to prevent. README.md:146 even states 'auger reads DUCKBRAIN_URL', directly contradicting line 156. docs_check cannot catch this because arm C (tests/docs_check.sh:185-205) checks only a fixed 5-item list (AUGER_DOMAIN_GRID, DUCKBRAIN_API_KEY, foreman-status.token, ~/.duckbrain/token, ~/.hermes/.env) that excludes AUGER_DUCKBRAIN_URL.\nThe README adds the non-default port, the WHY, and the ss port-free check, and docs_check passes, but the AUGER_DUCKBRAIN_URL pinning guidance is a no-op \u2014 auger.py reads DUCKBRAIN_URL, so the documented export does not pin auger and the shared-host collision remains.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": false,
+          "output": "INCOMPLETE\n  \u2717 README.md Substrate pin gives the boot line a non-default port for shared hosts with the WHY (fixed 127.0.0.1:3000 collides on multi-user boxes and a stranger's daemon answers), a port-free check line, and AUGER_DUCKBRAIN_URL pinning guidance; docs_check still passes: Three of four elements are present and correct: non-default port (README.md:155 `node bin/duckbrain.js http --port 3987`), the WHY (README.md:147-151: fixed 127.0.0.1:3000 collides on multi-user boxes, requests 'answered by someone else's daemon \u2014 you see another agent's namespaces and wrong-looking 500s'), and the port-free check line (README.md:154 `ss -tlnp | grep :3987  # must print nothing before you boot on it`). docs_check passes: `bash tests/docs_check.sh` \u2192 exit 0, 'PASS: README claims match code \u2014 ... 5 env/path refs ok'. BUT the AUGER_DUCKBRAIN_URL pinning guidance is functionally broken: README.md:156 tells the user `export AUGER_DUCKBRAIN_URL=http://127.0.0.1:3987`, yet auger.py:64 reads `DB_URL = os.environ.get(\"DUCKBRAIN_URL\", \"http://127.0.0.1:3000\")` \u2014 `grep -c AUGER_DUCKBRAIN_URL auger.py` returns 0, and no alias/wrapper maps the name anywhere in the repo (only DUCKBRAIN_URL is consumed, auger.py:64 and tests/conftest.py:96). Following the guidance is a no-op: auger still targets the default 127.0.0.1:3000, i.e. exactly the collision the section exists to prevent. README.md:146 even states 'auger reads DUCKBRAIN_URL', directly contradicting line 156. docs_check cannot catch this because arm C (tests/docs_check.sh:185-205) checks only a fixed 5-item list (AUGER_DOMAIN_GRID, DUCKBRAIN_API_KEY, foreman-status.token, ~/.duckbrain/token, ~/.hermes/.env) that excludes AUGER_DUCKBRAIN_URL.\nThe README adds the non-default port, the WHY, and the ss port-free check, and docs_check passes, but the AUGER_DUCKBRAIN_URL pinning guidance is a no-op \u2014 auger.py reads DUCKBRAIN_URL, so the documented export does not pin auger and the shared-host collision remains.",
+          "error": "",
+          "data": {
+            "verdict": "INCOMPLETE",
+            "items": [
+              {
+                "criterion": "README.md Substrate pin gives the boot line a non-default port for shared hosts with the WHY (fixed 127.0.0.1:3000 collides on multi-user boxes and a stranger's daemon answers), a port-free check line, and AUGER_DUCKBRAIN_URL pinning guidance; docs_check still passes",
+                "status": "FAIL",
+                "detail": "Three of four elements are present and correct: non-default port (README.md:155 `node bin/duckbrain.js http --port 3987`), the WHY (README.md:147-151: fixed 127.0.0.1:3000 collides on multi-user boxes, requests 'answered by someone else's daemon \u2014 you see another agent's namespaces and wrong-looking 500s'), and the port-free check line (README.md:154 `ss -tlnp | grep :3987  # must print nothing before you boot on it`). docs_check passes: `bash tests/docs_check.sh` \u2192 exit 0, 'PASS: README claims match code \u2014 ... 5 env/path refs ok'. BUT the AUGER_DUCKBRAIN_URL pinning guidance is functionally broken: README.md:156 tells the user `export AUGER_DUCKBRAIN_URL=http://127.0.0.1:3987`, yet auger.py:64 reads `DB_URL = os.environ.get(\"DUCKBRAIN_URL\", \"http://127.0.0.1:3000\")` \u2014 `grep -c AUGER_DUCKBRAIN_URL auger.py` returns 0, and no alias/wrapper maps the name anywhere in the repo (only DUCKBRAIN_URL is consumed, auger.py:64 and tests/conftest.py:96). Following the guidance is a no-op: auger still targets the default 127.0.0.1:3000, i.e. exactly the collision the section exists to prevent. README.md:146 even states 'auger reads DUCKBRAIN_URL', directly contradicting line 156. docs_check cannot catch this because arm C (tests/docs_check.sh:185-205) checks only a fixed 5-item list (AUGER_DOMAIN_GRID, DUCKBRAIN_API_KEY, foreman-status.token, ~/.duckbrain/token, ~/.hermes/.env) that excludes AUGER_DUCKBRAIN_URL."
+              }
+            ],
+            "summary": "The README adds the non-default port, the WHY, and the ss port-free check, and docs_check passes, but the AUGER_DUCKBRAIN_URL pinning guidance is a no-op \u2014 auger.py reads DUCKBRAIN_URL, so the documented export does not pin auger and the shared-host collision remains."
+          }
+        }
+      ]
+    }
+  },
+  "summary": "Judge Result: AUG-060\n\nStage tier1: PASS\n    \u2713 lint: ok (no output)\n  \u2713 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2713 tests: == syntax ==\n\nStage tier2: FAIL\n  INCOMPLETE\n  \u2717 README.md Substrate pin gives the boot line a non-default port for shared hosts with the WHY (fixed 127.0.0.1:3000 collides on multi-user boxes and a stranger's daemon answers), a port-free check line, and AUGER_DUCKBRAIN_URL pinning guidance; docs_check still passes: Three of four elements are present and correct: non-default port (README.md:155 `node bin/duckbrain.js http --port 3987`), the WHY (README.md:147-151: fixed 127.0.0.1:3000 collides on multi-user boxes, requests 'answered by someone else's daemon \u2014 you see another agent's namespaces and wrong-looking 500s'), and the port-free check line (README.md:154 `ss -tlnp | grep :3987  # must print nothing before you boot on it`). docs_check passes: `bash tests/docs_check.sh` \u2192 exit 0, 'PASS: README claims match code \u2014 ... 5 env/path refs ok'. BUT the AUGER_DUCKBRAIN_URL pinning guidance is functionally broken: README.md:156 tells the user `export AUGER_DUCKBRAIN_URL=http://127.0.0.1:3987`, yet auger.py:64 reads `DB_URL = os.environ.get(\"DUCKBRAIN_URL\", \"http://127.0.0.1:3000\")` \u2014 `grep -c AUGER_DUCKBRAIN_URL auger.py` returns 0, and no alias/wrapper maps the name anywhere in the repo (only DUCKBRAIN_URL is consumed, auger.py:64 and tests/conftest.py:96). Following the guidance is a no-op: auger still targets the default 127.0.0.1:3000, i.e. exactly the collision the section exists to prevent. README.md:146 even states 'auger reads DUCKBRAIN_URL', directly contradicting line 156. docs_check cannot catch this because arm C (tests/docs_check.sh:185-205) checks only a fixed 5-item list (AUGER_DOMAIN_GRID, DUCKBRAIN_API_KEY, foreman-status.token, ~/.duckbrain/token, ~/.hermes/.env) that excludes AUGER_DUCKBRAIN_URL.\nThe README adds the non-default port, the WHY, and the ss port-free check, and docs_check passes, but the AUGER_DUCKBRAIN_URL pinning guidance is a no-op \u2014 auger.py reads DUCKBRAIN_URL, so the documented export does not pin auger and the shared-host collision remains.\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-10-03T08:25:17.329830",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-10-03T08:25:17.342640+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 2570,
+        "truncated": false,
+        "source": "git show 4d6d7aabb0fc"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 819,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-060"
+  }
+}
