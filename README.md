@@ -50,6 +50,26 @@ mkdir -p ~/dd-data
 DUCKBRAIN_DATA_DIR=~/dd-data node bin/duckbrain.js http
 ```
 
+**On a box that already runs a production DuckBrain, data-dir env alone does not isolate a
+second instance.** The namespace registry is the shared surface: the `/api/namespaces` census
+is the union of `namespaceMappings` in `duckbrain.config.json` plus the on-disk scan, so
+pointing `DUCKBRAIN_DATA_DIR` and `DUCKBRAIN_NAMESPACES_PATH` at a scratch dir still lists the
+co-located production namespaces (review-lane finding AUG-090). Writes do land in the scratch
+data dir, but the namespace list is wrong, which can mislead you into thinking scratch writes
+reached production. Isolate the config too:
+
+```bash
+mkdir -p ~/dd-scratch
+printf '{"namespaceMappings": {}, "namespacesPath": "~/dd-scratch/namespaces"}' > ~/dd-scratch/config.json
+DUCKBRAIN_DATA_DIR=~/dd-scratch \
+DUCKBRAIN_CONFIG_PATH=~/dd-scratch/config.json \
+node bin/duckbrain.js http
+```
+
+`DUCKBRAIN_CONFIG_PATH` is an env-only runtime override (same pattern as
+`DUCKBRAIN_NAMESPACES_PATH`): it is read at boot and never written back into the config file.
+After boot, confirm isolation by checking that `/api/namespaces` on the new instance is empty.
+
 ## The loop
 
 ```
@@ -235,7 +255,9 @@ project's public issue tracker.
   a pass (.github/workflows/ci.yml, tests/gate.sh).
 - **A second substrate on a shared host is not isolated by data-dir env alone.** With
   `DUCKBRAIN_DATA_DIR` + `DUCKBRAIN_NAMESPACES_PATH` pointed at a scratch dir, the instance still
-  lists a co-located production DuckBrain's namespaces (review-lane finding AUG-090).
+  lists a co-located production DuckBrain's namespaces (review-lane finding AUG-090) — the
+  namespace registry is the shared surface. See the *Substrate pin* section for the
+  `DUCKBRAIN_CONFIG_PATH` escape hatch that isolates the config as well.
 - **Bundle membership is validated against a fleet scheduler DB.** `bundle member` checks the
   project against a read-only `projects` table (docs/VERBS.md, section *bundle*); on a standalone
   box membership needs the documented `AUGER_ALLOW_SCRATCH_MEMBERS=1` escape, and membership
