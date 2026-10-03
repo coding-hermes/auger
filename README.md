@@ -153,7 +153,7 @@ any multi-user box, boot on a port you verified free and point auger at it:
 ```bash
 ss -tlnp | grep :3987        # must print nothing before you boot on it
 node bin/duckbrain.js http --port 3987
-export AUGER_DUCKBRAIN_URL=http://127.0.0.1:3987
+export DUCKBRAIN_URL=http://127.0.0.1:3987
 ```
 
 **Authentication.** auger checks `DUCKBRAIN_API_KEY` first; if unset it falls back to
