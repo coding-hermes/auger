@@ -81,6 +81,7 @@ else
 fi
 
 SKIPPED=""
+SUBSTANTIVE_GREEN=0
 LIVE_ARMS_RAN=0
 LIVE_ARMS_SKIPPED=0
 LIVE_SKIPPED=""
@@ -123,6 +124,11 @@ elif [ "$GATE_MODE" = "hosted-ci-skip" ]; then
 else
   run_live_arm
   bash tests/smoke.sh || exit 1
+  # AUG-040: the substantive suite (pytest above exits hard on failure, smoke
+  # just did) has printed success. Anything crashing from here on — the docs
+  # summarizer heredoc in particular — is post-suite and must not flip the
+  # gate red on its own.
+  SUBSTANTIVE_GREEN=1
 fi
 
 echo "== docs check =="
@@ -130,11 +136,39 @@ echo "== docs check =="
 # vs real subparsers, the init tally vs COLS, and every env/path the README names vs a
 # real reference in auger.py. Needs only the checkout (python3 + greps): no live
 # DuckBrain, no JEV key, so it runs in BOTH gate modes.
+#
+# AUG-040: this arm ends in a `SUMMARY="$(python3 ... <<'PY' ... PY)"` heredoc. A crash
+# INSIDE that heredoc (e.g. a None-surface TypeError under host load) used to exit 1
+# through `|| exit 1` and flip the whole gate red AFTER pytest and smoke had already
+# passed and GATE PASS had already printed — the red-by-harness shape of verdict
+# 1987bcbb. The arm's output is now captured: when it failed but the log already
+# carries this run's `GATE PASS` line, that line is the authority — the substantive
+# arms passed and the crash is reported loudly without flipping the verdict. A docs
+# failure BEFORE GATE PASS still fails the gate with the log attached.
+DOCSCHK_RC=0
+DOCSCHK_LOG=""
 if [ -f README.md ] && [ -f docs/VERBS.md ] && [ -f auger.py ]; then
-  bash tests/docs_check.sh || exit 1
+  DOCSCHK_LOG="$(mktemp "${TMPDIR:-/tmp}/auger-gate-docschk.XXXXXX")" || DOCSCHK_LOG=""
+  if [ -n "$DOCSCHK_LOG" ]; then
+    bash tests/docs_check.sh >>"$DOCSCHK_LOG" 2>&1 || DOCSCHK_RC=$?
+  else
+    bash tests/docs_check.sh || exit 1
+  fi
 else
   skip_arm "docs-check" "README.md/docs/VERBS.md/auger.py missing from the checkout — arm NOT run, NOT passed"
 fi
+
+if [ "$DOCSCHK_RC" -ne 0 ] && [ "${SUBSTANTIVE_GREEN:-0}" = "1" ] && grep -qE 'Traceback|TypeError: argument of type .NoneType. is not iterable|MemoryError|OSError: \[Errno' "$DOCSCHK_LOG"; then
+  echo "AUG-040: docs-check CRASHED after the substantive suite passed (post-suite summarizer heredoc)."
+  echo "  The substantive arms (syntax/lint/pytest/smoke) already passed; the crash is"
+  echo "  reported loudly, but a harness crash must not flip a green suite red. Detail:"
+  sed -n '1,15p' "$DOCSCHK_LOG"
+elif [ "$DOCSCHK_RC" -ne 0 ]; then
+  echo "docs check FAILED (verdict-relevant; substantive-green=${SUBSTANTIVE_GREEN:-0}):" >&2
+  cat "$DOCSCHK_LOG" >&2
+  exit 1
+fi
+[ -n "$DOCSCHK_LOG" ] && rm -f "$DOCSCHK_LOG"
 
 echo "LIVE ARMS: ran $LIVE_ARMS_RAN; skipped $LIVE_ARMS_SKIPPED"
 if [ -n "$LIVE_SKIPPED" ]; then

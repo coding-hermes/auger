@@ -95,9 +95,19 @@ if mode == "sweep":
                 print(f"namespace sweep: removed {len(gone)} stale throwaway(s)")
 elif mode == "teardown":
     ns = sys.argv[3]
+    # AUG-040: listed() makes an independent DuckBrain HTTP call each time it
+    # runs. Two calls in one condition invited the observed harness crash
+    # (verdict 1987bcbb, `python <stdin> line 70` == this line): the first
+    # succeeded, the second failed under concurrent-wave load and returned
+    # None, so `ns not in None` raised "TypeError: argument of type 'NoneType'
+    # is not iterable" INSIDE this teardown — after the suite had already
+    # passed. Bind once and guard the binding; when the list is unavailable,
+    # fall through to drop(), which is 404-tolerant and removes the directory
+    # itself, so a rate-limited teardown can never crash or skip removal.
+    names = listed()
     if not ns.startswith(THROWAWAY):
         print(f"teardown skipped: {ns} lacks the auger-smoke-/auger-eval- prefix")
-    elif listed() is not None and ns not in listed() and not os.path.isdir(os.path.join(ROOT, ns)):
+    elif names is not None and ns not in names and not os.path.isdir(os.path.join(ROOT, ns)):
         print(f"teardown skipped: {ns} was never created (nothing to remove)")
     else:
         ok, why = drop(ns)
