@@ -49,6 +49,37 @@ if [ "${GATE_MODE_ONLY:-0}" = "1" ]; then
   exit 0
 fi
 
+# INT-GITREINS-20260927-01: doc-only fast path.
+# When the latest commit touches ONLY documentation files (no .py, no tests/),
+# skip the expensive pytest + e2e-smoke arms. The docs-check arm still runs.
+# Override: GATE_FULL=1 forces the full gate regardless of diff.
+DOC_ONLY=0
+if [ "${GATE_FULL:-0}" != "1" ]; then
+  # Detect changed files: prefer staged (pre-commit hook), fall back to HEAD~1..HEAD (post-commit / gitreins)
+  CHANGED=""
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    STAGED="$(git diff --cached --name-only 2>/dev/null)"
+    if [ -n "$STAGED" ]; then
+      CHANGED="$STAGED"
+    elif git rev-parse HEAD~1 >/dev/null 2>&1; then
+      CHANGED="$(git diff --name-only HEAD~1 HEAD 2>/dev/null)"
+    fi
+  fi
+  if [ -n "$CHANGED" ]; then
+    # If ANY changed file is NOT a doc file, run the full gate
+    NON_DOC="$(echo "$CHANGED" | grep -vE '^(README\.md|CHANGELOG\.md|docs/|.*\.md$|LICENSE|\.gitignore)' || true)"
+    if [ -z "$NON_DOC" ]; then
+      DOC_ONLY=1
+    fi
+  fi
+fi
+
+if [ "$DOC_ONLY" = "1" ]; then
+  echo "== gate mode: DOC-ONLY fast path (skipping pytest + e2e smoke) =="
+else
+  echo "== gate mode: FULL gate =="
+fi
+
 SKIPPED=""
 LIVE_ARMS_RAN=0
 LIVE_ARMS_SKIPPED=0
@@ -72,12 +103,9 @@ else
 fi
 
 echo "== pytest =="
-# The suite runs against a live DuckBrain namespace it creates and tears down itself, so this
-# arm needs no venv beyond the system python3 the other arms already use.
-# Cases needing DuckBrain/JEV skip themselves loudly and name the reason (`-ra` prints them in
-# CI); the cases that need no live API still run, and still fail the gate when they break.
-# A fresh box without pytest skips this arm loudly below instead of dying in a traceback.
-if ! python3 -c 'import pytest' 2>/dev/null; then
+if [ "$DOC_ONLY" = "1" ]; then
+  skip_arm "pytest" "doc-only fast path — pytest skipped (no code changed)"
+elif ! python3 -c 'import pytest' 2>/dev/null; then
   skip_arm "pytest" "pytest not importable by python3 (pip install pytest) — suite arm NOT run, NOT passed"
 elif [ "$GATE_MODE" = "hosted-ci-skip" ]; then
   skip_live_arm "pytest-live" "cases needing the live DuckBrain/JEV APIs SKIP — reasons in the summary"
@@ -88,7 +116,9 @@ else
 fi
 
 echo "== end-to-end smoke =="
-if [ "$GATE_MODE" = "hosted-ci-skip" ]; then
+if [ "$DOC_ONLY" = "1" ]; then
+  skip_arm "e2e-smoke" "doc-only fast path — e2e smoke skipped (no code changed)"
+elif [ "$GATE_MODE" = "hosted-ci-skip" ]; then
   skip_live_arm "e2e-smoke" "tests/smoke.sh needs a live DuckBrain namespace — arm NOT run, NOT passed"
 else
   run_live_arm
