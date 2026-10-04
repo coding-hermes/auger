@@ -1,6 +1,8 @@
 # Changelog
 
-## v0.2 (unreleased)
+## v0.2
+
+Tagged [v0.2.0](https://github.com/coding-hermes/auger/releases/tag/v0.2.0) on 2026-09-30.
 
 - record verb family (break/assumption/unknown/option)
 - export verb
@@ -12,5 +14,5 @@
 ## v0.1
 
 Initial release of Auger's spec-drilling loop and CLI surface: `init`, `start`, `bundle`, `ask`,
-`answer`, `check`, `status`, `toggle`, `dump`, `export`, `propagate`, `feedback`, `recall`,
-`verdict`, and `record`.
+`answer`, `check`, `status`, `toggle`, `dump`, `propagate`, `feedback`, `recall`,
+`serve`, and `verdict`. (`export` and `record` shipped in v0.2.)

@@ -85,6 +85,8 @@ auger propagate   run the graph walks: moot, reopen, cascade — and re-gate the
 auger feedback    turn thin decisions into the next question batch (model proposes, JEV gates)
 auger recall "Q"  semantic search over everything the project has embedded
 auger serve       serve the embedding store over HTTP — semantic search for external agents
+auger bundle      group decisions into named bundles (add / member subcommands)
+auger export      render the whole namespace as one readable spec document
 auger verdict     judge a configuration good/bad with reasons, on the record (DESIGN R11)
 auger record ...  write the registers: break, assumption, unknown, option costs/breaks
 ```
@@ -139,8 +141,9 @@ the number and the name), all 44 of `4.01`–`4.44` and nothing else; anything s
 refused by name rather than seeded partially.
 
 Requirements: a running DuckBrain (see below) with authentication set up, and an
-OpenRouter key in `~/.hermes/.env` for JEV. Python 3, standard library only — no
-dependencies.
+OpenRouter key for JEV — `OPENROUTER_API_KEY` (or `OR_API_KEY`) in the environment wins,
+otherwise every `sk-or-v1-` key found in `~/.hermes/.env` is used. Python 3, standard
+library only — no dependencies.
 
 **Substrate port on shared hosts.** The daemon's default address is
 `127.0.0.1:3000` (`node bin/duckbrain.js http`), and auger reads `DUCKBRAIN_URL`
@@ -179,7 +182,7 @@ embeddings the write verbs store are published as their own route by `auger serv
 
 ```bash
 # the namespace you practiced in; AUGER_NS is the env default every verb honours
-AUGER_NS=myproject auger serve --port 8765
+AUGER_NS=myproject python3 auger.py serve --port 8765
 curl "http://127.0.0.1:8765/api/ns/myproject/embeddings/search?q=how+is+the+record+stored&limit=5"
 ```
 
@@ -276,9 +279,6 @@ project's public issue tracker.
   project against a read-only `projects` table (docs/VERBS.md, section *bundle*); on a standalone
   box membership needs the documented `AUGER_ALLOW_SCRATCH_MEMBERS=1` escape, and membership
   management stays CLI-light.
-- **This README can lag the CLI.** The loop block above lists 14 verbs; the CLI ships 16
-  (`bundle` and `export` are missing from it — REVIEW-AUGER-003). Every verb is
-  documented in docs/VERBS.md, which is the complete surface.
 
 ## Scratch files
 

@@ -108,7 +108,7 @@ Storage is file-first, which the design leans on deliberately: the spec is reada
 JSONL, versioned by git, queryable over HTTP, and searchable by embedding, all from one copy.
 The dump is a projection of it, never a parallel artifact.
 
-### The data model (nine tables)
+### The data model (14 tables)
 
 | Table | Role |
 |---|---|
@@ -121,6 +121,14 @@ The dump is a projection of it, never a parallel artifact.
 | `escalation` | questions only the human can weight, with a default if unanswered |
 | `assumption` | what we are resting on, with a falsifier |
 | `unknown` | what we know we do not know, with owner/trigger/containment |
+| `edge` | the graph (SPEC-001): relationships the engine switches on — moot, reopen, cascade |
+| `facet` | named groupings/labels over rows (SPEC-001) |
+| `bundle` | named groups of decisions (add/member) |
+| `bundle_member` | a decision's membership in a bundle |
+| `verdict` | a recorded good/bad judgment of a configuration, with reasons (DESIGN R11) |
+
+`COLS` in `auger.py` is the source of truth; `auger init` prints the tally
+(`declared: 14/14 tables`), so the count is checked by running it, not trusted here.
 
 ## 4. Open decisions
 

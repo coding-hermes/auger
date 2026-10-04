@@ -25,6 +25,9 @@ Conventions every verb shares:
 - A refused write exits non-zero and says why. A model call that fails is fail-closed:
   no verdict is invented, no question is made up, nothing is written on an answer the
   model did not give.
+- Every verb talks to the substrate at `DUCKBRAIN_URL` (default `http://127.0.0.1:3000`).
+  On a shared host, set it to the port you actually booted — see README, *Substrate port
+  on shared hosts*.
 - Every verb authenticates to DuckBrain the same way: the `DUCKBRAIN_API_KEY` environment
   variable wins; if it is unset or empty, the token files `~/.duckbrain/foreman-status.token`
   then `~/.duckbrain/token` are tried in that order and the first non-empty one is used.
@@ -33,6 +36,9 @@ Conventions every verb shares:
   so set the env var or write one of the token files yourself. When nothing resolves,
   the command exits non-zero with
   `no DuckBrain token: set DUCKBRAIN_API_KEY or ~/.duckbrain/foreman-status.token`.
+- Every JEV call picks its OpenRouter key in this order: `OPENROUTER_API_KEY` first, then
+  `OR_API_KEY`, then every `sk-or-v1-` key found in `~/.hermes/.env` (in file order, keys
+  deduplicated, earlier sources win) — an env var always overrides the `.env` scan.
 
 ---
 
