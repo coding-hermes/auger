@@ -77,6 +77,17 @@ T_ANSWERED = (
 T_ANSWERED_BAND = (
     0.03  # |noul - T_ANSWERED| < this -> the stored question decides, not the score
 )
+# AUG-063. `check` measured 6.5-9.7s warm — the JEV round-trip dominates, and most of those
+# round-trips are spent on evidence the retrieval already handed back as a near-verbatim restatement
+# (or nothing like one). This LOCAL lexical-cosine prefilter (term-frequency vectors, stdlib `re` +
+# `math` only — no embeddings are available locally) triages the pooled evidence BEFORE the model is
+# asked, and the conservative policy is load-bearing: only an unambiguous top hit (>= COS_HIT) or an
+# unambiguous total miss (<= COS_MISS with nothing near it) skips JEV; everything in between — which
+# on short texts is most pairs — falls through to the model UNCHANGED. The gate's verdict-quality
+# baseline (AUG-086's 0.95 hit / 0.03 miss discrimination) is never traded for latency.
+# ch:trace row=AUG-063 test=tests/test_auger.py::test_gate_question_skips_jev_on_an_obvious_hit evidence=~/.hermes/state/aug063-evidence/focused.log witness=none:worktree-branch-merged-by-foreman
+COS_HIT = 0.85  # best lexical cosine >= this -> an obvious HIT: the query restates the evidence
+COS_MISS = 0.10  # best lexical cosine <= this -> an obvious MISS: no evidence is remotely about it
 T_CONFIDENT = 0.60  # decision confidence below this is surfaced as "needs drilling"
 T_SUBJECT = (
     0.45  # choice confidence below this -> we do not trust the "next subject" pick
@@ -2273,6 +2284,36 @@ def supersession_for(ns: str, decision_id: str) -> tuple[bool, str]:
     return True, ""
 
 
+def _tf_vector(text: str) -> dict:
+    """Term frequencies of a text — the cheap local vector the lexical cosine lives on (AUG-063).
+
+    `\\w+` runs on the lowercased text, so identifiers like `Postgres` and `postgres` collide into one
+    term; that is wanted, since the gate's question texts and evidence contents are prose. No stop
+    list, no stemming, no idf: this triages, it does not rank. Nothing here promises linguistic
+    quality, only a stable cheap signal.
+    """
+    vec: dict = {}
+    for term in re.findall(r"\w+", (text or "").lower()):
+        vec[term] = vec.get(term, 0) + 1
+    return vec
+
+
+def _lexical_cosine(query: str, content: str) -> float:
+    """Pure cosine over term-frequency vectors — 1.0 identical, 0.0 disjoint, never negative.
+
+    Empty or punctuated-only sides (`\\w+` found nothing) score 0.0: an unmeasurable pair is a MISS
+    signal only when COS_MISS is satisfied, and the MISS shortcut keeps its second condition, so an
+    empty vector can never alone send the gate to a verdict (AUG-063's conservative policy).
+    """
+    a, b = _tf_vector(query), _tf_vector(content)
+    if not a or not b:
+        return 0.0
+    dot = sum(n * b.get(term, 0) for term, n in a.items())
+    na = math.sqrt(sum(n * n for n in a.values()))
+    nb = math.sqrt(sum(n * n for n in b.values()))
+    return dot / (na * nb) if dot > 0 and na and nb else 0.0
+
+
 def gate_question(ns: str, project_id: str, text: str, limit: int = 5):
     """The gate: is this question already fully answered by evidence we already hold?
 
@@ -2283,9 +2324,21 @@ def gate_question(ns: str, project_id: str, text: str, limit: int = 5):
     anywhere means no model call: nothing can answer it, so the verdict is None and the question
     stays open. A transport error is returned, never converted into a verdict (fail-closed).
 
+    AUG-063: a LOCAL lexical cosine (term-frequency vectors, no embeddings — stdlib only) triages
+    the pooled hits BEFORE the model is spent. The retrieval `score` is the substrate's BM25/keyword
+    rank, an unbounded scale that cannot be compared with a similarity, so it re-ranks nothing here;
+    the cosine is computed fresh over the TEXTS. Only the two unambiguous ends shortcut: a best
+    cosine >= COS_HIT is an obvious hit (the query restates the evidence) and a best cosine <=
+    COS_MISS an obvious miss; the wide gray zone between — where short texts are noisy and the
+    model's judgement is worth its latency — falls through to the JEV path EXACTLY as before, and
+    so does anything the triage cannot classify. The verdict-quality baseline is never regressed by
+    this verb: when in doubt, ask the model.
+
     Returns (verdict, decision_id, src_project, err). `src_project` names the SIBLING whose namespace
     held the winning evidence, and is "" when the answer was this project's own; the caller puts it
-    on the `satisfies` edge, so a reader can see the link crossed the boundary.
+    on the `satisfies` edge, so a reader can see the link crossed the boundary. On the COS_HIT
+    shortcut the verdict is still T_ANSWERED — the same value the JEV path would have produced —
+    so the downstream >= T_ANSWERED branches and their printouts are unchanged.
     """
     home = project_name(ns, project_id)
     places = [(ns, home)] + bundle_namespaces(ns, home)
@@ -2294,6 +2347,36 @@ def gate_question(ns: str, project_id: str, text: str, limit: int = 5):
     except SubstrateError as exc:  # AUG-075: the store could not be asked
         return None, "", "", str(exc)
     if not hits:
+        return None, "", "", None
+    # ---- the AUG-063 prefilter: local lexical cosine over the query vs each hit's content.
+    # `hits` is non-empty here and `max` over floats cannot raise, so the triage itself never takes
+    # the gate down — anything it cannot classify falls through to the model.
+    best_cos = max(_lexical_cosine(text, h.get("content", "")) for _, h in hits)
+    if best_cos >= COS_HIT:
+        # An obvious hit: the query near-verbatim restates stored evidence. Same answer the JEV
+        # path returns for it — T_ANSWERED — with the decision link resolved exactly as that path
+        # resolves it, and NO model call spent proving what the texts already say.
+        v = T_ANSWERED
+        for where, h in sorted(hits, key=lambda pair: -(pair[1].get("score") or 0)):
+            key = h.get("key") or ""
+            if where == ns:
+                did, src = decision_for_evidence(ns, project_id, key), ""
+            else:
+                did = decision_named(key)
+                # Read it back WHERE IT LIVES: a decision that cannot be read is not a link, and a
+                # link to an unread row would be an invented one.
+                if did and not select_or_empty(
+                    where, "decision", f"id=eq.{did}&select=id&limit=1"
+                ):
+                    did = ""
+                src = next((p for w, p in places if w == where), "")
+            if did:
+                return v, did, src, None
+        return v, "", "", None  # answered, but by evidence that names no decision node
+    if best_cos <= COS_MISS:
+        # An obvious miss: nothing in the pooled evidence is remotely about this question. The same
+        # (None, "", "", None) the JEV path returns for a sub-threshold noul — the question stays
+        # open — but with NO model call spent on a pair the texts already separate.
         return None, "", "", None
     evidence = "\n".join(
         f"- {h.get('key')}: {h.get('content', '')[:400]}" for _, h in hits

@@ -6183,6 +6183,179 @@ def test_the_gate_survives_a_sibling_namespace_that_cannot_answer(ns: str, monke
     assert "Q-000002" in out and "WARNING" in out, out
 
 
+# ============================================================ AUG-063: the lexical cosine prefilter
+# `check` measured 6.5-9.7s warm, and the JEV round-trip dominates it. The prefilter triages the
+# pooled evidence locally (term-frequency cosine, stdlib only) and skips the model ONLY on the two
+# unambiguous ends: >= COS_HIT is an obvious hit, <= COS_MISS an obvious miss, everything between
+# falls through to JEV exactly as before. These cells pin all three arms, the constants' own
+# ordering, and the helper's degenerate inputs.
+# ch:trace row=AUG-063 test=tests/test_auger.py::test_gate_question_gray_zone_still_asks_the_model evidence=~/.hermes/state/aug063-evidence/red-hit.log witness=none:worktree-branch-merged-by-foreman
+AUG063_HIT_QUERY = (
+    "We chose a single SQLite file for the record store. "
+    "Rejected alternatives: Postgres, flat CSV files?"
+)
+AUG063_HIT_CONTENT = (
+    "Decision D-001: we chose a single SQLite file for the record store. "
+    "Rejected alternatives: Postgres, flat CSV files."
+)
+AUG063_MISS_QUERY = "Which colour renders the login button?"
+AUG063_MISS_CONTENT = (
+    "Decision D-002: deploys ride a blue-green pair behind one load balancer."
+)
+AUG063_GRAY_QUERY = "What does the watcher record about the files it has seen?"
+
+
+def aug063_gate_hits(monkeypatch, *, ns: str, content: str, key: str) -> None:
+    """Point gate_question's retrieval at ONE stub hit, and poison `jev` to raise if called.
+
+    The poisoning is the zero-JEV-calls proof for the shortcut arms: any prefilter regression
+    that reaches the model fails the test loudly here instead of silently spending a call.
+    """
+
+    def boom(*a, **k):
+        raise AssertionError("JEV was called — the prefilter did not shortcut this arm")
+
+    monkeypatch.setattr(auger, "jev", boom)
+    monkeypatch.setattr(
+        auger,
+        "recall_many",
+        lambda places, q, limit=5: [
+            (ns, {"key": key, "score": 0.9, "content": content})
+        ],
+    )
+
+
+def test_the_cosine_prefilter_constants_keep_the_gaps_between_the_three_arms():
+    """COS_MISS < gray zone < COS_HIT must hold, or the three arms below stop pinning three arms."""
+    assert 0.0 < auger.COS_MISS < auger.COS_HIT < 1.0, (auger.COS_MISS, auger.COS_HIT)
+    miss = auger._lexical_cosine(AUG063_MISS_QUERY, AUG063_MISS_CONTENT)
+    gray = auger._lexical_cosine(AUG063_GRAY_QUERY, AUG063_HIT_CONTENT)
+    hit = auger._lexical_cosine(AUG063_HIT_QUERY, AUG063_HIT_CONTENT)
+    assert miss <= auger.COS_MISS, f"the miss fixture must sit under COS_MISS: {miss}"
+    assert auger.COS_MISS < gray < auger.COS_HIT, (
+        f"the gray fixture must sit strictly between the thresholds: {gray}"
+    )
+    assert hit >= auger.COS_HIT, f"the hit fixture must sit at or over COS_HIT: {hit}"
+
+
+def test_gate_question_skips_jev_on_an_obvious_hit(project: dict, monkeypatch):
+    """A query that restates the evidence answers locally: T_ANSWERED, the link, NO model call.
+
+    The link is resolved against a REAL decision row (inserted through the module's own writer),
+    so this proves the shortcut returns the same decision path the JEV branch would have — not a
+    hand-shaped tuple.
+    """
+    ns, pid = project["ns"], project["pid"]
+    warning = auger.insert_decision(
+        ns,
+        {
+            "id": "D-001",
+            "project_id": pid,
+            "domain": "4.18",
+            "question_id": "",
+            "chosen": "a single SQLite file for the record store",
+            "why_not": "the alternatives lose the record on a crash",
+            "reversal_cost": "",
+            "confidence": 0.9,
+            "status": "decided",
+            "evidence_key": f"/auger/{pid}/D-001",
+            "scope": "",
+        },
+    )
+    assert not warning, warning
+    aug063_gate_hits(
+        monkeypatch, ns=ns, content=AUG063_HIT_CONTENT, key=f"/auger/{pid}/D-001"
+    )
+    verdict, dec_id, src_project, err = auger.gate_question(ns, pid, AUG063_HIT_QUERY)
+    assert (verdict, dec_id, src_project, err) == (
+        auger.T_ANSWERED,
+        "D-001",
+        "",
+        None,
+    ), (verdict, dec_id, src_project, err)
+
+
+def test_gate_question_skips_jev_on_an_obvious_miss(monkeypatch):
+    """A query lexically disjoint from the only evidence stays open: None, with NO model call.
+
+    Fully stubbed (no live namespace): the MISS arm must return BEFORE any link resolution or
+    store read, so a synthetic namespace proves the shortcut actually short-circuits.
+    """
+    monkeypatch.setattr(auger, "project_name", lambda ns, pid: "P1")
+    monkeypatch.setattr(auger, "bundle_namespaces", lambda ns, home: [])
+    aug063_gate_hits(
+        monkeypatch, ns="ns-aug063", content=AUG063_MISS_CONTENT, key="/auger/P1/D-002"
+    )
+    verdict, dec_id, src_project, err = auger.gate_question(
+        "ns-aug063", "P1", AUG063_MISS_QUERY
+    )
+    assert (verdict, dec_id, src_project, err) == (None, "", "", None), (
+        verdict,
+        dec_id,
+        src_project,
+        err,
+    )
+
+
+def test_gate_question_gray_zone_still_asks_the_model(project: dict, monkeypatch):
+    """The wide middle stays honest: JEV runs and its noul decides, exactly as before AUG-063.
+
+    The live fixtures matter here, not ceremony: the gray-zone noul lands BELOW T_ANSWERED, so
+    gate_question walks the hits for a decision link through the strict `select` — the one arm of
+    the three where a synthetic namespace would die on the store read instead of returning.
+    """
+    ns, pid = project["ns"], project["pid"]
+    warning = auger.insert_decision(
+        ns,
+        {
+            "id": "D-001",
+            "project_id": pid,
+            "domain": "4.18",
+            "question_id": "",
+            "chosen": "a single SQLite file for the record store",
+            "why_not": "the alternatives lose the record on a crash",
+            "reversal_cost": "",
+            "confidence": 0.9,
+            "status": "decided",
+            "evidence_key": f"/auger/{pid}/D-001",
+            "scope": "",
+        },
+    )
+    assert not warning, warning
+    calls: list = []
+    monkeypatch.setattr(auger, "jev", gate_stub(0.10, calls))
+    monkeypatch.setattr(
+        auger,
+        "recall_many",
+        lambda places, q, limit=5: [
+            (
+                ns,
+                {
+                    "key": f"/auger/{pid}/D-001",
+                    "score": 0.9,
+                    "content": AUG063_HIT_CONTENT,
+                },
+            )
+        ],
+    )
+    verdict, dec_id, src_project, err = auger.gate_question(ns, pid, AUG063_GRAY_QUERY)
+    assert len(calls) == 1, f"the gray zone must reach the model: {calls}"
+    assert (verdict, dec_id, src_project, err) == (0.10, "", "", None), (
+        verdict,
+        dec_id,
+        src_project,
+        err,
+    )
+
+
+def test_the_lexical_cosine_helper_scores_the_degenerate_inputs_zero():
+    """An empty or punctuated-only side is unmeasurable: 0.0, never a crash, never a fake verdict."""
+    assert auger._lexical_cosine("", AUG063_HIT_CONTENT) == 0.0
+    assert auger._lexical_cosine(AUG063_HIT_QUERY, "") == 0.0
+    assert auger._lexical_cosine("...?!", AUG063_HIT_CONTENT) == 0.0
+    assert auger._lexical_cosine(AUG063_HIT_QUERY, AUG063_HIT_QUERY) == 1.0
+
+
 def _declare_tables_without_the_cross_project_edge_columns(ns: str) -> None:
     """Write the declarations an AUG-009-era namespace has: `edge` without the two project columns.
 
@@ -7078,7 +7251,12 @@ def test_feedback_does_not_ask_a_question_it_cannot_link(decided: dict, monkeypa
                 {
                     "key": "/notes/somewhere-else",
                     "score": 0.9,
-                    "content": "an answer, filed elsewhere",
+                    # AUG-063: lexically ABOUT the question (cosine ~0.57, inside the gray
+                    # band), so the gate's local prefilter defers to JEV here and this test
+                    # pins what it always pinned — the answered-but-unlinkable verdict path.
+                    # Disjoint filler ("an answer, filed elsewhere") would now be an obvious
+                    # MISS that never reaches the model.
+                    "content": "Decision D-002: the staging table drains when the writer finishes the run.",
                 }
             ]
             if namespace == ns
