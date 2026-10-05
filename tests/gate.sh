@@ -93,6 +93,26 @@ skip_live_arm(){
   skip_arm "$1" "$2"
 }
 
+# AUG-081: pytest runs as the leader of its OWN SESSION, so the wrapper's
+# TERM (at budget) and SIGKILL (after --kill-after) reach it no matter how
+# the gate's parent died — a gateway drain, tick death, or dropped ssh no
+# longer leaves orphaned pytest children running forever against the shared
+# DuckBrain substrate (2026-09-25 incident: two 6h-old orphans poisoned a
+# guard run that had nothing to do with their diff). On overrun (exit 124)
+# the gate fails LOUDLY naming the arm; a plain pytest failure propagates
+# as before.
+run_pytest_arm(){
+  local budget="${AUGER_GATE_PYTEST_BUDGET:-1200s}"
+  local kill_after="${AUGER_GATE_PYTEST_KILL_AFTER:-30s}"
+  local rc=0
+  setsid timeout --kill-after="$kill_after" "$budget" python3 -m pytest tests/test_auger.py "$@" || rc=$?
+  if [ "$rc" -eq 124 ]; then
+    echo "GATE TIMEOUT: the pytest arm exceeded ${budget} and was killed as a process group (setsid+timeout, AUG-081) — investigate hung tests; failing the gate" >&2
+    exit 1
+  fi
+  return "$rc"
+}
+
 echo "== syntax =="
 python3 -m py_compile auger.py || exit 1
 
@@ -110,10 +130,24 @@ elif ! python3 -c 'import pytest' 2>/dev/null; then
   skip_arm "pytest" "pytest not importable by python3 (pip install pytest) — suite arm NOT run, NOT passed"
 elif [ "$GATE_MODE" = "hosted-ci-skip" ]; then
   skip_live_arm "pytest-live" "cases needing the live DuckBrain/JEV APIs SKIP — reasons in the summary"
-  python3 -m pytest tests/test_auger.py -q -ra || exit 1
+  run_pytest_arm -q -ra || exit 1
 else
   run_live_arm
-  python3 -m pytest tests/test_auger.py -q || exit 1
+  run_pytest_arm -q || exit 1
+fi
+
+echo "== wrapper regression (AUG-081) =="
+# Hermetic: no live DuckBrain, no network, no pytest import. Runs in BOTH
+# gate modes — the regression covers the group-kill wrapper itself plus a
+# source check that BOTH pytest arms carry it, so a future edit that
+# unwraps either arm fails the gate even on a hosted CI runner where the
+# real suite cannot run.
+if bash tests/test_gate_mode.sh; then
+  :
+else
+  rc=$?
+  echo "AUG-081 wrapper regression FAILED (rc=$rc): a hung pytest arm must die as a process group — see tests/test_gate_mode.sh" >&2
+  exit 1
 fi
 
 echo "== end-to-end smoke =="
