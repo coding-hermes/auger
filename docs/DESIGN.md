@@ -101,12 +101,13 @@ completeness was partial and the next subject was deployment/alerts — the actu
    ├ /api/namespaces    /api/alpha/decisions ├ POST /api/memories
    ├ /api/ns/:ns/tables {noul|choice|score}  └ GET  /api/memories?q=
    │   (declared, PostgREST)
-   └ git-backed JSONL  <- storage of record
+   └ namespace JSONL   <- storage of record
 ```
 
 Storage is file-first, which the design leans on deliberately: the spec is readable as plain
-JSONL, versioned by git, queryable over HTTP, and searchable by embedding, all from one copy.
-The dump is a projection of it, never a parallel artifact.
+JSONL in the DuckBrain namespace, queryable over HTTP, and searchable by embedding, all from one
+copy. The dump is a projection of it, never a parallel artifact. DuckBrain's repo gitignores
+`/namespaces/`, so these files are not tracked by git.
 
 ### The data model (14 tables)
 

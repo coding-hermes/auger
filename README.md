@@ -168,17 +168,20 @@ with `no DuckBrain token: set DUCKBRAIN_API_KEY or ~/.duckbrain/foreman-status.t
 ## Where the data lives
 
 Nothing is stored in this repo. Every row lives in the DuckBrain namespace you name, as
-declared tables over git-backed JSONL:
+declared tables over the JSONL files that namespace holds:
 
 ```
 ~/duckbrain/namespaces/<ns>/tables/<table>.table.json   the declared schema
 ~/duckbrain/namespaces/<ns>/tables/<table>.jsonl        the rows
 ```
 
-That means the spec is versioned in git, readable as plain files, queryable over HTTP, and
-searchable by embedding — and the dump is a *view* of it, not a separate artifact to keep in
-sync. The rows are queryable through DuckBrain's declared-table API as they stand; the
-embeddings the write verbs store are published as their own route by `auger serve` (AUG-046):
+That means the spec lives in the DuckBrain database (the namespace you name): readable as plain
+files, queryable over HTTP, and searchable by embedding; the dump is a *view* of it, not a
+separate artifact to keep in sync. DuckBrain's own repo gitignores `/namespaces/`, so these
+files are not tracked by git and carry no git history.
+
+The rows are queryable through DuckBrain's declared-table API as they stand; the embeddings the
+write verbs store are published as their own route by `auger serve` (AUG-046):
 
 ```bash
 # the namespace you practiced in; AUGER_NS is the env default every verb honours
