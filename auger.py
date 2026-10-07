@@ -162,6 +162,9 @@ COLS = {
         ("status", "varchar"),
         ("jev_already_answered", "double"),
         ("jev_checked_at", "varchar"),
+        ("proposed_by_model", "varchar"),
+        ("scored_by_model", "varchar"),
+        ("generation_cost", "double"),
     ],
     "decision": [
         ("id", "varchar"),
@@ -1844,6 +1847,74 @@ def proposer_model() -> str:
     caller (or a test) without re-importing, and the model is exactly the knob a run wants to set.
     """
     return (os.environ.get(PROPOSER_ENV) or "").strip() or PROPOSER_MODEL
+
+
+def candidate_questions_from_reply(resp, limit: int) -> list[str]:
+    """Parse up to `limit` independently numbered/bulleted question lines from a completion."""
+    if not isinstance(resp, dict) or limit <= 0:
+        return []
+    choices = resp.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return []
+    first = choices[0] if isinstance(choices[0], dict) else {}
+    text = (first.get("message") or {}).get("content") or ""
+    if not isinstance(text, str):
+        return []
+    out = []
+    for raw in text.splitlines():
+        line = REPLY_PREFIX.sub("", raw.strip()).strip().strip('"').strip()
+        if not line or "?" not in line:
+            continue
+        line = line[:QUESTION_MAX]
+        out.append(line)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def generate_candidate_questions(
+    state: str, count: int
+) -> tuple[list[str], float | None, str]:
+    """Ask the configured large model for a candidate batch; return (questions, cost, error).
+
+    The proposer uses the same model/key selection as `feedback`; generation cost is taken only
+    from the provider's reported `usage.cost`, never estimated or fabricated.
+    """
+    keys = _jev_keys()
+    if not keys:
+        return [], None, "no OpenRouter key found for the question proposer"
+    count = max(1, int(count))
+    body = {
+        "model": proposer_model(),
+        "max_tokens": min(1000, 180 * count),
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    f"Propose exactly {count} distinct, specific, answerable project questions. "
+                    "Return one question per line, numbered, and nothing else. Questions must "
+                    "address the supplied thin decisions and project context; do not answer them."
+                ),
+            },
+            {"role": "user", "content": state},
+        ],
+    }
+    last = "no attempt"
+    for key in keys:
+        st, resp, _ = _req(
+            PROPOSER_URL, "POST", body, {"Authorization": f"Bearer {key}"}, timeout=90
+        )
+        if st == 200 and isinstance(resp, dict):
+            questions = candidate_questions_from_reply(resp, count)
+            if questions:
+                usage = resp.get("usage") or {}
+                cost = usage.get("cost")
+                cost = float(cost) if isinstance(cost, (int, float)) else None
+                return questions, cost, ""
+            last = f"HTTP {st}: the reply contained no parseable questions"
+            continue
+        last = f"HTTP {st}: {str(resp)[:180]}"
+    return [], None, f"all {len(keys)} proposer keys failed; last: {last}"
 
 
 def question_from_reply(resp) -> str:
@@ -4129,7 +4200,16 @@ ASK_NEW_QUESTION_CRITERIA = {
 
 
 def store_proposed_question(
-    ns: str, project_id: str, nq: dict, noul
+    ns: str,
+    project_id: str,
+    nq: dict,
+    noul,
+    *,
+    text: str = "",
+    proposed_by_model: str = "",
+    scored_by_model: str = "",
+    generation_cost: float | None = None,
+    status: str = "open",
 ) -> tuple[str, str]:
     """Persist the question `ask` proposed. Returns (qid, why); an empty qid means nothing was stored.
 
@@ -4145,14 +4225,23 @@ def store_proposed_question(
       * the row and its facets are separate writes, so a failure AFTER the row landed is returned as
         a PARTIAL store (both a qid and a reason) instead of being reported as a clean one.
     """
+    if status not in QUESTION_STATES:
+        return "", f"unknown question status {status!r}"
     slug = str((nq or {}).get("choice") or "").strip()
-    if not slug:
-        return "", "JEV proposed no question"
-    criterion = ASK_NEW_QUESTION_CRITERIA.get(slug)
-    if criterion is None:
-        return "", f"JEV proposed unknown question criterion {slug!r}"
-    if slug == "none":
-        return "", "JEV proposed none: nothing left worth asking"
+    generated_text = bool(text)
+    if text:
+        text = str(text).strip()
+        if not text or "?" not in text:
+            return "", "proposed text is not a question"
+    else:
+        if not slug:
+            return "", "JEV proposed no question"
+        criterion = ASK_NEW_QUESTION_CRITERIA.get(slug)
+        if criterion is None:
+            return "", f"JEV proposed unknown question criterion {slug!r}"
+        if slug == "none":
+            return "", "JEV proposed none: nothing left worth asking"
+        text = criterion["sentence"]
     # `new_question` confidence says how sure JEV is about WHICH question to ask, not whether the
     # question is answered. The answered-score below is the safety gate, so a useful low-confidence
     # proposal must still reach storage rather than making this seam unreachable in live use.
@@ -4166,35 +4255,35 @@ def store_proposed_question(
         )
     except SystemExit as exc:
         return "", f"the project's stored questions could not be read — {exc}"
-    text = criterion["sentence"]
-    want = text.casefold()
-    for q in project_questions:
-        if str(q.get("text") or "").strip().casefold() != want:
-            continue
-        if q.get("status") == "open":
-            return "", f"already open as {q.get('id')}"
-        # Only a settled question that carries a durable decision closure is a duplicate. In
-        # particular, do not suppress moot/budget-thin rows: propagation may reopen or otherwise
-        # revisit those states, so a matching proposal remains a legitimate new question.
-        if q.get("status") not in SETTLED_STATES:
-            continue
-        facets = select(ns, "facet", f"question_id=eq.{q.get('id')}&order=id.asc")
-        closure = next(
-            (
-                f
-                for f in facets
-                if f.get("status") == "closed" and str(f.get("closed_by") or "").strip()
-            ),
-            None,
-        )
-        if closure:
-            reason = str(closure.get("note") or "").strip()
-            detail = f": {reason}" if reason else ""
-            return (
-                "",
-                f"already closed/answered as {q.get('id')} by "
-                f"{closure['closed_by']}{detail}",
+    # For generated candidates JEV is the duplicate gate. Do not second-guess its calibrated
+    # verdict with local text equality; retain the legacy exact-text guard for the criterion path.
+    if not generated_text:
+        want = text.casefold()
+        for q in project_questions:
+            if str(q.get("text") or "").strip().casefold() != want:
+                continue
+            if q.get("status") == "open":
+                return "", f"already open as {q.get('id')}"
+            if q.get("status") not in SETTLED_STATES:
+                continue
+            facets = select(ns, "facet", f"question_id=eq.{q.get('id')}&order=id.asc")
+            closure = next(
+                (
+                    f
+                    for f in facets
+                    if f.get("status") == "closed"
+                    and str(f.get("closed_by") or "").strip()
+                ),
+                None,
             )
+            if closure:
+                reason = str(closure.get("note") or "").strip()
+                detail = f": {reason}" if reason else ""
+                return (
+                    "",
+                    f"already closed/answered as {q.get('id')} by "
+                    f"{closure['closed_by']}{detail}",
+                )
     qid = next_id(ns, "question", "Q")
     row = {
         "id": qid,
@@ -4203,20 +4292,166 @@ def store_proposed_question(
         "text": text,
         "ring": 1,
         "qclass": ASK_CLASS,
-        "status": "open",
+        "status": status,
         "jev_already_answered": float(noul),
         "jev_checked_at": datetime.now(timezone.utc).isoformat(),
+        "proposed_by_model": proposed_by_model,
+        "scored_by_model": scored_by_model,
     }
+    if generation_cost is not None:
+        row["generation_cost"] = generation_cost
     try:
         insert(ns, "question", row)
     except SystemExit as exc:
         return "", f"the question row was refused — {exc}"
     for name in facet_set():
         try:
-            facet(ns, project_id, qid, name)
+            facet(
+                ns,
+                project_id,
+                qid,
+                name,
+                status="closed" if status == "budget_thin" else "open",
+                note="budget-thin: not asked within this run's ceiling"
+                if status == "budget_thin"
+                else "",
+            )
         except SystemExit as exc:
             return qid, f"the question row landed but facet {name!r} did not — {exc}"
     return qid, ""
+
+
+def _ask_generated_candidates(ns: str, pid: str, state: str, seats: list) -> int | None:
+    """Generate, JEV-gate and rank a candidate batch; None means use the legacy ask path."""
+    if not seats:
+        return None
+    ceiling = feedback_budget()
+    # One additional candidate lets the governor retain a visible budget-thin row when a batch
+    # exceeds the number of questions this run may actually ask. Zero still generates one to mark.
+    count = min(max(1, ceiling + 1), max(1, len(seats) * 2))
+    candidates, generation_cost, generation_error = generate_candidate_questions(
+        state, count
+    )
+    candidates = candidates[:count]
+    if not candidates:
+        print(
+            f"question generator unavailable — {generation_error}; using JEV's single-subject fallback"
+        )
+        return None
+
+    candidate_ids = [f"candidate_{i + 1}" for i in range(len(candidates))]
+    questions = {
+        "next_subject": {
+            "type": "choice",
+            "instructions": "Which subject needs coverage next?",
+            "criteria": {
+                "none_needed": "evidence is sufficient for a v1",
+                "deployment_and_alerts": "deployment, boot survival, failure notification",
+                "retention_and_privacy": "retention horizons, privacy, data lifecycle",
+                "concurrency_and_scaling": "concurrency, load, growth beyond v1",
+                "testability": "how correctness will be proven",
+            },
+        },
+        "next_question": {
+            "type": "choice",
+            "instructions": "Rank the candidate questions; choose the most valuable next question.",
+            "criteria": {candidate_ids[i]: text for i, text in enumerate(candidates)},
+        },
+        "completeness": {
+            "type": "score",
+            "instructions": "How complete is the design evidence for a buildable v1?",
+            "criteria": [
+                "nothing decided",
+                "partial, major gaps",
+                "mostly decided, minor gaps",
+                "decided enough to build",
+                "complete and verified",
+            ],
+        },
+    }
+    for candidate_id in candidate_ids:
+        questions[f"{candidate_id}_already_answered"] = {
+            "type": "noul",
+            "instructions": (
+                f"Is candidate {candidate_id} already fully answered by the supplied evidence?"
+            ),
+        }
+    ans, err = jev(state, questions)
+    if err or not isinstance(ans, dict):
+        print(
+            f"JEV unavailable for generated candidates — {err}; using JEV's single-subject fallback"
+        )
+        return None
+
+    answers = ans.get("answers") or {}
+    selected = str((answers.get("next_question") or {}).get("choice") or "")
+    order = list(range(len(candidates)))
+    if selected in candidate_ids:
+        rank = candidate_ids.index(selected)
+        order.remove(rank)
+        order.insert(0, rank)
+    model = proposer_model()
+    print(f"generated candidates: {len(candidates)}  proposed by: {model}")
+    print(f"completeness: {(answers.get('completeness') or {}).get('score')} / 4")
+    asked = 0
+    budget_thin = []
+    for idx in order:
+        candidate_id = candidate_ids[idx]
+        text = candidates[idx]
+        already = _noul(answers, f"{candidate_id}_already_answered")
+        if already is None:
+            print(
+                f"  UNGATED {candidate_id}: {text} (JEV returned no already_answered verdict)"
+            )
+            continue
+        if already >= T_ANSWERED:
+            print(
+                f"  DROPPED {candidate_id}: already answered (JEV noul {already:.2f}) — {text}"
+            )
+            continue
+        status = "open" if asked < ceiling else "budget_thin"
+        qid, why = store_proposed_question(
+            ns,
+            pid,
+            {},
+            already,
+            text=text,
+            proposed_by_model=model,
+            scored_by_model=JEV_MODEL,
+            generation_cost=generation_cost,
+            status=status,
+        )
+        if not qid:
+            print(f"  NOT STORED {candidate_id}: {why} — {text}")
+            continue
+        if status == "open":
+            asked += 1
+            print(
+                f"  ASKED {qid}  {text}  [proposed={model}; scored={JEV_MODEL}; generation_cost={generation_cost}]"
+            )
+        else:
+            budget_thin.append(qid)
+            print(
+                f"  BUDGET-THIN {qid}  {text}  [proposed={model}; scored={JEV_MODEL}]"
+            )
+        if why:
+            print(f"    WARNING {why}")
+    if budget_thin:
+        escalate(
+            ns,
+            pid,
+            question=(
+                f"budget-thin: true — the run hit its ceiling of {ceiling} question(s) "
+                f"with {len(budget_thin)} candidate question(s) recorded but NOT asked"
+            ),
+            options=", ".join(budget_thin),
+            default_action="the questions keep their rows in state budget_thin and are asked on a later run",
+            risk="those branches stay thin until then: an honest shallow branch, never a silent one",
+        )
+    print(f"ceiling: {ceiling}  asked: {asked}  budget-thin: {len(budget_thin)}")
+    if budget_thin:
+        print("budget-thin: true")
+    return 0
 
 
 def cmd_ask(a):
@@ -4291,6 +4526,9 @@ def cmd_ask(a):
             ],
         },
     }
+    generated_rc = _ask_generated_candidates(ns, pid, state, seats)
+    if generated_rc is not None:
+        return generated_rc
     ans, err = jev(state, qs)
     print(f"project {pid}  |  {ns}")
     print(
@@ -4332,7 +4570,14 @@ def cmd_ask(a):
     # AUG-035: the proposal becomes a ROW here, which is the whole difference between a report and a
     # question a reader can close. One added line either way — the question is on the record, or the
     # reason it is not (fail-closed: no half-stored question, and no exit code of its own).
-    stored_qid, store_why = store_proposed_question(ns, pid, nq, already)
+    stored_qid, store_why = store_proposed_question(
+        ns,
+        pid,
+        nq,
+        already,
+        proposed_by_model=ans.get("model") or JEV_MODEL,
+        scored_by_model=JEV_MODEL,
+    )
     if stored_qid:
         stored_text = ASK_NEW_QUESTION_CRITERIA[nq["choice"].strip()]["sentence"]
         print(f"stored question: {stored_qid}  {stored_text}")

@@ -4616,6 +4616,106 @@ Q_NEXT = "how_is_it_tested"  # what JEV's new_question choice carries — the cr
 Q_NEXT_TEXT = "What test proves this works?"
 
 
+def test_ask_generates_multiple_candidates_and_jev_gates_with_provenance(
+    decided: dict, monkeypatch
+):
+    ns, pid = decided["ns"], decided["pid"]
+    candidates = [
+        "What happens if the writer crashes?",
+        "Who owns the recovery process?",
+    ]
+    monkeypatch.setattr(auger, "recall", lambda *a, **k: [])
+    monkeypatch.setattr(
+        auger,
+        "generate_candidate_questions",
+        lambda state, count: (candidates, 0.000021, ""),
+    )
+    seen = {}
+
+    def judge(state, questions):
+        seen.update(questions)
+        return {
+            "answers": {
+                "next_question": {"choice": "candidate_2"},
+                "candidate_1_already_answered": {"noul": 0.91},
+                "candidate_2_already_answered": {"noul": 0.12},
+                "completeness": {"score": 2},
+            },
+            "model": auger.JEV_MODEL,
+        }, None
+
+    monkeypatch.setattr(auger, "jev", judge)
+    rc, out = run_cli(["-n", ns, "ask"])
+    assert rc == 0, out
+    assert len(seen["next_question"]["criteria"]) == 2, seen
+    assert "DROPPED candidate_1: already answered (JEV noul 0.91)" in out, out
+    q = row(ns, "question", f"project_id=eq.{pid}")
+    assert q["text"] == candidates[1] and q["status"] == "open", q
+    assert q["proposed_by_model"] == auger.proposer_model(), q
+    assert q["scored_by_model"] == auger.JEV_MODEL, q
+    assert q["generation_cost"] == pytest.approx(0.000021), q
+    assert len(rows(ns, "question", f"project_id=eq.{pid}")) == 1
+
+
+def test_ask_generated_batch_obeys_budget_and_records_budget_thin(
+    decided: dict, monkeypatch
+):
+    ns, pid = decided["ns"], decided["pid"]
+    monkeypatch.setenv(auger.BUDGET_ENV, "1")
+    monkeypatch.setattr(auger, "recall", lambda *a, **k: [])
+    got_count = []
+
+    def generate(state, count):
+        got_count.append(count)
+        return (
+            ["First candidate?", "Second candidate?", "Third candidate?"],
+            0.00003,
+            "",
+        )
+
+    monkeypatch.setattr(auger, "generate_candidate_questions", generate)
+
+    def judge(state, questions):
+        assert len(questions["next_question"]["criteria"]) == 2
+        return {
+            "answers": {
+                "next_question": {"choice": "candidate_1"},
+                "candidate_1_already_answered": {"noul": 0.1},
+                "candidate_2_already_answered": {"noul": 0.2},
+                "completeness": {"score": 2},
+            }
+        }, None
+
+    monkeypatch.setattr(auger, "jev", judge)
+    rc, out = run_cli(["-n", ns, "ask"])
+    assert rc == 0, out
+    assert got_count == [2], got_count
+    stored = rows(ns, "question", f"project_id=eq.{pid}&order=id.asc")
+    assert [q["status"] for q in stored] == ["open", "budget_thin"], stored
+    assert (
+        "budget-thin: true" in out and "ceiling: 1  asked: 1  budget-thin: 1" in out
+    ), out
+    marker = row(ns, "escalation", "")
+    assert "budget-thin: true" in marker["question"], marker
+
+
+def test_ask_falls_back_to_single_subject_when_generator_is_unavailable(
+    decided: dict, monkeypatch
+):
+    ns, pid = decided["ns"], decided["pid"]
+    monkeypatch.setattr(auger, "recall", lambda *a, **k: [])
+    monkeypatch.setattr(
+        auger, "generate_candidate_questions", lambda *a, **k: ([], None, "offline")
+    )
+    monkeypatch.setattr(auger, "jev", ask_stub(Q_NEXT, 0.73, 0.10))
+    rc, out = run_cli(["-n", ns, "ask"])
+    assert rc == 0, out
+    assert "using JEV's single-subject fallback" in out, out
+    assert f"stored question: Q-000001  {Q_NEXT_TEXT}" in out, out
+    q = row(ns, "question", f"project_id=eq.{pid}")
+    assert q["text"] == Q_NEXT_TEXT and q["status"] == "open", q
+
+
 def ask_stub(choice: str, conf, noul):
     """A JEV stub that answers `ask`'s four questions the way the live decisions model does."""
 
@@ -7325,6 +7425,34 @@ def opens_of(ns: str, question_id: str) -> str:
 def reply(content) -> dict:
     """A chat-completion reply in the shape `propose_question` parses."""
     return {"choices": [{"message": {"role": "assistant", "content": content}}]}
+
+
+def test_generate_candidate_questions_uses_configured_model_and_reports_cost(
+    monkeypatch,
+):
+    monkeypatch.setattr(auger, "_jev_keys", lambda: ["test-key"])
+    monkeypatch.setenv(auger.PROPOSER_ENV, "test/large-context-model")
+    seen = {}
+
+    def request(url, method, body, headers, timeout):
+        seen.update(url=url, method=method, body=body, headers=headers, timeout=timeout)
+        response = reply(
+            "1. What happens after a crash?\n2. Who owns recovery?\n3. Too many?"
+        )
+        response["usage"] = {"cost": 0.000024}
+        return 200, response, None
+
+    monkeypatch.setattr(auger, "_req", request)
+    questions, cost, err = auger.generate_candidate_questions("stored project state", 2)
+    assert err == "" and questions == [
+        "What happens after a crash?",
+        "Who owns recovery?",
+    ]
+    assert cost == pytest.approx(0.000024)
+    assert seen["body"]["model"] == "test/large-context-model", seen
+    assert "stored project state" in seen["body"]["messages"][1]["content"], seen
+    assert "exactly 2" in seen["body"]["messages"][0]["content"], seen
+    assert seen["headers"]["Authorization"] == "Bearer test-key"
 
 
 def test_the_proposer_parser_takes_one_question_and_rejects_everything_else():
