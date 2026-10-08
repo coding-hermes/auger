@@ -397,6 +397,10 @@ Semantic search over everything the namespace has embedded.
 
 **Writes:** nothing. One GET against the memory store.
 
+**Cold start:** the first recall in a process embeds the query, which can take
+~20s (the provider round-trip); a progress line is printed to stderr while it
+runs. Later recalls in the same process are fast (~2s).
+
 **Never writes:** anything. When the store cannot be read (AUG-075) it fails
 closed: the substrate error is printed and the exit is non-zero — an unreachable
 store is never printed as an empty result.

@@ -1395,6 +1395,16 @@ def recall(
         if project_prefix
         else ""
     )
+    # AUG-032, cold-start honesty: the FIRST query of a process lifetime pays the
+    # substrate's embedding provider round-trip for the query itself, which can
+    # sit ~20s reading like a hang. Say so on stderr BEFORE the call; stdout
+    # stays clean because recall's output is the product.
+    print(
+        "embedding query... (first recall in a process pays the provider "
+        "round-trip, ~20s)",
+        file=sys.stderr,
+        flush=True,
+    )
     st, body, _ = db(
         f"/api/memories?namespace={url_seg(ns)}{prefix_query}&q={quote(q)}&limit={limit}",
         timeout=60,

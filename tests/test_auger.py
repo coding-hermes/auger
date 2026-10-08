@@ -23,6 +23,7 @@ must pass every run.
 
 from __future__ import annotations
 
+import contextlib
 import http.client
 import io
 import json
@@ -2270,6 +2271,53 @@ def test_recall_non_200_status_is_a_failure_not_an_empty_store(monkeypatch):
     # The other side of the line: a genuine 200 with nothing in it stays `[]`.
     monkeypatch.setattr(auger, "db", _substrate(200, {"items": []}))
     assert auger.recall("auger-075-dead", "any question", limit=3) == []
+
+
+# ================================================= AUG-032: cold-start progress line
+# A process's first recall pays the substrate's query-embedding provider round-trip
+# (~20s measured 2026-09-23 vs ~2s warm) — silence that long reads like a hang. The
+# progress note rides on STDERR, before the embedding call, because recall's stdout
+# is the product and must stay parseable.
+
+
+def test_recall_emits_cold_start_progress_line_on_stderr_before_the_call(
+    monkeypatch, capsys
+):
+    """The progress note goes to stderr BEFORE the substrate call; stdout stays clean."""
+    calls: list[str] = []
+
+    def fake_db(path, *args, **kwargs):
+        calls.append(path)
+        return 200, {"items": []}, {}
+
+    monkeypatch.setattr(auger, "db", fake_db)
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        auger.recall("auger-032-cold", "any question", limit=3)
+
+    captured = capsys.readouterr()
+    assert captured.err.startswith("embedding query..."), captured.err
+    assert "~20s" in captured.err
+    # BEFORE: the note was on stderr while the substrate call ran (the fake records
+    # after `print` has flushed, and the assertion above proves the line exists at
+    # all — the order is enforced by the print sitting above the db() call site).
+    assert len(calls) == 1
+    # stdout is the product: nothing but the (empty) result here.
+    assert captured.out == ""
+    assert buf.getvalue() == ""
+
+
+def test_recall_verb_keeps_stdout_parseable_with_the_progress_note_on_stderr(
+    monkeypatch, capsys
+):
+    """End to end through the verb: stderr note present, stdout untouched (rc 0, empty)."""
+    monkeypatch.setattr(auger, "db", _substrate(200, {"items": []}))
+    rc, out = run_cli(["-n", "auger-032-cold-verb", "recall", "any question"])
+
+    captured = capsys.readouterr()
+    assert rc == 0
+    assert "embedding query..." in captured.err
+    assert out == ""  # genuine empty keeps the verb's silent rc=0 stdout contract
 
 
 def test_check_fails_closed_when_the_substrate_is_dead(monkeypatch):

@@ -84,6 +84,7 @@ auger dump        render the system under the current set, or a --config hypothe
 auger propagate   run the graph walks: moot, reopen, cascade — and re-gate the children
 auger feedback    turn thin decisions into the next question batch (model proposes, JEV gates)
 auger recall "Q"  semantic search over everything the project has embedded
+                  (first recall embeds the query — can take ~20s; progress on stderr)
 auger serve       serve the embedding store over HTTP — semantic search for external agents
 auger bundle      group decisions into named bundles (add / member subcommands)
 auger export      render the whole namespace as one readable spec document
