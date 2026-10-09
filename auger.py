@@ -4364,7 +4364,10 @@ def _ask_generated_candidates(ns: str, pid: str, state: str, seats: list) -> int
         },
         "next_question": {
             "type": "choice",
-            "instructions": "Rank the candidate questions; choose the most valuable next question.",
+            "instructions": (
+                "Rank the candidate questions; choose the most valuable next question. "
+                "Reject any candidate that repeats or paraphrases a stored open question."
+            ),
             "criteria": {candidate_ids[i]: text for i, text in enumerate(candidates)},
         },
         "completeness": {
@@ -4475,7 +4478,7 @@ def cmd_ask(a):
         f"project_id=eq.{pid}&confidence=lt.{T_CONFIDENT}&select=id,domain,chosen,confidence,status&order=confidence.asc",
     )
     unknown = select(ns, "unknown", f"project_id=eq.{pid}")
-    unans = select(ns, "question", f"project_id=eq.{pid}&status=eq.open")
+    unans = select(ns, "question", f"project_id=eq.{pid}&status=eq.open&order=id.asc")
     hits = []
     try:
         hits = recall(ns, p.get("seed", "") or "project spec", limit=6)
@@ -4496,9 +4499,20 @@ def cmd_ask(a):
         )
         or "(none yet)"
     )
+    stored_open_questions = (
+        "\n".join(
+            f"- {q.get('id', 'unknown')}: {' '.join(str(q.get('text') or '').split())[:100]}"
+            for q in unans[:20]
+        )
+        or "(none)"
+    )
     state = (
         f"SEED:\n{p.get('seed', '')}\n\nDECISIONS:\n{decisions}\n\n"
-        f"OPEN QUESTIONS: {len(unans)}\nUNKNOWNS: {len(unknown)}\n\nRELATED EVIDENCE:\n{evidence}"
+        f"OPEN QUESTIONS: {len(unans)}\n"
+        f"STORED OPEN QUESTION TEXTS (up to 20; each truncated to 100 characters; do not "
+        f"propose these again or paraphrase them):\n"
+        f"{stored_open_questions}\n"
+        f"UNKNOWNS: {len(unknown)}\n\nRELATED EVIDENCE:\n{evidence}"
     )
     qs = {
         "next_subject": {

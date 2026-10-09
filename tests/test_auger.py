@@ -4705,6 +4705,64 @@ def test_ask_generates_multiple_candidates_and_jev_gates_with_provenance(
     assert len(rows(ns, "question", f"project_id=eq.{pid}")) == 1
 
 
+def test_ask_generated_paraphrase_is_rejected_using_bounded_stored_question_context(
+    decided: dict, monkeypatch
+):
+    ns, pid = decided["ns"], decided["pid"]
+    original = (
+        "What happens to the uploaded report when the background worker crashes "
+        "before it finishes processing the report?"
+    )
+    paraphrase = "What happens to the report if the background processor fails mid-run?"
+    store_questions(
+        ns,
+        pid,
+        ("Q-000001", original, "open"),
+        *(
+            (f"Q-{index:06d}", f"Filler question number {index}?", "open")
+            for index in range(2, 22)
+        ),
+    )
+    monkeypatch.setattr(auger, "recall", lambda *a, **k: [])
+    monkeypatch.setattr(
+        auger,
+        "generate_candidate_questions",
+        lambda state, count: ([paraphrase], 0.00001, ""),
+    )
+    seen_states = []
+
+    def judge(state, questions):
+        seen_states.append(state)
+        assert "STORED OPEN QUESTION TEXTS" in state
+        assert "do not propose these again or paraphrase them" in state
+        assert (
+            "paraphrases a stored open question"
+            in questions["next_question"]["instructions"]
+        )
+        assert f"- Q-000001: {original[:100]}" in state
+        assert len(original) > 100 and original[100:] not in state
+        assert "Filler question number 21?" not in state
+        # This models JEV spotting that the proposed paraphrase repeats an open question.
+        already = 0.95 if original[:100] in state else 0.05
+        return {
+            "answers": {
+                "next_question": {"choice": "candidate_1"},
+                "candidate_1_already_answered": {"noul": already},
+                "completeness": {"score": 2},
+            }
+        }, None
+
+    monkeypatch.setattr(auger, "jev", judge)
+    rc, out = run_cli(["-n", ns, "ask"])
+    assert rc == 0, out
+    assert len(seen_states) == 1
+    assert "DROPPED candidate_1: already answered (JEV noul 0.95)" in out, out
+    stored = rows(ns, "question", f"project_id=eq.{pid}&order=id.asc")
+    assert len(stored) == 21, stored
+    assert stored[0]["text"] == original
+    assert all(q["text"] != paraphrase for q in stored), stored
+
+
 def test_ask_generated_batch_obeys_budget_and_records_budget_thin(
     decided: dict, monkeypatch
 ):
