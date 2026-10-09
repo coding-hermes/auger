@@ -252,6 +252,20 @@ edge     facet     bundle    bundle_member  verdict
 bash tests/smoke.sh          # full loop against a scratch namespace
 ```
 
+## Muster contract (OpenAPI for consumers)
+
+Auger publishes the OpenAPI 3.x contract the [muster](https://github.com/wojons/muster)
+protocol consumes: `docs/openapi.yaml`, a GENERATED artifact (one source of truth —
+`scripts/gen_openapi.py` emits it from the code's own registry, and
+`tests/test_openapi_parity.py` fails the gate if the file drifts from the code or is
+hand-edited). It describes the read-only HTTP API on `http://127.0.0.1:8766` — every
+operation carries `x-safety: read-only`, and no mutating operation exists in the
+contract. The exact `mcpServers` consumer block and the three-line quickstart live in
+[docs/MUSTER-CONSUMER.md](docs/MUSTER-CONSUMER.md); the scope decision behind the
+surface is [docs/muster-scope.md](docs/muster-scope.md). (The service that implements
+this contract is the next build row; the existing `auger serve` embedding surface on
+`:8765` is unchanged by it.)
+
 ## Limits and known gaps
 
 Auger v0.2 is a day-one-plus-a-release proof, deliberately small: one standard-library Python file (`auger.py`),

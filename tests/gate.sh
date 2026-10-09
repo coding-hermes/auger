@@ -105,7 +105,7 @@ run_pytest_arm(){
   local budget="${AUGER_GATE_PYTEST_BUDGET:-1200s}"
   local kill_after="${AUGER_GATE_PYTEST_KILL_AFTER:-30s}"
   local rc=0
-  setsid timeout --kill-after="$kill_after" "$budget" python3 -m pytest tests/test_auger.py "$@" || rc=$?
+  setsid timeout --kill-after="$kill_after" "$budget" python3 -m pytest tests/test_auger.py tests/test_openapi_parity.py "$@" || rc=$?
   if [ "$rc" -eq 124 ]; then
     echo "GATE TIMEOUT: the pytest arm exceeded ${budget} and was killed as a process group (setsid+timeout, AUG-081) — investigate hung tests; failing the gate" >&2
     exit 1
@@ -164,6 +164,41 @@ else
   # gate red on its own.
   SUBSTANTIVE_GREEN=1
 fi
+
+echo "== openapi-parity (AUG-066) =="
+# The muster contract must never drift from the code: regenerate the spec and
+# demand byte identity with the committed docs/openapi.yaml (AUG-066). Offline
+# by construction (imports auger, touches no service), so it runs in BOTH gate
+# modes — a doc-only commit that hand-edits the spec is caught here even when
+# the doc-only fast path skips pytest. The full parity suite (operationId ->
+# registry mapping, safety classes, served-route templates, credential scan)
+# runs inside the pytest arm as tests/test_openapi_parity.py.
+if [ -f scripts/gen_openapi.py ] && [ -f docs/openapi.yaml ]; then
+  GENOUT="$(mktemp "${TMPDIR:-/tmp}/auger-gate-openapi.XXXXXX")" || GENOUT=""
+  if [ -n "$GENOUT" ]; then
+    if python3 scripts/gen_openapi.py >"$GENOUT" 2>/tmp/aug066-gate-gen.err; then
+      if ! cmp -s "$GENOUT" docs/openapi.yaml; then
+        echo "openapi parity FAILED: docs/openapi.yaml differs from scripts/gen_openapi.py's output" >&2
+        echo "  regenerate: python3 scripts/gen_openapi.py > docs/openapi.yaml" >&2
+        diff "$GENOUT" docs/openapi.yaml | sed -n '1,15p' >&2
+        rm -f "$GENOUT"
+        exit 1
+      fi
+      echo "  docs/openapi.yaml matches the generator byte-for-byte"
+    else
+      echo "openapi parity FAILED: scripts/gen_openapi.py could not run" >&2
+      sed -n '1,15p' /tmp/aug066-gate-gen.err >&2
+      rm -f "$GENOUT"
+      exit 1
+    fi
+    rm -f "$GENOUT"
+  else
+    skip_arm "openapi-parity" "mktemp failed — arm NOT run, NOT passed"
+  fi
+else
+  skip_arm "openapi-parity" "scripts/gen_openapi.py or docs/openapi.yaml missing from the checkout — arm NOT run, NOT passed"
+fi
+rm -f /tmp/aug066-gate-gen.err
 
 echo "== docs check =="
 # README-003: execute the README's claims instead of reading them — the loop verb list

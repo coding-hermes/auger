@@ -1,0 +1,692 @@
+# GENERATED FILE — do not hand-edit (AUG-066).
+# Source of truth: auger.py's operation registry, via scripts/gen_openapi.py.
+# Regenerate:  python3 scripts/gen_openapi.py > docs/openapi.yaml
+# Drift gate:  tests/test_openapi_parity.py + the openapi-parity arm in tests/gate.sh.
+# Scope:       docs/muster-scope.md (AUG-065) — read-only surface; no writes, ever,
+#              until an explicit approval boundary exists.
+openapi: 3.0.3
+info:
+  title: Auger read-first API
+  version: 0.1.0
+  x-auger-cli-version: '0.2'
+  description: 'The versioned, read-first HTTP API auger owns and muster consumes (AUG-066, the frozen
+    contract AUG-067 implements). Generated artifact — regenerate with `python3 scripts/gen_openapi.py
+    > docs/openapi.yaml`; the parity gates (tests/gate.sh, tests/test_openapi_parity.py) fail on drift
+    from the code.
+
+
+    Scope boundary: every operation is read-only with respect to auger''s records (`x-safety: read-only`).
+    Operations that create, modify, or judge records are absent from this contract entirely — not labelled,
+    omitted — until an explicit approval boundary exists (AUG-065 scope decision). The DuckBrain substrate''s
+    own API is not exposed: consumers address auger concepts, and auger controls which substrate operations
+    occur.
+
+
+    External calls: `check` calls the JEV decisions model, and the retrieval operations query an embedding/search
+    provider through the DuckBrain substrate; both are disclosed per operation via `x-external-calls`
+    and can incur cost. These operations remain read-only for auger''s records.
+
+
+    Credentials stay server-side: no API key, header scheme, or credential path is part of this contract.
+    The service binds loopback only. The base URL is deliberately distinct from the existing embedding-only
+    `auger serve` default (http://127.0.0.1:8765).
+
+
+    Fail-closed semantics: a store that cannot be asked is an error (502/503), never an empty success;
+    a JEV that cannot be reached is verdict UNKNOWN, never a fabricated answer.'
+servers:
+- url: http://127.0.0.1:8766
+x-safety-policy: read-only
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: Substrate embedding status
+      description: 'The health/status read backing every retrieval tier label: whether the substrate''s
+        embedding leg is healthy, and which provider/model answered. Advisory by design — a degraded or
+        unanswerable substrate is reported as `tier: "unknown"` with null fields, never as an HTTP error,
+        because the label exists to remove ambiguity, not to gate reads on it.'
+      x-safety: read-only
+      responses:
+        '200':
+          description: The substrate's own statement about its embedding leg.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+      x-cli: 'auger -n <namespace> status  # tier labels come from this read'
+  /api/ns/{namespace}/status:
+    get:
+      operationId: getNamespaceStatus
+      summary: Confidence map and coverage for one namespace
+      description: 'The `status` verb as data: project identity, register row counts, the confidence summary,
+        which decisions are thin (below the drill threshold or unmeasured), pending-memory warnings, and
+        the 44-domain grid coverage. Reads only; nothing is written and no external model is called. Fails
+        closed: a namespace with no project row is 404, a namespace with several and no explicit project_id
+        is 409.'
+      x-safety: read-only
+      parameters:
+      - &id002
+        name: namespace
+        in: path
+        required: true
+        description: The DuckBrain namespace the rows live in — the name `auger -n` takes. auger addresses
+          auger concepts; the DuckBrain substrate API itself is not exposed.
+        schema:
+          type: string
+          minLength: 1
+      - &id003
+        name: project_id
+        in: query
+        required: false
+        description: Project context (the CLI's -p/--project-id). When omitted the newest project row
+          is used; a namespace holding several projects without an explicit id is refused with 409, exactly
+          as the CLI refuses.
+        schema:
+          type: string
+      responses:
+        '200':
+          description: The confidence map and coverage report.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NamespaceStatus'
+        '404':
+          description: No project row in this namespace — run the `start` verb from the CLI first.
+          content:
+            application/json:
+              schema: &id001
+                $ref: '#/components/schemas/Error'
+        '409':
+          description: 'Several project rows and no explicit project_id: implicit selection is refused,
+            nothing is guessed.'
+          content:
+            application/json:
+              schema: *id001
+        '502':
+          description: The DuckBrain substrate refused a read.
+          content:
+            application/json:
+              schema: *id001
+      x-cli: auger -n <namespace> status
+  /api/ns/{namespace}/dump:
+    get:
+      operationId: getNamespaceDump
+      summary: Render the namespace's configuration
+      description: 'The `dump` verb''s render: the stored active configuration, or a hypothetical one
+        under `config` overrides. Nothing is written in either mode. The CLI''s `--out` FILE form is deliberately
+        absent — writing a local file is not read-only (scope contract), so the HTTP surface renders to
+        the response body only.'
+      x-safety: read-only
+      parameters:
+      - *id002
+      - *id003
+      - name: config
+        in: query
+        required: false
+        description: Hypothetical decision=option override, repeatable (the CLI's repeatable --config
+          D-001=O2). Option tokens accept a full id, label, or bare index; malformed or ambiguous entries
+          are refused before anything is rendered.
+        schema:
+          type: array
+          items:
+            type: string
+      responses:
+        '200':
+          description: The rendered configuration document (text/plain).
+          content:
+            text/plain:
+              schema:
+                type: string
+        '400':
+          description: A config entry is not a decision=option pair, or names an unknown/ambiguous decision
+            or option — nothing is rendered.
+          content:
+            application/json:
+              schema: *id001
+        '404':
+          description: No project row in this namespace.
+          content:
+            application/json:
+              schema: *id001
+        '409':
+          description: Several project rows and no explicit project_id.
+          content:
+            application/json:
+              schema: *id001
+        '502':
+          description: The DuckBrain substrate refused a read.
+          content:
+            application/json:
+              schema: *id001
+      x-cli: auger -n <namespace> dump [--config D-001=O2 ...]
+  /api/ns/{namespace}/export:
+    get:
+      operationId: exportNamespace
+      summary: Export every declared table as one deterministic document
+      description: 'The `export` verb: a read-only, deterministic rendering of every declared table in
+        the namespace (whole namespace by contract — the CLI''s project context is not a filter here,
+        and the HTTP surface exposes no filter parameter for it).'
+      x-safety: read-only
+      parameters:
+      - *id002
+      responses:
+        '200':
+          description: The namespace export document (text/plain).
+          content:
+            text/plain:
+              schema:
+                type: string
+        '404':
+          description: The namespace does not exist.
+          content:
+            application/json:
+              schema: *id001
+        '502':
+          description: The DuckBrain substrate refused a read.
+          content:
+            application/json:
+              schema: *id001
+      x-cli: auger -n <namespace> export
+  /api/ns/{namespace}/check:
+    post:
+      operationId: checkNamespaceEvidence
+      summary: Is this question already answered by stored evidence?
+      description: 'The `check` verb: retrieve the nearest stored evidence for a question, then ask JEV
+        (the external decisions model) whether the evidence already answers it. READ-ONLY with respect
+        to auger''s records, but it makes an EXTERNAL model call and can incur cost — disclosed here by
+        contract. Fail-closed twice over: a memory store that cannot be asked is 503 (never ''treat as
+        a new question''), and a JEV that cannot be reached yields verdict UNKNOWN with jev_used false
+        — an unjudged check must never look like a judged one.'
+      x-safety: read-only
+      x-external-calls:
+      - JEV decisions model (OpenRouter)
+      parameters:
+      - *id002
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckRequest'
+      responses:
+        '200':
+          description: The retrieved evidence and the verdict over it.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CheckResult'
+        '400':
+          description: The question text is blank.
+          content:
+            application/json:
+              schema: *id001
+        '503':
+          description: 'The memory store could not be asked (fail-closed: unaskable is not the same as
+            empty).'
+          content:
+            application/json:
+              schema: *id001
+      x-cli: auger -n <namespace> check "<question>" [--limit N]
+  /api/ns/{namespace}/recall:
+    get:
+      operationId: recallNamespace
+      summary: Semantic search over the namespace's memory
+      description: 'The `recall` verb as data: ranked hits from the namespace''s embedded memory, each
+        labelled with the retrieval tier the substrate answered on (semantic vs lexical — the two scales
+        are not comparable, so the tier travels with the scores). Read-only for auger''s rows; it queries
+        the embedding/search provider through the DuckBrain substrate and can incur external cost. Fail-closed:
+        a store that cannot be asked is 503 — ''unaskable'' and ''empty'' are never the same answer.'
+      x-safety: read-only
+      x-external-calls:
+      - embedding/search provider via the DuckBrain substrate
+      parameters:
+      - *id002
+      - &id004
+        name: q
+        in: query
+        required: true
+        description: The query text. Blank queries are refused with 400.
+        schema:
+          type: string
+          minLength: 1
+      - &id005
+        name: limit
+        in: query
+        required: false
+        description: Maximum hits to return (1..1000).
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          default: 5
+      - &id006
+        name: project
+        in: query
+        required: false
+        description: Restrict hits to one project id (optional).
+        schema:
+          type: string
+      responses:
+        '200':
+          description: Ranked hits with the retrieval tier they were scored on.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecallResult'
+        '400':
+          description: q is blank, or limit is not an integer in range.
+          content:
+            application/json:
+              schema: *id001
+        '503':
+          description: The memory store could not be asked (fail-closed).
+          content:
+            application/json:
+              schema: *id001
+      x-cli: auger -n <namespace> recall "<query>" [--limit N]
+  /api/ns/{namespace}/embeddings/search:
+    get:
+      operationId: searchNamespaceEmbeddings
+      summary: Embedding search with hit classification (the served route)
+      description: 'The embedding search `auger serve` already publishes (AUG-046), addressed per namespace:
+        ranked hits where each hit''s stored key is classified — `seed` (the project seed), `decision`
+        (with the decision id it is evidence of), or `memory` (another writer''s row in a shared namespace,
+        never guessed into an auger concept). Read-only for auger''s rows; queries the embedding/search
+        provider through the DuckBrain substrate and can incur external cost. A store that cannot be asked
+        is 502 in the substrate''s own words; a store that genuinely holds nothing is 200 with count 0.'
+      x-safety: read-only
+      x-external-calls:
+      - embedding/search provider via the DuckBrain substrate
+      parameters:
+      - *id002
+      - *id004
+      - *id005
+      - *id006
+      responses:
+        '200':
+          description: Ranked, tier-labelled, classified hits.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EmbeddingSearchResult'
+        '400':
+          description: q is blank, or limit is not an integer in range.
+          content:
+            application/json:
+              schema: *id001
+        '502':
+          description: 'The substrate refused the search (fail-closed: unaskable is not the same as empty).'
+          content:
+            application/json:
+              schema: *id001
+      x-cli: curl 'http://127.0.0.1:8766/api/ns/<namespace>/embeddings/search?q=<query>&limit=<n>'
+  /api/ns/{namespace}/verdicts:
+    get:
+      operationId: listNamespaceVerdicts
+      summary: Every recorded verdict, newest first
+      description: 'The register''s reading half — the CLI''s `verdict --list` as data. Only the LIST
+        is exposed: recording a verdict (the CLI''s --good/--bad/--ask-jev forms) writes a verdict row
+        and is a mutating operation, so it is absent from this contract until an approval gate exists.'
+      x-safety: read-only
+      parameters:
+      - *id002
+      responses:
+        '200':
+          description: The verdict register, newest first (empty array when nothing is recorded).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/VerdictRow'
+        '502':
+          description: The DuckBrain substrate refused a read.
+          content:
+            application/json:
+              schema: *id001
+      x-cli: auger -n <namespace> verdict --list
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      description: The substrate's advisory embedding status. Any field except `tier` can be null when
+        the substrate did not answer.
+      required:
+      - tier
+      - embedding_healthy
+      - provider
+      - model
+      properties:
+        tier:
+          type: string
+          enum:
+          - semantic
+          - lexical
+          - unknown
+          description: 'Which ranker a scored read used: semantic (embedding index), lexical (keyword
+            fallback), or unknown (the substrate''s health read did not answer).'
+        embedding_healthy:
+          type: boolean
+          nullable: true
+        provider:
+          type: string
+          nullable: true
+        model:
+          type: string
+          nullable: true
+    Counts:
+      type: object
+      required:
+      - decisions
+      - options
+      - escalations
+      - unknowns
+      - domains
+      properties:
+        decisions:
+          type: integer
+        options:
+          type: integer
+        escalations:
+          type: integer
+        unknowns:
+          type: integer
+        domains:
+          type: integer
+    ConfidenceSummary:
+      type: object
+      required:
+      - min
+      - mean
+      - max
+      properties:
+        min:
+          type: number
+        mean:
+          type: number
+        max:
+          type: number
+    ThinDecision:
+      type: object
+      description: A decision below the confidence threshold or unmeasured — what the `ask` verb would
+        drill next.
+      required:
+      - id
+      - confidence
+      - chosen
+      properties:
+        id:
+          type: string
+        confidence:
+          type: number
+          nullable: true
+          description: null when the decision is unmeasured.
+        chosen:
+          type: string
+    NamespaceStatus:
+      type: object
+      required:
+      - namespace
+      - project_id
+      - name
+      - status
+      - counts
+      properties:
+        namespace:
+          type: string
+        project_id:
+          type: string
+        name:
+          type: string
+          nullable: true
+        status:
+          type: string
+          nullable: true
+        counts:
+          $ref: '#/components/schemas/Counts'
+        confidence:
+          $ref: '#/components/schemas/ConfidenceSummary'
+        pending_memory_warnings:
+          type: array
+          items:
+            type: string
+          description: 'Decisions whose memory is provisional: stored but excluded from every aggregate
+            until it lands.'
+        thin_decisions:
+          type: array
+          items:
+            $ref: '#/components/schemas/ThinDecision'
+    CheckRequest:
+      type: object
+      required:
+      - question
+      properties:
+        question:
+          type: string
+          minLength: 1
+          description: The question under consideration.
+        limit:
+          type: integer
+          minimum: 1
+          default: 5
+          description: How much stored evidence to retrieve.
+    RecallHit:
+      type: object
+      required:
+      - key
+      - score
+      - content
+      properties:
+        key:
+          type: string
+          description: The store key — for auger's own rows `/auger/<project>/<thing>`; anything else
+            is another writer's row.
+        score:
+          type: number
+          nullable: true
+          description: Similarity rank on the labelled tier's scale.
+        content:
+          type: string
+        timestamp:
+          type: string
+          nullable: true
+    RecallResult:
+      type: object
+      required:
+      - namespace
+      - query
+      - limit
+      - project
+      - tier
+      - count
+      - hits
+      properties:
+        namespace:
+          type: string
+        query:
+          type: string
+        limit:
+          type: integer
+        project:
+          type: string
+          nullable: true
+        tier:
+          type: string
+          enum:
+          - semantic
+          - lexical
+          - unknown
+        count:
+          type: integer
+        hits:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecallHit'
+    EmbeddingHit:
+      type: object
+      required:
+      - key
+      - kind
+      - decision_id
+      - score
+      - domain
+      - content
+      - snippet
+      - timestamp
+      properties:
+        key:
+          type: string
+        kind:
+          type: string
+          enum:
+          - seed
+          - decision
+          - memory
+          description: 'Read from the key''s own shape: the project seed (`/auger/<project>/seed`), a
+            decision''s evidence (`/auger/<project>/<decision-id>`), or another writer''s row (`memory`).'
+        decision_id:
+          type: string
+          nullable: true
+          description: Set exactly when kind is `decision`.
+        score:
+          type: number
+          nullable: true
+        domain:
+          type: string
+          nullable: true
+        content:
+          type: string
+          nullable: true
+        snippet:
+          type: string
+          nullable: true
+        timestamp:
+          type: string
+          nullable: true
+    EmbeddingSearchResult:
+      type: object
+      required:
+      - namespace
+      - query
+      - limit
+      - project
+      - tier
+      - embedding_healthy
+      - count
+      - results
+      properties:
+        namespace:
+          type: string
+        query:
+          type: string
+        limit:
+          type: integer
+        project:
+          type: string
+          nullable: true
+        tier:
+          type: string
+          enum:
+          - semantic
+          - lexical
+          - unknown
+        embedding_healthy:
+          type: boolean
+          nullable: true
+        count:
+          type: integer
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/EmbeddingHit'
+    CheckResult:
+      type: object
+      required:
+      - namespace
+      - question
+      - tier
+      - hits
+      - verdict
+      - verdict_decided_by
+      - jev_used
+      - jev_cost
+      properties:
+        namespace:
+          type: string
+        question:
+          type: string
+        tier:
+          type: string
+          enum:
+          - semantic
+          - lexical
+          - unknown
+        hits:
+          type: array
+          items:
+            $ref: '#/components/schemas/RecallHit'
+        verdict:
+          type: string
+          enum:
+          - ALREADY ANSWERED
+          - NOT YET ANSWERED
+          - UNKNOWN
+          description: 'UNKNOWN is the fail-closed answer: JEV was unreachable, and an unjudged check
+            must never read as a judged one.'
+        verdict_decided_by:
+          type: string
+          enum:
+          - score
+          - record
+          - fail-closed
+          description: 'Which decider produced the verdict: the JEV score, the stored question record
+            (inside the score-drift band), or neither because JEV was unreachable.'
+        jev_used:
+          type: boolean
+        jev_cost:
+          type: string
+          nullable: true
+          description: The external call's reported cost, when JEV answered.
+    VerdictRow:
+      type: object
+      required:
+      - id
+      - project_id
+      - config_summary
+      - verdict
+      - judged_by
+      - created_at
+      properties:
+        id:
+          type: string
+        project_id:
+          type: string
+        config_summary:
+          type: string
+        verdict:
+          type: string
+          enum:
+          - good
+          - bad
+        reasons:
+          type: string
+        judged_by:
+          type: string
+        confidence:
+          type: number
+          nullable: true
+        source:
+          type: string
+        note:
+          type: string
+        created_at:
+          type: string
+    Error:
+      type: object
+      required:
+      - error
+      properties:
+        error:
+          type: string
+          description: What was refused or failed, in one line.
