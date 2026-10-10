@@ -225,3 +225,13 @@ def test_generator_carries_the_readonly_self_check():
     assert 'raise SystemExit("self-check: ' in gen_src, (
         "scripts/gen_openapi.py's _self_check no longer raises"
     )
+
+
+def test_generator_and_served_api_share_one_base_url():
+    import auger
+    from scripts import gen_openapi
+
+    assert gen_openapi.API_BASE_URL == auger.AUGER_API_BASE_URL
+    assert (
+        gen_openapi.API_BASE_URL == f"http://127.0.0.1:{auger.AUGER_API_DEFAULT_PORT}"
+    )

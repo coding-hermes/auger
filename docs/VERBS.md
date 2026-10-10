@@ -5,11 +5,11 @@ write. This is the contract — the verb names are public, and every argument li
 exists in the verb's `add_parser` definition in `auger.py`. If the code and this file
 disagree, the code wins and this file is a bug.
 
-The 16 top-level verbs — one `add_parser` registration each in `auger.py`, and the count here is
+The 17 top-level verbs — one `add_parser` registration each in `auger.py`, and the count here is
 the registry's own, not a hand-kept tally — in the order `auger --help` lists them:
 
 ```
-init  start  bundle  ask  answer  check  status  toggle  dump  export  propagate  feedback  recall  serve  verdict  record
+init  start  bundle  ask  answer  check  status  toggle  dump  export  propagate  feedback  recall  serve  api  verdict  record
 ```
 
 Conventions every verb shares:
@@ -455,6 +455,39 @@ stdout; every write still goes through the verbs above (and over the declared ta
 **Never writes:** any row, table, namespace, or memory entry; and it never sends a request that
 could write one — the handler issues only the two reads the search needs (the substrate's
 `/health` and `/api/memories?q=`).
+
+## api
+
+Serve the separately versioned, read-first HTTP API described by `docs/openapi.yaml` (AUG-067).
+It runs independently of the embedding-only `serve` endpoint. The OpenAPI generator takes its
+base URL from `AUGER_API_BASE_URL` in `auger.py`, whose default port is `8768`.
+
+**Arguments:** `--host` (default `127.0.0.1`) and `--port` (default `8768`). There is no
+`api --namespace` option: each API request names its namespace in the route. The HTTP surface
+has no authentication, so keep it on loopback unless an authenticated access-control proxy is
+in front. A bind conflict exits non-zero and names the requested host and port.
+
+**Routes:** eight operations, all read-only with respect to auger's rows:
+
+```
+GET  /health
+GET  /api/ns/<namespace>/status
+GET  /api/ns/<namespace>/dump
+GET  /api/ns/<namespace>/export
+GET  /api/ns/<namespace>/recall?q=<query>&limit=<n>
+GET  /api/ns/<namespace>/embeddings/search?q=<query>&limit=<n>
+GET  /api/ns/<namespace>/verdicts
+POST /api/ns/<namespace>/check
+```
+
+`check` performs retrieval and a JEV judgment and can incur provider cost; it does not write a
+verdict or any other row. Unknown namespaces and substrate failures are returned as errors,
+never converted into empty successful data. Mutating verbs such as `init`, `start`, `answer`,
+`toggle`, `record`, and verdict-recording forms are not present in the OpenAPI/MCP surface.
+
+**Writes:** none. The complete operation registry and byte-generated contract are parity-gated by
+`tests/test_openapi_parity.py`; the live consumer proof is in
+`docs/dogfood/2026-10-10-muster-e2e-integration.md`.
 
 ## verdict
 

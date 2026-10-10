@@ -7,9 +7,8 @@ library. This repository publishes the contract muster consumes:
 hand-maintained list (see below), describing auger's read-first HTTP API.
 
 Status: this file is the frozen AUG-066 contract and consumer wiring. The
-service that implements it on `http://127.0.0.1:8766` is the AUG-067 build.
-The port is deliberate: `8766` is distinct from the existing embedding-only
-`auger serve` default (`8765`) and from DuckBrain's default (`3000`). Do not
+service that implements it on `http://127.0.0.1:8768` is the AUG-067 build.
+The port is deliberate: `8768` was verified free on this host when AUG-067 was implemented and avoids the foreign off-by-one pre-solve service bound to `8766`; it is distinct from the existing embedding-only `auger serve` default (`8765`) and DuckBrain's default (`3000`). Do not
 point a consumer at `:8765` — that surface is embedding search and health
 only, and it stays exactly as it is.
 
@@ -57,7 +56,7 @@ The exact `mcpServers` block (from the scope decision in
         "--spec",
         "/home/kara/auger/docs/openapi.yaml",
         "--base-url",
-        "http://127.0.0.1:8766"
+        "http://127.0.0.1:8768"
       ]
     }
   }
@@ -68,24 +67,18 @@ On another installation, substitute the checked-out repository's absolute
 spec path and the configured API base URL **together**. Never point the
 consumer at DuckBrain itself; muster talks to auger, and auger alone decides
 which substrate operations occur. The spec's own `servers[0].url` is the same
-absolute `http://127.0.0.1:8766`, so muster can also dereference the document
+absolute `http://127.0.0.1:8768`, so muster can also dereference the document
 standalone when `--base-url` is omitted.
 
 ## Quickstart (3 lines)
 
 ```bash
-openapi-cli --spec /home/kara/auger/docs/openapi.yaml --base-url http://127.0.0.1:8766 status
-openapi-mcp --spec /home/kara/auger/docs/openapi.yaml --base-url http://127.0.0.1:8766
+openapi-cli generate /home/kara/auger/docs/openapi.yaml
+openapi-cli get-namespace-status <namespace> --base-url http://127.0.0.1:8768 --output json
+openapi-mcp -spec /home/kara/auger/docs/openapi.yaml -base-url http://127.0.0.1:8768
 ```
 
-Line 1 drives a generated read verb (`status`) and must return the
-namespace's populated status data — not help or schema output; line 2 starts
-the MCP server, whose listed tools are exactly the contract's read-only
-operations (initialize + tool-list handshake, then attach it to any MCP
-host). muster derives the typed verb names from the spec's stable
-`operationId`s (`getNamespaceStatus`, `recallNamespace`, `listNamespaceVerdicts`,
-...); the AUG-067 acceptance runs both binaries against the live service and
-freezes the exact spellings in evidence.
+Line 1 parses the contract and registers the typed commands; line 2 drives the generated status read and must return populated namespace data, not help or schema output; line 3 starts the MCP server, whose initialize/tool-list handshake exposes exactly the contract's read-only operations. muster derives typed command names from stable `operationId`s (`get-namespace-status`, `recall-namespace`, `list-namespace-verdicts`, ...); the AUG-067 acceptance captures the exact commands and outputs.
 
 No write tool exists to be careful with: attempting any mutator by name must
 fail as "not listed / not callable", because the contract never declared one.

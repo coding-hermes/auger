@@ -34,14 +34,14 @@ The canonical local consumer uses the generated spec at the repository's absolut
         "--spec",
         "/home/kara/auger/docs/openapi.yaml",
         "--base-url",
-        "http://127.0.0.1:8766"
+        "http://127.0.0.1:8768"
       ]
     }
   }
 }
 ```
 
-`docs/openapi.yaml` is the agreed AUG-066 artifact path. The spec must use the API base URL `http://127.0.0.1:8766` in its server entry. `8766` is deliberately distinct from the existing embedding server's default port `8765` and DuckBrain's default `3000`. On another installation, substitute the checked-out repository's absolute spec path and the configured API base URL together; do not point the consumer at DuckBrain or pretend the `:8765` embedding service implements the full API.
+`docs/openapi.yaml` is the agreed AUG-066 artifact path. The spec must use the API base URL `http://127.0.0.1:8768` in its server entry. `8768` was verified free on this host for AUG-067; `8766` was already bound by the unrelated off-by-one pre-solve lab, so consumers must not target it. The API port is distinct from the existing embedding server's default port `8765` and DuckBrain's default `3000`. On another installation, substitute the checked-out repository's absolute spec path and the configured API base URL together; do not point the consumer at DuckBrain or pretend the `:8765` embedding service implements the full API.
 
 ## Operation boundary: MCP safety classification
 
@@ -92,14 +92,14 @@ The following checks are required at the later rows' merged HEAD. Run from the a
    openapi-cli validate docs/openapi.yaml
    ```
 
-   Assertions: generated spec parses as OpenAPI 3.x; every documented `operationId` is unique and maps to a registered implemented operation; required safe operation IDs are present; every mutating verb/branch listed in this document is absent from the initial MCP tool surface; no undocumented operation is generated; the spec `servers[0].url` equals `http://127.0.0.1:8766`; and its security/auth description contains no credential literal. A test that only checks the file exists or YAML parses is not sufficient.
+   Assertions: generated spec parses as OpenAPI 3.x; every documented `operationId` is unique and maps to a registered implemented operation; required safe operation IDs are present; every mutating verb/branch listed in this document is absent from the initial MCP tool surface; no undocumented operation is generated; the spec `servers[0].url` equals `http://127.0.0.1:8768`; and its security/auth description contains no credential literal. A test that only checks the file exists or YAML parses is not sufficient.
 
 2. Start the actual HTTP service, not a mock, and prove populated reads:
 
    ```bash
    python3 auger.py -n auger-muster-acceptance init
    python3 auger.py -n auger-muster-acceptance start --id P-MUSTER-ACCEPTANCE --name muster-acceptance --seed 'Muster adapter acceptance fixture'
-   python3 auger_api.py --host 127.0.0.1 --port 8766 --namespace auger-muster-acceptance
+   python3 auger.py api --host 127.0.0.1
    ```
 
    From a second terminal, request each implemented read route using `curl -fsS` and assert, with `jq -e`, that the response is valid JSON and includes the seeded project ID/text; assert `status`/`export` do not report an empty namespace, and assert recall/search returns the seeded evidence when indexing is available (otherwise require a clearly identified provider-unavailable response, never a false successful empty result). Also send `POST`, `PUT`, `PATCH`, and `DELETE` to every collection/resource route and assert `405` (or the documented fail-closed refusal), no row count changes, and no MCP write tool is advertised. A 200 health response alone is not acceptance.
@@ -109,8 +109,8 @@ The following checks are required at the later rows' merged HEAD. Run from the a
 3. Exercise Muster itself against the same live process and fixture:
 
    ```bash
-   openapi-cli --spec /home/kara/auger/docs/openapi.yaml --base-url http://127.0.0.1:8766 status
-   openapi-mcp --spec /home/kara/auger/docs/openapi.yaml --base-url http://127.0.0.1:8766
+   openapi-cli --spec /home/kara/auger/docs/openapi.yaml --base-url http://127.0.0.1:8768 status
+   openapi-mcp --spec /home/kara/auger/docs/openapi.yaml --base-url http://127.0.0.1:8768
    ```
 
    Assertions: `openapi-cli` exits zero and returns the populated fixture data, not merely help/schema output; `openapi-mcp` completes its MCP initialize/tool-list handshake; the listed tools include the required read operations and exclude every mutator (including `ask`, `verdict` write forms, and `record` subcommands); invoke at least one read tool and verify its result contains the fixture. Attempt each write-class tool by name and assert it is not listed/callable. If MUSTER's CLI syntax differs, use its actual documented command but retain these semantic assertions and capture `--help`/handshake evidence. Clean up only the isolated `auger-muster-acceptance` test namespace after assertions.

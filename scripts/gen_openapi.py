@@ -9,7 +9,7 @@ tests/test_openapi_parity.py).
 
 The described surface is the scope decision frozen in docs/muster-scope.md
 (AUG-065): a NEW, separately versioned, read-first HTTP API on
-http://127.0.0.1:8766 — deliberately distinct from the existing embedding-only
+http://127.0.0.1:8768 — deliberately distinct from the existing embedding-only
 `auger serve` on :8765, which stays untouched. Every operation carries
 `x-safety: read-only`. Mutating verbs (init, start, bundle, ask, answer,
 toggle, propagate, feedback, record, and verdict's recording forms) are absent
@@ -40,7 +40,7 @@ import auger  # noqa: E402  (needs REPO_ROOT on sys.path first)
 #: The new API's base URL. Absolute on purpose: muster dereferences the spec
 #: standalone when --base-url is omitted, and a relative servers url cannot be
 #: dereferenced at all (AUG-065 scope doc, "Consumer configuration").
-API_BASE_URL = "http://127.0.0.1:8766"
+API_BASE_URL = auger.AUGER_API_BASE_URL
 
 #: Contract version of THIS document (the frozen AUG-066 surface). It is the
 #: contract's own semver, not auger's CLI version — which rides alongside as
@@ -404,7 +404,8 @@ def build_spec() -> dict:
                 external=["embedding/search provider via the DuckBrain substrate"],
                 parameters=[NS_PARAM, Q_PARAM, RECALL_LIMIT_PARAM, PROJECT_QUERY_PARAM],
                 cli=(
-                    "curl 'http://127.0.0.1:8766"
+                    "curl '"
+                    + API_BASE_URL
                     + SEARCH_PATH.replace("{namespace}", "<namespace>")
                     + "?q=<query>&limit=<n>'"
                 ),

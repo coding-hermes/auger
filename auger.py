@@ -61,6 +61,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 AUGER_VERSION = "0.2"
+AUGER_API_DEFAULT_PORT = 8768
+AUGER_API_BASE_URL = f"http://127.0.0.1:{AUGER_API_DEFAULT_PORT}"
 DB_URL = os.environ.get("DUCKBRAIN_URL", "http://127.0.0.1:3000")
 JEV_URL = "https://openrouter.ai/api/alpha/decisions"
 JEV_MODEL = "typesafe/jev-1.13"
@@ -6685,6 +6687,330 @@ def cmd_record_option(a):
     return 0
 
 
+"""Read-only HTTP adapter for auger's frozen AUG-066 contract."""
+
+
+class APIError(Exception):
+    def __init__(self, status: int, message: str):
+        self.status = status
+        super().__init__(message)
+
+
+def _namespace(ns: str) -> None:
+    try:
+        if not select(ns, "project", "select=id&limit=1"):
+            raise APIError(404, f"unknown namespace {ns!r}")
+    except APIError:
+        raise
+    except SystemExit as exc:
+        message = str(exc)
+        if "does not exist" in message or "unknown namespace" in message:
+            raise APIError(404, message) from exc
+        raise APIError(503, message or "substrate unavailable") from exc
+    except Exception as exc:
+        raise APIError(502, f"substrate read failed: {exc}") from exc
+
+
+def namespace_status(ns: str, project_id: str | None) -> dict:
+    try:
+        p = _project(ns, project_id)
+    except SystemExit as exc:
+        message = str(exc)
+        raise APIError(409 if "multiple projects" in message else 404, message) from exc
+    pid = p["id"]
+    decisions = select(ns, "decision", f"project_id=eq.{pid}")
+    options = select(ns, "option", "")
+    escalations = select(ns, "escalation", f"project_id=eq.{pid}")
+    unknowns = select(ns, "unknown", f"project_id=eq.{pid}")
+    coverage = domain_coverage(ns, pid)
+    active = [d for d in decisions if not is_pending_memory(d)]
+    confidence = _conf_values(active)
+    thin = [
+        {"id": d["id"], "confidence": _conf(d), "chosen": d.get("chosen", "")}
+        for d in decisions
+        if not is_pending_memory(d)
+        and (
+            _is_unmeasured(d)
+            or (
+                isinstance(d.get("confidence"), (int, float))
+                and d["confidence"] < T_CONFIDENT
+            )
+        )
+    ]
+    return {
+        "namespace": ns,
+        "project_id": pid,
+        "name": p.get("name"),
+        "status": p.get("status"),
+        "counts": {
+            "decisions": len(decisions),
+            "options": len(options),
+            "escalations": len(escalations),
+            "unknowns": len(unknowns),
+            "domains": coverage["rows"],
+        },
+        "confidence": {
+            "min": min(confidence),
+            "mean": sum(confidence) / len(confidence),
+            "max": max(confidence),
+        }
+        if confidence
+        else {"min": 0, "mean": 0, "max": 0},
+        "pending_memory_warnings": [
+            str(x) for x in pending_memory_warning_lines(decisions)
+        ],
+        "thin_decisions": thin,
+    }
+
+
+class APIHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    server_version = f"auger-api/{AUGER_VERSION}"
+
+    def log_message(self, fmt, *args):
+        print(f"{self.address_string()} {fmt % args}", file=sys.stderr, flush=True)
+
+    def _send(self, status: int, body, content_type="application/json"):
+        raw = (
+            body.encode()
+            if isinstance(body, str)
+            else json.dumps(body, ensure_ascii=False).encode()
+        )
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def do_GET(self):
+        try:
+            self._route()
+        except APIError as exc:
+            self._send(exc.status, {"error": str(exc)})
+        except SystemExit as exc:
+            self._send(503, {"error": str(exc) or "substrate unavailable"})
+        except Exception as exc:
+            self._send(
+                502, {"error": f"substrate read failed: {type(exc).__name__}: {exc}"}
+            )
+
+    def do_POST(self):
+        self._route_post()
+
+    def do_PUT(self):
+        self._send(405, {"error": "method not allowed"})
+
+    do_PATCH = do_DELETE = do_PUT
+
+    def _route(self):
+        parts = urlsplit(self.path)
+        args = parse_qs(parts.query, keep_blank_values=True)
+        path = parts.path
+        if path == "/health":
+            try:
+                stat = embedding_status()
+            except Exception:
+                stat = {
+                    "tier": "unknown",
+                    "healthy": None,
+                    "provider": None,
+                    "model": None,
+                }
+            return self._send(
+                200,
+                {
+                    "tier": stat["tier"],
+                    "embedding_healthy": stat["healthy"],
+                    "provider": stat["provider"],
+                    "model": stat["model"],
+                },
+            )
+        bits = path.split("/")
+        if len(bits) not in (5, 6) or bits[1:3] != ["api", "ns"]:
+            return self._send(404, {"error": f"no such route: {path}"})
+        ns, op = unquote(bits[3]), bits[4]
+        _namespace(ns)
+        pid = (args.get("project_id") or [None])[0]
+        if op == "status" and len(bits) == 5:
+            return self._send(200, namespace_status(ns, pid))
+        if op == "dump" and len(bits) == 5:
+            try:
+                text = render_dump(ns, pid, args.get("config", []))
+            except SystemExit as exc:
+                raise APIError(
+                    400 if "--config" in str(exc) else 404, str(exc)
+                ) from exc
+            return self._send(200, text, "text/plain; charset=utf-8")
+        if op == "export" and len(bits) == 5:
+            return self._send(200, render_export(ns), "text/plain; charset=utf-8")
+        if op == "recall" and len(bits) == 5:
+            q = (args.get("q") or [""])[0].strip()
+            limit = self._limit(args)
+            if not q:
+                raise APIError(400, "q is required")
+            tier = embedding_status()["tier"]
+            hits = recall(ns, q, limit, project_id=(args.get("project") or [None])[0])
+            rows = [
+                {
+                    "key": h.get("key", ""),
+                    "score": h.get("score"),
+                    "content": h.get("content", ""),
+                    "timestamp": h.get("timestamp"),
+                }
+                for h in hits
+                if isinstance(h, dict)
+            ]
+            return self._send(
+                200,
+                {
+                    "namespace": ns,
+                    "query": q,
+                    "limit": limit,
+                    "project": (args.get("project") or [None])[0],
+                    "tier": tier,
+                    "count": len(rows),
+                    "hits": rows,
+                },
+            )
+        if op == "embeddings" and len(bits) == 6 and bits[5] == "search":
+            q = (args.get("q") or [""])[0].strip()
+            if not q:
+                raise APIError(400, "q is required")
+            return self._send(
+                200,
+                embedding_search(
+                    ns,
+                    q,
+                    self._limit(args),
+                    project_id=(args.get("project") or [None])[0],
+                ),
+            )
+        if op == "verdicts" and len(bits) == 5:
+            return self._send(
+                200, select(ns, "verdict", "order=created_at.desc,id.desc")
+            )
+        return self._send(404, {"error": f"no such route: {path}"})
+
+    @staticmethod
+    def _limit(args):
+        try:
+            limit = int((args.get("limit") or [str(EMBEDDINGS_DEFAULT_LIMIT)])[0])
+        except ValueError as exc:
+            raise APIError(400, "limit must be an integer") from exc
+        if not 1 <= limit <= EMBEDDINGS_MAX_LIMIT:
+            raise APIError(400, "limit outside allowed range")
+        return limit
+
+    def _route_post(self):
+        parts = urlsplit(self.path)
+        bits = parts.path.split("/")
+        if len(bits) != 5 or bits[1:3] != ["api", "ns"] or bits[4] != "check":
+            return self._send(404, {"error": f"no such route: {parts.path}"})
+        ns = unquote(bits[3])
+        try:
+            _namespace(ns)
+            length = int(self.headers.get("Content-Length", "0"))
+            if length > 1024 * 1024:
+                raise APIError(400, "request body too large")
+            data = json.loads(self.rfile.read(length) or b"{}")
+            question = str(data.get("question", "")).strip()
+            if not question:
+                raise APIError(400, "question is required")
+            limit = max(1, min(1000, int(data.get("limit", 5))))
+            tier = embedding_status()["tier"]
+            hits = recall(ns, question, limit)
+            records = [
+                {
+                    "key": h.get("key", ""),
+                    "score": h.get("score"),
+                    "content": h.get("content", ""),
+                    "timestamp": h.get("timestamp"),
+                }
+                for h in hits
+                if isinstance(h, dict)
+            ]
+            state = (
+                f"QUESTION UNDER CONSIDERATION: {question}\\nSTORED EVIDENCE: "
+                + "\\n".join(
+                    f"- {h.get('key')}: {h.get('content', '')[:400]}" for h in records
+                )
+            )
+            answers, err = jev(
+                state,
+                {
+                    "already_answered": {
+                        "type": "noul",
+                        "instructions": "Is the supplied evidence already answering the question? Higher noul means yes.",
+                    }
+                },
+            )
+            val = (
+                _noul((answers or {}).get("answers", {}), "already_answered")
+                if not err
+                else None
+            )
+            band = val is not None and in_answered_band(val)
+            matched = settled_question_with_text(ns, question) if band else ""
+            verdict = (
+                check_verdict(val, bool(matched)) if val is not None else "UNKNOWN"
+            )
+            decided_by = (
+                "record"
+                if band and matched
+                else "fail-closed"
+                if val is None
+                else "score"
+            )
+            cost = ((answers or {}).get("usage") or {}).get("cost")
+            return self._send(
+                200,
+                {
+                    "namespace": ns,
+                    "question": question,
+                    "tier": tier,
+                    "hits": records,
+                    "verdict": verdict,
+                    "verdict_decided_by": decided_by,
+                    "jev_used": bool(not err and answers is not None),
+                    "jev_cost": str(cost) if cost is not None else None,
+                },
+            )
+        except APIError as exc:
+            self._send(exc.status, {"error": str(exc)})
+        except SystemExit as exc:
+            self._send(503, {"error": str(exc) or "substrate unavailable"})
+        except Exception as exc:
+            self._send(
+                503, {"error": f"substrate unavailable: {type(exc).__name__}: {exc}"}
+            )
+
+
+class APIServer(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
+def serve(host="127.0.0.1", port=AUGER_API_DEFAULT_PORT):
+    try:
+        server = APIServer((host, port), APIHandler)
+    except OSError as exc:
+        raise SystemExit(f"auger API cannot bind {host}:{port}: {exc}") from exc
+    print(
+        f"auger read-first API: http://{server.server_address[0]}:{server.server_address[1]}",
+        flush=True,
+    )
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()
+
+
+def cmd_api(a):
+    return serve(a.host, a.port)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="auger", description="spec drilling backed by DuckBrain"
@@ -6897,6 +7223,11 @@ def main(argv=None):
         "banner names it)",
     )
     s.set_defaults(fn=cmd_serve)
+
+    s = sub.add_parser("api", help="serve auger's read-first HTTP API (AUG-067)")
+    s.add_argument("--host", default="127.0.0.1")
+    s.add_argument("--port", type=int, default=AUGER_API_DEFAULT_PORT)
+    s.set_defaults(fn=cmd_api)
 
     s = sub.add_parser(
         "verdict", help="record good/bad on a configuration, with reasons (R11)"
