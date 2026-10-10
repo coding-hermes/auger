@@ -6873,6 +6873,44 @@ def test_the_impact_walk_reports_a_member_it_walked_with_nothing_to_compare(
     assert f"impact: {sib} walked, no bundle-scoped decision to compare" in out, out
 
 
+def test_impact_walk_skips_bundle_scoped_decisions_in_different_bundles(monkeypatch):
+    """A sibling reached only through another bundle/contract is not invalidated by this answer."""
+    decisions = {
+        "same": [{"id": "D-SAME", "chosen": "same contract choice"}],
+        "other": [{"id": "D-OTHER", "chosen": "different contract choice"}],
+    }
+
+    monkeypatch.setattr(auger, "project_name", lambda ns, pid: "home")
+    monkeypatch.setattr(auger, "bundles_of", lambda ns, project: [{"id": "B-SHARED"}])
+    monkeypatch.setattr(auger, "bundle_siblings", lambda ns, project: ["same", "other"])
+    monkeypatch.setattr(auger, "member_namespace", lambda project: project)
+
+    def select_or_empty(ns, table, query):
+        if table == "bundle_member":
+            project = query.split("project=eq.", 1)[1].split("&", 1)[0]
+            bundle_id = "B-SHARED" if project == "same" else "B-OTHER"
+            return [{"project": project, "bundle_id": bundle_id}]
+        if table == "decision":
+            return decisions.get(ns, [])
+        raise AssertionError(f"unexpected read: {ns} {table} {query}")
+
+    monkeypatch.setattr(auger, "select_or_empty", select_or_empty)
+    calls: list = []
+    monkeypatch.setattr(auger, "jev", impact_stub(0.0, calls))
+
+    result = auger.bundle_impact(
+        "home-ns", "P-HOME", {"id": "D-ANSWER", "scope": "bundle"}
+    )
+
+    assert result["walked"] == ["same"]
+    assert result["unchanged"] == ["same"]
+    assert len(calls) == 1, calls
+    assert "D-SAME" in result["lines"][0]
+    assert all(
+        "other" not in line and "D-OTHER" not in line for line in result["lines"]
+    )
+
+
 def test_a_verdict_below_the_confidence_floor_is_unknown_and_fails_closed(
     ns: str, sibling_ns: str, monkeypatch
 ):

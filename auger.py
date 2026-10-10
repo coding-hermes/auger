@@ -4880,7 +4880,18 @@ def bundle_impact(ns: str, project_id: str, dec_row: dict) -> dict:
         return rep  # only a CONTRACT crosses the boundary — the finite rule
     rep["scoped"] = True
     home = project_name(ns, project_id)
+    # A project may belong to several bundles, and bundle-scoped decisions do not carry a
+    # bundle_id. Resolve the shared bundle(s) from membership: a sibling reachable only through a
+    # different bundle has a different contract and must not be invalidated by this answer.
+    home_bundle_ids = {b["id"] for b in bundles_of(ns, home) if b.get("id")}
     for project in bundle_siblings(ns, home):
+        member_rows = select_or_empty(
+            ns, "bundle_member", f"project=eq.{project}&order=id.asc"
+        )
+        if not home_bundle_ids.intersection(
+            m.get("bundle_id") for m in member_rows if m.get("bundle_id")
+        ):
+            continue
         where = member_namespace(project)
         # A sibling's rows are read with the SAFE reader: a foreign namespace that cannot answer has
         # no decisions, and that is not this project's failure. The decision the ANSWER recorded is

@@ -123,14 +123,36 @@ The `satisfies` edge gains a `src_project`, so a reader can see the answer came 
 **bundle-scoped** decision additionally walks every member:
 
 ```
-for m in bundle_members(bundle_of(answer)):
-    for D in decisions(m) where D.scope == 'bundle' and D.shared_contract == answer's contract:
-        ask JEV: does this answer leave m's decision unchanged | change | invalidate?
-        write affects/breaks(answer -> D) with dst_project = m
+for b in active_bundles_of(project_of(answer)):
+    for m in members(b) where m.project != project_of(answer):
+        for D in bundle_scoped_decisions(m.project) where D.id != answer.id:
+            ask JEV: does this answer leave m's decision unchanged | change | invalidate?
+            write affects/breaks(answer -> D) with dst_project = m.project
 ```
 
-Two rules keep it finite and honest:
+#### DECISION (AUG-014) — bundle membership, not a decision column
 
+Three shapes were considered:
+
+- **(a) Add a per-decision contract column:** compare its value to the answer. Rejected: §1
+  deliberately adds only `decision.scope`; the contract is already owned by `bundle`, and
+  duplicating it on each decision would introduce another value that can drift.
+- **(b) `bundle.contract`:** compare by the bundle containing the answer and the sibling. Chosen in a
+  refined form: determine active bundle IDs from the answer project's `bundle_member` rows, and walk
+  only sibling projects that are members of one of those same bundle IDs. `decision.scope ==
+  'bundle'` remains the decision-level gate; membership supplies the contract context.
+- **(c) drop the contract clause as implied:** rejected because a project may belong to multiple
+  bundles, and walking every bundle-scoped decision of every sibling would cross unrelated
+  contracts.
+
+Behavioral consequence: a bundle-scoped answer examines decisions in sibling projects connected
+to the answer project through the same active bundle(s); a sibling reachable only through a
+different bundle/contract is not asked of JEV and receives no `affects`/`breaks` edge. If the answer
+project belongs to several active bundles, each shared bundle contributes its members, with each
+sibling project still visited once. The model has no per-decision bundle ID, so this is the narrowest
+consistent interpretation available without changing §1's schema.
+
+Two rules keep it finite and honest:
 - Only **bundle-scoped** decisions cross the boundary. A project-local decision never does — or
   every answer reaches every project and the pass is quadratic again.
 - A `breaks` edge into a sibling is an **escalation, not a silent change**. The engine does not
