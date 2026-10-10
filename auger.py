@@ -4336,8 +4336,8 @@ def _ask_generated_candidates(ns: str, pid: str, state: str, seats: list) -> int
     if not seats:
         return None
     ceiling = feedback_budget()
-    # One additional candidate lets the governor retain a visible budget-thin row when a batch
-    # exceeds the number of questions this run may actually ask. Zero still generates one to mark.
+    # One candidate of headroom: the run BREAKS at the ceiling (AUG-095) instead of recording the
+    # overflow, so the extra candidate is a margin, never a budget_thin row.
     count = min(max(1, ceiling + 1), max(1, len(seats) * 2))
     candidates, generation_cost, generation_error = generate_candidate_questions(
         state, count
@@ -4407,7 +4407,7 @@ def _ask_generated_candidates(ns: str, pid: str, state: str, seats: list) -> int
     print(f"generated candidates: {len(candidates)}  proposed by: {model}")
     print(f"completeness: {(answers.get('completeness') or {}).get('score')} / 4")
     asked = 0
-    budget_thin = []
+    hit_ceiling = False
     for idx in order:
         candidate_id = candidate_ids[idx]
         text = candidates[idx]
@@ -4422,7 +4422,13 @@ def _ask_generated_candidates(ns: str, pid: str, state: str, seats: list) -> int
                 f"  DROPPED {candidate_id}: already answered (JEV noul {already:.2f}) — {text}"
             )
             continue
-        status = "open" if asked < ceiling else "budget_thin"
+        # AUG-095: the ceiling bounds ASKING, exactly as in `feedback`. Once it is reached the
+        # run STOPS — the over-ceiling candidates are generated, not owed, so they are left
+        # unrecorded (a later run regenerates them) instead of being piled up as budget_thin rows
+        # the user never asked for and never sees a stop signal about.
+        if asked >= ceiling:
+            hit_ceiling = True
+            break
         qid, why = store_proposed_question(
             ns,
             pid,
@@ -4432,37 +4438,36 @@ def _ask_generated_candidates(ns: str, pid: str, state: str, seats: list) -> int
             proposed_by_model=model,
             scored_by_model=JEV_MODEL,
             generation_cost=generation_cost,
-            status=status,
+            status="open",
         )
         if not qid:
             print(f"  NOT STORED {candidate_id}: {why} — {text}")
             continue
-        if status == "open":
-            asked += 1
-            print(
-                f"  ASKED {qid}  {text}  [proposed={model}; scored={JEV_MODEL}; generation_cost={generation_cost}]"
-            )
-        else:
-            budget_thin.append(qid)
-            print(
-                f"  BUDGET-THIN {qid}  {text}  [proposed={model}; scored={JEV_MODEL}]"
-            )
+        asked += 1
+        print(
+            f"  ASKED {qid}  {text}  [proposed={model}; scored={JEV_MODEL}; generation_cost={generation_cost}]"
+        )
         if why:
             print(f"    WARNING {why}")
-    if budget_thin:
+    if hit_ceiling:
+        print(
+            f"  STOPPED at the ceiling: {ceiling} question(s) asked this run — the remaining "
+            f"candidate(s) were left unasked and not recorded"
+        )
         escalate(
             ns,
             pid,
             question=(
-                f"budget-thin: true — the run hit its ceiling of {ceiling} question(s) "
-                f"with {len(budget_thin)} candidate question(s) recorded but NOT asked"
+                f"budget-thin: true — the run hit its ceiling of {ceiling} question(s) and "
+                f"stopped; the over-ceiling candidate(s) were left unasked and NOT recorded "
+                f"(a later run regenerates them)"
             ),
-            options=", ".join(budget_thin),
-            default_action="the questions keep their rows in state budget_thin and are asked on a later run",
-            risk="those branches stay thin until then: an honest shallow branch, never a silent one",
+            options="",
+            default_action="the run asked its ceiling and stopped; a later run regenerates the rest",
+            risk="the over-ceiling candidates stay unasked until a later run regenerates them",
         )
-    print(f"ceiling: {ceiling}  asked: {asked}  budget-thin: {len(budget_thin)}")
-    if budget_thin:
+    print(f"ceiling: {ceiling}  asked: {asked}")
+    if hit_ceiling:
         print("budget-thin: true")
     return 0
 
@@ -4477,6 +4482,21 @@ def cmd_ask(a):
         "decision",
         f"project_id=eq.{pid}&confidence=lt.{T_CONFIDENT}&select=id,domain,chosen,confidence,status&order=confidence.asc",
     )
+    # AUG-095: a decision that already has an OPEN follow-up (an `opens` edge to an unanswered
+    # question) is not a candidate for re-drilling — asking again would pile a second open
+    # question on the same decision. `feedback` already skips these and says so out loud; `ask`
+    # must not re-drill them silently.
+    drilled = drilled_decisions(ns, pid)
+    if drilled:
+        undrilled = []
+        for d in seats:
+            if d["id"] in drilled:
+                print(
+                    f"  {d['id']}  already drilled: {drilled[d['id']]} is open and awaiting an answer"
+                )
+            else:
+                undrilled.append(d)
+        seats = undrilled
     unknown = select(ns, "unknown", f"project_id=eq.{pid}")
     unans = select(ns, "question", f"project_id=eq.{pid}&status=eq.open&order=id.asc")
     hits = []

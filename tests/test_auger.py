@@ -4763,9 +4763,11 @@ def test_ask_generated_paraphrase_is_rejected_using_bounded_stored_question_cont
     assert all(q["text"] != paraphrase for q in stored), stored
 
 
-def test_ask_generated_batch_obeys_budget_and_records_budget_thin(
+def test_ask_generated_batch_stops_at_the_ceiling_and_prints_a_stop_notice(
     decided: dict, monkeypatch
 ):
+    """AUG-095 (a): once the ceiling is reached, `ask` STOPS — it does not keep storing the
+    over-ceiling candidates as budget_thin rows, and it says so out loud."""
     ns, pid = decided["ns"], decided["pid"]
     monkeypatch.setenv(auger.BUDGET_ENV, "1")
     monkeypatch.setattr(auger, "recall", lambda *a, **k: [])
@@ -4797,12 +4799,78 @@ def test_ask_generated_batch_obeys_budget_and_records_budget_thin(
     assert rc == 0, out
     assert got_count == [2], got_count
     stored = rows(ns, "question", f"project_id=eq.{pid}&order=id.asc")
-    assert [q["status"] for q in stored] == ["open", "budget_thin"], stored
-    assert (
-        "budget-thin: true" in out and "ceiling: 1  asked: 1  budget-thin: 1" in out
-    ), out
+    assert [q["status"] for q in stored] == ["open"], stored
+    assert "STOPPED at the ceiling" in out, out
+    assert "ceiling: 1  asked: 1" in out and "budget-thin: true" in out, out
     marker = row(ns, "escalation", "")
     assert "budget-thin: true" in marker["question"], marker
+
+
+def test_ask_skips_a_decision_that_already_has_an_open_followup(
+    decided: dict, monkeypatch
+):
+    """AUG-095 (b): a decision with a live follow-up is not re-drilled by `ask` — it is skipped
+    as a candidate with the reason printed, matching `feedback`'s wording."""
+    ns, pid = decided["ns"], decided["pid"]
+    # A second thin decision so the generated-candidate path still has one after D-002 is skipped.
+    assert (
+        answer(
+            ns,
+            did="D-003",
+            domain="4.07",
+            chosen="option three",
+            options=["option three", "the other one"],
+            why_not="the seed forbids the other one",
+            confidence=0.35,
+        )[0]
+        == 0
+    )
+    store_questions(
+        ns, pid, ("Q-000001", "What happens if the writer crashes?", "open")
+    )
+    auger.edge(
+        ns,
+        pid,
+        "opens",
+        "decision",
+        "D-002",
+        "question",
+        "Q-000001",
+        source="rule",
+        note="D-002 already has a live follow-up",
+    )
+    seen_states = []
+    monkeypatch.setattr(auger, "recall", lambda *a, **k: [])
+
+    def generate(state, count):
+        seen_states.append(state)
+        return (["First candidate?", "Second candidate?"], 0.00001, "")
+
+    monkeypatch.setattr(auger, "generate_candidate_questions", generate)
+    monkeypatch.setattr(
+        auger,
+        "jev",
+        lambda state, questions: (
+            {
+                "answers": {
+                    "next_question": {"choice": "candidate_1"},
+                    "candidate_1_already_answered": {"noul": 0.1},
+                    "candidate_2_already_answered": {"noul": 0.1},
+                    "completeness": {"score": 2},
+                }
+            },
+            None,
+        ),
+    )
+    rc, out = run_cli(["-n", ns, "ask"])
+    assert rc == 0, out
+    assert "  D-002  already drilled: Q-000001 is open and awaiting an answer" in out, (
+        out
+    )
+    assert seen_states, "the generated-candidate path did not run"
+    state = seen_states[0]
+    assert "D-002" not in state, state
+    assert "D-003" in state, state
 
 
 def test_ask_falls_back_to_single_subject_when_generator_is_unavailable(
