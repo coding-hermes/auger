@@ -155,12 +155,13 @@ for D in neighbours, excluding the decision this answer belongs to:
     elif 'invalidate' and score>=T-> write breaks(answer -> D)
 ```
 
-**Engineering call — Q3 (how aggressive): two conditions, not one.** The pass fires when (a) the
-answer *changed* a previously recorded decision (a human/rule assertion, no model call needed), or
-(b) retrieval over the namespace returns a neighbour above a score floor `T_NEIGHBOUR`. Below the
-floor nothing is asked. Without a floor the pass is quadratic and every answer "affects" every
-other; with it, the pass is proportional to genuine semantic proximity. `T_NEIGHBOUR` starts at
-the retrieval layer's own default and is tuned from the observed false-positive rate.
+**Engineering call — Q3 (how aggressive): one floor, bundle walk.** The `bundle_impact` pass
+walks bundle siblings directly (no retrieval/neighbour scoring). The only gate is the impact
+confidence floor `T_IMPACT_FLOOR` (auger.py:4721): a verdict stated below that confidence is
+treated as UNKNOWN, not as a real impact. Without the floor every answer would "affect" every
+sibling; with it, the pass is proportional to the model's actual confidence. The earlier design
+sketch mentioned a retrieval-based neighbour floor (`T_NEIGHBOUR`), but the shipped
+implementation uses the confidence floor alone — see `docs/VERBS.md` → `impact`.
 
 ### BEAT 4 — PROPAGATE (closing branches, E2/E4)
 

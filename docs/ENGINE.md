@@ -161,8 +161,9 @@ concluded engineering call in `docs/SPEC-001-graph.md` section 7 and is implemen
 3. **How aggressive is the `affects` pass?** Every answer could touch everything, so the pass
    needs a stopping rule or it becomes quadratic. Leaning: only make the pass when the answer
    *changes* a previously recorded decision, or when retrieval scores above a floor.
-   → **Settled: two conditions (Q3).** Implemented as the neighbour floor and the impact
-   confidence floor (`T_NEIGHBOUR` / `T_IMPACT_FLOOR` in `auger.py`).
+   → **Settled: one floor (Q3).** Implemented as the impact confidence floor
+   (`T_IMPACT_FLOOR` in `auger.py`); the pass walks bundle siblings directly via
+   `bundle_impact` (no retrieval/neighbour scoring). See `docs/VERBS.md` → `impact`.
 4. **Is a closed branch reopened automatically?** If a new answer invalidates an old one, the old
    branch is no longer closed. The skill has an invalidation walk for exactly this. Leaning:
    automatic reopen, with the reason recorded, because a stale closed branch is worse than an
