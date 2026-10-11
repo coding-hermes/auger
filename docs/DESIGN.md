@@ -52,8 +52,8 @@
 | R9 | Toggle choices on/off to see what the system looks like | `auger toggle` (PATCH by primary key) |
 | R10 | A dump script: "give me output with option 1 4 95 234 11" | `auger dump --config D-001=O2 D-003=O1 …` (hypothetical, non-mutating) |
 | R10a | One readable deterministic document for the entire stored namespace | `auger export` (all declared tables, explicit empty sections, non-mutating) |
-| R11 | Send a good/bad configuration to an agent for judgement | `dump` renders text; piping it to a model is the next step |
-| R12 | A feedback engine that asks deeper questions based on what we have | `ask` + low-confidence surfacing; the engine proper is v0.2 |
+| R11 | Send a good/bad configuration to an agent for judgement | `auger verdict` — SHIPPED (AUG-003): on-file or `--ask-jev` judgments recorded as `verdict` rows with reasons; see `docs/VERBS.md` → `verdict` |
+| R12 | A feedback engine that asks deeper questions based on what we have | `auger feedback` — SHIPPED (AUG-001): low-confidence decisions become the next question batch, bounded by the governor (`--budget`, default 3); see `docs/VERBS.md` → `feedback` |
 | R13 | JEV to tell us confidence, amount of data, range of data, subjects next | `ask` reports completeness + next_subject + `status` reports spread |
 | R14 | The SDM skill given to both the CLI's agent and the answering agent | the skill is the method; this program is its memory and its driver |
 
@@ -131,7 +131,7 @@ copy. The dump is a projection of it, never a parallel artifact. DuckBrain's rep
 `COLS` in `auger.py` is the source of truth; `auger init` prints the tally
 (`declared: 14/14 tables`), so the count is checked by running it, not trusted here.
 
-## 4. Open decisions
+## 4. Open decisions (with shipped resolutions)
 
 1. **Name.** Working name is `auger`. One word to change. Alternatives considered: `strata`,
    `taproot`, `bore`, `quarry`.
@@ -139,21 +139,38 @@ copy. The dump is a projection of it, never a parallel artifact. DuckBrain's rep
    day. The fleet convention for durable daemons is a single Go binary + systemd + a loopback
    port. Recommend: keep Python while the shape is moving, port once the verbs stop changing.
 3. **Who asks the questions — JEV alone?** JEV gives calibrated choice, which is what we want for
-   *confidence*, but a large-context model may propose better *questions*. Proposal for v0.2: a
+   *confidence*, but a large-context model may propose better *questions*. The v0.2 proposal — a
    strong model proposes candidate questions, JEV scores them (dedupe via `already_answered`,
-   rank via `choice`, completeness via `score`). That splits generation from judgement, which is
-   also what the skill's own doctrine demands.
+   rank via `choice`, completeness via `score`) — is SHIPPED in `auger feedback`
+   (`AUGER_PROPOSER_MODEL`, default `deepseek/deepseek-v3.2`; see `docs/VERBS.md` → `feedback`).
+   That splits generation from judgement, which is also what the skill's own doctrine demands.
 4. **The feedback engine (R12).** Should it auto-loop without the human (bounded by a budget and
    a stopping rule), or propose the next batch and wait? The skill's governor says the budget is
    real; the program should enforce it rather than trust the agent to.
+   → SHIPPED as `auger feedback` (AUG-001): it auto-proposes the next batch under a program-
+   enforced ceiling (`--budget N`, default 3, env `AUGER_QUESTION_BUDGET`), records every
+   question the ceiling stopped, and is fail-closed on a proposer or gate failure — see
+   `docs/VERBS.md` → `feedback`.
 5. **Sending a dump to an agent for judgement (R11).** What is the verdict shape — a JEV `score`
    with a rubric, or a free-text critique from a large model, or both?
+   → SHIPPED as `auger verdict` (AUG-003): both shapes, one row shape — a verdict ON FILE
+   (human or another model judged it elsewhere) or `--ask-jev`, where JEV judges the dump
+   rendered exactly as `dump` renders it — see `docs/VERBS.md` → `verdict`.
 
-## 5. v0.2 candidate work
+## 5. The v0.2 shortlist, resolved
+
+The v0.2 shortlist, with what happened to it:
 
 - `auger feedback` — the loop that turns low-confidence decisions into the next question batch.
+  → **SHIPPED (AUG-001)**, bounded by the program-enforced governor.
 - Budget governor — a per-run question ceiling with an explicit `budget-thin` marker, mirroring
-  the skill's rule.
+  the skill's rule. → **SHIPPED** inside `feedback` (`--budget`, `budget-thin` escalation on
+  the run).
 - `auger verdict` — pipe a dump to a model (or JEV) and record good/bad with reasons.
+  → **SHIPPED (AUG-003)** as `auger verdict` (`--ask-jev` / on-file; `status` tallies the
+  words per project).
 - Domain grid seeding — the 44 domains from the skill as `domain` rows, with triage scores.
-- A pytest suite that runs against an ephemeral namespace and cleans up.
+  → **SHIPPED (AUG-004)**: `auger init --seed-domains` seeds the canonical 44-domain grid,
+  idempotent, with validation against the skill's files.
+- A pytest suite that runs against an ephemeral namespace and cleans up. → **SHIPPED**:
+  `tests/test_auger.py` (297 tests) plus the gate battery in `tests/gate.sh`.

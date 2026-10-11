@@ -1,8 +1,11 @@
 # Auger — the engine (working model, v0.1 thinking)
 
 > This is the part Bane flagged as "we need to keep talking about this". It states the engine as
-> a concrete mechanism so it can be argued with, rather than as an intention. Nothing here is
-> final; the open questions at the bottom are the actual agenda.
+> a concrete mechanism so it can be argued with, rather than as an intention. Written as v0.1
+> thinking, it is now largely SHIPPED: the edge table and question linking (AUG-007/AUG-008),
+> the impact pass (AUG-010), the feedback engine (AUG-001), and the verdict verb (AUG-003) are
+> in `auger.py`. `docs/VERBS.md` is the registry of record for how the verbs actually behave;
+> the historical framing below is kept because the reasoning still holds.
 
 ## The requirement, in the words it came in
 
@@ -28,13 +31,15 @@ Distilled, that is five claims about the engine:
 
 ## The core model: a graph, not a list
 
-Today auger has rows. The engine needs **edges**, because every claim above is a statement about
-a relationship between two nodes.
+Auger started as rows only. The engine reasons over **edges**, because every claim above is a
+statement about a relationship between two nodes.
 
 **Nodes** (already exist as tables): `question`, `decision` (an answer), `unknown`,
 `assumption`, `escalation`, `break`.
 
-**Edges** (missing — this is the actual gap):
+**Edges** (SHIPPED as of AUG-007/AUG-008 — the `edge` table and question linking are in the
+CLI; see `docs/SPEC-001-graph.md` section 2 for the table and `docs/VERBS.md` for what each
+verb writes):
 
 | Edge | From → To | Means | Serves |
 |---|---|---|---|
@@ -46,7 +51,9 @@ a relationship between two nodes.
 | `derives_from` | question → question | this question exists only because that one was asked | E1, E4 |
 | `perspective` | question → facet | the way of looking this question came from | E5 |
 
-Only `decision.question_id` exists today and **nothing populates it** — see board row AUG-002.
+Only `decision.question_id` existed when this was written and nothing populated it. That gap is
+closed (AUG-007/AUG-008): `auger answer --question-id Q-…` populates the field and writes the
+`closes` edge in the same write — see `docs/VERBS.md` → `answer`.
 
 ### Why edges are the whole thing
 
@@ -65,7 +72,8 @@ candidate question Q
 
 That check is in the CLI today (`auger check`) and it **works** — verified: the same question
 scored `noul 0.11` against self-contradictory evidence and `0.78` once the evidence was made
-consistent. The engine adds the write-back: today `check` only prints a verdict.
+consistent. The write-back shipped with the graph (AUG-007/AUG-008): `feedback` links gate-answered
+questions (`satisfies` + `linked`, never asked) and `answer --question-id` writes `closes`.
 
 ## The loop, concretely
 
@@ -95,9 +103,12 @@ Four beats, and each already has a proven substrate:
    retrieval + JEV `noul already_answered`. *Proven.*
 3. **ANSWER** — record the choice, the rejected alternatives, the reason, the confidence.
    *Where:* `auger answer`. *Proven.*
-4. **IMPACT** — the new beat, and the one that makes it an engine. When an answer lands, find
-   what it touches: retrieve neighbours, ask JEV what it affects/breaks, and either record the
-   break or open the follow-up question. *This is E3, and it does not exist yet.*
+4. **IMPACT** — the beat that makes it an engine, and it is SHIPPED (AUG-010). When an answer
+   lands, find what it touches: retrieve neighbours, ask JEV what it affects/breaks, and record
+   `affects`/`breaks` edges naming each sibling's bundle-scoped decision — the bundle impact
+   pass runs on `auger answer --scope bundle` (JEV `choice`, confidence-floored, fail-closed),
+   with cross-boundary edges carrying `dst_project` and every break recorded as an escalation
+   with a default. See `docs/VERBS.md` → `answer` (scope bundle).
 
 ## E4 — depth, handled rather than hoped for
 
@@ -129,29 +140,45 @@ economic perspectives does not. Concretely, every open question is asked from a 
 This is the concrete answer to "many ways of looking". The facet set is data, not code, so it can
 be extended per project.
 
-## Open questions — the actual agenda
+## Open questions — from agenda to settled
+
+When this was written these were the actual agenda. Every leaning below was later recorded as a
+concluded engineering call in `docs/SPEC-001-graph.md` section 7 and is implemented in
+`auger.py`; they are kept here in their original wording as the rationale record.
 
 1. **Does the gate run on every candidate question, or only the cheap ones?** Every question
    costs ~$0.00003 to gate. Gating everything is affordable; not gating produces duplicate work.
    Leaning: gate everything, because the duplicate-question failure is the expensive one.
+   → **Settled: gate everything (Q1).** The gate runs on every candidate in `feedback` and
+   `propagate`'s gate walk.
 2. **Who generates the candidate questions — JEV or a large model?** JEV *judges* superbly
    (calibrated choice/score/noul) but it does not generate prose well. Leaning: a large-context
    model proposes candidates from the graph, JEV gates and ranks them. That splits generation
    from judgement, which the skill's own doctrine requires.
+   → **Shipped:** `feedback` proposes follow-ups with a large model (`AUGER_PROPOSER_MODEL`,
+   default `deepseek/deepseek-v3.2`) and JEV gates each proposal — see `docs/VERBS.md` →
+   `feedback`.
 3. **How aggressive is the `affects` pass?** Every answer could touch everything, so the pass
    needs a stopping rule or it becomes quadratic. Leaning: only make the pass when the answer
    *changes* a previously recorded decision, or when retrieval scores above a floor.
+   → **Settled: two conditions (Q3).** Implemented as the neighbour floor and the impact
+   confidence floor (`T_NEIGHBOUR` / `T_IMPACT_FLOOR` in `auger.py`).
 4. **Is a closed branch reopened automatically?** If a new answer invalidates an old one, the old
    branch is no longer closed. The skill has an invalidation walk for exactly this. Leaning:
    automatic reopen, with the reason recorded, because a stale closed branch is worse than an
    open one.
+   → **Settled: yes, with the reason (Q4).** `auger propagate` runs the rule walk (moot +
+   reopen + `derives_from` cascade) and the gate walk — see `docs/VERBS.md` → `propagate`.
 5. **Does the human sit inside the loop or at the ends?** Your skill reserves priority judgments
    for the human. Leaning: the engine runs unattended but *stops* at a priority judgment, records
    an escalation with a default and a risk, and continues on the default — so it never blocks and
    never pretends to have decided for you.
+   → **Shipped:** escalation rows with a default action are written by the impact pass and
+   `feedback` (per decision and run-level `budget-thin`).
 
-## What this means for the board
+## What this means for the board — historical note
 
-AUG-001 (feedback engine) and AUG-002 (branch linking) are the two rows that build this. The
-engine cannot be built in one pass: **AUG-002 first** (edges, or nothing can be walked), then
-AUG-001 (the loop over those edges). Everything else is downstream.
+The two rows this section pointed at are built: **AUG-007/AUG-008** landed the edge table and
+question linking first (edges, or nothing can be walked), then **AUG-001** built the feedback
+loop over those edges, with AUG-010 (impact) and AUG-003 (verdict) completing the set. Kept for
+the sequencing rationale — graph before loop — which still governs how new engine features land.

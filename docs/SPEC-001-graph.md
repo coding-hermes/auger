@@ -1,21 +1,26 @@
 # SPEC-001 — the question/answer graph
 
-> Status: **draft for agreement.** This is the schema and the propagation rules the engine needs.
-> It is written to be executed by a worker without further conversation. Parts that depend on
-> unresolved design decisions are marked `[BLOCKED: Qn]` and must not be implemented until the
-> decision is recorded.
+> Status: **draft implemented.** This is the schema and the propagation rules the engine needed;
+> it is now executed by `auger.py` (edge table + question linking AUG-007/AUG-008, propagate
+> walks, the feedback engine over it). Written to be executed by a worker without further
+> conversation; the `[BLOCKED: Qn]` markers and their decisions are recorded in section 7 —
+> every engineering call below is implemented as concluded. `docs/VERBS.md` is the registry of
+> record for the verbs that write these tables.
 
 ## Why this spec exists
 
 `docs/ENGINE.md` states the engine as five claims (E1–E5). This spec turns the graph parts of
-those claims into tables and rules. Without it, AUG-001 and AUG-002 cannot be built: there is
-nothing to walk.
+those claims into tables and rules, which is what AUG-001 and AUG-002 were built on: the edge
+table and question linking shipped as AUG-007/AUG-008, and the propagate walks, feedback engine,
+and impact pass run on top of them.
 
 The governing insight: auger stores **rows**, but the engine reasons over **relationships**.
 Every claim Bane stated — answers leading to questions, matching across the project, linking an
 old answer as the answer to a new question, closing branches, resolving a chain — is an assertion
-about two nodes. Today exactly one such field exists (`decision.question_id`) and nothing
-populates it.
+about two nodes. When this spec was written exactly one such field existed
+(`decision.question_id`) and nothing populated it; that gap is closed (AUG-007/AUG-008) —
+`auger answer --question-id` populates the field and writes the `closes` edge in the same write
+(see `docs/VERBS.md` → `answer`).
 
 ## 1. Node states
 
@@ -129,12 +134,17 @@ cheaper than the failure it prevents. This is now recorded as concluded, not ope
 ### BEAT 2 — ANSWER
 
 Unchanged from today: record the choice, the rejected alternatives, **the reason each lost**, the
-reversal cost, the confidence. Plus: populate `decision.question_id` (today nothing does) and
-write `closes(answer → question)`.
+reversal cost, the confidence. Plus: populate `decision.question_id` (shipped AUG-007/AUG-008 —
+the flag was the first thing to populate it) and write `closes(answer → question)`.
 
 ### BEAT 3 — IMPACT (E3)
 
-The new beat, and the one that makes this an engine rather than a form.
+The beat that makes this an engine rather than a form. SHIPPED (AUG-010) as the bundle impact
+pass on `auger answer --scope bundle`: neighbours come from retrieval over sibling projects'
+bundle-scoped decisions, JEV scores each with `choice` (below the confidence floor the outcome
+is UNKNOWN and no edge is written — fail-closed), `change` writes `affects` and `invalidate`
+writes `breaks`, cross-boundary edges carry `dst_project`, and every break is recorded as an
+escalation with a default action. See `docs/VERBS.md` → `answer` (scope bundle).
 
 ```
 neighbours = recall(ns, answer.summary, limit=N)     # what does this reach?
@@ -154,7 +164,10 @@ the retrieval layer's own default and is tuned from the observed false-positive 
 
 ### BEAT 4 — PROPAGATE (closing branches, E2/E4)
 
-This is the mechanic Bane described and the one the design was missing.
+This is the mechanic Bane described; the design originally lacked it, and it shipped as
+`auger propagate` — the rule walk (moot + reopen + `derives_from` cascade) and the gate walk,
+per the SOURCE comment at the top of the PROPAGATE block in `auger.py`. See
+`docs/VERBS.md` → `propagate`.
 
 ```
 when a question becomes answered | linked | moot:
@@ -210,3 +223,12 @@ opens nothing is the real signal that a branch is finished.
 
 **Q2 and Q5 are the two that still gate implementation.** Everything else in this spec is
 settled and buildable.
+
+> UPDATE (DOC-008): this closing paragraph is the spec's original state and no longer holds —
+> the blockers it names did not stop the build. BEAT 1's proposer gate and BEAT 4's walks ship
+> today: `feedback` proposes with a large model (`AUGER_PROPOSER_MODEL`, default
+> `deepseek/deepseek-v3.2`) and JEV gates every candidate (Q2 answered in practice), and the
+> engine runs unattended with escalations carrying a default (Q5, per `docs/VERBS.md` →
+> `feedback`/`propagate`). Q1/Q3/Q4 are recorded as CONCLUDED above. The engineering calls in
+> this spec are implemented as concluded, not re-litigated — see the SOURCE comment at the top
+> of the PROPAGATE block in `auger.py`.
