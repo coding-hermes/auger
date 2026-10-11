@@ -13,7 +13,8 @@ The spec is a GENERATED artifact — this suite proves it never drifts:
     itself is built from auger.py's constants (the served route regex, the
     health path, the version, the limit bounds). No phantom operations, no
     missing read-only ones, no mutating verb anywhere, servers url pinned to
-    the contracted http://127.0.0.1:8766, and the search path template must
+    the contracted base URL (API_BASE_URL, currently http://127.0.0.1:8768),
+    and the search path template must
     match the route `auger serve` actually dispatches on.
 
 Offline by construction: importing `auger` touches no service, and nothing
