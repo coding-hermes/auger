@@ -1525,6 +1525,108 @@ def test_answer_supersedes_marks_the_old_decision_and_records_one_edge(decided: 
     assert row(ns, "decision", "id=eq.D-001")["status"] == auger.SUPERSEDED_STATUS
 
 
+def test_dump_shows_invalidated_marker(decided: dict):
+    ns, pid = decided["ns"], decided["pid"]
+    invalidation = auger.edge(
+        ns,
+        pid,
+        "breaks",
+        "decision",
+        "D-002",
+        "decision",
+        "D-001",
+        source="human",
+        note="new evidence invalidates the earlier decision",
+    )
+
+    rc, out = run_cli(["-n", ns, "dump"])
+
+    assert rc == 0, out
+    assert f"INVALIDATED by D-002 ({invalidation['id']})" in out, out
+
+
+def test_export_shows_invalidated_marker(decided: dict):
+    ns, pid = decided["ns"], decided["pid"]
+    invalidation = auger.edge(
+        ns,
+        pid,
+        "breaks",
+        "decision",
+        "D-002",
+        "decision",
+        "D-001",
+        source="human",
+        note="new evidence invalidates the earlier decision",
+    )
+
+    exported = auger.render_export(ns)
+
+    assert f"INVALIDATED by D-002 ({invalidation['id']})" in exported, exported
+
+
+def test_status_excludes_invalidated_from_active_count(decided: dict):
+    ns, pid = decided["ns"], decided["pid"]
+    invalidation = auger.edge(
+        ns,
+        pid,
+        "breaks",
+        "decision",
+        "D-002",
+        "decision",
+        "D-001",
+        source="human",
+        note="new evidence invalidates the earlier decision",
+    )
+
+    rc, out = run_cli(["-n", ns, "status"])
+
+    assert rc == 0, out
+    assert "decisions 1 |" in out, out
+    assert "invalidated_count=1" in out, out
+    assert f"D-001: INVALIDATED by D-002 ({invalidation['id']})" in out, out
+
+
+def test_export_active_option_excluded_by_breaks_edge(decided: dict):
+    ns, pid = decided["ns"], decided["pid"]
+    auger.edge(
+        ns,
+        pid,
+        "breaks",
+        "decision",
+        "D-002",
+        "decision",
+        "D-001",
+        source="human",
+        note="new evidence invalidates the earlier decision",
+    )
+
+    exported = auger.render_export(ns)
+    start = exported.index("### D-001-O1")
+    end = exported.find("### ", start + len("### D-001-O1"))
+    option_block = exported[start:] if end < 0 else exported[start:end]
+
+    assert "- active: false" in option_block, option_block
+    assert "- active: true" not in option_block, option_block
+
+
+def test_no_breaks_edges_renders_normally(decided: dict):
+    """AUG-100 AC4: a namespace with NO breaks edges renders byte-for-byte as before."""
+    ns = decided["ns"]
+
+    rc, dump_out = run_cli(["-n", ns, "dump"])
+    assert rc == 0, dump_out
+    assert "INVALIDATED" not in dump_out, dump_out
+    assert "invalidated" not in dump_out, dump_out
+
+    exported = auger.render_export(ns)
+    assert "INVALIDATED" not in exported, exported
+
+    rc, status_out = run_cli(["-n", ns, "status"])
+    assert rc == 0, status_out
+    assert "decisions 2 |" in status_out, status_out  # unmodified count
+    assert "invalidated" not in status_out, status_out  # no invalidated field at all
+
+
 def test_answer_supersede_refusals_write_nothing(decided: dict):
     ns, pid = decided["ns"], decided["pid"]
     before = {

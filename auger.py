@@ -2026,7 +2026,10 @@ def q_states(ns: str, project_id: str) -> dict:
 
 
 def graph_edges(ns: str, project_id: str) -> list:
-    return select(ns, "edge", f"project_id=eq.{project_id}&order=id.asc")
+    # An empty project id asks for the WHOLE namespace (the export render is namespace-scoped):
+    # `project_id=eq.` matches nothing and would silently blind the caller.
+    query = "order=id.asc" if not project_id else f"project_id=eq.{project_id}&order=id.asc"
+    return select(ns, "edge", query)
 
 
 def edge_index(es: list) -> dict:
@@ -2069,6 +2072,37 @@ def edge_index(es: list) -> dict:
         ):
             idx["breaks"].append(e)
     return idx
+
+
+def breaks_by_decision(edges: list[dict]) -> dict[str, list[dict]]:
+    """Index local decision invalidations for read-side renderers.
+
+    The write path deliberately leaves the target decision and its option rows untouched. A
+    renderer therefore needs the edge table to distinguish an invalidated decision from a live one.
+    Cross-project breaks are excluded just like ``edge_index``: their target belongs to a sibling
+    namespace and is not a local decision in this render.
+    """
+    return {
+        decision_id: targeted
+        for decision_id, targeted in _group_break_edges(edges).items()
+    }
+
+
+def _group_break_edges(edges: list[dict]) -> dict[str, list[dict]]:
+    grouped: dict[str, list[dict]] = {}
+    for e in edges:
+        if (
+            e.get("kind") == "breaks"
+            and e.get("dst_kind") == "decision"
+            and not e.get("dst_project")
+        ):
+            grouped.setdefault(e["dst_id"], []).append(e)
+    return grouped
+
+
+def invalidation_marker(edge_row: dict) -> str:
+    """The stable reader-facing annotation for one breaks edge."""
+    return f"INVALIDATED by {edge_row['src_id']} ({edge_row['id']})"
 
 
 def questions_closed_by(ns: str, project_id: str, idx: dict) -> dict:
@@ -5630,9 +5664,23 @@ def cmd_status(a):
     for d in active_dec:
         by_dom.setdefault(d.get("domain") or "(none)", []).append(d)
     print(f"project {pid} — {p.get('name')}  [{p.get('status')}]")
+    # AUG-100: an invalidated decision stays STORED (AUG-076 keeps every stored row in the
+    # count), so the main count subtracts only the invalidated rows, and the invalidated set
+    # is reported by name below — a reader must see WHICH decision died, not just how many.
+    edges = graph_edges(ns, pid)
+    break_idx = breaks_by_decision(edges)
+    invalidated_dec_ids = set(break_idx.keys())
+    invalidated_rows = [d for d in dec if d["id"] in invalidated_dec_ids]
+    invalidated_count = len(invalidated_rows)
     print(
-        f"decisions {len(dec)} | options {len(opt)} | escalations {len(esc)} | unknowns {len(unk)} | domains {cov['rows']}"
+        f"decisions {len(dec) - invalidated_count} | invalidated {invalidated_count} | "
+        f"options {len(opt)} | escalations {len(esc)} | unknowns {len(unk)} | domains {cov['rows']}"
     )
+    if invalidated_count:
+        print(f"invalidated_count={invalidated_count}")
+        for d in invalidated_rows:
+            for e in break_idx[d["id"]]:
+                print(f"{d['id']}: {invalidation_marker(e)}")
     pending_lines = pending_memory_warning_lines(dec)
     if pending_lines:
         print("\n" + "\n".join(pending_lines))
@@ -6108,6 +6156,9 @@ def render_export(ns: str, project_id: str | None = None) -> str:
     ]
     if project_id:
         lines.append(f"Project context: {project_id} (not a filter).")
+    # AUG-100: index breaks edges for rendering (always, export is namespace-scoped)
+    edges = graph_edges(ns, "")
+    break_idx = breaks_by_decision(edges)
     for table in EXPORT_TABLES:
         rows = select(ns, table, "order=id.asc")
         lines.extend(("", f"## {EXPORT_HEADINGS[table]} ({len(rows)} rows)"))
@@ -6116,8 +6167,18 @@ def render_export(ns: str, project_id: str | None = None) -> str:
             continue
         fields = [name for name, _kind in COLS[table]]
         for row in rows:
+            # AUG-100: render breaks-edge invalidation on decisions
+            if table == "decision" and row.get("id") in break_idx:
+                markers = [invalidation_marker(e) for e in break_idx[row["id"]]]
+                lines.extend(f"- {marker}" for marker in markers)
             lines.append(f"### {row.get('id') or '(missing id)'}")
+            invalidated_option = table == "option" and row.get("decision_id") in break_idx
             for field in fields:
+                # AUG-100: an option of an invalidated decision is not live — the stored value
+                # stays untouched on disk, but the render must not report it as active.
+                if invalidated_option and field == "active":
+                    lines.append("- active: false  # INVALIDATED by a breaks edge")
+                    continue
                 lines.append(f"- {field}: {_export_value(row.get(field))}")
     return "\n".join(lines)
 
@@ -6158,6 +6219,8 @@ def cmd_dump(a):
             and e.get("dst_kind") == "decision"
         ):
             superseded_by.setdefault(e["dst_id"], []).append(e["src_id"])
+    # AUG-100: index breaks edges so invalidations surface in the render
+    break_idx = breaks_by_decision(graph_edges(ns, pid))
 
     # --config overrides: accept a full option id, label, or bare index, but refuse every
     # malformed/unknown/ambiguous entry before rendering so a current dump cannot masquerade as a
@@ -6232,6 +6295,10 @@ def cmd_dump(a):
                     f"({d.get('chosen')}) — reason on file: "
                     f"{why_not_display(d.get('why_not'), cand)}"
                 )
+        # AUG-100: surface breaks-edge invalidations on the decision header
+        break_markers = []
+        for edge_row in break_idx.get(d["id"], []):
+            break_markers.append(invalidation_marker(edge_row))
         lines.append(
             f"## {d['id']}  ({d.get('domain') or '—'})  conf {_conf_render(d.get('confidence'))}"
             + (
@@ -6242,7 +6309,11 @@ def cmd_dump(a):
                     if superseders
                     else "  [SUPERSEDED]"
                     if d.get("status") == SUPERSEDED_STATUS
-                    else ""
+                    else (
+                        f"  [{'; '.join(break_markers)}]"
+                        if break_markers
+                        else ""
+                    )
                 )
             )
         )
