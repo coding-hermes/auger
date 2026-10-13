@@ -33,6 +33,11 @@ node bin/duckbrain.js http
 writes `/usr/lib`. Install into a user prefix instead (~5s, pnpm 12.4.2, measured on the
 2026-09-23 bunker leg):
 
+**Node version.** DuckBrain's dependencies require Node >=22.22.2 or >=24.15 or >=26. Node 22 LTS
+(22.14) and 24.11 fail `pnpm install` with `ERR_PNPM_UNSUPPORTED_ENGINE` (jsdom@30.1.1 wants
+^22.22.2 || ^24.15.0 || >=26). Verified 2026-10-12: Node 26.0.0 succeeds. Check your version:
+`node --version`. If below 22.22.2, upgrade before running pnpm.
+
 ```bash
 npm config set prefix ~/.npm-global
 export PATH=~/.npm-global/bin:$PATH
@@ -165,6 +170,22 @@ token files in order: `~/.duckbrain/foreman-status.token`, then `~/.duckbrain/to
 On a fresh box, set the env var (`export DUCKBRAIN_API_KEY=<your-key>`) or create one
 of the token files before running `init` — without either, every command exits rc=1
 with `no DuckBrain token: set DUCKBRAIN_API_KEY or ~/.duckbrain/foreman-status.token`.
+
+**Git identity (DuckBrain substrate).** DuckBrain refuses writes without a git author identity
+configured. On a fresh box, the first `auger start` (which calls the substrate's remember API)
+fails 500 with `GIT-IDENTITY-001: No git author identity is configured. DuckBrain refuses to
+invent one`. Fix: set git config or the env vars before running auger:
+
+```bash
+git config --global user.name "Your Name"
+git config --global user.email "you@example.com"
+# or env-only (no global config):
+export DUCKBRAIN_GIT_AUTHOR_NAME="Your Name"
+export DUCKBRAIN_GIT_AUTHOR_EMAIL="you@example.com"
+```
+
+The substrate reads these at boot and uses them for every JSONL commit it makes in the namespace
+directory. Without either the global config or the env vars, the substrate cannot write.
 
 ## Where the data lives
 
