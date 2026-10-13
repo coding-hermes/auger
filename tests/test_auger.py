@@ -2375,6 +2375,153 @@ def test_recall_non_200_status_is_a_failure_not_an_empty_store(monkeypatch):
     assert auger.recall("auger-075-dead", "any question", limit=3) == []
 
 
+# ============================================ AUG-101: ONE refusal for a store that cannot be asked
+# Dogfood run 15 (2026-10-12) measured `status` on a dead substrate printing the raw transport dict
+# while `recall` printed its named refusal. The EXIT CODE was 1 for both once the plumbing was
+# right — the finding's rc=0 came from `cmd | tail -2; echo $?`, which reads TAIL's status, not the
+# verb's — but the WORDS are the contract a scripting consumer keys on, and two verbs answering one
+# dead store with two different sentences is not a contract. These cases drive the REAL transport
+# at a port that REFUSES (nothing is mocked at the `db()` boundary), so the whole path runs:
+# CLI -> _project/select -> _req -> ECONNREFUSED -> refusal -> exit status.
+
+#: Port 1 is privileged and nothing listens on it: a connect is refused instantly, on any host,
+#: with no service to start, stop, or accidentally talk to.
+REFUSING_SUBSTRATE_URL = "http://127.0.0.1:1"
+
+#: The four read surfaces the row names, with the argv each needs to reach its FIRST substrate read.
+FAIL_CLOSED_READ_VERBS = [
+    ("status", ["status"]),
+    ("dump", ["dump"]),
+    ("feedback", ["feedback"]),
+    ("recall", ["recall", "any question"]),
+]
+
+
+@pytest.fixture
+def refusing_substrate(monkeypatch):
+    """Point the module at a port that refuses connections, with a token present.
+
+    The token matters: without it `_token()` exits before any request is built, so the verb would
+    fail closed for the WRONG reason and a bare `rc != 0` assertion would prove nothing. The
+    assertions below therefore also demand the transport's own words.
+    """
+    monkeypatch.setenv("DUCKBRAIN_API_KEY", "auger-101-refusing-substrate")
+    monkeypatch.setattr(auger, "DB_URL", REFUSING_SUBSTRATE_URL)
+    return REFUSING_SUBSTRATE_URL
+
+
+def run_verb(argv: list[str]) -> tuple[int, str, str]:
+    """Run one verb and report (exit code, stderr, stdout) — failing closed EITHER way.
+
+    `run_cli_exit` covers the verbs that RAISE their refusal; `recall`/`check` PRINT it and
+    `return 1`. A shell does not care which shape a verb uses, so neither does this helper.
+    """
+    out, err = io.StringIO(), io.StringIO()
+    try:
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = auger.main(argv)
+    except SystemExit as exc:
+        # `SystemExit(str)` is what the CLI exits 1 with: the message goes to stderr, the status
+        # is 1. Capture both the way a caller would see them.
+        err.write(str(exc))
+        return (exc.code if isinstance(exc.code, int) else 1), err.getvalue(), out.getvalue()
+    return rc, err.getvalue(), out.getvalue()
+
+
+@pytest.mark.parametrize("verb,argv", FAIL_CLOSED_READ_VERBS)
+def test_every_read_verb_fails_closed_on_a_refused_substrate(
+    refusing_substrate, verb, argv
+):
+    """AUG-101: all four read surfaces are ONE contract on a dead substrate."""
+    rc, err, out = run_verb(["-n", "auger-101-dead"] + argv)
+    text = out + err
+    assert rc != 0, f"{verb} exited {rc} on a refused substrate: {text!r}"
+    assert auger.FAIL_CLOSED_SENTENCE in text, (verb, text)
+    # The refusal is the TRANSPORT's — a failure for any other reason would pass a bare
+    # `rc != 0` assertion while proving nothing about the dead-substrate contract.
+    assert "Connection refused" in text, (verb, text)
+    # ...and the pre-fix shape it replaced is gone: the raw transport dict was a diagnostic
+    # printed INSTEAD of a refusal, which is what made `status` read differently from `recall`.
+    assert "'error': 'transport" not in text, (verb, text)
+
+
+def test_a_shell_consumer_reads_status_failure_as_failure(refusing_substrate):
+    """The finding's own measurement bug, pinned: `cmd | tail -2; echo $?` reads TAIL's status.
+
+    rc=0 in the dogfood log was captured that way. Called the way a script that KEYS on the exit
+    code calls it, `status` must be non-zero — so this runs the real interpreter as a child
+    process and asserts the PROCESS status, not an in-process return value.
+    """
+    env = dict(
+        os.environ,
+        DUCKBRAIN_URL=refusing_substrate,
+        DUCKBRAIN_API_KEY="auger-101-refusing-substrate",
+    )
+    proc = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "auger.py"), "-n", "auger-101-dead", "status"],
+        cwd=str(REPO_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert auger.FAIL_CLOSED_SENTENCE in proc.stderr, proc.stderr
+    assert "Connection refused" in proc.stderr, proc.stderr
+    # The control that makes the exit status meaningful: piping status into `tail` reports TAIL's
+    # status (0). That is the artifact, reproduced here so the finding cannot be re-filed from it.
+    piped = subprocess.run(
+        [
+            "sh",
+            "-c",
+            f'{sys.executable} auger.py -n auger-101-dead status | tail -2; echo $?',
+        ],
+        cwd=str(REPO_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert piped.stdout.strip().endswith("0"), piped.stdout
+
+
+def test_strict_select_raises_the_shared_refusal_on_a_transport_failure(monkeypatch):
+    """AUG-101 fixes the READ LAYER, not one verb: `select` itself raises the named refusal."""
+    monkeypatch.setattr(auger, "db", _substrate(0, {"error": "transport: connection refused"}))
+    with pytest.raises(auger.SubstrateError) as ei:
+        auger.select("auger-101-dead", "project", "order=created_at.desc")
+    msg = str(ei.value)
+    assert auger.FAIL_CLOSED_SENTENCE in msg, msg
+    assert "select project" in msg and "auger-101-dead" in msg, msg
+    # The diagnostic is KEPT, not replaced: which read died and what the transport said.
+    assert "transport: connection refused" in msg, msg
+    # The class matters: `SubstrateError` is the SystemExit the CLI exits 1 with, and the API
+    # surface keys on it to answer "unreachable" (503) instead of "missing namespace" (404).
+    assert issubclass(auger.SubstrateError, SystemExit)
+
+
+def test_a_served_refusal_keeps_the_substrates_own_words(monkeypatch):
+    """The other half of the split, pinned so it stays a DECISION: a non-zero status is not st 0.
+
+    AUG-085's contract is untouched — a substrate that ANSWERED with a 503 spoke, and its body is
+    the diagnostic to keep loud — while an unreachable one (st 0) has no responder to quote and
+    gets the named refusal instead.
+    """
+    monkeypatch.setattr(auger, "db", _substrate(503, {"error": "unavailable", "code": "X"}))
+    with pytest.raises(SystemExit) as ei:
+        auger.select("auger-101-dead", "project", "order=created_at.desc")
+    msg = str(ei.value)
+    assert "select project failed (503)" in msg, msg
+    assert "unavailable" in msg and "X" in msg, msg
+
+
+def test_a_reachable_read_is_untouched_by_the_fail_closed_change(monkeypatch):
+    """Happy-path control: a 200 answers rows exactly as before — the change is the error path."""
+    rows = [{"id": "P-101"}]
+    monkeypatch.setattr(auger, "db", _substrate(200, rows))
+    assert auger.select("auger-101-live", "project", "order=created_at.desc") == rows
+
+
 # ================================================= AUG-032: cold-start progress line
 # A process's first recall pays the substrate's query-embedding provider round-trip
 # (~20s measured 2026-09-23 vs ~2s warm) — silence that long reads like a hang. The

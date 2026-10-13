@@ -11,6 +11,7 @@ import pytest
 import auger
 
 REAL_NAMESPACE_CHECK = auger._namespace
+REAL_NAMESPACE_STATUS = auger.namespace_status
 
 
 @pytest.fixture
@@ -192,6 +193,31 @@ def test_unreachable_substrate_fails_closed(api, monkeypatch):
     status, content_type, body = request(api, "/api/ns/demo/status")
     assert status in (502, 503) and content_type == "application/json"
     assert "error" in json.loads(body)
+
+
+def test_status_answers_an_unreachable_substrate_as_502_not_404(api, monkeypatch):
+    """AUG-101: a dead store is not a missing namespace.
+
+    `namespace_status` turns `_project`'s SystemExit into 404 — "run: `auger init` first".
+    `SubstrateError` ("the store could not be asked") is a SystemExit SUBCLASS, so without its own
+    branch the API answered 404 to a caller whose namespace is perfectly fine while the substrate
+    is DOWN: the error-shape-dependent contract the row is about, on the HTTP surface. 502 is the
+    code this route's own OpenAPI entry documents for a substrate failure.
+    """
+    monkeypatch.setattr(auger, "namespace_status", REAL_NAMESPACE_STATUS)
+    monkeypatch.setattr(
+        auger,
+        "select",
+        lambda *a, **k: (_ for _ in ()).throw(
+            auger.substrate_read_failure(
+                "demo", "select project", 0, {"error": "transport: connection refused"}
+            )
+        ),
+    )
+    status, content_type, body = request(api, "/api/ns/demo/status")
+    assert (status, content_type) == (502, "application/json"), body
+    assert auger.FAIL_CLOSED_SENTENCE in json.loads(body)["error"], body
+    assert "auger init" not in body, body
 
 
 def test_bind_conflict_fails_loudly_with_address():

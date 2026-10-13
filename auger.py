@@ -726,6 +726,15 @@ def _select_paged(ns: str, table: str, query: str, strict: bool) -> list:
                     raise SystemExit(
                         f"namespace '{ns}' does not exist — run: auger init first"
                     )
+                if st == 0:
+                    # AUG-101: `_req`'s st == 0 IS the unreachable contract — the transport
+                    # died, so there is no responder and no body to paraphrase. Handing that
+                    # back as `select project failed (0): {'error': 'transport: ...'}` made one
+                    # dead store read differently in `status` than in `recall`; the refusal is
+                    # now the shared one every strict read raises. A NON-zero status keeps the
+                    # raw detailed message below: there the store DID answer, and its body is
+                    # the diagnostic (AUG-085).
+                    raise substrate_read_failure(ns, f"select {table}", st, body)
                 raise SystemExit(f"select {table} failed ({st}): {body}")
             return []
         page = body if isinstance(body, list) else []
@@ -1254,6 +1263,34 @@ class SubstrateError(SystemExit):
     """
 
 
+#: The ONE sentence every strict read prints when the store could not be ASKED (AUG-101).
+#:
+#: `recall`/`check`/`ask` have carried it since AUG-075; every verb that reads a table through
+#: `select` — `status`, `dump`, `feedback`, `export` — printed the substrate's raw transport dict
+#: instead, so ONE dead substrate produced two different refusals depending on which verb asked
+#: (dogfood run 15, 2026-10-12). The exit code was 1 either way once the shell plumbing was right
+#: (the finding's rc=0 was `cmd | tail -2; echo $?` reading TAIL's status), but the WORDS are the
+#: contract a scripting consumer keys on, and `select project failed (0): {'error': 'transport:
+#: ...'}` is a diagnostic, not a refusal. The diagnostic is KEPT — the sentence is appended to it,
+#: never printed instead of it.
+FAIL_CLOSED_SENTENCE = "a failed read is NOT an empty store"
+
+
+def substrate_read_failure(ns: str, what: str, st: int, body) -> SubstrateError:
+    """The refusal EVERY strict read raises when the substrate did not answer (AUG-101).
+
+    One builder, so `select` and `recall` cannot drift apart again: `what` names the read that
+    failed (`select project`, `substrate read`), `ns` says where it was asked, and the substrate's
+    own words are carried verbatim — the reader still needs to know WHICH read died and WHAT the
+    store said. Returns the error rather than raising it so the call site stays an explicit
+    `raise` (the no-bypass property AUG-075 relies on).
+    """
+    detail = body.get("error", body) if isinstance(body, dict) else body
+    return SubstrateError(
+        f"{what} failed for {ns!r} (status {st}): {detail} — {FAIL_CLOSED_SENTENCE}"
+    )
+
+
 # ---------------------------------------------------------------- retrieval tiers (AUG-092)
 # A `?q=` search is answered by ONE of three rankers, and all three report their number in the same
 # `items[].score` field (DuckBrain `src/mcp/tools/recall.ts` + `src/search/fusion.ts`):
@@ -1414,11 +1451,11 @@ def recall(
     if st != 200:
         if missing_ok and st == 404:
             return []
-        detail = body.get("error", body) if isinstance(body, dict) else body
-        raise SubstrateError(
-            f"substrate read failed for {ns!r} (status {st}): {detail} — a failed "
-            "read is NOT an empty store"
-        )
+        # AUG-101: the SAME builder `select` raises from — one dead store, one refusal, whoever
+        # asked. `recall`'s message is unchanged in shape (it is the one `substrate_read_failure`
+        # was named after), so `check`/`ask`/`recall` keep the sentence they have had since
+        # AUG-075 and the table verbs now join them instead of printing a raw dict.
+        raise substrate_read_failure(ns, "substrate read", st, body)
     items = body.get("items", []) if isinstance(body, dict) else []
     if project_prefix:
         return [
@@ -6796,6 +6833,14 @@ def _namespace(ns: str) -> None:
 def namespace_status(ns: str, project_id: str | None) -> dict:
     try:
         p = _project(ns, project_id)
+    except SubstrateError as exc:
+        # AUG-101: "the store could not be asked" is NOT "this namespace has no such project".
+        # A SubstrateError is a SystemExit subclass, so without this branch the translation below
+        # answered 404 — `run: auger init first` — for a substrate that is simply DOWN, telling a
+        # caller to re-init a namespace that is fine. 502 is the code this route's own OpenAPI
+        # entry already documents for a substrate failure ("The DuckBrain substrate refused a
+        # read"), so the mapping moves to the code the contract promised instead of inventing one.
+        raise APIError(502, str(exc)) from exc
     except SystemExit as exc:
         message = str(exc)
         raise APIError(409 if "multiple projects" in message else 404, message) from exc

@@ -284,6 +284,12 @@ contradiction should not occur on a record this program writes: `answer` advance
 (AUG-059), so the note now names drift a pre-AUG-059 record, a skipped advance, or a hand-made
 row — the one line still says both words so the disagreement is never smoothed over.
 
+**Unreachable store:** a substrate read that does not answer fails closed (AUG-101). The verb
+exits non-zero with the same named refusal `recall` prints — `... — a failed read is NOT an
+empty store` — naming the read that died and the transport's own words, instead of the raw
+transport dict it used to print. A dead store never renders as a project with nothing in it,
+and `status` is not the one read verb whose failure a script has to parse differently.
+
 ## toggle
 
 Turn options on/off — the what-if switch, one active option per decision by default.
@@ -316,6 +322,9 @@ With `--out`, a local file. That is the whole write surface.
 
 **Never writes:** any table or memory entry, ever. A hypothesis that contradicts the
 recorded reasons is named in the output ("CONTRADICTIONS WITH THE RECORD"), not repaired.
+
+**Unreachable store:** as in `status` (AUG-101) — the first read is strict, so a substrate that
+cannot answer exits non-zero with the shared fail-closed refusal, never the raw transport dict.
 
 ## export
 
@@ -388,6 +397,10 @@ to the decision that answers it plus a `satisfies` edge, never asked.
 the model); a question whose gate verdict is unknown (not asked, not stored); a question
 the gate scores as answered but whose evidence names no decision (not asked, not linked,
 not stored — said out loud instead).
+
+**Unreachable store:** the run's own reads are fail-closed like every other verb's (AUG-101) —
+a non-zero exit with the shared refusal (`... — a failed read is NOT an empty store`) rather
+than a raw transport dict, so a batch is never reported off a store that could not be asked.
 
 ## recall
 
