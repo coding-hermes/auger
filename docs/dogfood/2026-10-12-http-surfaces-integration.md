@@ -67,6 +67,13 @@ Real fresh box (no node, no npm). Sequence + wall times:
 9. Teardown: destroy refused once (live node/esbuild children — gate worked as
    designed), then destroyed cleanly.
 
+Harness note (AUG-099): boot the substrate and run the whole loop inside ONE
+bunker exec session — a setsid+nohup daemon from a previous exec session was dead
+by the next call (connection refused, 3 retries across install legs 2/7/9); a boot
+with sleep+health-check in the same session held. Environment friction, not an
+auger defect. Also add a node install step to the README path (leg 1: box had no
+node at all — README assumes it).
+
 Install verdict: PASS with two doc gaps (AUG-097 node pin, AUG-098 git identity).
 bunker-qa.sh full battery NOT run — this leg ran the README install path directly
 (which is the dogfood contract); no auger code was modified anywhere.
