@@ -1623,8 +1623,9 @@ def test_no_breaks_edges_renders_normally(decided: dict):
 
     rc, status_out = run_cli(["-n", ns, "status"])
     assert rc == 0, status_out
-    assert "decisions 2 |" in status_out, status_out  # unmodified count
-    assert "invalidated" not in status_out, status_out  # no invalidated field at all
+    # AUG-100: the status line always carries the invalidated field — with no breaks
+    # edges in this namespace it is 0, and the active count is still the stored count.
+    assert "decisions 2 | invalidated 0 |" in status_out, status_out  # unmodified count
 
 
 def test_answer_supersede_refusals_write_nothing(decided: dict):
@@ -2424,7 +2425,11 @@ def run_verb(argv: list[str]) -> tuple[int, str, str]:
         # `SystemExit(str)` is what the CLI exits 1 with: the message goes to stderr, the status
         # is 1. Capture both the way a caller would see them.
         err.write(str(exc))
-        return (exc.code if isinstance(exc.code, int) else 1), err.getvalue(), out.getvalue()
+        return (
+            (exc.code if isinstance(exc.code, int) else 1),
+            err.getvalue(),
+            out.getvalue(),
+        )
     return rc, err.getvalue(), out.getvalue()
 
 
@@ -2474,7 +2479,7 @@ def test_a_shell_consumer_reads_status_failure_as_failure(refusing_substrate):
         [
             "sh",
             "-c",
-            f'{sys.executable} auger.py -n auger-101-dead status | tail -2; echo $?',
+            f"{sys.executable} auger.py -n auger-101-dead status | tail -2; echo $?",
         ],
         cwd=str(REPO_ROOT),
         env=env,
@@ -2487,7 +2492,9 @@ def test_a_shell_consumer_reads_status_failure_as_failure(refusing_substrate):
 
 def test_strict_select_raises_the_shared_refusal_on_a_transport_failure(monkeypatch):
     """AUG-101 fixes the READ LAYER, not one verb: `select` itself raises the named refusal."""
-    monkeypatch.setattr(auger, "db", _substrate(0, {"error": "transport: connection refused"}))
+    monkeypatch.setattr(
+        auger, "db", _substrate(0, {"error": "transport: connection refused"})
+    )
     with pytest.raises(auger.SubstrateError) as ei:
         auger.select("auger-101-dead", "project", "order=created_at.desc")
     msg = str(ei.value)
@@ -2507,7 +2514,9 @@ def test_a_served_refusal_keeps_the_substrates_own_words(monkeypatch):
     the diagnostic to keep loud — while an unreachable one (st 0) has no responder to quote and
     gets the named refusal instead.
     """
-    monkeypatch.setattr(auger, "db", _substrate(503, {"error": "unavailable", "code": "X"}))
+    monkeypatch.setattr(
+        auger, "db", _substrate(503, {"error": "unavailable", "code": "X"})
+    )
     with pytest.raises(SystemExit) as ei:
         auger.select("auger-101-dead", "project", "order=created_at.desc")
     msg = str(ei.value)
@@ -4511,7 +4520,12 @@ def test_status_and_dump_report_a_namespace_holding_more_than_a_page(project: di
 
     rc, out = run_cli(["-n", ns, "status"])
     assert rc == 0, out
-    assert f"decisions {decisions} | options {decisions * options} |" in out, out[:400]
+    # AUG-100 interleaves the invalidated field between decisions and options; this
+    # namespace stores no edges, so the shipped line reads `invalidated 0 |` here.
+    assert (
+        f"decisions {decisions} | invalidated 0 | options {decisions * options} |"
+        in out
+    ), out[:400]
 
     rc, out = run_cli(["-n", ns, "dump"])
     assert rc == 0, out
