@@ -170,6 +170,9 @@ token files in order: `~/.duckbrain/foreman-status.token`, then `~/.duckbrain/to
 On a fresh box, set the env var (`export DUCKBRAIN_API_KEY=<your-key>`) or create one
 of the token files before running `init` — without either, every command exits rc=1
 with `no DuckBrain token: set DUCKBRAIN_API_KEY or ~/.duckbrain/foreman-status.token`.
+Mint the key with `duckbrain token` (or `node bin/duckbrain.js token` if the CLI is not
+installed globally): it prints the key once and stores only a hash of it in
+`~/.duckbrain/auth.json`, so save the printed value when you run it.
 
 **Git identity (DuckBrain substrate).** DuckBrain refuses writes without a git author identity
 configured. On a fresh box, the first `auger start` (which calls the substrate's remember API)
