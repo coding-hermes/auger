@@ -3872,6 +3872,148 @@ def test_the_decision_id_width_is_read_from_the_highest_id(monkeypatch):
         assert auger.decision_id_width(MINT_NS) == want, ids
 
 
+# ------------------------------------- the id law the mint reads from (AUG-107)
+# `next_id`'s docstring always declared the law it reads under — ids of the shape PREFIX-<digits>
+# — but the read enforced none of it: the lexicographically-highest stored row became the mint
+# source whatever its id looked like. A stored decision id outside the law (`D-CACHE-EMBED`,
+# `D-BAND-1.0`: hand-stored or foreign rows) sorts above every numeric id, the trailing-digit
+# extraction failed (or read the wrong number), and the mint fell back to the FIRST id — D-001,
+# which any real namespace already holds. The AUG-070 re-mint loop then re-derived the same taken
+# id on every attempt and refused with a false "(concurrent writers)" accusation, blocking every
+# no-flag `answer` in the namespace until the poison row was removed by hand. Reproduced
+# 2026-10-15 after D-BAND-1.0 / D-CACHE-EMBED landed; evidence:
+# docs/dogfood/2026-10-15-mindchange-reproof-integration.md (New findings, item 1).
+
+
+def test_a_non_numeric_decision_id_cannot_poison_the_auto_mint(monkeypatch):
+    """The poison rows sit as the highest ids; the mint stores D-004, not the D-001 fallback.
+
+    RED pre-fix: `D-CACHE-EMBED` (no trailing digits) and `D-007x` (a non-digit trailing char)
+    are both outside the id law; the mint extracted nothing from the top row, fell back to D-001,
+    and the AUG-070 loop exhausted against the already-taken D-001 — the answer was refused with
+    a false concurrent-writers accusation and NOTHING was stored.
+    """
+    ids = ["D-001", "D-002", "D-003", "D-007x", "D-CACHE-EMBED"]
+    out, written, queries = drive_answer(monkeypatch, ids)
+    assert out.startswith("D-004 recorded"), out
+    assert [r["id"] for r in written] == ["D-004"], written
+    # the reads keep the page-safe select=id&order=id.desc shape: the mint PROBES at limit=1 and
+    # widens to the bounded law scan (ID_LAW_SCAN_ROWS) because the top row failed the law — the
+    # legal-top case never widens (pinned by the page-safe test below)
+    assert queries[0] == "select=id&order=id.desc&limit=1", queries
+    assert f"select=id&order=id.desc&limit={auger.ID_LAW_SCAN_ROWS}" in queries, queries
+
+
+def test_digits_before_a_non_numeric_tail_cannot_poison_the_auto_mint(monkeypatch):
+    """`D-BAND-1.0` — the shape the dogfood namespace actually stored — is outside the law too.
+
+    RED pre-fix in a second way: the trailing-digit extraction READ the `0` and minted D-001 from
+    it — the same already-taken first id — and the answer was refused. The mint must read the
+    numeric top below the malformed row instead.
+    """
+    out, written, _ = drive_answer(monkeypatch, ["D-001", "D-007", "D-BAND-1.0"])
+    assert out.startswith("D-008 recorded"), out
+    assert [r["id"] for r in written] == ["D-008"], written
+
+
+def test_next_id_mints_from_the_id_law_and_ignores_out_of_law_rows(monkeypatch):
+    """The unit law table: which stored ids are mint sources, at one glance.
+
+    A legal top row keeps the hot path byte-for-byte (one read, same id); every out-of-law shape
+    (`D-CACHE-EMBED`, a non-digit trailing char, digits before a non-numeric tail, another
+    prefix's id) is skipped in favour of the highest LEGAL row; a table with no legal row at all
+    falls back to the first id, which is now collision-safe — there is no legal id to collide
+    with. The id law itself is unchanged: DECISION_ID_WIDTH stays 3.
+    """
+    law_table = [
+        (["D-041"], "D-042"),  # numeric-only: byte-for-byte unchanged
+        ([], "D-001"),  # empty table: the first id, unchanged
+        (["D-003", "D-CACHE-EMBED"], "D-004"),  # poison top: the legal top below it
+        (["D-007", "D-007x"], "D-008"),  # a non-digit trailing char: outside the law
+        (["D-007", "D-BAND-1.0"], "D-008"),  # digits before a non-numeric tail: outside too
+        (["DM-01", "D-005"], "D-006"),  # another prefix's id is not a D- source
+        (["D-CACHE-EMBED"], "D-001"),  # no legal row: the fallback is collision-safe
+    ]
+    for ids, want in law_table:
+        monkeypatch.setattr(auger, "select", stand_in_api(ids))
+        assert auger.next_id(MINT_NS, "decision", "D", width=3) == want, ids
+
+
+def test_the_mint_width_ignores_a_malformed_top_row(monkeypatch):
+    """AUG-107: the width comes from the highest LEGAL id, not from whatever row the read hit.
+
+    RED pre-fix: a poison top row absorbed the page-safe read, the width fell back to
+    `DECISION_ID_WIDTH` even though the live legal ids below were six digits wide — the width was
+    derived from a row that was never part of the id law.
+    """
+    stored = [
+        {"id": "D-CACHE-EMBED", "project_id": MINT_PID},
+        {"id": "D-000102", "project_id": MINT_PID},
+        {"id": "D-000101", "project_id": MINT_PID},
+    ]
+    server = StandInServer({"decision": stored})
+    monkeypatch.setattr(auger, "db", server)
+    assert auger.decision_id_width(MINT_NS) == 6
+    # the page-safe read is still first; only the failed-law top row buys the bounded scan
+    assert len(server.requests) == 2, server.requests
+    assert server.requests[0].endswith("?select=id&order=id.desc&limit=1"), server.requests[0]
+    assert server.requests[1].endswith(
+        f"?select=id&order=id.desc&limit={auger.ID_LAW_SCAN_ROWS}"
+    ), server.requests
+
+    # the numeric-only path is unchanged: one page-safe read, the live width
+    server = StandInServer({"decision": [{"id": "D-000102", "project_id": MINT_PID}]})
+    monkeypatch.setattr(auger, "db", server)
+    assert auger.decision_id_width(MINT_NS) == 6
+    assert len(server.requests) == 1, server.requests
+
+
+def test_the_exhausted_mint_refusal_names_the_malformed_id_first(monkeypatch):
+    """Poison top row AND every id the mint can derive already stored: the refusal's FIRST cause
+    is the malformed stored id, with concurrent writers named second — a genuine second writer is
+    still possible, but the poison is the cause this namespace actually has.
+
+    RED pre-fix: the same store produced the old message that blamed "(concurrent writers)"
+    outright and never mentioned the poison row the mint was choking on.
+    """
+    posts: list[str] = []
+
+    def poison_top_and_every_id_taken(path, method="GET", body=None, *a, **k):
+        """`D-CACHE-EMBED` sorts above every numeric id and every derived id is already stored."""
+        if method == "POST":
+            posts.append(path)
+            return 201, {}, {}
+        if "order=id.desc" in path:
+            rows = [
+                {"id": "D-CACHE-EMBED"},
+                {"id": "D-003"},
+                {"id": "D-002"},
+                {"id": "D-001"},
+            ]
+            limit = path.split("limit=")[1].split("&")[0] if "limit=" in path else ""
+            return 200, (rows[:1] if limit == "1" else rows), {}
+        if "id=eq." in path and "select=id" in path:
+            did = path.split("id=eq.")[1].split("&")[0]
+            return 200, [{"id": did}], {}
+        return 200, [], {}
+
+    monkeypatch.setattr(auger, "db", poison_top_and_every_id_taken)
+    race_stubs(monkeypatch)
+
+    rc, msg, _ = run_cli_exit(["-n", MINT_NS, "answer", "--chosen", "alpha"])
+
+    assert rc != 0, msg
+    assert f"re-checked {AUG070_ATTEMPTS} times" in msg, msg
+    assert "NOTHING was stored" in msg, msg
+    # the malformed id is named, as the FIRST cause, with its remedy
+    assert "D-CACHE-EMBED" in msg, msg
+    assert "malformed" in msg, msg
+    # concurrent writers are the SECOND cause now, not the outright accusation
+    assert msg.index("malformed") < msg.index("concurrent writers"), msg
+    # bounded BEFORE the first write, as before: the bound fired, nothing landed
+    assert posts == [], f"a bounded pre-insert refusal wrote: {posts!r}"
+
+
 def test_a_live_namespace_holding_a_hundred_and_one_decisions_keeps_answering(
     project: dict,
 ):

@@ -843,12 +843,18 @@ def next_id(ns: str, table: str, prefix: str, width: int | None = None) -> str:
     `decision_id_width`) and a six-digit row in that column would sort below every existing id
     under `order=id.desc`. The width is a FLOOR, never a truncation: a number needing more digits
     than `width` keeps all of them.
+
+    AUG-107: only rows whose id matches the declared law ``^<prefix>-\\d+$$`` are mint sources. A
+    lexicographically-higher stored id outside the law (a hand-stored `D-CACHE-EMBED`, a
+    `D-BAND-1.0`) is not part of this register and reading it as the top poisoned the mint into
+    re-deriving the already-taken first id. The read widens once, bounded by `ID_LAW_SCAN_ROWS`,
+    only when the `limit=1` top row fails the law — the trade-off is stated there.
     """
     pad = ID_WIDTH if width is None else width
-    rows = select(ns, table, "select=id&order=id.desc&limit=1")
-    if not rows or not rows[0].get("id"):
+    _rows, top = _highest_id_under_the_law(ns, table, prefix)
+    if top is None:
         return f"{prefix}-{1:0{pad}d}"
-    m = re.search(r"(\d+)\s*$", str(rows[0]["id"]))
+    m = re.search(r"(\d+)\s*$", top)
     return f"{prefix}-{int(m.group(1)) + 1:0{pad}d}" if m else f"{prefix}-{1:0{pad}d}"
 
 
@@ -865,19 +871,73 @@ DECISION_ID_WIDTH = 3
 #: for one more, and each attempt costs one `limit=1` read — the mint's own page-safe shape.
 AUG070_ID_ATTEMPTS = 3
 
+#: AUG-107: when the mint's page-safe `limit=1` top row does not match the declared id law
+#: (`^<prefix>-\d+$`), the read widens ONCE to this many rows — still ordered `id.desc` — to find
+#: the highest id that IS part of the law. The bound is the honest version of a trade-off the
+#: `next_id` docstring has always warned about: a capped page can hide the real highest id, and
+#: any wider read re-admits that risk in exchange for immunity to out-of-law rows. Thirty-two
+#: covers the observed poison shape (a handful of hand-stored rows above the numeric register)
+#: dozens of times over while staying a bounded, single extra request on a path that only runs
+#: when a malformed row is actually present — the numeric-only namespace keeps its one-row read.
+ID_LAW_SCAN_ROWS = 32
+
+#: The shape an id must match to be a mint source — the law `next_id`'s docstring has always
+#: declared (`PREFIX-<digits>`). Anything else stored in an id column (a hand-stored
+#: `D-CACHE-EMBED`, a `D-BAND-1.0` with a non-numeric tail) is not part of the register the
+#: mint advances, and reading it as one poisons the mint (AUG-107).
+_ID_LAW_TEMPLATE = r"^{prefix}-\d+$"
+
+
+def _highest_id_under_the_law(
+    ns: str, table: str, prefix: str
+) -> tuple[list, str | None]:
+    """The mint's read: the highest stored id that matches the declared id law.
+
+    The hot path is the page-safe single-row read (`select=id&order=id.desc&limit=1`); when the
+    top row fails the law it is a malformed/foreign row, NOT the register's top — so the read
+    widens once, bounded by `ID_LAW_SCAN_ROWS`, and the first law-matching id wins. Returns the
+    rows the winning read served and the winning id (None when the bounded page holds no legal
+    id at all). The page-safety trade-off is stated on `ID_LAW_SCAN_ROWS`: a capped page can
+    hide the real highest id, and this read only pays that risk when a malformed row forced it.
+    """
+    rows = select(ns, table, "select=id&order=id.desc&limit=1")
+    law = re.compile(_ID_LAW_TEMPLATE.format(prefix=re.escape(prefix)))
+    if rows and rows[0].get("id") and law.match(str(rows[0]["id"])):
+        return rows, str(rows[0]["id"])
+    if not (rows and rows[0].get("id")):
+        # An empty read is the empty-table contract, not a malformed row: no widening.
+        return rows, None
+    rows = select(
+        ns, table, f"select=id&order=id.desc&limit={ID_LAW_SCAN_ROWS}"
+    )
+    for row in rows:
+        rid = str(row.get("id") or "")
+        if law.match(rid):
+            return rows, rid
+    return rows, None
+
+
+def _out_of_law_ids(rows: list, prefix: str) -> list[str]:
+    """The ids in `rows` that are NOT part of the declared id law — the AUG-107 poison shape."""
+    law = re.compile(_ID_LAW_TEMPLATE.format(prefix=re.escape(prefix)))
+    return [rid for rid in (str(r.get("id") or "") for r in rows) if rid and not law.match(rid)]
+
 
 def decision_id_width(ns: str) -> int:
     """The digit width this namespace's decision ids are minted at.
 
-    Read from the SAME page-safe row `next_id` mints from — the highest id, `order=id.desc&limit=1`
-    — so the width can never be derived from a capped page of a bigger table. An empty table yields
-    `DECISION_ID_WIDTH`, and a table wider than `ID_WIDTH` is capped there so one accidental row
-    cannot mint an over-wide id law for the whole namespace.
+    Read from the SAME id the mint mints from — the highest id that matches the declared law,
+    `order=id.desc` (AUG-107) — so the width can never be derived from a capped page of a bigger
+    table, and never from a malformed row that is not part of the id law at all: a poison top row
+    (`D-CACHE-EMBED`) used to fall back to `DECISION_ID_WIDTH` while the live register below it
+    was minted wider. An empty table yields `DECISION_ID_WIDTH`, and a table wider than
+    `ID_WIDTH` is capped there so one accidental row cannot mint an over-wide id law for the
+    whole namespace.
     """
-    rows = select(ns, "decision", "select=id&order=id.desc&limit=1")
-    if not rows or not rows[0].get("id"):
+    top = _highest_id_under_the_law(ns, "decision", "D")[1]
+    if top is None:
         return DECISION_ID_WIDTH
-    m = re.search(r"-(\d+)\s*$", str(rows[0]["id"]))
+    m = re.search(r"-(\d+)\s*$", top)
     return min(len(m.group(1)), ID_WIDTH) if m else DECISION_ID_WIDTH
 
 
@@ -5261,6 +5321,30 @@ def cmd_answer(a):
                 break
             did = next_id(ns, "decision", "D", width=decision_id_width(ns))
         else:
+            # AUG-107: a re-mint that keeps re-deriving the SAME taken id is the signature of a
+            # stored id outside the register's law, not of contention. The mint now SKIPS such
+            # rows when it derives its id, so a namespace holding them still refuses here only
+            # when the legal ids themselves are taken — the malformed rows are then the first
+            # thing to clean up. Name that first; a genuine two-writer race is still possible
+            # and keeps its own cause below, scoped to the collision wording the bound retains.
+            poison_rows = select(
+                ns,
+                "decision",
+                f"select=id&order=id.desc&limit={ID_LAW_SCAN_ROWS}",
+            )
+            poison_ids = _out_of_law_ids(poison_rows, "D")
+            if poison_ids:
+                raise SystemExit(
+                    f"refused: the auto-minted decision id {did!r} is taken — re-minted and "
+                    f"re-checked {AUG070_ID_ATTEMPTS} times against the live highest id and every "
+                    f"attempt collided; NOTHING was stored. Likely cause: this namespace stores "
+                    f"malformed decision ids outside the register's id law `D-<digits>` "
+                    f"({', '.join(poison_ids)}); the mint ignores them when deriving ids, but a "
+                    f"namespace full of out-of-law rows (or rows crowding the scan window) can "
+                    f"still leave every legal id taken. Remedy: delete or rename those rows, or "
+                    f"pass an explicit --id. A second, less likely cause is concurrent writers: "
+                    f"if another writer really is minting here, retry `answer` once it settles."
+                )
             raise SystemExit(
                 f"refused: the auto-minted decision id {did!r} is taken — re-minted and re-checked "
                 f"{AUG070_ID_ATTEMPTS} times against the live highest id and every attempt collided "
