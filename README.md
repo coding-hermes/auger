@@ -28,7 +28,25 @@ pnpm install && pnpm build
 node bin/duckbrain.js http
 ```
 
-**First, on a bare box (no `pnpm`; node already installed).** The two standard routes both die
+**Install Node.js.** The substrate requires Node >=22.22.2 or >=24.15 or >=26 (jsdom@30.1.1
+engine gate). On a bare Debian box, `apt install nodejs` may ship an older version — verify
+with `node --version` and upgrade if needed. The reliable user-space path is the official
+tarball (~10s download + unpack, no root):
+
+```bash
+# Check your version first
+node --version   # need >=22.22.2 or >=24.15 or >=26
+
+# If too old, install from the official tarball (replace the version to match):
+curl -fsSL https://nodejs.org/dist/v22.22.2/node-v22.22.2-linux-x64.tar.xz \
+  -o ~/node.tar.xz && tar -xf ~/node.tar.xz -C ~ --strip-components=1
+export PATH=$HOME/bin:$PATH   # or add to ~/.profile
+node --version               # verify >=22.22.2
+```
+
+Alternatively, `nvm install 22` or `nvm install 24` works on most boxes.
+
+**First, bootstrap pnpm (no root).** The two standard routes both die
 `EACCES` for a plain user — `corepack enable pnpm` symlinks into `/usr/bin`, `npm i -g pnpm`
 writes `/usr/lib`. Install into a user prefix instead (~5s, pnpm 12.4.2, measured on the
 2026-09-23 bunker leg):
