@@ -192,6 +192,8 @@ Mint the key with `duckbrain token` (or `node bin/duckbrain.js token` if the CLI
 installed globally): it prints the key once and stores only a hash of it in
 `~/.duckbrain/auth.json`, so save the printed value when you run it.
 
+**Authentication ordering.** The daemon reads `~/.duckbrain/auth.json` at boot and caches the allowed keys in memory. If you mint a new token with `duckbrain token` *after* the daemon has started, the new key will not be recognized until you restart the daemon. Always mint the token **before** starting the substrate, or restart the substrate after minting.
+
 **Git identity (DuckBrain substrate).** DuckBrain refuses writes without a git author identity
 configured. On a fresh box, the first `auger start` (which calls the substrate's remember API)
 fails 500 with `GIT-IDENTITY-001: No git author identity is configured. DuckBrain refuses to
