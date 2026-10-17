@@ -82,8 +82,8 @@ data dir, but the namespace list is wrong, which can mislead you into thinking s
 reached production. Isolate the config too:
 
 ```bash
-mkdir -p ~/dd-scratch
-printf '{"namespaceMappings": {}, "namespacesPath": "~/dd-scratch/namespaces"}' > ~/dd-scratch/config.json
+mkdir -p ~/dd-scratch/namespaces
+printf '{"namespaceMappings": {}, "namespacesPath": "namespaces"}' > ~/dd-scratch/config.json
 DUCKBRAIN_DATA_DIR=~/dd-scratch \
 DUCKBRAIN_CONFIG_PATH=~/dd-scratch/config.json \
 node bin/duckbrain.js http
