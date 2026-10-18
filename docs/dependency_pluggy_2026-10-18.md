@@ -1,0 +1,94 @@
+# Dependency review: pluggy 1.6.0 → 1.7.0
+
+- **Date:** 2026-10-18
+- **Task:** SUP-DEPS-20261018-AUGER (supervisor-reported outdated package)
+- **Verdict: `upgraded`** — pluggy-only, active project venv only. No manifest, pin, or board file touched.
+
+## Environment
+
+- Active test environment: `/home/kara/auger/venv` — Python 3.11.15, pytest 9.1.1.
+- `/home/kara/auger/.venv` (Python 3.14.5) has no pytest/pluggy installed and is not the active test environment — not touched.
+- Gate interpreter note: `tests/gate.sh` runs bare `python3 -m pytest`. On this host `python3` resolves to the Hermes agent venv (`/home/kara/.hermes/hermes-agent/venv/bin/python3`, also Python 3.11.15), not the project venv. The supervisor scan flagged the project venv's pluggy; the gate interpreter itself was not modified by this task.
+
+## Package / version before and after
+
+| package | before | after |
+|---|---|---|
+| pluggy | 1.6.0 (PyPI upload 2025-05-15) | 1.7.0 (PyPI release 2026-10-14) |
+
+Everything else in the venv unchanged (uv resolved exactly one package: `- pluggy==1.6.0 / + pluggy==1.7.0`).
+
+## Manifest / pin evidence — no project constraint on pluggy
+
+- `pyproject.toml`: `build-system requires = ["setuptools>=68"]`; `[project] dependencies = []` (auger.py is deliberately stdlib-only per `docs/DESIGN.md` v0.1). No pluggy reference.
+- `tests/requirements-dev.txt`: `pytest>=8` only, and states the gate "does NOT install from this file: `tests/gate.sh` runs `python3 -m pytest` with whatever the system python3 provides".
+- `.github/workflows/ci.yml`: installs `ruff==0.15.22`, `pytest`, `pyyaml` — no pluggy pin or constraint.
+- Repo-wide grep for `pluggy` across `*.toml *.txt *.yml *.yaml *.cfg *.md` (venvs and `.git` excluded): the only hit is `.gitreins/tasks.yaml` — the task definition itself. No pin anywhere in the project.
+- Git history cross-reference: `SUP-DEPS-20261013-AUGER` (closed 2026-10-14, commit `055a0d1`) upgraded venv dev dependencies (iniconfig, pip, setuptools) with the auger runtime untouched — precedent: dependency-scan tasks act on the venv dev chain, not on manifests (there are none to change).
+
+## Dependency relationship (installed metadata)
+
+- `pip show pluggy`: `Required-by: pytest` → **not an orphan-chain**; it is a live transitive dependency of the test stack.
+- pytest 9.1.1 dist-info `METADATA` declares: `Requires-Dist: pluggy<2,>=1.5` → **1.7.0 satisfies pytest's declared range**.
+
+## Reason for the upgrade verdict
+
+1. **In range:** 1.7.0 satisfies pytest 9.1.1's `pluggy<2,>=1.5` (same major; pluggy follows semver per its changelog).
+2. **Python compatible:** pluggy 1.7.0 declares `requires_python >=3.10`; the venv is 3.11.15.
+3. **Upstream profile:** 1.7.0 (2026-10-14) is bug fixes + features + one new `DeprecationWarning` (hookspecs without `self`); no removals. pytest is pluggy's primary consumer and ships in lockstep with it, so intra-project compatibility risk is minimal.
+4. **No security exposure either way:** GitHub advisory API (`ecosystem=pip&affects=pluggy`) returns zero advisories as of 2026-10-18 — the upgrade is hygiene, not remediation.
+5. **Zero product risk:** `auger.py` imports pluggy nowhere (stdlib-only module); only the test suite consumes it via pytest.
+6. **Fleet precedent:** the prior dependency task (SUP-DEPS-20261013) upgraded venv dev deps the same way, keeping the dev chain coherent with pytest.
+
+## Verification — exact commands and results
+
+1. Upgrade (the one mandated form):
+   ```
+   uv pip install --python /home/kara/auger/venv/bin/python pluggy==1.7.0
+   → Resolved 1 package; Uninstalled 1 package; Installed 1 package
+     - pluggy==1.6.0
+     + pluggy==1.7.0
+   ```
+2. Dependency consistency, before **and** after the upgrade:
+   ```
+   /home/kara/auger/venv/bin/pip check
+   → No broken requirements found.   (rc=0, both runs)
+   ```
+3. Linter (project's relevant linter, per CI):
+   ```
+   /home/kara/.local/bin/ruff check auger.py    (ruff 0.15.22)
+   → All checks passed!   (rc=0)
+   ```
+4. Full test suite — the exact arm `tests/gate.sh` runs, on the project venv interpreter:
+   ```
+   /home/kara/auger/venv/bin/python -m pytest tests/test_auger.py tests/test_openapi_parity.py tests/test_api_service.py -q -ra
+   → (result filled in below)
+   ```
+
+### Test results
+
+**Baseline attempt (BEFORE the upgrade), same command:** killed at ~34 min. 37 tests had completed (all passing dots) plus 2 teardown-error markers (`E`) when it was stopped; no summary line was reached. py-spy showed the main thread idle in `teardown_namespace` (tests/conftest.py:215) — the documented bounded 409 retry on DuckBrain's sync lock ("a push can run for minutes", 600 s deadline per namespace, then the problem is recorded and the suite moves on). `gitreins judge DOC-18` was running concurrently against the same DuckBrain substrate — the exact contention scenario conftest.py documents (QA-AUGER-6). This is pre-existing substrate slowness, not a pluggy failure; the attempt was killed rather than left to strand on the shared substrate.
+
+**Post-upgrade run (the run that counts — pluggy 1.7.0 installed):** completed in full.
+```
+/home/kara/auger/venv/bin/python -m pytest tests/test_auger.py tests/test_openapi_parity.py tests/test_api_service.py -q -ra
+→ 1 failed, 332 passed, 1 skipped, 3 errors in 3547.15s (0:59:07)
+```
+Every assertion that ran, passed: 332 passed, 1 environment-gated skip (the 44-domain grid is not on this host, by design). All four non-passes are ONE documented substrate event — DuckBrain's native sync lock held by an in-flight git push:
+
+- 3 teardown ERRORs, each `DELETE /api/namespaces/auger-pytest-* returned 409: Push in flight … (native sync lock held by pid 1023502 / 1288454 / 1480634)` (tests/conftest.py:408 after the bounded 600 s retry in `teardown_namespace`, conftest.py:206-219).
+- 1 FAIL: `test_no_test_namespace_survives_the_suite` (the leak audit) faithfully reporting those same 3 leaked namespaces. No test-logic failure exists anywhere in the run.
+- None of the lock-holder pids is this run's pytest process — the contention came from other fleet processes sharing the DuckBrain substrate (a `gitreins judge DOC-18` was running concurrently throughout).
+
+**Attribution proven by re-run:** after the pushes completed and the 3 leaked namespaces were deleted through the project's own `auger.delete_namespace` (DELETE 200 ×3), the exact 4 affected tests were re-run against pluggy 1.7.0:
+```
+/home/kara/auger/venv/bin/python -m pytest tests/test_auger.py -k "test_no_flag_project_read_refuses_after_second_project or test_the_default_decision_scope_is_project_and_sends_no_scope_key or test_dump_excludes_superseded_decision_from_active_configuration or test_no_test_namespace_survives_the_suite" -q -ra
+→ 4 passed, 313 deselected in 9.07s
+```
+So under pluggy 1.7.0 the entire suite's test logic passes; the full-run non-passes were transient substrate races, not pluggy regressions. The suite itself was green in substance on first run (332/336 substantive passes + 1 by-design skip).
+
+## Limitations
+
+- `tests/gate.sh` (the full live gate) was **not** run end-to-end this task. Its pytest arm is exactly the suite above (the full pytest evidence is from the project venv interpreter — the environment the scan flagged); the gate's `python3` resolves to a different interpreter on this host, and REVIEW-AUGER-005 (2026-10-15, board event) measured the full live gate at ~19.5 minutes wall even before today's substrate contention. The substitute evidence is recorded honestly: gate's exact pytest arm on the venv interpreter (full completion + 4-test re-run proof), `pip check`, and `ruff check auger.py`.
+- The full suite's wall time (59 min vs the gate's 1200 s pytest budget) is dominated by shared-substrate contention, not by this change: every test body passed; three teardowns hit the documented 409 sync-lock retries and the leak audit reported their residue. A quiet-substrate re-run would be faster and clean.
+- pytest 9.1.1's own test run is the compat proof for pluggy 1.7.0 here; pluggy has no direct consumer in auger itself.
