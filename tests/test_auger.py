@@ -6324,7 +6324,7 @@ class FakeDuckBrain:
                 headers,
                 io.BytesIO(json.dumps(payload).encode()),
             )
-        if method == "DELETE":
+        if method == "DELETE" and status in (200, 404):
             self.registered = False
         return _FakeResponse(status, payload, headers)
 
@@ -6453,6 +6453,47 @@ def test_a_saturated_limiter_is_bounded_and_the_leak_is_reported(offline_duckbra
     )
     assert any("429" in p for p in problems), problems
     assert any("still listed" in p for p in problems), problems
+
+
+def test_teardown_retries_a_short_409_then_confirms_deletion(offline_duckbrain):
+    """DuckBrain's own just-started push can settle inside the short conflict budget."""
+    fake = offline_duckbrain(
+        [
+            (409, {"error": "sync push in progress"}, {}),
+            (200, {"deleted": True}, {}),
+            (200, REGISTRY, {}),
+        ]
+    )
+
+    assert teardown_namespace(fake.ns) == []
+    assert fake.registered is False
+    assert fake.req_calls == ["DELETE", "DELETE", "GET"], fake.req_calls
+    assert fake.sleeps == [1], fake.sleeps
+
+
+def test_teardown_reports_persistent_409_and_listed_residue(offline_duckbrain):
+    """A persistent sync conflict is bounded and LOUD, never accepted as deletion.
+
+    REVIEW-AUGER-005 serializes sibling live suites with the substrate flock. A 409
+    that outlives the short native-push budget belongs to some other writer, so
+    teardown reports both the failed DELETE and the independent LIST evidence. The
+    listed row must remain registered in this fake or this test would accept the exact
+    hidden-leak regression the review found.
+    """
+    backoffs = list(conftest.TEARDOWN_CONFLICT_BACKOFFS)
+    fake = offline_duckbrain(
+        [(409, {"error": "sync push in progress"}, {})] * (len(backoffs) + 1)
+        + [(200, REGISTRY, {})]
+    )
+
+    problems = teardown_namespace(fake.ns)
+
+    assert fake.registered is True, "the 409 control must leave a real listed residue"
+    assert fake.req_calls == ["DELETE"] * (len(backoffs) + 1) + ["GET"], fake.req_calls
+    assert fake.count("DELETE") == len(backoffs) + 1, fake.requests
+    assert fake.sleeps == backoffs, "409 retries exceeded or skipped the 61s budget"
+    assert any("returned 409" in problem for problem in problems), problems
+    assert any("still listed" in problem for problem in problems), problems
 
 
 # ================================================================= the just-deleted lag on the audit (AUG-080)
@@ -10307,6 +10348,34 @@ def test_live_serve_verb_serves_the_route_end_to_end(decided):
 
 
 # ================================================================= the substrate lock (QA-AUGER-6)
+#: REVIEW-AUGER-005 isolation choice: one shared cross-process fcntl lock serializes
+#: live DuckBrain pytest sessions; this suite does NOT start a dedicated server.
+#: Session-unique namespace prefixes make residue ownership unambiguous even before
+#: each serialized session reaches teardown.
+def test_live_namespace_prefix_is_unique_per_pytest_process():
+    """Two fresh pytest processes cannot claim each other's namespace residue."""
+    code = (
+        "import sys; "
+        "sys.path.insert(0, sys.argv[1]); "
+        "import conftest; "
+        "print(conftest.TEST_NS_PREFIX)"
+    )
+    tests_dir = os.path.dirname(os.path.abspath(__file__))
+    prefixes = [
+        subprocess.run(  # noqa: S603 - fixed interpreter and in-repo import probe
+            [sys.executable, "-c", code, tests_dir],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        ).stdout.strip()
+        for _ in range(2)
+    ]
+
+    assert all(re.fullmatch(r"auger-pytest-[0-9a-f]{8}-", p) for p in prefixes), prefixes
+    assert len(set(prefixes)) == 2, f"two sessions shared one namespace prefix: {prefixes}"
+
+
 #: Two concurrent pytest LEGS (a gate.sh arm plus a sibling run) failed the same three
 #: live-service tests with `transport: timed out` while each passed in isolation. The fix
 #: in conftest.py serializes legs behind an flock and widens the live tests' timeout

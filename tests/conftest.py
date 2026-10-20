@@ -3,10 +3,15 @@ Shared fixtures for the pytest suite that replaces shell-only coverage of `auger
 
 Three rules shape this file, all of them cost-places in the shell suite it replaces:
 
-  * ONE EPHEMERAL NAMESPACE PER TEST, torn down in a fixture finalizer so a failing
+  * ONE EPHEMERAL NAMESPACE PER TEST SESSION, torn down in a fixture finalizer so a failing
     assertion still removes it. `tests/smoke.sh` deliberately leaves its namespace
     behind (it prints a `rm -rf` line and asks the reader to run it); a test suite that
     leaks a namespace per case would be worse, so teardown happens here, in a `finally`.
+    The namespace name carries a SESSION-UNIQUE tag (REVIEW-AUGER-005): a stale audit
+    (the 2026-10-18 pluggy run, docs/dependency_pluggy_2026-10-18.md) read
+    `auger-pytest-*` rows that were a CONCURRENT session's live namespaces and called
+    them this run's leaks — the tag makes every session's names disjoint, so the
+    prefix scan can never report another run's in-flight namespace.
   * TEARDOWN GOES DOWN BOTH PATHS — `DELETE /api/namespaces/<ns>` (the registry mapping
     plus the directory) and `shutil.rmtree` of `~/duckbrain/namespaces/<ns>`. Whatever a
     path could not fix is RETURNED to the caller and raised by the fixture, never
@@ -39,7 +44,11 @@ if str(REPO_ROOT) not in sys.path:
 
 import auger  # noqa: E402  (needs REPO_ROOT on sys.path first)
 
-TEST_NS_PREFIX = "auger-pytest-"
+TEST_NS_TAG = uuid.uuid4().hex[:8]
+#: REVIEW-AUGER-005: the tag makes one session's names disjoint from every other
+#: session's (concurrent gate legs, a sibling worktree's suite, a gitreins judge
+#: re-run). A namespace is identified by the FULL prefix, never by the literal name.
+TEST_NS_PREFIX = f"auger-pytest-{TEST_NS_TAG}-"
 
 #: Every namespace this session created. The leak audit reads it.
 CREATED: list[str] = []
@@ -179,11 +188,19 @@ def leftovers(scope: list[str] | None = None) -> dict[str, list[str]]:
 
 
 # ---------------------------------------------------------------- teardown
+#: DuckBrain's own native push can briefly hold the namespace sync lock after a write.
+#: Retry that conflict for 61s total — enough for the ordinary push window, one tenth
+#: of the old per-namespace 600s stall. Persistent residue remains a loud failure.
+TEARDOWN_CONFLICT_BACKOFFS = (1, 2, 4, 8, 16, 30)
+
+
 def teardown_namespace(ns: str) -> list[str]:
     """Remove a test namespace over BOTH paths. Returns the problems it could not fix.
 
     Refuses anything without the test prefix, so a bug here can never rmtree a real
-    namespace. 404 from the API counts as success: the desired end state is "gone".
+    namespace. 404 counts as success: the desired end state is "gone". A 409 gets
+    a short bounded retry budget; if it persists, the failure and registry evidence
+    are reported rather than hidden or retried for ten minutes (REVIEW-AUGER-005).
 
     The deletion goes through `auger.delete_namespace`, never a hand-rolled request: that
     call is the one the 429 retry exists for. A 429 landing on a bare DELETE leaves the
@@ -198,25 +215,24 @@ def teardown_namespace(ns: str) -> list[str]:
         )
     problems: list[str] = []
 
-    # 409 = DuckBrain's native sync lock is held by an in-flight git push. The server
-    # itself says "Retry after it completes": under fleet load a push can run for
-    # minutes (observed: >90s), so retry 409 here with a bounded backoff before
-    # recording the problem. Bounded: ~10 min ceiling — a push that outlives it is
-    # recorded as a problem, never hung on.
-    deadline = time.monotonic() + 600
-    backoff = 5
-    while True:
+    # 409 = DuckBrain's sync lock is held by another writer. The old teardown retried
+    # that answer for up to 600s PER namespace, which made one concurrent gate spend
+    # most of its ~19.5 minute wall time in teardown backoff. The session-wide flock
+    # below prevents sibling pytest legs from causing that contention; a short bounded
+    # retry still permits DuckBrain's own just-started native push to finish. A conflict
+    # that survives all six waits is not reinterpreted as success: teardown still
+    # removes any local directory and LISTs the registry so the caller gets honest
+    # residue evidence. Worst-case conflict wait: 61s, not 600s.
+    status, body = auger.delete_namespace(ns)
+    for backoff in TEARDOWN_CONFLICT_BACKOFFS:
+        if status != 409:
+            break
+        time.sleep(backoff)
         status, body = auger.delete_namespace(ns)
-        if status not in (200, 404):
-            problems.append(
-                f"DELETE /api/namespaces/{ns} returned {status}: {str(body)[:200]}"
-            )
-            if status == 409 and time.monotonic() < deadline:
-                time.sleep(backoff)
-                backoff = min(backoff * 2, 30)
-                problems.pop()  # retried below; only the final outcome is reported
-                continue
-        break
+    if status not in (200, 404):
+        problems.append(
+            f"DELETE /api/namespaces/{ns} returned {status}: {str(body)[:200]}"
+        )
 
     path = ns_path(ns)
     shutil.rmtree(path, ignore_errors=True)
