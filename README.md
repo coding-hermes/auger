@@ -51,11 +51,6 @@ Alternatively, `nvm install 22` or `nvm install 24` works on most boxes.
 writes `/usr/lib`. Install into a user prefix instead (~5s, pnpm 12.4.2, measured on the
 2026-09-23 bunker leg):
 
-**Node version.** DuckBrain's dependencies require Node >=22.22.2 or >=24.15 or >=26. Node 22 LTS
-(22.14) and 24.11 fail `pnpm install` with `ERR_PNPM_UNSUPPORTED_ENGINE` (jsdom@30.1.1 wants
-^22.22.2 || ^24.15.0 || >=26). Verified 2026-10-12: Node 26.0.0 succeeds. Check your version:
-`node --version`. If below 22.22.2, upgrade before running pnpm.
-
 ```bash
 npm config set prefix ~/.npm-global
 export PATH=~/.npm-global/bin:$PATH
@@ -93,6 +88,24 @@ node bin/duckbrain.js http
 `DUCKBRAIN_NAMESPACES_PATH`): it is read at boot and never written back into the config file.
 After boot, confirm isolation by checking that `/api/namespaces` on the new instance is empty.
 
+## Install auger
+
+Once the substrate is running, install auger itself. The repo ships a `pyproject.toml` with a
+console script, so you can install it with pip or pipx:
+
+```bash
+# Clone and install (editable mode for development)
+git clone https://github.com/coding-hermes/auger ~/auger
+cd ~/auger
+pip install -e .   # or: pipx install .
+
+# Verify the console script is on your PATH
+auger --version
+```
+
+The `auger` command is now available. Every example in this README uses `python3 auger.py` for
+clarity, but `auger` (the console script) does the same thing.
+
 ## The loop
 
 ```
@@ -113,6 +126,7 @@ auger bundle      group decisions into named bundles (add / member subcommands)
 auger export      render the whole namespace as one readable spec document
 auger verdict     judge a configuration good/bad with reasons, on the record (DESIGN R11)
 auger record ...  write the registers: break, assumption, unknown, option costs/breaks
+auger api         serve auger's read-first HTTP API (Muster contract on :8768)
 ```
 
 Every verb is documented — arguments, what it writes, what it must never write — in
@@ -132,6 +146,12 @@ mkdir -p ~/dd-data && DUCKBRAIN_DATA_DIR=~/dd-data node bin/duckbrain.js http
 Then the loop:
 
 ```bash
+# Create a seed file (one sentence per line describing the project's context)
+cat > seed.txt << 'EOF'
+The record of files we have seen lives in a single SQLite file.
+Postgres needs a service the seed forbids.
+EOF
+
 python3 auger.py -n myproject init
 python3 auger.py -n myproject start --name myproject --seed-file seed.txt
 python3 auger.py -n myproject answer --id D-001 \
@@ -294,12 +314,13 @@ edge     facet     bundle    bundle_member  verdict
 
 ```bash
 bash tests/smoke.sh          # full loop against a scratch namespace
+bash tests/gate.sh           # the real gate: py_compile + ruff + pytest + smoke (what CI runs)
 ```
 
 ## Muster contract (OpenAPI for consumers)
 
-Auger publishes the OpenAPI 3.x contract the [muster](https://github.com/wojons/muster)
-protocol consumes: `docs/openapi.yaml`, a GENERATED artifact (one source of truth —
+Auger publishes the OpenAPI 3.x contract the Muster protocol consumes:
+`docs/openapi.yaml`, a GENERATED artifact (one source of truth —
 `scripts/gen_openapi.py` emits it from the code's own registry, and
 `tests/test_openapi_parity.py` fails the gate if the file drifts from the code or is
 hand-edited). It describes the read-only HTTP API on `http://127.0.0.1:8768` — every
@@ -317,7 +338,7 @@ with tokens you placed (see **Quick start → Authentication**), and it works on
 time (the `-n` flag every verb takes). The dogfood integration reports under
 [docs/dogfood/](docs/dogfood/) have graded the loop PROMISING-BUT-ROUGH run after run; the rough
 edges below are the ones still live at this writing. Current known gaps are tracked in the
-project's public issue tracker.
+[project's public issue tracker](https://github.com/coding-hermes/auger/issues).
 
 - **JEV scores carry model noise near thresholds; the `check` verdict does not.** The
   already-answered gate is a code constant (`T_ANSWERED = 0.55` in `auger.py`), but the score under
