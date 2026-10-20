@@ -16,9 +16,10 @@ only. Public repo: `coding-hermes/auger`.
 
 ## Entry points
 
-- CLI: `python3 auger.py -n <namespace> <verb> ...` — 15 verbs: `init start
+- CLI: `python3 auger.py -n <namespace> <verb> ...` — 17 verbs: `init start
   bundle ask answer check status toggle dump export propagate feedback recall
-  verdict record`. The verb surface is a PUBLIC CONTRACT; renames are breaking.
+  serve api verdict record`. The verb surface is a PUBLIC CONTRACT; renames are breaking.
+  (`serve` runs the embedding store HTTP server; `api` serves the Muster OpenAPI contract on :8768.)
   (`export` renders the whole namespace as a deterministic spec — byte-identical
   across runs; `record` writes the registers; `bundle add|member` manages
   bundles — recipes below.)
@@ -27,24 +28,24 @@ only. Public repo: `coding-hermes/auger`.
   edge facet bundle bundle_member verdict). Files:
   `~/duckbrain/namespaces/<ns>/tables/`.
 - Tests: `bash tests/smoke.sh` (15 assertions, ~21s, leaves a namespace
-  behind on purpose) · `AUGER_CI=1 pytest` (68 tests, ~5.5 min).
+  behind on purpose) · `AUGER_CI=1 pytest` (340 tests collected, ~5–19 min
+  depending on host load — the gate budget is 1200s per AUG-081).
 
 ## Environment you need
 
 - DuckBrain HTTP on `127.0.0.1:3000` (or your own `DUCKBRAIN_URL`). Substrate
-  proven live 2026-09-29 on `feat/native-s3` @ 8f14f52 (fresh-box build 81s,
-  `init` 14/14). The README now claims public `main` also carries the
-  declared-tables API (since 42cea0a) — NOT yet verified by a dogfood run
-  (our transfer leg lands on the pinned branch); if `init` 404s on `main`,
-  fall back to the pinned branch (AUG-016 history).
+proven live 2026-10-15 on `main` (dogfood run 16, 14/14 tables; see
+docs/dogfood/2026-10-15-released-artifact-integration.md). The `main` branch
+carries the declared-tables API — no branch pin required.
 - Credentials: `DUCKBRAIN_API_KEY` env, else token files
   `~/.duckbrain/foreman-status.token` then `~/.duckbrain/token` — the README
   documents this since AUG-091 (fixed; re-verified live 2026-09-29 on a fresh
   box: file fallback alone worked, no env var needed). To mint:
   `node bin/duckbrain.js token` prints a 64-hex admin token on stdout only
   (with `--auth=apikey` the daemon enforces it; never paste it into notes or
-  artifacts). `DUCKBRAIN_URL` overrides the base URL (undocumented in the
-  README — needed the moment :3000 is not yours); JEV needs an OpenRouter key
+  artifacts). `DUCKBRAIN_URL` overrides the base URL (documented in README
+  §"Substrate port on shared hosts" at line ~171 — needed the moment :3000 is
+  not yours); JEV needs an OpenRouter key
   in `~/.hermes/.env` — without it ask/check fail CLOSED and say so.
 
 ## The right-way patterns
@@ -70,10 +71,12 @@ only. Public repo: `coding-hermes/auger`.
    with 0 tables. If `init` prints `declared: 0/14` or an odd count, STOP —
    the substrate is lying or unreachable; do not proceed to `start`.
 2. **toggle has per-decision exclusivity now (AUG-015 fixed)**: one option ON
-   deactivates its siblings by default; `--additive` opts back out. But use
-   the FULL option id (`D-001-O2`) — a bare `O2` exits 0 with "toggled …
-   (0)" and patches NOTHING (AUG-036). If a subsequent dump shows "nothing
-   active", this no-op is why.
+   deactivates its siblings by default; `--additive` opts back out. Use the
+   FULL option id (`D-001-O2`) — a bare index token resolves when it matches
+   exactly one option row; ambiguous tokens are refused rc=1 naming candidates;
+   an unknown token prints "no such option" rc=1. The pre-AUG-036 no-op (bare
+   index exits 0, patches nothing) is fixed — a subsequent dump showing "nothing
+   active" is not explained by a silent no-op.
 3. **JEV probe shape**: a probe missing the body's `model` field 400s on every
    key and looks like a total outage. Mirror `JEV_MODEL` from auger.py.
 4. **ask/check take 5-7s**: that is the JEV network round trip. Fail-closed
@@ -107,11 +110,13 @@ sharp edges (all hit live, see docs/dogfood/2026-09-23-seam-http-integration.md)
   PATCH; never trust the status code.
 - ⚠️ POST with no `id` is ACCEPTED (201) and stores `id: null` — unreachable
   afterward (AUG-045). Always send a full row.
-- ⚠️ `count`/pagination params are silently ignored (no Content-Range);
-  filter+count client-side (AUG-042/046 family).
+- ⚠️ `Prefer: count=exact` returns `X-Total-Count` on every table; the `?count=` QUERY
+  parameter is silently ignored (no Content-Range). Use the header path for pagination.
 - ⚠️ A bad-typed filter value (`confidence=gt.banana`) 500s (AUG-044).
-- ⚠️ The embedding store (`memories`) has NO HTTP route — semantic search is
-  only reachable through auger's `recall`/`check` verbs.
+- ⚠️ The embedding store (`memories`) IS reachable over HTTP: `auger serve` (AUG-046) publishes
+  GET `/api/ns/<ns>/embeddings/search?q=…&limit=…` and `GET /api/embeddings/search?q=…`;
+  `auger api` (AUG-067) does the same plus GET `/api/ns/<ns>/recall`.
+  The start command: `python3 auger.py -n <ns> serve` or `python3 auger.py api`.
 - ⚠️ "Versioned in git" (README/DESIGN) is currently FALSE: duckbrain
   gitignores `/namespaces/` (AUG-044). Treat the JSONL as local files.
 

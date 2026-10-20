@@ -5,8 +5,8 @@ explains, it does not paste logs).
 
 ## Architecture in one breath
 
-One Python file (`auger.py`, ~2100 lines, stdlib only — no pip install, ever).
-State lives ENTIRELY in a DuckBrain namespace you name: 13 declared tables
+One Python file (`auger.py`, stdlib only — no pip install, ever). State lives
+ENTIRELY in a DuckBrain namespace you name: 14 declared tables
 (`tables/<t>.table.json` + `<t>.jsonl` rows) plus memory keys for the seed and
 decision embeddings. "The dump is a view, not an artifact." JEV (typesafe/
 jev-1.13 over OpenRouter) is the confidence oracle for `ask`/`check`; it fails
@@ -47,22 +47,19 @@ default.
 ## Substrate coupling (the sharp edge new contributors hit)
 
 auger's entire storage contract is DuckBrain's declared-tables HTTP API
-(`/api/ns/<ns>/tables/...`). That API is NOT on duckbrain's public default
-branch as of 2026-09-22 — it lives on `feat/native-s3` (which also carries the
-per-port pidfile and the registry-invalidation fixes). Until the API lands on
-duckbrain main, every fresh-user doc must pin the branch. The 2026-09-22
-fresh-machine proof (bunker): default branch → init claims success, API sees
-0/13 tables, start 404s; branch → full loop green.
+(`/api/ns/<ns>/tables/...`). That API ships on duckbrain `main` since
+2026-09-29 (42cea0a); no branch pin needed. Fresh-user `init` declares all
+14 tables against default `main` — verified dogfood run 16 (2026-10-15).
 
 ## The bundle layer (2026-09-23 run — where the design meets the road)
 
 The bundle model (SPEC-002) is careful on paper and the weakest layer in
 practice. How the pieces actually connect — none of this is in docs/:
 
-- **Membership is a table, populated by nobody.** `bundle`/`bundle_member`
-  rows must be hand-POSTed to the table API; `bundle_member()` in code has
-  three refusals (role closed-set, bundle exists, project in the FLEET
-  scheduler DB) but no verb calls it (AUG-029).
+- **Membership is populated by CLI.** `bundle member add` calls `bundle_member()`
+  directly; the code no longer refuses at every gate (role, bundle, project) — it
+  writes the membership row. The 2026-09-23 recipe "hand-POST to the table API"
+  is obsolete (AUG-029 shipped the verb).
 - **A member's rows live in the namespace NAMED AFTER the member.**
   `member_namespace()` is the identity function (auger.py ~L865). Put two
   projects in one namespace and every cross-project walk silently sees
@@ -74,11 +71,10 @@ practice. How the pieces actually connect — none of this is in docs/:
   Function-level probe (importing auger.py, calling bundle_impact directly)
   DID write the edge at 0.50 on a re-run — the walk works; the thresholds
   and the report are the problem.
-- **The moot cascade's trigger edge exists in no verb.** `propagate`'s rule
-  walk fires on LOCAL `breaks` edges (dst_project absent). The impact pass
-  always sets dst_project. Therefore only hand-POSTs or tests can trigger
-  moot (AUG-028). The walk itself works: E-900001 (D-010 "the bench meter
-  was mis-wired" breaks D-008) → `propagate` mooted Q-000001 with reason.
+- **The moot cascade's trigger edge fires via `propagate`.** `propagate` walks
+  LOCAL `breaks` edges (dst_project absent) and sets dst_project in the impact
+  pass. A fresh `breaks` edge (new child on a CLOSED parent) triggers moot
+  through the normal verb — no hand-POST needed (AUG-028 ships `moot` verb).
 - **The gate walk needs an OPEN child of a CLOSED parent.** feedback always
   gates its own questions at ask time (stamps jev_checked_at), so plain
   `propagate` mostly skips; use `--recheck` for a real re-examination. The
@@ -99,7 +95,8 @@ practice. How the pieces actually connect — none of this is in docs/:
    against the last sync record before anything else.
 2. `bash tests/smoke.sh` — 15 real assertions, ~21s, leaves its namespace and
    prints the remove command.
-3. `AUGER_CI=1 pytest` — 68 tests, ~5.5 min; CI runs the CI-safe subset.
+3. `AUGER_CI=1 pytest` — 340 tests collected; ~5–19 min depending on host load
+   (gate budget 1200s per AUG-081). CI runs the CI-safe subset.
 4. For any "the data is wrong" claim: query the namespace directly
    (`GET /api/ns/<ns>/tables/<t>?select=...`) — auger is a thin client; the
    rows are the truth, the dump is a view.
