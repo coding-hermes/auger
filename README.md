@@ -306,9 +306,8 @@ hand-edited). It describes the read-only HTTP API on `http://127.0.0.1:8768` —
 operation carries `x-safety: read-only`, and no mutating operation exists in the
 contract. The exact `mcpServers` consumer block and the three-line quickstart live in
 [docs/MUSTER-CONSUMER.md](docs/MUSTER-CONSUMER.md); the scope decision behind the
-surface is [docs/muster-scope.md](docs/muster-scope.md). (The service that implements
-this contract is the next build row; the existing `auger serve` embedding surface on
-`:8765` is unchanged by it.)
+surface is [docs/muster-scope.md](docs/muster-scope.md). The service that implements
+this contract ships with auger — start it with `python3 auger.py api` (serves the contract on http://127.0.0.1:8768; see docs/VERBS.md, section *api*). The existing `auger serve` embedding surface on `:8765` is unchanged by it.
 
 ## Limits and known gaps
 
