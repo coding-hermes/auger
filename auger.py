@@ -2274,7 +2274,7 @@ def set_state(
                 for i, name in enumerate(facet_set())
             ],
         )
-    return patch(ns, "question", question_id, {"status": status})
+    return patch(ns, "question", question_id, {"status": status, "proposed_by_model": "", "scored_by_model": "", "generation_cost": 0.0})
 
 
 def close_question(
