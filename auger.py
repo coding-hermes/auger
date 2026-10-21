@@ -44,6 +44,7 @@ Hard-won rules encoded here:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import contextlib
 import io
 import json
@@ -4703,10 +4704,15 @@ def cmd_ask(a):
             ],
         },
     }
-    generated_rc = _ask_generated_candidates(ns, pid, state, seats)
-    if generated_rc is not None:
-        return generated_rc
-    ans, err = jev(state, qs)
+    # AUG-110: proposer + JEV are both pure I/O waits and consume `state` independently —
+    # run them concurrently so the wall clock is max(proposer, JEV) not proposer + JEV.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _ex:
+        _fut_gen = _ex.submit(_ask_generated_candidates, ns, pid, state, seats)
+        _fut_jev = _ex.submit(jev, state, qs)
+        generated_rc = _fut_gen.result()
+        if generated_rc is not None:
+            return generated_rc
+        ans, err = _fut_jev.result()
     print(f"project {pid}  |  {ns}")
     print(
         f"low-confidence decisions (<{T_CONFIDENT}): {len(seats)}   open questions: {len(unans)}   unknowns: {len(unknown)}"
