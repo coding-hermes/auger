@@ -5494,14 +5494,6 @@ def cmd_answer(a):
             f"answer {did} remains provisional until its memory is written; "
             f"retry the same answer to repair it: {exc}"
         ) from exc
-    try:
-        patch(ns, "decision", did, {"status": final_status})
-    except SystemExit as exc:
-        raise SystemExit(
-            f"answer {did} remains provisional after memory was written; "
-            f"retry the same answer to finalize it: {exc}"
-        ) from exc
-    row["status"] = final_status
     # A legacy namespace may have downgraded a requested bundle scope because its cached declaration
     # lacks the column. On repair, preserve the scope that was actually stored rather than re-running
     # the impact pass as if the requested scope had landed.
@@ -5512,6 +5504,14 @@ def cmd_answer(a):
         if warning
         else decision_scope(row)
     )
+    try:
+        patch(ns, "decision", did, {"status": final_status, "scope": stored_scope})
+    except SystemExit as exc:
+        raise SystemExit(
+            f"answer {did} remains provisional after memory was written; "
+            f"retry the same answer to finalize it: {exc}"
+        ) from exc
+    row["status"] = final_status
     if stored_scope == DEFAULT_SCOPE:
         row.pop("scope", None)
     else:
