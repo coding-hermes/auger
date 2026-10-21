@@ -142,7 +142,11 @@ loop_verbs = []
 for f in fences:
     for ln in f.splitlines():
         if ln.startswith("auger "):
-            loop_verbs.append(ln.split()[1])
+            verb = ln.split()[1]
+            # Skip argparse global flags (--version, --help, --namespace, --project-id)
+            if verb.startswith("-"):
+                continue
+            loop_verbs.append(verb)
 if not loop_verbs:
     fail("verbs", "no 'auger <verb>' fenced block found in the README — loop section moved?")
 for v in loop_verbs:
