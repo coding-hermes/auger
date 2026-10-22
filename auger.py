@@ -61,7 +61,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
-AUGER_VERSION = "0.2"
+AUGER_VERSION = "0.3"
 AUGER_API_DEFAULT_PORT = 8768
 AUGER_API_BASE_URL = f"http://127.0.0.1:{AUGER_API_DEFAULT_PORT}"
 DB_URL = os.environ.get("DUCKBRAIN_URL", "http://127.0.0.1:3000")
@@ -908,9 +908,7 @@ def _highest_id_under_the_law(
     if not (rows and rows[0].get("id")):
         # An empty read is the empty-table contract, not a malformed row: no widening.
         return rows, None
-    rows = select(
-        ns, table, f"select=id&order=id.desc&limit={ID_LAW_SCAN_ROWS}"
-    )
+    rows = select(ns, table, f"select=id&order=id.desc&limit={ID_LAW_SCAN_ROWS}")
     for row in rows:
         rid = str(row.get("id") or "")
         if law.match(rid):
@@ -921,7 +919,11 @@ def _highest_id_under_the_law(
 def _out_of_law_ids(rows: list, prefix: str) -> list[str]:
     """The ids in `rows` that are NOT part of the declared id law — the AUG-107 poison shape."""
     law = re.compile(_ID_LAW_TEMPLATE.format(prefix=re.escape(prefix)))
-    return [rid for rid in (str(r.get("id") or "") for r in rows) if rid and not law.match(rid)]
+    return [
+        rid
+        for rid in (str(r.get("id") or "") for r in rows)
+        if rid and not law.match(rid)
+    ]
 
 
 def decision_id_width(ns: str) -> int:
@@ -2126,7 +2128,9 @@ def q_states(ns: str, project_id: str) -> dict:
 def graph_edges(ns: str, project_id: str) -> list:
     # An empty project id asks for the WHOLE namespace (the export render is namespace-scoped):
     # `project_id=eq.` matches nothing and would silently blind the caller.
-    query = "order=id.asc" if not project_id else f"project_id=eq.{project_id}&order=id.asc"
+    query = (
+        "order=id.asc" if not project_id else f"project_id=eq.{project_id}&order=id.asc"
+    )
     return select(ns, "edge", query)
 
 
@@ -2274,7 +2278,17 @@ def set_state(
                 for i, name in enumerate(facet_set())
             ],
         )
-    return patch(ns, "question", question_id, {"status": status, "proposed_by_model": "", "scored_by_model": "", "generation_cost": 0.0})
+    return patch(
+        ns,
+        "question",
+        question_id,
+        {
+            "status": status,
+            "proposed_by_model": "",
+            "scored_by_model": "",
+            "generation_cost": 0.0,
+        },
+    )
 
 
 def close_question(
@@ -6299,7 +6313,9 @@ def render_export(ns: str, project_id: str | None = None) -> str:
                 markers = [invalidation_marker(e) for e in break_idx[row["id"]]]
                 lines.extend(f"- {marker}" for marker in markers)
             lines.append(f"### {row.get('id') or '(missing id)'}")
-            invalidated_option = table == "option" and row.get("decision_id") in break_idx
+            invalidated_option = (
+                table == "option" and row.get("decision_id") in break_idx
+            )
             for field in fields:
                 # AUG-100: an option of an invalidated decision is not live — the stored value
                 # stays untouched on disk, but the render must not report it as active.
@@ -6436,11 +6452,7 @@ def cmd_dump(a):
                     if superseders
                     else "  [SUPERSEDED]"
                     if d.get("status") == SUPERSEDED_STATUS
-                    else (
-                        f"  [{'; '.join(break_markers)}]"
-                        if break_markers
-                        else ""
-                    )
+                    else (f"  [{'; '.join(break_markers)}]" if break_markers else "")
                 )
             )
         )

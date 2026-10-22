@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.3
+
+Tagged v0.3.0 on 2026-10-22.
+
+- ask split into generation (large model) + judgement (JEV) (AUG-052)
+- read-first HTTP API on :8768 (muster contract, AUG-067) + OpenAPI contract + parity gate (AUG-066)
+- embedding-store HTTP search route (AUG-046)
+- breaks-edge invalidation in dump/export/status (AUG-100)
+- lexical cosine prefilter in gate_question (AUG-063)
+- fail-closed init on a 0/N declaration tally (AUG-105); ask ceiling-stop (AUG-095); dead-substrate verbs exit consistently (AUG-101)
+- ask runs proposer + JEV concurrently (AUG-110), set_state/decision NOT NULL fixes
+- pyproject.toml: pip-installable (QA-AUGER-11); pyyaml in tests/requirements-dev.txt (QA-AUGER-12)
+- next_id declared-id law (AUG-107); check sticky-band hysteresis (AUG-086); gate teardown None-tolerance (AUG-040)
+- README: api verb documented, muster private-link removed, real gate named, install block added (README-008..014)
+- shipped usage skill + diagnostics refreshed (DOC-011..019)
+
+## Unreleased
+
 ## v0.2
 
 Tagged [v0.2.0](https://github.com/coding-hermes/auger/releases/tag/v0.2.0) on 2026-09-30.

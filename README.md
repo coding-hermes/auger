@@ -7,7 +7,7 @@ puts down. Auger makes it a program: it keeps drilling, remembers every choice a
 the alternatives lost, scores its own confidence, and can render what the system looks like
 under a different set of choices.
 
-**Status: v0.2 (tag [v0.2.0](https://github.com/coding-hermes/auger/releases/tag/v0.2.0)) — the loop works end to end against live DuckBrain + JEV.** See
+**Status: v0.3 (tag [v0.3.0](https://github.com/coding-hermes/auger/releases/tag/v0.3.0)) — the loop works end to end against live DuckBrain + JEV.** See
 [docs/DESIGN.md](docs/DESIGN.md) for the concept and
 [docs/SUBSTRATE-VERIFICATION.md](docs/SUBSTRATE-VERIFICATION.md) for the live proof that the
 substrate does what this design assumes.
@@ -332,7 +332,7 @@ this contract ships with auger — start it with `python3 auger.py api` (serves 
 
 ## Limits and known gaps
 
-Auger v0.2 is a day-one-plus-a-release proof, deliberately small: one standard-library Python file (`auger.py`),
+Auger v0.3 is a day-one-plus-a-release proof, deliberately small: one standard-library Python file (`auger.py`),
 no daemon, no auth layer of its own — it expects a substrate you control, a DuckBrain you started
 with tokens you placed (see **Quick start → Authentication**), and it works on one namespace at a
 time (the `-n` flag every verb takes). The dogfood integration reports under
