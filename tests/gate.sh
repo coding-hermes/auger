@@ -101,8 +101,18 @@ skip_live_arm(){
 # guard run that had nothing to do with their diff). On overrun (exit 124)
 # the gate fails LOUDLY naming the arm; a plain pytest failure propagates
 # as before.
+# RELEASE-017: the default was 1200s against a ~1170s measured wall on a QUIET
+# host (REVIEW-AUGER-005, commit 8a9de98: "GATE PASS rc=0, ~19.5min wall"),
+# i.e. ~30s of headroom — so under ordinary fleet load the arm died on its own
+# budget, not on a test failure (guard-20261022T215539.703096Z.log: "GATE
+# TIMEOUT: the pytest arm exceeded 1200s" with three concurrent pytest
+# batteries running), and contributors were pushed to --no-verify on trees CI
+# passes. The inner budget must also stay well inside .gitreins/config.yaml's
+# outer test_timeout/hook_timeout, or the outer raises never take effect.
+# 2400s = 2x the measured wall (~1170s), leaving ~1230s for load-induced
+# slowdown. Override with AUGER_GATE_PYTEST_BUDGET when a soak run needs more.
 run_pytest_arm(){
-  local budget="${AUGER_GATE_PYTEST_BUDGET:-1200s}"
+  local budget="${AUGER_GATE_PYTEST_BUDGET:-2400s}"
   local kill_after="${AUGER_GATE_PYTEST_KILL_AFTER:-30s}"
   local rc=0
   setsid timeout --kill-after="$kill_after" "$budget" python3 -m pytest tests/test_auger.py tests/test_openapi_parity.py tests/test_api_service.py "$@" || rc=$?
