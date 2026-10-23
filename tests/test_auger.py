@@ -1320,7 +1320,9 @@ def test_a_bundle_scoped_decision_round_trips_through_the_api(project: dict):
     assert [r["scope"] for r in disk if r["id"] == "D-010"] == ["bundle"], disk
 
 
-def test_the_default_decision_scope_is_project_and_sends_no_scope_key(decided: dict):
+def test_the_default_decision_scope_is_project_and_sends_no_scope_key(
+    decided: dict, monkeypatch
+):
     """Criterion 3: without `--scope` the behaviour AND the stored payload are unchanged.
 
     Asserted on the namespace's own JSONL — the storage of record — because "the default is
@@ -1358,6 +1360,60 @@ def test_the_default_decision_scope_is_project_and_sends_no_scope_key(decided: d
     )
     assert rc == 0 and "scope project" in out, out
     assert "WARNING" not in out, out
+
+    # GATE-RED-001: the contract is about the PAYLOAD, not only the row it leaves behind. Capture
+    # every write `answer` makes against the decision table and prove a default-scope decision sends
+    # no scope VALUE: the provisional INSERT carries no `scope` key at all, and the finalize UPDATE
+    # carries the empty one (the declared-table layer refuses a null varchar — see below) and never
+    # the word "project". (The finalize PATCH re-sending the default's NAME is what wrote
+    # `scope: "project"` into these rows before this fix; the row assertion above could only see the
+    # damage after the fact.)
+    sent: list[tuple[str, object]] = []
+    real_db = auger.db
+
+    def recording_db(path, method="GET", body=None, *args, **kwargs):
+        if "/tables/decision" in path and method in ("POST", "PATCH"):
+            sent.append((method, body))
+        return real_db(path, method, body, *args, **kwargs)
+
+    monkeypatch.setattr(auger, "db", recording_db)
+    rc, out = run_cli(
+        [
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-013",
+            "--chosen",
+            "watch loop",
+            "--confidence",
+            "0.6",
+        ]
+    )
+    assert rc == 0 and "D-013 recorded" in out, out
+    assert {method for method, _ in sent} == {"POST", "PATCH"}, (
+        f"the default-scope answer did not make both decision writes: {sent!r}"
+    )
+    inserts = [
+        written
+        for method, payload in sent
+        if method == "POST"
+        for written in (payload if isinstance(payload, list) else [payload])
+    ]
+    updates = [payload for method, payload in sent if method == "PATCH"]
+    assert inserts and updates, sent
+    for written in inserts:
+        assert "scope" not in written, (
+            f"a default-scope INSERT carries a scope key: {written!r}"
+        )
+    for written in updates:
+        # The finalize UPDATE cannot OMIT the key: the declared-table layer materialises the column
+        # as JSON null and refuses to write a row holding it (422 UNPROCESSABLE_ENTITY "Column
+        # 'scope' (varchar) requires a string, got null", measured against the live API 2026-10-23),
+        # so the default travels as the EMPTY value that decision_scope() already reads as `project`.
+        assert written.get("scope") == "", (
+            f"a default-scope finalize UPDATE carries a real scope: {written!r}"
+        )
 
 
 def test_an_unknown_decision_scope_is_refused(project: dict):

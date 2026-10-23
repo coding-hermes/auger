@@ -4843,6 +4843,34 @@ def insert_decision(ns: str, row: dict) -> str:
     raise SystemExit(f"insert decision failed ({st}): {body}")
 
 
+def finalize_decision(ns: str, did: str, status: str, scope: str = DEFAULT_SCOPE) -> None:
+    """Set a provisional decision's FINAL status without inventing a scope.
+
+    AUG-009's contract covers this UPDATE too, and the two substrates force two different shapes:
+
+    * a namespace that DECLARES `scope` cannot take the key's OMISSION — the declared-table layer
+      materialises a missing column as JSON null and then refuses to write it (measured live
+      2026-10-23: 422 UNPROCESSABLE_ENTITY "Column 'scope' (varchar) requires a string, got null in
+      table 'decision'"). So the default travels as the EMPTY value, which `decision_scope` and
+      SPEC-002 both read as the default (`project | bundle (-1/empty = project)`) — never as the
+      default's NAME, which made every default-scope row indistinguishable from an explicitly
+      project-scoped one and returned `scope: "project"` to every reader (GATE-RED-001).
+    * a namespace whose declaration PREDATES the column answers 400 VALIDATION_ERROR "Unknown
+      column(s) in PATCH body: scope" instead — the same split insert_decision handles — and is
+      finalized with the key left off entirely, because there is no column to satisfy.
+    """
+    values = {"status": status, "scope": "" if scope == DEFAULT_SCOPE else scope}
+    try:
+        patch(ns, "decision", did, values)
+        return
+    except SystemExit as exc:
+        if not UNDECLARED_SCOPE.search(str(exc)):
+            raise
+    # A namespace whose declaration predates the column has nothing to satisfy — the same downgrade
+    # insert_decision makes at INSERT time — so it is finalized with the key left off entirely.
+    patch(ns, "decision", did, {"status": status})
+
+
 # ---------------------------------------------------------------- the cross-boundary IMPACT pass
 # SPEC-002 section 2.2. An answer to a BUNDLE-scoped decision additionally walks every member of the
 # decision's bundle(s): each sibling's own bundle-scoped decisions are put to JEV, one question per
@@ -5524,8 +5552,12 @@ def cmd_answer(a):
         if warning
         else decision_scope(row)
     )
+    # AUG-009's contract covers BOTH writes; finalize_decision owns the shape of this UPDATE (the
+    # default travels as the empty value, a non-default scope still says its name out loud, and a
+    # namespace declared before the column is finalized without the key). See its docstring for the
+    # two substrate answers this was measured against.
     try:
-        patch(ns, "decision", did, {"status": final_status, "scope": stored_scope})
+        finalize_decision(ns, did, final_status, stored_scope)
     except SystemExit as exc:
         raise SystemExit(
             f"answer {did} remains provisional after memory was written; "
