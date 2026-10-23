@@ -25,11 +25,26 @@ only. Public repo: `coding-hermes/auger`.
   bundles — recipes below.)
 - Storage: DuckBrain declared tables in namespace `<ns>` — 14 tables
   (project question decision option break escalation assumption unknown domain
-  edge facet bundle bundle_member verdict). Files:
-  `~/duckbrain/namespaces/<ns>/tables/`.
+  edge facet bundle bundle_member verdict). Rows live in the SUBSTRATE's
+  namespace dir; the declaration files (`<ns>/tables/*.table.json`) are written
+  by the CLI to a path IT resolves locally — `DUCKBRAIN_NAMESPACES_PATH`, else
+  `~/duckbrain/namespaces` — NOT the path the substrate it is talking to uses.
+  On a host with more than one DuckBrain, export
+  `DUCKBRAIN_NAMESPACES_PATH=<the substrate's namespaces dir>` for the CLI too,
+  or `init` writes into the OTHER instance's tree and exits rc=1 at 0/14
+  (AUG-074-R2, measured 2026-10-23: 14 files created under the live instance).
+- Install: `pip install .` / `-e .` needs a venv or pipx on Debian 12+ /
+  Ubuntu 24.04 (PEP 668 `externally-managed-environment`; AUG-106-R2). The
+  console script then lives in `<venv>/bin/auger`; stock boxes do not ship pipx.
 - Tests: `bash tests/smoke.sh` (15 assertions, ~21s, leaves a namespace
   behind on purpose) · `AUGER_CI=1 pytest` (340 tests collected, ~5–19 min
-  depending on host load — the gate budget is 1200s per AUG-081).
+  depending on host load — the gate budget is 1200s per AUG-081). The pytest
+  suite targets the LIVE substrate at `DUCKBRAIN_URL` (default
+  `127.0.0.1:3000`) and only teardown removes its namespaces, so a KILLED run
+  (gate cap, QA cap) leaves a namespace + registry mapping behind and there is
+  no sweep verb — on this host that had accumulated to 15,492 mappings and 645
+  dirs / 1.18 GB (AUG-111). Point it at a scratch substrate for anything you
+  expect to interrupt.
 
 ## Environment you need
 
