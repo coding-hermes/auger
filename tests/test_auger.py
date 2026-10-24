@@ -6527,6 +6527,39 @@ def test_teardown_retries_a_short_409_then_confirms_deletion(offline_duckbrain):
     assert fake.sleeps == [1], fake.sleeps
 
 
+def test_substrate_preflight_names_simulated_push_conflict_and_free_locks():
+    """A simulated 409 is named, while a free substrate starts without a blocker."""
+    blocked = conftest.substrate_preflight(
+        process_commands=[],
+        push_probe=lambda: (409, {"error": "Push in flight (pid 7654)"}),
+        lock_holder=lambda: None,
+    )
+    assert blocked == (
+        "AUGER_BLOCKED_BY: full-fleet sync push pid 7654 "
+        "(probe returned 409 Push in flight)"
+    )
+
+    assert conftest.substrate_preflight(
+        process_commands=[(4321, "python -m pytest tests/test_auger.py")],
+        push_probe=lambda: None,
+        lock_holder=lambda: None,
+    ) is None
+
+
+def test_substrate_preflight_names_full_fleet_process_and_foreign_lock():
+    """The process and lock arms both carry a concrete PID in their named cause."""
+    assert conftest.substrate_preflight(
+        process_commands=[(2385306, "node bin/duckbrain.js s3 sync all push")],
+        push_probe=lambda: None,
+        lock_holder=lambda: None,
+    ) == "AUGER_BLOCKED_BY: full-fleet sync push pid 2385306"
+    assert conftest.substrate_preflight(
+        process_commands=[],
+        push_probe=lambda: None,
+        lock_holder=lambda: 9876,
+    ) == "AUGER_BLOCKED_BY: foreign AUGER_TEST_LOCK holder pid 9876"
+
+
 def test_teardown_reports_persistent_409_and_listed_residue(offline_duckbrain):
     """A persistent sync conflict is bounded and LOUD, never accepted as deletion.
 

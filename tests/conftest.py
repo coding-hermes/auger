@@ -28,6 +28,7 @@ import contextlib
 import fcntl
 import io
 import os
+import re
 import shutil
 import sys
 import time
@@ -298,6 +299,149 @@ _SUBSTRATE_LOCK_DEPTH = 0
 #: serialize against the one real flock. A process without the flag is unaffected.
 SUBSTRATE_LOCK_INHERITED_ENV = "AUGER_TEST_LOCK_INHERITED"
 
+# A full-fleet native sync holds every namespace's native lock for much longer than the
+# ordinary post-write window. Detect it before any live fixture takes the flock, so a live
+# arm never spends 61 seconds per namespace discovering the same known blocker.
+FULL_FLEET_SYNC_MARKER = "duckbrain.js s3 sync all push"
+AUGER_BLOCKED_BY_PREFIX = "AUGER_BLOCKED_BY:"
+SUBSTRATE_PREFLIGHT_BLOCKED: str | None = None
+
+
+def _process_command_lines() -> list[tuple[int, str]]:
+    """Return (pid, command) for visible processes, with unreadable entries ignored."""
+    commands: list[tuple[int, str]] = []
+    proc_root = Path("/proc")
+    try:
+        entries = proc_root.iterdir()
+    except OSError:
+        return commands
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            command = (entry / "cmdline").read_bytes().replace(b"\\x00", b" ").decode(
+                errors="replace"
+            )
+        except OSError:
+            continue
+        commands.append((int(entry.name), command))
+    return commands
+
+
+def _full_fleet_sync_holders(
+    process_commands: list[tuple[int, str]] | None = None,
+) -> list[tuple[int, str]]:
+    """Find full-fleet sync processes without shelling out to a process-list command."""
+    commands = (
+        _process_command_lines() if process_commands is None else process_commands
+    )
+    return [
+        (pid, command)
+        for pid, command in commands
+        if FULL_FLEET_SYNC_MARKER in command and pid != os.getpid()
+    ]
+
+
+def _probe_full_fleet_sync_push() -> tuple[int, object] | None:
+    """Probe the configured substrate for the named 409 Push-in-flight response.
+
+    The probe is injectable for unit tests and uses the same DELETE transport shape as
+    teardown, but a scratch namespace is never created: a server that exposes the
+    documented conflict response identifies the substrate-wide blocker directly.
+    """
+    try:
+        status, body, _ = auger.db("/api/namespaces/auger-preflight", "DELETE")
+    except BaseException:  # noqa: BLE001 - preflight must not mask ordinary liveness errors
+        return None
+    if status != 409:
+        return None
+    text = str(body)
+    if re.search(r"push in flight", text, re.IGNORECASE):
+        return status, body
+    return None
+
+
+def _foreign_substrate_lock_holder() -> int | None:
+    """Return a PID holding AUGER_TEST_LOCK, or None when the lock is immediately free."""
+    if _substrate_lock_is_inherited():
+        return None
+    path = _substrate_lock_path()
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            # flock does not expose the holder PID. Match the lock file's device/inode
+            # against /proc/<pid>/fd so the diagnostic names the actual foreign holder.
+            identity = os.fstat(fd)
+            for entry in Path("/proc").iterdir():
+                if not entry.name.isdigit() or int(entry.name) == os.getpid():
+                    continue
+                fd_dir = entry / "fd"
+                try:
+                    for held_fd in fd_dir.iterdir():
+                        try:
+                            held = os.stat(held_fd)
+                        except OSError:
+                            continue
+                        if (held.st_dev, held.st_ino) == (identity.st_dev, identity.st_ino):
+                            return int(entry.name)
+                except OSError:
+                    continue
+            return None
+        else:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            return None
+    finally:
+        os.close(fd)
+
+
+def substrate_preflight(
+    process_commands: list[tuple[int, str]] | None = None,
+    push_probe=None,
+    lock_holder=None,
+) -> str | None:
+    """Return one named substrate blocker, or None when live arms may start."""
+    holders = _full_fleet_sync_holders(process_commands)
+    if holders:
+        return f"{AUGER_BLOCKED_BY_PREFIX} full-fleet sync push pid {holders[0][0]}"
+    probe = (push_probe or _probe_full_fleet_sync_push)()
+    if probe is not None:
+        _status, body = probe
+        match = re.search(r"pid\s+(\d+)", str(body), re.IGNORECASE)
+        pid = f" pid {match.group(1)}" if match else " pid unknown"
+        return f"{AUGER_BLOCKED_BY_PREFIX} full-fleet sync push{pid} (probe returned 409 Push in flight)"
+    holder = (lock_holder or _foreign_substrate_lock_holder)()
+    if holder is not None:
+        return f"{AUGER_BLOCKED_BY_PREFIX} foreign AUGER_TEST_LOCK holder pid {holder}"
+    return None
+
+
+def pytest_sessionstart(session):
+    """Fail or skip live arms before they can enter a substrate conflict backoff."""
+    global SUBSTRATE_PREFLIGHT_BLOCKED
+    blocked = substrate_preflight()
+    SUBSTRATE_PREFLIGHT_BLOCKED = blocked
+    if blocked is None:
+        return
+    session.config._auger_substrate_blocked = blocked
+    if os.environ.get("AUGER_REQUIRE_LIVE") == "1":
+        raise pytest.UsageError(blocked)
+    terminal = session.config.pluginmanager.getplugin("terminalreporter")
+    if terminal is not None:
+        terminal.write_line(f"{blocked}; live arms will be skipped")
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip only live-dependent tests when the session preflight found a blocker."""
+    blocked = getattr(config, "_auger_substrate_blocked", None)
+    if blocked is None:
+        return
+    marker = pytest.mark.skip(reason=f"{blocked}; live arm skipped")
+    for item in items:
+        if "live_service" in item.fixturenames:
+            item.add_marker(marker)
+
 
 def _substrate_lock_is_inherited() -> bool:
     return os.environ.get(SUBSTRATE_LOCK_INHERITED_ENV, "").strip() == "1"
@@ -383,6 +527,9 @@ def live_service() -> str:
     offline tests are unaffected.
     """
     with substrate_lock(), _test_transport_budget():
+        if SUBSTRATE_PREFLIGHT_BLOCKED is not None:
+            reason = f"{SUBSTRATE_PREFLIGHT_BLOCKED}; live arm skipped"
+            pytest.skip(reason)
         url = require_live()
         yield url
 
