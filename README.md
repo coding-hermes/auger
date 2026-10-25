@@ -105,16 +105,17 @@ Once the substrate is running, install auger itself. The repo ships a `pyproject
 console script, so you can install it with pip or pipx:
 
 ```bash
-# Clone and install (editable mode for development)
+# Clone and install in a virtual environment (safe on PEP 668 hosts)
 git clone https://github.com/coding-hermes/auger ~/auger
 cd ~/auger
-pip install -e .   # or: pipx install .
+python3 -m venv .venv                 # install python3-venv if your distro lacks venv
+.venv/bin/python -m pip install -e .
 # Runtime install stays stdlib-only. For DEVELOPMENT (running the test
 # suite), add the dev extra — tests/test_openapi_parity.py imports yaml:
-pip install -e '.[dev]'   # same as: pip install -e . -r tests/requirements-dev.txt
+.venv/bin/python -m pip install -e '.[dev]'
 
 # Verify the console script is on your PATH
-auger --version
+.venv/bin/auger --version
 ```
 
 The `auger` command is now available. Every example in this README uses `python3 auger.py` for
