@@ -25,9 +25,14 @@ Conventions every verb shares:
 - A refused write exits non-zero and says why. A model call that fails is fail-closed:
   no verdict is invented, no question is made up, nothing is written on an answer the
   model did not give.
-- Every verb talks to the substrate at `DUCKBRAIN_URL` (default `http://127.0.0.1:3000`).
-  On a shared host, set it to the port you actually booted — see README, *Substrate port
-  on shared hosts*.
+- Every verb talks to the configured DuckBrain substrate: `DUCKBRAIN_URL` (default
+  `http://127.0.0.1:3000`) selects the HTTP endpoint, `DUCKBRAIN_API_KEY` supplies the
+  `x-api-key` credential (with the documented token-file fallback), and
+  `DUCKBRAIN_NAMESPACES_PATH` selects the declaration tree used by `init`. When the URL points
+  at an isolated substrate, also set `DUCKBRAIN_NAMESPACES_PATH` (or `DUCKBRAIN_DATA_DIR`, whose
+  `namespaces/` child is the fallback); otherwise `init` refuses before writing to the legacy
+  default tree and names the missing path knob. On a shared host, set the URL to the port you
+  actually booted — see README, *Substrate port on shared hosts*.
 - Every verb authenticates to DuckBrain the same way: the `DUCKBRAIN_API_KEY` environment
   variable wins; if it is unset or empty, the token files `~/.duckbrain/foreman-status.token`
   then `~/.duckbrain/token` are tried in that order and the first non-empty one is used.
@@ -53,15 +58,17 @@ there is nothing beyond the top-level `--namespace`.
 
 **Writes:** the namespace itself, when it does not exist yet, and one declaration file
 per table in `COLS` — 14 today — under `<ns>/tables/<table>.table.json` inside the
-namespaces base: `DUCKBRAIN_NAMESPACES_PATH` when it is set and non-empty (the substrate
-honors the same variable, so the declarations land in the tree the API actually reads),
-else the legacy `~/duckbrain/namespaces`. Idempotent: a declaration file whose content
+namespaces base. Resolution is `DUCKBRAIN_NAMESPACES_PATH` when it is set and non-empty,
+then `DUCKBRAIN_DATA_DIR/namespaces`, then the legacy `~/duckbrain/namespaces` for the
+plain default substrate. The substrate must read the same tree: when `DUCKBRAIN_URL` points
+at an isolated substrate and neither path knob is set, `init` refuses before any namespace or
+file write and names the missing knob. Idempotent: a declaration file whose content
 already matches is not rewritten. The run states the tally itself (`declared: 14/14
 tables -> ...`), which is how the count the README repeats is checked against the code
-rather than trusted. A 0/N tally — no declared table visible to the API at all — REFUSES
-with a non-zero exit naming the resolved directory and the override: `start` on such a
-namespace would die on its first insert anyway. A partial tally keeps the WARNING, on the
-assumption the API has not caught up yet.
+rather than trusted. A 0/N tally — no declared table visible to the API at all — refuses
+and rolls back any files changed by this invocation, naming the resolved directory and the
+path remedy: `start` on such a namespace would die on its first insert anyway. A partial
+tally keeps the WARNING, on the assumption the API has not caught up yet.
 With `--seed-domains`, a further 44 `domain` rows — one per domain of the method's grid,
 4.01-4.44 — read from the skill's own `design/02-domains/` files (the default path is the
 dogfood artifact under `~/.hermes/skills/`; `AUGER_DOMAIN_GRID` moves it) rather than copied

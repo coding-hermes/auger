@@ -88,6 +88,17 @@ node bin/duckbrain.js http
 `DUCKBRAIN_NAMESPACES_PATH`): it is read at boot and never written back into the config file.
 After boot, confirm isolation by checking that `/api/namespaces` on the new instance is empty.
 
+**CLI substrate variables.** Callers of `auger` must point all three substrate settings at the
+same instance: `DUCKBRAIN_URL` selects the HTTP endpoint, `DUCKBRAIN_API_KEY` supplies its
+`x-api-key` credential, and `DUCKBRAIN_NAMESPACES_PATH` points `init` at the namespace tree
+that instance reads. If the daemon was configured with only `DUCKBRAIN_DATA_DIR`, auger uses
+`$DUCKBRAIN_DATA_DIR/namespaces` when `DUCKBRAIN_NAMESPACES_PATH` is unset. The path precedence
+is explicit namespace path, data-dir `namespaces/`, then the legacy `~/duckbrain/namespaces`.
+When `DUCKBRAIN_URL` is an isolated/non-default endpoint and neither path knob is set,
+`auger init` refuses before creating a namespace or declaration file instead of risking writes
+to the default tree. Remedy: export `DUCKBRAIN_NAMESPACES_PATH` (or `DUCKBRAIN_DATA_DIR`) and
+retry; a 0/N API tally also rolls back declarations and names the resolved root.
+
 ## Install auger
 
 Once the substrate is running, install auger itself. The repo ships a `pyproject.toml` with a
@@ -236,7 +247,9 @@ directory. Without either the global config or the env vars, the substrate canno
 ## Where the data lives
 
 Nothing is stored in this repo. Every row lives in the DuckBrain namespace you name, as
-declared tables over the JSONL files that namespace holds:
+declared tables over the JSONL files that namespace holds. The base is
+`DUCKBRAIN_NAMESPACES_PATH`, or `$DUCKBRAIN_DATA_DIR/namespaces` when the explicit path is
+unset; the default substrate uses `~/duckbrain/namespaces`:
 
 ```
 ~/duckbrain/namespaces/<ns>/tables/<table>.table.json   the declared schema

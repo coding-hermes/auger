@@ -201,16 +201,77 @@ def test_ns_dir_honors_the_namespaces_path_override(monkeypatch):
 
 
 def test_ns_dir_falls_back_to_the_legacy_default_without_the_override(monkeypatch):
-    """Without DUCKBRAIN_NAMESPACES_PATH the legacy ~/duckbrain/namespaces stays the base."""
+    """Without either path override the default substrate keeps the legacy base."""
     monkeypatch.delenv(auger.NAMESPACES_PATH_ENV, raising=False)
+    monkeypatch.delenv(auger.DATA_DIR_ENV, raising=False)
     assert auger.ns_dir("demo") == os.path.join(
         os.path.expanduser("~"), "duckbrain", "namespaces", "demo"
     )
 
 
+def test_ns_dir_uses_data_dir_namespaces_when_configured(monkeypatch, tmp_path):
+    """DUCKBRAIN_DATA_DIR is the fallback substrate root when no explicit namespace path exists."""
+    monkeypatch.delenv(auger.NAMESPACES_PATH_ENV, raising=False)
+    monkeypatch.setenv(auger.DATA_DIR_ENV, str(tmp_path / "data"))
+    assert auger.ns_dir("demo") == str(tmp_path / "data" / "namespaces" / "demo")
+
+
+def test_init_refuses_an_isolated_url_without_a_path_knob(monkeypatch, tmp_path):
+    """An isolated URL cannot fall through to the legacy default before any API write."""
+    monkeypatch.setattr(auger, "DB_URL", "http://127.0.0.1:3987")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.delenv(auger.NAMESPACES_PATH_ENV, raising=False)
+    monkeypatch.delenv(auger.DATA_DIR_ENV, raising=False)
+    calls = []
+    monkeypatch.setattr(auger, "db", lambda *args, **kwargs: calls.append(args))
+
+    code, msg, out = run_cli_exit(
+        ["-n", f"auger-worker074-{uuid.uuid4().hex}", "init"]
+    )
+
+    assert code == 1, out
+    assert calls == []
+    assert auger.NAMESPACES_PATH_ENV in msg, msg
+    assert auger.DATA_DIR_ENV in msg, msg
+    assert not (tmp_path / "home" / "duckbrain" / "namespaces").exists()
+
+
+def test_init_declares_all_tables_in_configured_root(monkeypatch, tmp_path):
+    """A configured root receives every declaration when the API reports 14/14."""
+    ns = f"auger-worker074-{uuid.uuid4().hex}"
+    configured = tmp_path / "substrate" / "namespaces"
+    calls = []
+
+    def fake_db(path, method="GET", body=None, timeout=45, retries=auger.RETRIES):
+        calls.append((method, path))
+        if path == "/api/namespaces":
+            if method == "GET":
+                return 200, {"namespaces": []}, None
+            return 201, {"name": ns}, None
+        return 200, {"tables": [{"name": name} for name in sorted(auger.COLS)]}, None
+
+    monkeypatch.setattr(auger, "db", fake_db)
+    monkeypatch.setenv(auger.NAMESPACES_PATH_ENV, str(configured))
+    monkeypatch.delenv(auger.DATA_DIR_ENV, raising=False)
+
+    rc, out = run_cli(["-n", ns, "init"])
+
+    declaration_dir = configured / ns / "tables"
+    files = list(declaration_dir.glob("*.table.json"))
+    assert rc == 0, out
+    assert "declared: 14/14 tables" in out, out
+    assert len(files) == len(auger.COLS)
+    assert {p.name.removesuffix(".table.json") for p in files} == set(auger.COLS)
+    assert calls == [
+        ("GET", "/api/namespaces"),
+        ("POST", "/api/namespaces"),
+        ("GET", auger.ns_tables_path(ns)),
+    ]
+
+
 def test_init_refuses_a_zero_declared_tally(monkeypatch, tmp_path):
-    """A 0/N tally exits non-zero naming the resolved directory and the override."""
-    ns = "auger-worker074-unit"  # never touched: db is stubbed
+    """A 0/N tally rolls back declarations and names the resolved root and remedy."""
+    ns = f"auger-worker074-{uuid.uuid4().hex}"
     calls: list[tuple[str, str]] = []
 
     def fake_db(path, method="GET", body=None, timeout=45, retries=auger.RETRIES):
@@ -222,10 +283,9 @@ def test_init_refuses_a_zero_declared_tally(monkeypatch, tmp_path):
         return 200, {"tables": []}, None  # the API serves no declared table
 
     monkeypatch.setattr(auger, "db", fake_db)
-    # The override points the declaration writes at tmp_path: the refusal path still
-    # writes its 14 files, and they must land in the test's own tree, never in the
-    # real ~/duckbrain namespaces base.
-    monkeypatch.setenv(auger.NAMESPACES_PATH_ENV, str(tmp_path / "ns"))
+    configured = tmp_path / "wrong-root"
+    monkeypatch.setenv(auger.NAMESPACES_PATH_ENV, str(configured))
+    monkeypatch.delenv(auger.DATA_DIR_ENV, raising=False)
 
     code, msg, out = run_cli_exit(["-n", ns, "init"])
 
@@ -238,6 +298,11 @@ def test_init_refuses_a_zero_declared_tally(monkeypatch, tmp_path):
     assert "declared: 0/" in msg, msg
     assert auger.ns_dir(ns) in msg, msg
     assert auger.NAMESPACES_PATH_ENV in msg, msg
+    assert list((configured / ns / "tables").glob("*.table.json")) == []
+    legacy_ns = os.path.join(
+        os.path.expanduser("~"), "duckbrain", "namespaces", ns, "tables"
+    )
+    assert not os.path.exists(legacy_ns)
 
 
 def test_init_partial_tally_still_warns_and_exits_zero(monkeypatch, tmp_path):

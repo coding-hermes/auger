@@ -64,7 +64,8 @@ from urllib.parse import parse_qs, quote, unquote, urlsplit
 AUGER_VERSION = "0.3"
 AUGER_API_DEFAULT_PORT = 8768
 AUGER_API_BASE_URL = f"http://127.0.0.1:{AUGER_API_DEFAULT_PORT}"
-DB_URL = os.environ.get("DUCKBRAIN_URL", "http://127.0.0.1:3000")
+DEFAULT_DUCKBRAIN_URL = "http://127.0.0.1:3000"
+DB_URL = os.environ.get("DUCKBRAIN_URL", DEFAULT_DUCKBRAIN_URL)
 JEV_URL = "https://openrouter.ai/api/alpha/decisions"
 JEV_MODEL = "typesafe/jev-1.13"
 
@@ -462,16 +463,42 @@ def facet_set() -> tuple:
 # DUCKBRAIN_NAMESPACES_PATH for its namespaces directory, so a substrate running from a
 # non-default path made the legacy guess write declaration files into a tree the API never
 # reads (proven 2026-09-25: 0/14 declared files under ~, substrate serving /tmp/...).
-# First choice is the env var when it is set and non-empty; the legacy default stays the
-# fallback so a plain setup resolves exactly as before.
+# First choice is DUCKBRAIN_NAMESPACES_PATH when it is set and non-empty; the substrate's
+# data directory is the next deterministic location, then the legacy default for the plain
+# default substrate. An isolated DUCKBRAIN_URL without either path knob is refused by `init`
+# before it can create declarations in the legacy tree.
 NAMESPACES_PATH_ENV = "DUCKBRAIN_NAMESPACES_PATH"
+DATA_DIR_ENV = "DUCKBRAIN_DATA_DIR"
+
+
+def namespaces_base() -> str:
+    """Resolve the local declaration tree using the substrate's path precedence."""
+    base = os.environ.get(NAMESPACES_PATH_ENV, "").strip()
+    if base:
+        return base
+    data_dir = os.environ.get(DATA_DIR_ENV, "").strip()
+    if data_dir:
+        return os.path.join(data_dir, "namespaces")
+    return os.path.join(os.path.expanduser("~"), "duckbrain", "namespaces")
 
 
 def ns_dir(ns: str) -> str:
-    base = os.environ.get(NAMESPACES_PATH_ENV, "").strip()
-    if not base:
-        base = os.path.join(os.path.expanduser("~"), "duckbrain", "namespaces")
-    return os.path.join(base, ns)
+    return os.path.join(namespaces_base(), ns)
+
+
+def _init_ns_dir(ns: str) -> str:
+    """Resolve `init`'s declaration tree, refusing an unpinned isolated substrate."""
+    if (
+        not os.environ.get(NAMESPACES_PATH_ENV, "").strip()
+        and not os.environ.get(DATA_DIR_ENV, "").strip()
+        and DB_URL.rstrip("/") != DEFAULT_DUCKBRAIN_URL
+    ):
+        raise SystemExit(
+            f"cannot resolve namespace declarations for isolated substrate {DB_URL!r}; "
+            f"set {NAMESPACES_PATH_ENV} or {DATA_DIR_ENV} before running init "
+            "(refusing the legacy default namespaces tree)"
+        )
+    return ns_dir(ns)
 
 
 # ---------------------------------------------------------------- the 429 budget
@@ -4104,6 +4131,12 @@ def domain_line(ln: dict) -> str:
 # ---------------------------------------------------------------- verbs
 def cmd_init(a):
     ns = a.namespace
+    # Resolve the declaration root before the namespace POST. A custom substrate URL without
+    # a matching local path must never fall through to ~/duckbrain/namespaces.
+    d = os.path.join(_init_ns_dir(ns), "tables")
+    namespace_path = os.path.dirname(d)
+    tables_dir_existed = os.path.isdir(d)
+    namespace_dir_existed = os.path.isdir(namespace_path)
     st, body, _ = db("/api/namespaces")
     # An error body is not a namespace list. Reading an error dict as a list used to
     # crash with `'str' object has no attribute 'get'` and, worse, made `init` report
@@ -4151,8 +4184,8 @@ def cmd_init(a):
         else:
             raise SystemExit(f"could not create namespace {ns} ({st}): {body}")
     # declare (idempotent) the SDM tables
-    d = os.path.join(ns_dir(ns), "tables")
     os.makedirs(d, exist_ok=True)
+    changed = []
     wrote = []
     for name, cols in COLS.items():
         decl = {
@@ -4171,6 +4204,7 @@ def cmd_init(a):
         if current != text:
             with open(p, "w") as f:
                 f.write(text)
+            changed.append((p, current))
             wrote.append(name)
     st, live, _ = db(ns_tables_path(ns))
     have = sorted(
@@ -4178,21 +4212,34 @@ def cmd_init(a):
     )
     print(f"namespace {ns}: {'created' if created else 'existing'}")
     print(f"declared: {len(have)}/{len(COLS)} tables -> {', '.join(have)}")
+    if not have:
+        # A full miss means the API did not read the tree we just touched. Restore every file
+        # changed by this invocation before refusing, so a wrong-root configuration cannot
+        # leave declarations behind for a later run to mistake for substrate state.
+        for p, previous in reversed(changed):
+            if previous is None:
+                with contextlib.suppress(FileNotFoundError):
+                    os.unlink(p)
+            else:
+                with open(p, "w") as f:
+                    f.write(previous)
+        if not tables_dir_existed:
+            with contextlib.suppress(OSError):
+                os.rmdir(d)
+        if not namespace_dir_existed:
+            with contextlib.suppress(OSError):
+                os.rmdir(namespace_path)
+        if wrote:
+            print(f"rolled back declarations: {', '.join(wrote)}")
+        raise SystemExit(
+            f"declared: 0/{len(COLS)} tables — nothing visible to the API under {d}; "
+            f"namespaces base resolved from {NAMESPACES_PATH_ENV}"
+        )
     if wrote:
         print(f"wrote declarations: {', '.join(wrote)}")
     missing = sorted(set(COLS) - set(have))
     if missing:
         print(f"WARNING not visible to the API yet: {', '.join(missing)}")
-    if not have:
-        # A full miss is not a slow mirror: it means the API serves no table where the
-        # declarations were just written, and `start` on this namespace would die on its
-        # very first insert ("Table 'project' not found"). Fail here, naming where the
-        # declarations went and which knob moves that place, so the next run is a fix
-        # rather than the same false success. A PARTIAL tally keeps the WARNING above.
-        raise SystemExit(
-            f"declared: 0/{len(COLS)} tables — nothing visible to the API under {d}; "
-            f"namespaces base resolved from {NAMESPACES_PATH_ENV}"
-        )
     if a.seed_domains:
         # The one row-writing arm of `init`, and it belongs here because `init` owns namespace
         # setup: the 44-domain grid is the shape of the namespace, not an answer about a project.
