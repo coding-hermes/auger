@@ -48,6 +48,19 @@ def test_dependencies_stay_empty_for_stdlib_only_module():
     assert data["build-system"]["build-backend"] == "setuptools.build_meta"
 
 
+def test_dev_extra_carries_the_test_dependencies():
+    # QA-AUGER-12-R2: the clean dev install path is `pip install -e '.[dev]'`.
+    # tests/test_openapi_parity.py imports yaml at collection time, so the
+    # extra must carry PyYAML alongside the pytest runner;
+    # tests/requirements-dev.txt stays the pin list for hosts that install
+    # test tools without packaging metadata.
+    extras = _load_pyproject()["project"].get("optional-dependencies", {})
+    dev = extras.get("dev", [])
+    names = {r.lower().split(">=")[0].split("==")[0].strip() for r in dev}
+    assert "pytest" in names, "the dev extra must install the pytest runner"
+    assert "pyyaml" in names, "tests/test_openapi_parity.py imports yaml"
+
+
 def test_dynamic_version_attr_resolves_to_module_constant():
     data = _load_pyproject()
     assert "version" in data["project"].get("dynamic", [])

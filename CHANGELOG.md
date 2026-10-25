@@ -18,6 +18,10 @@ Tagged v0.3.0 on 2026-10-22.
 
 ## Unreleased
 
+- pyproject.toml: `dev` extra (`pip install -e '.[dev]'`) installs pytest + PyYAML — the clean
+  dev install can collect the OpenAPI parity suite (QA-AUGER-12-R2); runtime install stays
+  stdlib-only
+
 ## v0.2
 
 Tagged [v0.2.0](https://github.com/coding-hermes/auger/releases/tag/v0.2.0) on 2026-09-30.

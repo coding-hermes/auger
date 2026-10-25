@@ -98,6 +98,9 @@ console script, so you can install it with pip or pipx:
 git clone https://github.com/coding-hermes/auger ~/auger
 cd ~/auger
 pip install -e .   # or: pipx install .
+# Runtime install stays stdlib-only. For DEVELOPMENT (running the test
+# suite), add the dev extra — tests/test_openapi_parity.py imports yaml:
+pip install -e '.[dev]'   # same as: pip install -e . -r tests/requirements-dev.txt
 
 # Verify the console script is on your PATH
 auger --version
