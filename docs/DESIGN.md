@@ -173,4 +173,5 @@ The v0.2 shortlist, with what happened to it:
   → **SHIPPED (AUG-004)**: `auger init --seed-domains` seeds the canonical 44-domain grid,
   idempotent, with validation against the skill's files.
 - A pytest suite that runs against an ephemeral namespace and cleans up. → **SHIPPED**:
-  `tests/test_auger.py` (297 tests) plus the gate battery in `tests/gate.sh`.
+  `tests/` (verify the current scope with `AUGER_CI=1 python3 -m pytest tests/ --collect-only -q`;
+  345 tests collected at DOC-020 verification) plus the gate battery in `tests/gate.sh`.

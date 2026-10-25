@@ -37,8 +37,10 @@ only. Public repo: `coding-hermes/auger`.
   Ubuntu 24.04 (PEP 668 `externally-managed-environment`; AUG-106-R2). The
   console script then lives in `<venv>/bin/auger`; stock boxes do not ship pipx.
 - Tests: `bash tests/smoke.sh` (15 assertions, ~21s, leaves a namespace
-  behind on purpose) · `AUGER_CI=1 pytest` (340 tests collected, ~5–19 min
-  depending on host load — the gate budget is 1200s per AUG-081). The pytest
+  behind on purpose) · collection: `AUGER_CI=1 python3 -m pytest tests/ --collect-only -q`
+  (345 tests collected at DOC-020 verification; rerun this command rather than relying on
+  the snapshot) · execution: `AUGER_CI=1 python3 -m pytest tests/` (~5–19 min depending
+  on host load — the gate budget is 1200s per AUG-081). The pytest
   suite targets the LIVE substrate at `DUCKBRAIN_URL` (default
   `127.0.0.1:3000`) and only teardown removes its namespaces, so a KILLED run
   (gate cap, QA cap) leaves a namespace + registry mapping behind and there is
