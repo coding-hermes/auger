@@ -65,6 +65,45 @@ If a release is broken:
 
 The previous release remains intact. Do not amend or force-push.
 
+## Verifying the v0.2.0 upgrade path
+
+The previous supported release, v0.2.0, predates this repo's packaging metadata:
+`git ls-tree v0.2.0` has no `pyproject.toml`, and no auger distribution was ever
+published to an index. A plain `pip install auger==0.2.0` therefore fails with
+`No matching distribution found for auger==0.2.0` (QA run
+auger-qa-2026-10-25-06-39-44, QA-AUGER-11-R2) — that is the real historical
+limitation, and the tag is immutable, so it is documented here rather than fixed
+by a retroactive publication.
+
+The supported way to exercise the v0.2.0 → current upgrade is the offline
+artifact cell:
+
+```bash
+bash scripts/upgrade-verify.sh          # add --keep to keep the artifact + scratch dir
+```
+
+The cell exports the v0.2.0 tree into a scratch worktree, injects only the
+current `pyproject.toml` (the packaging that post-dates the tag — the module
+code stays the tag's), builds a wheel offline with a fresh venv's own
+pip+setuptools, then:
+
+1. installs `auger==0.2.0` from that artifact into a fresh venv (`--no-index`,
+   so the pin can only be satisfied by the local artifact);
+2. upgrades the same venv to this checkout and asserts `auger --version`
+   reports the checkout's `AUGER_VERSION` and `auger --help` exits 0;
+3. installs the same artifact into a second untouched venv — the previous
+   release stays installable on its own.
+
+The regression seam `tests/test_upgrade_path.py` pins the procedure (the exact
+failed pin, fresh venvs, offline installs, version + help smoke, and that the
+artifact is built from the tag tree, not a copy of HEAD's module). The
+end-to-end leg of that seam is opt-in (`AUGER_UPGRADE_VERIFY_LIVE=1`, ~30s of
+venv creation); the script itself is the executable cell.
+
+Regenerating a comparable artifact for any future release needs nothing extra:
+release tags from v0.3.0 onward carry their own `pyproject.toml`, so a cell
+targeting a later tag drops the injection step.
+
 ## Gates
 
 The release gate (`tests/gate.sh` with `GATE_FULL=1`) runs:

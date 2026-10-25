@@ -115,7 +115,7 @@ run_pytest_arm(){
   local budget="${AUGER_GATE_PYTEST_BUDGET:-2400s}"
   local kill_after="${AUGER_GATE_PYTEST_KILL_AFTER:-30s}"
   local rc=0
-  setsid timeout --kill-after="$kill_after" "$budget" python3 -m pytest tests/test_auger.py tests/test_openapi_parity.py tests/test_api_service.py "$@" || rc=$?
+  setsid timeout --kill-after="$kill_after" "$budget" python3 -m pytest tests/test_auger.py tests/test_openapi_parity.py tests/test_api_service.py tests/test_upgrade_path.py "$@" || rc=$?
   if [ "$rc" -eq 124 ]; then
     echo "GATE TIMEOUT: the pytest arm exceeded ${budget} and was killed as a process group (setsid+timeout, AUG-081) — investigate hung tests; failing the gate" >&2
     exit 1
