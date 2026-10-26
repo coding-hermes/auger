@@ -122,11 +122,13 @@ auger --version                       # -> auger v0.3
 ```
 
 Prefer `auger` on your `PATH` in every shell instead of activating a venv? Use pipx, which
-installs the same console script into its own environment:
+installs the same console script into its own environment (`~/.local/bin` by default — a
+directory a fresh shell may not have on `PATH` yet, which is what `ensurepath` fixes):
 
 ```bash
-pipx install .                        # requires pipx; for editable dev use: pipx install --editable .
-auger --version
+pipx install .                    # requires pipx (apt install pipx); editable dev: pipx install --editable .
+pipx ensurepath                   # adds pipx's bin dir to PATH; a NEW shell then gets plain `auger`
+~/.local/bin/auger --version      # absolute path, so this works in the current shell too
 ```
 
 In the activated shell (or after pipx) the `auger` command is available; a NEW shell needs
