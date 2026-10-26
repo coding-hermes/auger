@@ -307,9 +307,25 @@ write verbs store are published as their own route by `auger serve` (AUG-046):
 
 ```bash
 # the namespace you practiced in; AUGER_NS is the env default every verb honours
-AUGER_NS=myproject python3 auger.py serve --port 8765
-curl "http://127.0.0.1:8765/api/ns/myproject/embeddings/search?q=how+is+the+record+stored&limit=5"
+#
+# 8765 is serve's DEFAULT port — not a port your host guarantees to leave alone.
+# It is routinely already taken (another agent's service, an earlier run of this
+# one), and the boot then exits 1 with
+# `cannot serve on 127.0.0.1:8765: [Errno 98] Address already in use`.
+# 8769 below is an EXAMPLE port: pick whichever port you like, but prove it is free
+# before you boot on it — the same check the substrate section above makes for
+# DuckBrain's 3000:
+ss -tlnp | grep :8769        # must print nothing before you boot on it
+AUGER_NS=myproject python3 auger.py serve --port 8769
+# the URL carries the SAME port you booted on
+curl "http://127.0.0.1:8769/api/ns/myproject/embeddings/search?q=how+is+the+record+stored&limit=5"
 ```
+
+The boot banner is the authority on where the server landed — it prints
+`auger <version> embedding HTTP surface: http://127.0.0.1:8769`. If you change `--port`, read the
+curl URL off that line instead of off this example. `--port 0` is the no-guess form: it binds an
+ephemeral port the kernel knows is free and the banner names the real number, which is what a test
+or a proxy-fronted caller wants.
 
 That answers ranked, scored hits as JSON — each tagged with the decision its key is evidence of,
 and with the retrieval tier the substrate's own `/health` reports. See
@@ -385,7 +401,9 @@ operation carries `x-safety: read-only`, and no mutating operation exists in the
 contract. The exact `mcpServers` consumer block and the three-line quickstart live in
 [docs/MUSTER-CONSUMER.md](docs/MUSTER-CONSUMER.md); the scope decision behind the
 surface is [docs/muster-scope.md](docs/muster-scope.md). The service that implements
-this contract ships with auger — start it with `python3 auger.py api` (serves the contract on http://127.0.0.1:8768; see docs/VERBS.md, section *api*). The existing `auger serve` embedding surface on `:8765` is unchanged by it.
+this contract ships with auger — start it with `python3 auger.py api` (serves the contract on http://127.0.0.1:8768; see docs/VERBS.md, section *api*). The existing `auger serve` embedding surface on its default port `:8765` is unchanged by it
+(and, as above, that default is an example, not a free-port promise — `serve --port 0` or a port
+you verified free is what the command itself accepts).
 
 ## Limits and known gaps
 
