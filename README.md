@@ -175,11 +175,51 @@ auger bundle      group decisions into named bundles (add / member subcommands)
 auger export      render the whole namespace as one readable spec document
 auger verdict     judge a configuration good/bad with reasons, on the record (DESIGN R11)
 auger record ...  write the registers: break, assumption, unknown, option costs/breaks
+auger ns gc --prefix auger-pytest-
+                  remove only stale auger-pytest-* test residue; refuses other prefixes and live sessions
 auger api         serve auger's read-first HTTP API (Muster contract on :8768)
 ```
 
 Every verb is documented — arguments, what it writes, what it must never write — in
 [docs/VERBS.md](docs/VERBS.md).
+
+### Test namespace residue sweep
+
+A killed pytest process cannot run its fixture finalizer. To remove that residue, run the explicit
+maintenance verb below against the same DuckBrain instance and namespace tree as the tests:
+
+```bash
+python3 auger.py ns gc --prefix auger-pytest-
+```
+
+The prefix is a required safety token and must be exactly `auger-pytest-`; every other prefix is
+refused before the registry is listed. The sweep lists the registry through auger's normal retrying
+transport, considers only names in that throwaway family, and deletes a namespace only when its
+local directory is absent or older than 24 hours. It sends the existing confirmed namespace
+`DELETE`, then removes that exact matching directory with Python's filesystem API and reads the
+registry back before counting it. A fresh directory is reported as preserved because the conftest
+session tag identifies the in-flight session; while any pytest session holds the shared
+`AUGER_TEST_LOCK`, the whole sweep refuses to run. It never deletes production/customer names,
+symlinks, arbitrary paths, or a live concurrent test namespace.
+
+For before/after evidence on a controlled fixture, capture both the registry and filesystem
+surfaces, including bytes; do not infer cleanup from the command's exit code alone:
+
+```bash
+grep -c auger-pytest ~/duckbrain/duckbrain.config.json
+wc -c < ~/duckbrain/duckbrain.config.json
+find ~/duckbrain/namespaces -maxdepth 1 -type d -name 'auger-pytest-*' -printf '%f\\n' | sort | tee /tmp/auger-pytest-namespaces.before
+while IFS= read -r ns; do du -sb -- "$HOME/duckbrain/namespaces/$ns"; done < /tmp/auger-pytest-namespaces.before
+python3 auger.py ns gc --prefix auger-pytest-
+grep -c auger-pytest ~/duckbrain/duckbrain.config.json
+wc -c < ~/duckbrain/duckbrain.config.json
+find ~/duckbrain/namespaces -maxdepth 1 -type d -name 'auger-pytest-*' -printf '%f\\n' | sort | tee /tmp/auger-pytest-namespaces.after
+while IFS= read -r ns; do du -sb -- "$HOME/duckbrain/namespaces/$ns"; done < /tmp/auger-pytest-namespaces.after
+```
+
+Run this only with the explicitly authorized `auger-pytest-` prefix. A live production sweep was not
+performed as part of the offline test gate; the deterministic fixture and exact procedure are the
+honest evidence surface for this change.
 
 ## Quick start
 

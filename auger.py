@@ -46,11 +46,13 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import contextlib
+import fcntl
 import io
 import json
 import math
 import os
 import re
+import shutil
 import sqlite3
 import sys
 import time
@@ -851,6 +853,139 @@ def delete_namespace(ns: str, retries: int = TEARDOWN_RETRIES) -> tuple[int, obj
         f"/api/namespaces/{url_seg(ns)}", "DELETE", {"confirm": True}, retries=retries
     )
     return st, body
+
+
+# ---------------------------------------------------------------- safe pytest residue collection (AUG-111)
+# This is intentionally narrower than a general namespace janitor. The only supported prefix
+# is the throwaway namespace family created by tests/conftest.py. A required literal prefix,
+# a stale-directory threshold, and the pytest substrate lock together make a broad or live
+# namespace deletion impossible through this surface.
+PYTEST_NAMESPACE_PREFIX = "auger-pytest-"
+NAMESPACE_GC_STALE_SECONDS = 24 * 60 * 60
+NAMESPACE_GC_LOCK_ENV = "AUGER_TEST_LOCK"
+NAMESPACE_GC_DEFAULT_LOCK = "/tmp/auger-pytest-substrate.lock"
+
+
+def _namespace_gc_lock_path() -> str:
+    return os.environ.get(NAMESPACE_GC_LOCK_ENV, "").strip() or NAMESPACE_GC_DEFAULT_LOCK
+
+
+def _namespace_gc_lock_held() -> bool:
+    """Return whether a pytest session currently owns the shared substrate lock."""
+    lock_path = _namespace_gc_lock_path()
+    try:
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o644)
+    except OSError:
+        # An unreadable lock is not proof that no live suite exists. Refuse the sweep.
+        return True
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(fd)
+
+
+def _namespace_gc_namespaces() -> list[str]:
+    """List registry names through the normal transport, failing closed on any bad read."""
+    status, body, _ = db("/api/namespaces")
+    if status != 200 or not isinstance(body, dict):
+        raise SystemExit(f"namespace sweep could not list namespaces ({status}): {body}")
+    names = []
+    for entry in body.get("namespaces", []):
+        if isinstance(entry, dict) and isinstance(entry.get("name"), str):
+            names.append(entry["name"])
+    return names
+
+
+def _namespace_gc_candidates(registry_names: list[str]) -> list[str]:
+    """Return the supported-prefix union of registry names and local namespace directories."""
+    names = {name for name in registry_names if name.startswith(PYTEST_NAMESPACE_PREFIX)}
+    root = namespaces_base()
+    try:
+        with os.scandir(root) as entries:
+            names.update(
+                entry.name
+                for entry in entries
+                if entry.name.startswith(PYTEST_NAMESPACE_PREFIX)
+            )
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        raise SystemExit(f"namespace sweep could not scan {root}: {exc}") from exc
+    return sorted(names)
+
+
+def garbage_collect_namespaces(prefix: str) -> dict[str, object]:
+    """Remove only stale `auger-pytest-*` namespaces and report every decision.
+
+    `prefix` must be the exact supported literal. A live pytest session holds the shared
+    `AUGER_TEST_LOCK`; when it is held, this function refuses the whole sweep. Otherwise a
+    namespace is stale only when its directory is absent or older than one day. Deletion
+    uses `delete_namespace`, then removes the matching local directory with Python's
+    filesystem API and reads the registry back before counting it as removed.
+    """
+    if prefix != PYTEST_NAMESPACE_PREFIX:
+        raise ValueError(
+            f"refusing namespace sweep prefix {prefix!r}; only {PYTEST_NAMESPACE_PREFIX!r} is supported"
+        )
+    if _namespace_gc_lock_held():
+        return {
+            "blocked": True,
+            "removed": [],
+            "skipped": [],
+            "failed": [],
+        }
+
+    before = _namespace_gc_namespaces()
+    candidates = _namespace_gc_candidates(before)
+    cutoff = time.time() - NAMESPACE_GC_STALE_SECONDS
+    removed: list[str] = []
+    skipped: list[str] = []
+    failed: list[str] = []
+    for name in candidates:
+        path = ns_dir(name)
+        if os.path.lexists(path):
+            if os.path.islink(path) or not os.path.isdir(path):
+                failed.append(f"{name}: local path is not a namespace directory")
+                continue
+            try:
+                stale = os.stat(path).st_mtime <= cutoff
+            except OSError as exc:
+                failed.append(f"{name}: could not stat directory: {exc}")
+                continue
+            if not stale:
+                skipped.append(name)
+                continue
+        status, body = delete_namespace(name)
+        if status not in (200, 404):
+            failed.append(f"{name}: DELETE returned {status}: {str(body)[:200]}")
+            continue
+        try:
+            if os.path.lexists(path):
+                shutil.rmtree(path)
+            if os.path.lexists(path):
+                failed.append(f"{name}: directory still present: {path}")
+                continue
+        except OSError as exc:
+            failed.append(f"{name}: directory removal failed: {exc}")
+            continue
+        removed.append(name)
+
+    after = _namespace_gc_namespaces()
+    for name in list(removed):
+        if name in after:
+            removed.remove(name)
+            failed.append(f"{name}: registry mapping still present after DELETE")
+    return {
+        "blocked": False,
+        "removed": removed,
+        "skipped": skipped,
+        "failed": failed,
+    }
 
 
 # ---------------------------------------------------------------- the graph write path
@@ -7319,6 +7454,31 @@ def cmd_api(a):
     return serve(a.host, a.port)
 
 
+def cmd_namespace_gc(a):
+    """Run the fail-closed pytest residue sweep and print a count-based report."""
+    result = garbage_collect_namespaces(a.prefix)
+    if result["blocked"]:
+        print(
+            "namespace sweep refused: a live pytest session holds "
+            f"{NAMESPACE_GC_LOCK_ENV}; removed 0"
+        )
+        return 2
+    removed = result["removed"]
+    skipped = result["skipped"]
+    failed = result["failed"]
+    print(
+        f"namespace sweep: removed {len(removed)}; skipped {len(skipped)} live; "
+        f"failed {len(failed)}; prefix {PYTEST_NAMESPACE_PREFIX}"
+    )
+    if removed:
+        print("removed: " + " ".join(removed))
+    if skipped:
+        print("preserved live: " + " ".join(skipped))
+    if failed:
+        print("failed: " + " | ".join(failed))
+    return 0 if not failed else 1
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="auger", description="spec drilling backed by DuckBrain"
@@ -7342,6 +7502,21 @@ def main(argv=None):
         "NOT-REACHED with no owner, so `status` can report coverage and name what is absent",
     )
     s.set_defaults(fn=cmd_init)
+
+    s = sub.add_parser(
+        "ns", help="safe namespace maintenance (only the explicit pytest residue sweep)"
+    )
+    ns_sub = s.add_subparsers(dest="namespace_cmd", required=True)
+    g = ns_sub.add_parser(
+        "gc",
+        help="remove stale auger-pytest-* namespaces; refuses other prefixes and live sessions",
+    )
+    g.add_argument(
+        "--prefix",
+        required=True,
+        help="must be exactly 'auger-pytest-' (the only supported throwaway namespace family)",
+    )
+    g.set_defaults(fn=cmd_namespace_gc)
 
     s = sub.add_parser("start", help="register a project + store/embed its seed")
     s.add_argument("--name")
