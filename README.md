@@ -19,13 +19,32 @@ That API now exists on the public `main` branch of
 [wojons/duckbrain](https://github.com/wojons/duckbrain) — see commit 42cea0a1280c8d4937d95285b1f8c72feacaa62d.
 Against default `main`, `auger init` declares all tables and `auger start` succeeds.
 
-Install the working substrate:
+Install the working substrate — and boot it on a port nothing else is holding:
 
 ```bash
 git clone https://github.com/wojons/duckbrain ~/duckbrain
 # main already has the working API; no checkout needed
+cd ~/duckbrain
 pnpm install && pnpm build
-node bin/duckbrain.js http
+
+# 3000 is the daemon default and collides on any host that already runs a
+# DuckBrain: `listen EADDRINUSE: address already in use 127.0.0.1:3000`.
+# Choose a port that is free BEFORE booting — this walks up from 3987:
+PORT=$(for p in $(seq 3987 4099); do ss -tln | grep -q ":$p " || { echo "$p"; break; }; done)
+echo "booting DuckBrain on 127.0.0.1:$PORT"
+node bin/duckbrain.js http --port "${PORT:?no free port in 3987-4099 — pick one by hand}"
+```
+
+The daemon stays in the foreground, so `export DUCKBRAIN_URL=http://127.0.0.1:$PORT` in every
+other shell you use: auger's default endpoint is `http://127.0.0.1:3000`, which on a shared
+host is *someone else's* daemon. Prove the instance behind that port is the one you started —
+a `curl` that answers is not proof, because a foreign daemon answers just as happily. The
+per-instance pidfile is proof, and it is named after the port:
+
+```bash
+cat "${DUCKBRAIN_DATA_DIR:-/tmp/duckbrain-$(id -u)}/duckbrain-http-$PORT.pid"  # pid of THIS instance
+ss -tlnp | grep ":$PORT "                     # the listener must be that pid
+curl -s "http://127.0.0.1:$PORT/health"       # {"status":"healthy"|"degraded","uptime":...}
 ```
 
 **Install Node.js.** The substrate requires Node >=22.22.2 or >=24.15 or >=26 (jsdom@30.1.1
@@ -65,7 +84,7 @@ that names the pidfile rather than the missing directory:
 
 ```bash
 mkdir -p ~/dd-data
-DUCKBRAIN_DATA_DIR=~/dd-data node bin/duckbrain.js http
+DUCKBRAIN_DATA_DIR=~/dd-data node bin/duckbrain.js http --port "${PORT:?run the port preflight above first}"
 ```
 
 **On a box that already runs a production DuckBrain, data-dir env alone does not isolate a
@@ -81,7 +100,7 @@ mkdir -p ~/dd-scratch/namespaces
 printf '{"namespaceMappings": {}, "namespacesPath": "namespaces"}' > ~/dd-scratch/config.json
 DUCKBRAIN_DATA_DIR=~/dd-scratch \
 DUCKBRAIN_CONFIG_PATH=~/dd-scratch/config.json \
-node bin/duckbrain.js http
+node bin/duckbrain.js http --port "${PORT:?run the port preflight above first}"
 ```
 
 `DUCKBRAIN_CONFIG_PATH` is an env-only runtime override (same pattern as
@@ -149,12 +168,17 @@ Every verb is documented — arguments, what it writes, what it must never write
 
 ## Quick start
 
-First get the substrate up — the three commands that block a bare Debian box (no `pnpm`, no
-data dir, no skill tree) are spelled out with their failure modes in **Substrate pin** above:
+First get the substrate up — the obstacles that block a bare Debian box (no `pnpm`, no data dir,
+no free port 3000, no skill tree) are spelled out with their failure modes in **Substrate pin**
+above:
 
 ```bash
 npm config set prefix ~/.npm-global && export PATH=~/.npm-global/bin:$PATH && npm i -g pnpm
-mkdir -p ~/dd-data && DUCKBRAIN_DATA_DIR=~/dd-data node bin/duckbrain.js http
+cd ~/duckbrain                                    # the clone the Substrate pin block made
+# Boot on a port verified free — not the default 3000, which a co-located DuckBrain holds:
+PORT=$(for p in $(seq 3987 4099); do ss -tln | grep -q ":$p " || { echo "$p"; break; }; done)
+mkdir -p ~/dd-data && DUCKBRAIN_DATA_DIR=~/dd-data node bin/duckbrain.js http --port "${PORT:?no free port in 3987-4099}"
+export DUCKBRAIN_URL=http://127.0.0.1:$PORT      # every auger call must target THIS instance
 # and for `init --seed-domains`: export AUGER_DOMAIN_GRID=<a canonical 44-domain grid>
 ```
 
@@ -210,7 +234,8 @@ library only — no dependencies.
 run DuckBrain, that fixed port collides: your boot can lose the race or lose it
 silently, and the requests meant for your instance get answered by *someone
 else's* daemon — you see another agent's namespaces and wrong-looking 500s. So on
-any multi-user box, boot on a port you verified free and point auger at it:
+any multi-user box, boot on a port you verified free and point auger at it — the preflight in
+the Substrate pin and Quick start blocks above is exactly this, spelled out by hand:
 
 ```bash
 ss -tlnp | grep :3987        # must print nothing before you boot on it
