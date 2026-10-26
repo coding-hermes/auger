@@ -5,11 +5,11 @@ write. This is the contract — the verb names are public, and every argument li
 exists in the verb's `add_parser` definition in `auger.py`. If the code and this file
 disagree, the code wins and this file is a bug.
 
-The 17 top-level verbs — one `add_parser` registration each in `auger.py`, and the count here is
+The 18 top-level verbs — one `add_parser` registration each in `auger.py`, and the count here is
 the registry's own, not a hand-kept tally — in the order `auger --help` lists them:
 
 ```
-init  start  bundle  ask  answer  check  status  toggle  dump  export  propagate  feedback  recall  serve  api  verdict  record
+init  ns  start  bundle  ask  answer  check  status  toggle  dump  export  propagate  feedback  recall  serve  api  verdict  record
 ```
 
 Conventions every verb shares:
@@ -46,6 +46,44 @@ Conventions every verb shares:
   deduplicated, earlier sources win) — an env var always overrides the `.env` scan.
 
 ---
+
+## namespace garbage collection
+
+Remove stale pytest residue after a test process was killed before `tests/conftest.py` could run its
+finalizer.
+
+**Command:**
+
+```
+auger ns gc --prefix auger-pytest-
+```
+
+`--prefix` is required and must equal the literal `auger-pytest-`. This is the only supported
+namespace maintenance prefix; `auger ns gc --prefix auger-`, a session-specific arbitrary prefix,
+or any other value is refused before the registry is read. The verb lists `/api/namespaces` using
+the normal `db` transport (including its retry/backpressure handling), finds only names in the
+supported family, and uses the existing confirmed `delete_namespace` helper for each deletion.
+
+A namespace is eligible only when its local directory is absent or older than 24 hours. A fresh
+`auger-pytest-<conftest-session-tag>-...` directory is preserved as a concurrent live session.
+If the shared `AUGER_TEST_LOCK` is held, the entire sweep refuses to run rather than racing a live
+suite. After a successful API delete (200 or already-gone 404), the exact matching local directory
+is removed with Python's filesystem API, never shell `rm`; symlinks and non-directory paths are
+refused. The registry is listed again and a namespace is counted as removed only when both mapping
+and directory are gone.
+
+**Writes:** only the explicitly named stale `auger-pytest-*` namespace mappings through the
+confirmed DuckBrain DELETE and their exact local directories. The report prints removed, preserved
+live, and failed counts, plus names.
+
+**Never writes:** production/customer namespaces, unrelated registry rows, fresh concurrent test
+namespaces, arbitrary prefixes, symlinks, or any namespace outside the supported prefix. It does
+not claim to clean a live substrate unless the registry and directory read-back both confirm it.
+
+**Evidence:** capture before and after `grep -c auger-pytest` and `wc -c` for
+`~/duckbrain/duckbrain.config.json`, plus a sorted namespace-directory census and `du -sb` bytes;
+see the README procedure. The offline tests use a deterministic fake substrate and an actual
+SIGKILL child fixture. They do not invent or claim live operator numbers.
 
 ## init
 

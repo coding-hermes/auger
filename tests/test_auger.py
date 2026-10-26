@@ -30,6 +30,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -6374,6 +6375,139 @@ def test_no_test_namespace_survives_the_suite(live_service: str):
     assert found == {"api": [], "disk": []}, (
         f"test namespaces were left behind: {found} (prefix {TEST_NS_PREFIX!r})"
     )
+
+
+def test_namespace_gc_removes_only_stale_pytest_residue_and_preserves_unrelated_rows(
+    monkeypatch, tmp_path
+):
+    """AUG-111 AC1: three stale throwaways go, a live session and two unrelated rows do not."""
+    monkeypatch.setenv(auger.NAMESPACES_PATH_ENV, str(tmp_path))
+    monkeypatch.setattr(auger, "_namespace_gc_lock_held", lambda: False)
+    stale = [f"{auger.PYTEST_NAMESPACE_PREFIX}stale-{i}" for i in range(1, 4)]
+    live = f"{TEST_NS_PREFIX}concurrent-live"
+    unrelated = ["auger-production", "customer-project"]
+    names = stale + [live] + unrelated
+    registry = [{"name": name, "mapping": f"namespaces/{name}"} for name in names]
+    registry_bytes = {
+        row["name"]: (json.dumps(row, separators=(",", ":")) + "\n") for row in registry
+    }
+    unrelated_before = [registry_bytes[name] for name in unrelated]
+    for name in names:
+        path = tmp_path / name
+        path.mkdir()
+        (path / "residue.jsonl").write_text(f"{name}\n")
+    for name in stale:
+        os.utime(tmp_path / name, (1, 1))
+
+    delete_calls: list[str] = []
+
+    def fake_db(path, method="GET", body=None, **kwargs):  # noqa: ARG001
+        assert path == "/api/namespaces"
+        assert method == "GET"
+        return 200, {"namespaces": list(registry)}, {}
+
+    def fake_delete(name):
+        delete_calls.append(name)
+        registry[:] = [row for row in registry if row["name"] != name]
+        return 200, {"deleted": name}
+
+    monkeypatch.setattr(auger, "db", fake_db)
+    monkeypatch.setattr(auger, "delete_namespace", fake_delete)
+
+    rc, out = run_cli(["ns", "gc", "--prefix", auger.PYTEST_NAMESPACE_PREFIX])
+
+    assert rc == 0, out
+    assert "removed 3; skipped 1 live; failed 0" in out, out
+    assert delete_calls == stale, delete_calls
+    assert all(not (tmp_path / name).exists() for name in stale)
+    assert all((tmp_path / name).is_dir() for name in [live, *unrelated])
+    unrelated_after = [
+        json.dumps(next(row for row in registry if row["name"] == name), separators=(",", ":"))
+        + "\n"
+        for name in unrelated
+    ]
+    assert unrelated_after == unrelated_before
+    assert {row["name"] for row in registry} == {live, *unrelated}
+
+
+def test_namespace_gc_refuses_unsafe_prefix_before_listing(monkeypatch):
+    """The supported verb cannot be turned into a broad live-substrate delete."""
+    calls: list[tuple] = []
+    monkeypatch.setattr(auger, "db", lambda *args, **kwargs: calls.append(args))
+
+    with pytest.raises(ValueError, match="only 'auger-pytest-' is supported"):
+        auger.garbage_collect_namespaces("auger-")
+
+    assert calls == []
+
+    monkeypatch.setattr(auger, "_namespace_gc_lock_held", lambda: True)
+    rc, out = run_cli(["ns", "gc", "--prefix", auger.PYTEST_NAMESPACE_PREFIX])
+    assert rc == 2, out
+    assert "live pytest session" in out
+    assert calls == []
+
+
+def test_namespace_gc_reaps_sigkilled_session_but_preserves_concurrent_tag(
+    monkeypatch, tmp_path
+):
+    """AUG-111 AC2: SIGKILL leaves three stale rows; the current conftest tag stays live."""
+    monkeypatch.setenv(auger.NAMESPACES_PATH_ENV, str(tmp_path))
+    monkeypatch.setattr(auger, "_namespace_gc_lock_held", lambda: False)
+    stale = [f"{auger.PYTEST_NAMESPACE_PREFIX}killed-{i}" for i in range(1, 4)]
+    live = f"{TEST_NS_PREFIX}concurrent-live"
+    unrelated = ["auger-production", "customer-project"]
+    all_names = stale + [live] + unrelated
+    registry_path = tmp_path / "duckbrain.config.json"
+    child_code = (
+        "import json, pathlib, sys, time; "
+        "root=pathlib.Path(sys.argv[1]); config=pathlib.Path(sys.argv[2]); "
+        "names=json.loads(sys.argv[3]); root.mkdir(parents=True, exist_ok=True); "
+        "[((root/name).mkdir(), (root/name/'residue').write_text(name)) for name in names]; "
+        "config.write_text(json.dumps({'namespaceMappings': [{'name': n, 'mapping': 'namespaces/'+n} for n in names]})); "
+        "time.sleep(60)"
+    )
+    child = subprocess.Popen(
+        [sys.executable, "-c", child_code, str(tmp_path), str(registry_path), json.dumps(all_names)]
+    )
+    try:
+        for _ in range(100):
+            if registry_path.exists() and all((tmp_path / name).is_dir() for name in all_names):
+                break
+            time.sleep(0.01)
+        assert registry_path.exists(), "the killed-session fixture never wrote its registry"
+        os.kill(child.pid, signal.SIGKILL)
+        assert child.wait(timeout=5) == -signal.SIGKILL
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.wait()
+
+    for name in stale:
+        os.utime(tmp_path / name, (1, 1))
+    registry = json.loads(registry_path.read_text())["namespaceMappings"]
+    delete_calls: list[str] = []
+
+    def fake_db(path, method="GET", body=None, **kwargs):  # noqa: ARG001
+        assert path == "/api/namespaces"
+        assert method == "GET"
+        return 200, {"namespaces": list(registry)}, {}
+
+    def fake_delete(name):
+        delete_calls.append(name)
+        registry[:] = [row for row in registry if row["name"] != name]
+        registry_path.write_text(json.dumps({"namespaceMappings": registry}))
+        return 200, {"deleted": name}
+
+    monkeypatch.setattr(auger, "db", fake_db)
+    monkeypatch.setattr(auger, "delete_namespace", fake_delete)
+    rc, out = run_cli(["ns", "gc", "--prefix", auger.PYTEST_NAMESPACE_PREFIX])
+
+    assert rc == 0, out
+    assert "removed 3; skipped 1 live; failed 0" in out, out
+    assert delete_calls == stale, delete_calls
+    assert all(not (tmp_path / name).exists() for name in stale)
+    assert (tmp_path / live).is_dir()
+    assert {row["name"] for row in registry} == {live, *unrelated}
 
 
 # ================================================================= 429 backpressure on teardown
