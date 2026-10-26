@@ -102,24 +102,37 @@ retry; a 0/N API tally also rolls back declarations and names the resolved root.
 ## Install auger
 
 Once the substrate is running, install auger itself. The repo ships a `pyproject.toml` with a
-console script, so you can install it with pip or pipx:
+console script. A bare `pip install -e .` fails on any distribution that marks its system Python
+as externally managed (PEP 668: Ubuntu 23.04+, Debian 12+, Fedora, ...), so install into a
+virtual environment — or use `pipx`, which makes its own:
 
 ```bash
 # Clone and install in a virtual environment (safe on PEP 668 hosts)
 git clone https://github.com/coding-hermes/auger ~/auger
 cd ~/auger
 python3 -m venv .venv                 # install python3-venv if your distro lacks venv
-.venv/bin/python -m pip install -e .
-# Runtime install stays stdlib-only. For DEVELOPMENT (running the test
-# suite), add the dev extra — tests/test_openapi_parity.py imports yaml:
-.venv/bin/python -m pip install -e '.[dev]'
+source .venv/bin/activate             # everything below runs inside the venv
+pip install -e .                      # runtime install stays stdlib-only
+# For DEVELOPMENT (running the test suite), add the dev extra —
+# tests/test_openapi_parity.py imports yaml:
+pip install -e '.[dev]'
 
-# Verify the console script is on your PATH
-.venv/bin/auger --version
+# Verify the console script resolves inside the venv and reports the version
+auger --version                       # -> auger v0.3
 ```
 
-The `auger` command is now available. Every example in this README uses `python3 auger.py` for
-clarity, but `auger` (the console script) does the same thing.
+Prefer `auger` on your `PATH` in every shell instead of activating a venv? Use pipx, which
+installs the same console script into its own environment:
+
+```bash
+pipx install .                        # requires pipx; for editable dev use: pipx install --editable .
+auger --version
+```
+
+In the activated shell (or after pipx) the `auger` command is available; a NEW shell needs
+`source .venv/bin/activate` again, or you can always call the script by path: `.venv/bin/auger`.
+Every example in this README uses `python3 auger.py` for clarity, but `auger` (the console
+script) does the same thing.
 
 ## The loop
 
