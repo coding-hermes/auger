@@ -82,6 +82,44 @@ artifact cell:
 bash scripts/upgrade-verify.sh          # add --keep to keep the artifact + scratch dir
 ```
 
+### How the QA battery must grade the upgrade cell
+
+Any automated QA battery (fresh-box harness, dogfood install-leg, CI) must drive
+this offline cell and must NOT probe a remote index for the pin:
+
+- Run `bash scripts/upgrade-verify.sh` (or the pinned seam in
+  `tests/test_upgrade_path.py`). The upgrade cell is graded by that script's exit
+  code and its `UPGRADE VERIFY: PASS` line.
+- An index probe for `auger==0.2.0` (`pip install auger==0.2.0` /
+  `pip download auger==0.2.0`) is EXPECTED to fail with
+  `No matching distribution found for auger==0.2.0` (from versions: none): the
+  tag predates the repo's packaging metadata and no auger distribution was ever
+  published to any index. That miss is an expected **SKIP**, not a product
+  failure — record the cell as `SKIP` with the no-distribution reason, never as
+  `FAIL`. A green upgrade cell on this project always comes from the offline
+  artifact path above, never from an index.
+
+The QA battery must invoke that script (or the pinned
+`tests/test_upgrade_path.py` seam), not an index install. `pip download
+auger==0.2.0` and `pip install auger==0.2.0` are expected to return non-zero
+because no v0.2.0 distribution was published; an index miss is an honest
+`SKIP` with that reason, not a product failure. The offline script is the
+PASS/FAIL upgrade verdict and its `UPGRADE VERIFY: PASS` line is the evidence
+that the exact historical pin installed from the locally built artifact.
+
+For a harness that still probes an index, preserve the distinction explicitly:
+
+```bash
+if pip download --no-deps auger==0.2.0 >/tmp/auger-index-probe.log 2>&1; then
+  printf 'unexpected published distribution: run the offline verifier too\n'
+else
+  printf 'SKIP: auger==0.2.0 has no published index distribution; use bash scripts/upgrade-verify.sh\n'
+fi
+```
+
+Do not turn that expected `SKIP` into a release failure and do not publish a
+retroactive artifact merely to make the probe green.
+
 The cell exports the v0.2.0 tree into a scratch worktree, injects only the
 current `pyproject.toml` (the packaging that post-dates the tag — the module
 code stays the tag's), builds a wheel offline with a fresh venv's own

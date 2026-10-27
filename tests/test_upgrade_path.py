@@ -178,6 +178,21 @@ def test_script_installs_offline():
     )
 
 
+def test_release_docs_route_unpublished_index_probe_to_skip():
+    docs = (REPO_ROOT / "docs" / "RELEASE.md").read_text(encoding="utf-8")
+    assert "pip download --no-deps auger==0.2.0" in docs
+    assert "SKIP" in docs and "no published index distribution" in docs
+    assert "bash scripts/upgrade-verify.sh" in docs
+    assert "not a product failure" in docs
+
+
+def test_release_docs_do_not_treat_index_miss_as_upgrade_verdict():
+    docs = (REPO_ROOT / "docs" / "RELEASE.md").read_text(encoding="utf-8")
+    assert "The QA battery must invoke that script" in docs
+    assert "UPGRADE VERIFY: PASS" in docs
+    assert "Do not turn that expected `SKIP` into a release failure" in docs
+
+
 def test_script_uses_fresh_venvs():
     src = SCRIPT.read_text(encoding="utf-8")
     # builder + previous-release venv + second fresh venv — count real
