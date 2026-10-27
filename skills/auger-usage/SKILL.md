@@ -179,10 +179,16 @@ python3 auger.py -n <ns> recall "any seed phrase"   # proves embeddings
   2026-09-23).** A nonexistent `--question-id` (and a duplicate `--id`) now
   refuses with nothing stored, so the retry that used to duplicate a decision
   id is gone; decision ids are still not unique-keyed in the store itself.
-- **`--domain` is unvalidated free text (AUG-038)** and `status`'s
-  domain-coverage display is one-index-off — do not copy a domain number
-  from `status`; look it up in the grid dir (`4.05-data.md` → `--domain
-  4.05`).
+- **`--domain` IS validated against the canonical grid (AUG-038 closed, commit
+  5422123) — the accepted form is the bare zero-padded number.** `--domain 4.05`
+  rc=0; `4.05-data`, `4.05=data`, `data`, `4.9`, `4.99` and `notanumber` each
+  refuse rc=1 with "nothing was stored" (re-verified live 2026-10-27). The grid
+  FILES are named `4.05-data.md` and the refusal's own example prints
+  `4.05=data`, so the two tokens a reader is most likely to try are the two that
+  refuse — pass the number.
+- **`status`'s coverage display is NOT one-index-off** (stale claim, measured
+  2026-10-27): its 44 `(num, name)` pairs are exactly the 44 grid file names
+  (`4.05  data` ↔ `4.05-data.md`), so a number copied from `status` is correct.
 - **`dump --config` full ids only (AUG-037):** the help's `D-001=O2`
   shorthand is discarded as "unparsed" at rc=0; write `D-001=D-001-O2`
   (option labels also accepted per verdict, per the note above).
@@ -259,17 +265,32 @@ python3 auger.py -n <ns> recall "any seed phrase"   # proves embeddings
   closed): `record option <label> --costs … --breaks …` fills them now**
   (verified live 2026-09-29 — values render in dump/export). Older rows may
   still print «—»; read that as "not recorded", not "no cost".
-- **`status`'s domain lines can contradict themselves (AUG-059).** A domain leading
-  with "answered" can still end "(row status NOT-REACHED)"; trust the leading word
-  and the decisions/questions count, not the parenthetical.
+- **`(row status NOT-REACHED)` beside an answered domain means the ROW ADVANCE
+  FAILED — not a display quirk (AUG-059-R2, filed 2026-10-27).** AUG-059 closed
+  the advance (`answer` retires the seed word), but the substrate REFUSES the
+  PATCH for the 35 of the 44 domains whose grid header says
+  `terminating_ring: null` (422 "Column 'terminating_ring' (integer) requires an
+  integer number, got null"), and auger skips that failure by design — so on
+  those domains the parenthetical persists forever. The coverage COUNT is still
+  right: trust `answered` and the `decisions/questions` count for what you have
+  covered, do NOT trust the stored status word, and expect that advance to work
+  only for domains with an integer terminating ring.
+- **On a gridless namespace the coverage map is blind to your answers
+  (AUG-112, filed 2026-10-27).** Without `init --seed-domains` the rows are
+  absent, and `status` prints "answered 0" plus "44 absent" even when decisions
+  carry domain numbers — `dump` shows them, the coverage block does not. The
+  numbers are still stored; run `init --seed-domains` (it binds the 44 rows to
+  the newest project in the namespace, and is idempotent per project) if you
+  want the map to count them.
 - **Confirmed FIXED in the current tree** (rows still pending on the board — check
   the code before believing them): `toggle --on O1` now resolves a unique bare index
   and writes it; an ambiguous token is refused rc=1 naming every candidate; a token
   matching nothing prints `no such option` rc=1 (AUG-036). `dump --config D-001=O1`
   now accepts the bare-index shorthand the help advertises (AUG-037). `status` now
   measures 199 ms, not the 2.2 s of AUG-047.
-- **Still live:** `answer --domain` accepts any string (4.99, and even `notanumber`,
-  both recorded exit 0) — AUG-038.
+- **FIXED since these notes were written:** `answer --domain` no longer accepts
+  any string — 4.99 and `notanumber` both refuse rc=1 with "nothing was stored"
+  (AUG-038 closed, commit 5422123; re-verified live 2026-10-27).
 - **Every unpaginated read is silently capped at 100 rows (AUG-068).** The
   substrate returns exactly the first 100 rows when a table select carries no
   `limit` — 200 OK, no Content-Range, no truncation flag. Past 100 decisions in
