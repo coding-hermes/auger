@@ -818,6 +818,17 @@ def patch(ns: str, table: str, pk: str, values: dict) -> dict:
     return body
 
 
+def delete_row(ns: str, table: str, pk: str) -> dict:
+    """DELETE the row(s) carrying this primary key. AUG-059-R2: the rewrite half of the
+    domain advance needs the substrate's one other row-level write, because a stored null
+    in a validated column puts the row beyond PATCH's reach entirely (see
+    advance_domain_status)."""
+    st, body, _ = db(tbl(ns, table, f"pk=eq.{pk}"), "DELETE")
+    if st not in (200, 204):
+        raise SystemExit(f"delete {table} failed ({st}): {body}")
+    return body
+
+
 def remember(ns: str, key: str, content: str, domain: str = "concept") -> dict:
     st, body, _ = db(
         "/api/memories",
@@ -3259,10 +3270,13 @@ def record_followup(
     insert(ns, "question", row)
     # AUG-059: the question carries the decision's domain, so it retires the seed word too —
     # normally a no-op (the parent decision already advanced the row), but the advance keeps
-    # the row and the evidence count in agreement however the question arrived.
-    reached = advance_domain_status(ns, project_id, row["domain"])
-    if reached and warnings is not None:
-        warnings.append(f"domain {row['domain']} -> {reached}")
+    # the row and the evidence count in agreement however the question arrived. AUG-059-R2:
+    # a refused advance rides the warnings channel, never the exit code.
+    advance = advance_domain_status(ns, project_id, row["domain"])
+    if advance["reached"] and warnings is not None:
+        warnings.append(f"domain {row['domain']} -> {advance['reached']}")
+    if advance["warning"] and warnings is not None:
+        warnings.append(advance["warning"])
     for name in facet_set():
         facet(ns, project_id, qid, name)
     edges = [
@@ -3946,7 +3960,65 @@ def seed_domains(ns: str, project_id: str = "", grid_dir: str | None = None) -> 
     }
 
 
-def advance_domain_status(ns: str, project_id: str, num: str) -> str:
+def _advance_warning(row: dict, *errors: object) -> str:
+    """The ONE line a refused domain advance earns (AUG-059-R2): the domain number, the row
+    id, and the substrate's own error(s), whitespace-folded so the line stays one line."""
+    detail = "; ".join(" ".join(str(e).split()) for e in errors)
+    return (
+        f"WARNING domain {row.get('num') or '?'} row {row.get('id') or '?'}: the seed status "
+        f"advance ({DOMAIN_SEED_STATUS} -> {DOMAIN_REACHED_STATUS}) was refused — {detail}. "
+        "The answer itself is stored; the domain row keeps its stored status, and `status` "
+        "keeps naming the drift until the advance lands."
+    )
+
+
+def _advance_via_rewrite(ns: str, row: dict, patch_exc: SystemExit) -> dict:
+    """Advance a seeded domain row the substrate's PATCH cannot touch (AUG-059-R2).
+
+    The substrate validates the MERGED row on every PATCH, and its own INSERT normalization
+    materializes an omitted column as an explicit JSON null in the stored line — so a seeded
+    row whose grid header reads `terminating_ring: null` (35 of the 44) carries that null on
+    disk, and EVERY PATCH on it 422s on the integer column no matter what the payload says
+    (measured live against the running substrate 2026-10-27: omitting the key changes nothing
+    because the stored line carries the null, and re-sending the null is refused outright).
+    No PATCH payload can repair such a row, the column's integer type is the schema contract
+    and stays, and the row's ring must not be FABRICATED to satisfy a validator — so the one
+    write shape left is a read-modify-write through the primary key: DELETE the stored line,
+    INSERT the same image with the advance applied and every null-valued key DROPPED from the
+    body (an explicit null is refused at INSERT too; the omission re-materializes as null,
+    leaving the stored shape byte-equivalent to what seeding wrote).
+
+    Ordering is delete-then-insert because the reverse is not safe: a duplicate primary key
+    would make the DELETE take BOTH copies. If the delete landed but the insert did not, the
+    ORIGINAL row is put back before the failure is reported — the advance may fail, the row
+    may not be silently lost.
+    """
+    quiet = {"reached": "", "warning": ""}
+    replacement = {k: v for k, v in row.items() if v is not None}
+    replacement["status"] = DOMAIN_REACHED_STATUS
+    try:
+        delete_row(ns, "domain", str(row["id"]))
+    except SystemExit as delete_exc:
+        # the row is untouched — nothing to restore, just name both refusals
+        quiet["warning"] = _advance_warning(row, patch_exc, delete_exc)
+        return quiet
+    try:
+        insert(ns, "domain", replacement)
+    except SystemExit as insert_exc:
+        try:
+            insert(ns, "domain", {k: v for k, v in row.items() if v is not None})
+            note = "the original row was restored unchanged"
+        except SystemExit as restore_exc:
+            note = (
+                f"the row itself could not be restored ({' '.join(str(restore_exc).split())})"
+                " — it is GONE, and `status` renders the domain ABSENT until it is re-seeded"
+            )
+        quiet["warning"] = _advance_warning(row, patch_exc, f"{insert_exc} — {note}")
+        return quiet
+    return {"reached": DOMAIN_REACHED_STATUS, "warning": ""}
+
+
+def advance_domain_status(ns: str, project_id: str, num: str) -> dict:
     """Retire the seed word on one domain row: NOT-REACHED -> REACHED (AUG-059).
 
     The coverage line derives `answered` from the decision/question rows carrying the num, but
@@ -3959,35 +4031,45 @@ def advance_domain_status(ns: str, project_id: str, num: str) -> str:
     The row is chosen the way `domain_coverage` reads them (the API cannot filter on an empty
     value, and a pre-`start` seed leaves the rows unbound): the slice is read whole, a row
     bound to this project outranks an unbound one, and a sibling project's row is skipped.
+    The read takes the row's WHOLE image, not the three keys the guard needs, because the
+    rewrite path below re-writes the row and must not invent the fields it carries.
 
     The guard is equality with the seed word, and it does double duty: a row already past
     NOT-REACHED (a grid header's CASCADED, a word a person wrote) is never dragged back to
-    REACHED, and a second decision in the same domain is idempotent. Every failure here is
-    SKIPPED — never fatal: an answer must land even where the grid was never seeded or the
-    row could not be written, and a coverage row that stayed behind is surfaced by `status`'s
-    own drift note on the next render, not lost silently.
+    REACHED, and a second decision in the same domain is idempotent. No failure here is
+    fatal: an answer must land even where the grid was never seeded or the row could not be
+    written. But since AUG-059-R2 a REFUSED advance is not silent either — the substrate
+    rejects every update of a null-ring row (its INSERT normalization stores the omitted ring
+    as an explicit null its PATCH then refuses), so when the plain PATCH 422s the advance
+    falls back to a delete+insert rewrite of the same row image, and when even that fails the
+    caller prints ONE WARNING line naming the domain, the row id and the substrate's error.
+    The answer still exits 0 with the decision stored, and `status`'s drift note names the
+    same row on the next render.
 
-    Returns the new status when the row moved ("" when there was nothing to move), so the
-    calling verb can say one honest line about what changed.
+    Returns {"reached": <the new status when the row moved, "" when there was nothing to
+    move>, "warning": <"" or the one WARNING line for a refused advance>}, so the calling
+    verb can say one honest line about what changed — or about what refused to.
     """
+    quiet = {"reached": "", "warning": ""}
     target = (num or "").strip()
     if not target:
-        return ""
+        return quiet
     try:
-        rows = select(ns, "domain", f"num=eq.{target}&select=id,status,project_id")
+        rows = select(ns, "domain", f"num=eq.{target}")
     except SystemExit:
-        return ""
+        # no read, so no row to name — a stuck row still surfaces in `status`'s drift note
+        return quiet
     row = next(
         (r for r in rows if r.get("project_id") == project_id),
         next((r for r in rows if not r.get("project_id")), None),
     )
     if row is None or str(row.get("status") or "") != DOMAIN_SEED_STATUS:
-        return ""
+        return quiet
     try:
         patch(ns, "domain", row["id"], {"status": DOMAIN_REACHED_STATUS})
-    except SystemExit:
-        return ""
-    return DOMAIN_REACHED_STATUS
+    except SystemExit as patch_exc:
+        return _advance_via_rewrite(ns, row, patch_exc)
+    return {"reached": DOMAIN_REACHED_STATUS, "warning": ""}
 
 
 def domain_coverage(ns: str, project_id: str) -> dict:
@@ -5643,9 +5725,11 @@ def cmd_answer(a):
     # for — "not reached: no rows yet" stopped being true when this row landed. The row's own
     # status advances here (NOT-REACHED -> REACHED, never regressing a row already past the
     # seed word), so `status`'s coverage line stops contradicting itself. The advance is
-    # SKIPPED, never fatal: an answer lands even where the grid was never seeded, and the
-    # drift note names a row left behind on the next render.
-    reached = advance_domain_status(ns, pid, row["domain"])
+    # never fatal: an answer lands even where the grid was never seeded. AUG-059-R2: it is
+    # never SILENT either — a refused advance prints one WARNING line below naming the
+    # domain, the row and the substrate's error, and the drift note names it on the next
+    # render.
+    advance = advance_domain_status(ns, pid, row["domain"])
     impact = bundle_impact(ns, pid, {**row, "scope": stored_scope})
     active_count = 1 if resolved_option else 0
     domain_note = f"domain {row['domain']} = {domain_name}, " if domain_name else ""
@@ -5683,10 +5767,13 @@ def cmd_answer(a):
     # for — "not reached: no rows yet" stopped being true when this row landed. The row's own
     # status advanced with the answer (NOT-REACHED -> REACHED, never regressing a row already
     # past the seed word), so `status`'s coverage line stops contradicting itself. The advance
-    # itself is SKIPPED, never fatal: an answer lands even where the grid was never seeded, and
-    # the drift note names a row left behind on the next render.
-    if reached:
-        print(f"  domain     {row['domain']} -> {reached} (seed status retired)")
+    # itself is never fatal: an answer lands even where the grid was never seeded. AUG-059-R2:
+    # a REFUSED advance is not silent — one WARNING line names the domain, the row id and the
+    # substrate's own error, and the drift note names the row left behind on the next render.
+    if advance["reached"]:
+        print(f"  domain     {row['domain']} -> {advance['reached']} (seed status retired)")
+    if advance["warning"]:
+        print(f"  {advance['warning']}")
     # The walk's own report (AUG-027): `impact["lines"]` carries one line per member the pass
     # WALKED — its decision, the verdict word and the score — so that an 'unchanged' member and a
     # skipped one are both visible in the verb's output. Without that the answer to a run where

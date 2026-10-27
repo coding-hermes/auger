@@ -9029,8 +9029,13 @@ def test_domain_advance_is_a_reach_not_a_regress(project):
     assert "domain 4.10 ->" not in out, out
     seed_grid(ns)
     d = row(ns, "domain", "num=eq.4.10")
-    d["status"] = "CASCADED"
-    auger.patch(ns, "domain", d["id"], {"status": "CASCADED"})
+    # AUG-059-R2: 4.10 is a null-ring row, so the substrate's PATCH cannot move it (the merged
+    # row carries the stored null and 422s). The CASCADED setup goes through the same
+    # delete+insert rewrite the advance itself falls back to.
+    cascaded = {k: v for k, v in d.items() if v is not None}
+    cascaded["status"] = "CASCADED"
+    auger.delete_row(ns, "domain", d["id"])
+    auger.insert(ns, "domain", cascaded)
     rc, out = run_cli(
         [
             "-n",
@@ -9052,6 +9057,190 @@ def test_domain_advance_is_a_reach_not_a_regress(project):
     # a row that left the seed word is never dragged back to REACHED
     assert row(ns, "domain", "num=eq.4.10")["status"] == "CASCADED"
     assert "domain     4.10 ->" not in out, out
+    assert "WARNING domain 4.10" not in out, out
+
+
+def test_null_ring_domain_rows_advance_through_the_real_write_path(project):
+    """AUG-059-R2: the 35 null-ring domain rows advance through the REAL substrate write path.
+
+    The recurrence: the substrate's INSERT normalization stores an omitted `terminating_ring`
+    as an explicit JSON null, and its PATCH validates the merged row — so every PATCH on such
+    a row 422s on the integer column, whatever the payload. 4.03 and 4.09 are the board's
+    named arms; the advance must still retire their seed word (via the delete+insert rewrite
+    fallback), without fabricating a ring and without touching any other field, and a second
+    decision in the same domain stays idempotent. The integer-ring rows (4.05) keep the plain
+    PATCH path.
+    """
+    grid = grid_or_skip()
+    null_ring = {e["num"] for e in grid if e["terminating_ring"] is None}
+    assert {"4.03", "4.09"} <= null_ring, "the AC's named arms must be null-ring domains"
+    ns = project["ns"]
+    seed_grid(ns)
+    before = {
+        num: row(ns, "domain", f"num=eq.{num}") for num in ("4.03", "4.09", "4.05")
+    }
+    assert before["4.03"].get("terminating_ring") is None
+    assert before["4.09"].get("terminating_ring") is None
+    assert before["4.05"]["terminating_ring"] == 5
+
+    for did, num in (("D-403", "4.03"), ("D-409", "4.09"), ("D-405", "4.05")):
+        rc, out = run_cli(
+            [
+                "-n", ns, "answer",
+                "--id", did,
+                "--domain", num,
+                "--chosen", "c",
+                "--option", "c",
+                "--why-not", "n/a",
+            ]
+        )
+        assert rc == 0, out
+        assert f"domain     {num} -> REACHED (seed status retired)" in out, out
+        assert "WARNING domain" not in out, out
+        stored = row(ns, "domain", f"num=eq.{num}")
+        assert stored["status"] == auger.DOMAIN_REACHED_STATUS, stored
+        # the rewrite changed the status and NOTHING else — no ring was invented to satisfy
+        # the validator, and every field the seed wrote survived byte-for-byte
+        for key in ("id", "num", "name", "triage", "ring_floor", "owner", "trigger",
+                    "containment", "project_id", "terminating_ring"):
+            assert stored.get(key) == before[num].get(key), (num, key, stored)
+
+    # idempotent: a second decision in a null-ring domain moves nothing and says nothing
+    rc, out = run_cli(
+        [
+            "-n", ns, "answer",
+            "--id", "D-4031",
+            "--domain", "4.03",
+            "--chosen", "c",
+            "--option", "c",
+            "--why-not", "n/a",
+        ]
+    )
+    assert rc == 0, out
+    assert "domain     4.03 ->" not in out, out
+    assert "WARNING domain" not in out, out
+    assert row(ns, "domain", "num=eq.4.03")["status"] == auger.DOMAIN_REACHED_STATUS
+
+    # the coverage lines agree: answered, no drift parenthetical, ring still "not opened"
+    rc, out = run_cli(["-n", ns, "status"])
+    assert rc == 0, out
+    for num in ("4.03", "4.09", "4.05"):
+        line = next(ln for ln in coverage_lines(out) if ln.strip().startswith(num))
+        assert "answered" in line, line
+        assert "(row status" not in line, line
+    line = next(ln for ln in coverage_lines(out) if ln.strip().startswith("4.03"))
+    assert "terminating ring none (not opened)" in line, line
+
+
+def test_a_refused_advance_warns_once_and_costs_nothing(project, monkeypatch):
+    """AUG-059-R2: a substrate refusal is ONE warning line, never the answer's exit code.
+
+    Both write shapes are forced to fail (the PATCH and the rewrite's DELETE), so the row is
+    untouched and the advance genuinely cannot land. The answer still exits 0 with the
+    decision stored and finalized, the output carries exactly one WARNING line naming the
+    domain number, the row id and the substrate's own errors, and `status`'s drift note names
+    the same row on the next render.
+    """
+    grid_or_skip()
+    ns = project["ns"]
+    seed_grid(ns)
+    stored_before = row(ns, "domain", "num=eq.4.05")
+    real_patch = auger.patch
+
+    def refusing_patch(ns_, table, pk, values):
+        if table == "domain":
+            raise SystemExit(
+                f"patch domain failed (422): {{'error': 'probe refusal {pk}'}}"
+            )
+        return real_patch(ns_, table, pk, values)
+
+    def refusing_delete(ns_, table, pk):
+        raise SystemExit(f"delete domain failed (503): {{'error': 'SERIALIZER_LOCKED {pk}'}}")
+
+    monkeypatch.setattr(auger, "patch", refusing_patch)
+    monkeypatch.setattr(auger, "delete_row", refusing_delete)
+    rc, out = run_cli(
+        [
+            "-n", ns, "answer",
+            "--id", "D-505",
+            "--domain", "4.05",
+            "--chosen", "c",
+            "--option", "c",
+            "--why-not", "n/a",
+        ]
+    )
+    assert rc == 0, out
+    assert "D-505 recorded" in out, out
+    warnings = [ln for ln in out.splitlines() if "WARNING domain 4.05" in ln]
+    assert len(warnings) == 1, out
+    assert stored_before["id"] in warnings[0], warnings[0]
+    assert "probe refusal" in warnings[0], warnings[0]
+    assert "SERIALIZER_LOCKED" in warnings[0], warnings[0]
+    assert "seed status retired" not in out, out
+    # no data loss: the decision landed and finalized, the domain row is untouched
+    stored_decision = row(ns, "decision", "id=eq.D-505")
+    assert stored_decision["domain"] == "4.05", stored_decision
+    assert stored_decision["status"] == "decided", stored_decision  # finalized, not pending_memory
+    stored_after = row(ns, "domain", "num=eq.4.05")
+    assert stored_after["status"] == auger.DOMAIN_SEED_STATUS, stored_after
+    # `status` names the same drift: the row holds evidence but still reads NOT-REACHED
+    rc, out = run_cli(["-n", ns, "status"])
+    assert rc == 0, out
+    line = next(ln for ln in coverage_lines(out) if ln.strip().startswith("4.05"))
+    assert "answered" in line, line
+    assert "(row status NOT-REACHED)" in line, line
+
+
+def test_a_failed_rewrite_restores_the_original_row(project, monkeypatch):
+    """AUG-059-R2: the rewrite may fail, the ROW may not be silently lost.
+
+    The rewrite is delete-then-insert (the reverse would let one DELETE take both copies of a
+    duplicated pk). Against a null-ring row the real PATCH 422s on its own; the first domain
+    INSERT is forced to fail so the fallback must put the original row back before warning.
+    The answer exits 0, the warning names the row, and the row reads exactly as seeded.
+    """
+    grid_or_skip()
+    ns = project["ns"]
+    seed_grid(ns)
+    before = row(ns, "domain", "num=eq.4.03")
+    assert before.get("terminating_ring") is None
+    real_insert = auger.insert
+    domain_inserts = []
+
+    def flaky_insert(ns_, table, rows_):
+        if table == "domain":
+            domain_inserts.append(rows_)
+            if len(domain_inserts) == 1:
+                raise SystemExit("insert domain failed (0): {'error': 'transport: probe'}")
+            return real_insert(ns_, table, rows_)
+        return real_insert(ns_, table, rows_)
+
+    monkeypatch.setattr(auger, "insert", flaky_insert)
+    rc, out = run_cli(
+        [
+            "-n", ns, "answer",
+            "--id", "D-603",
+            "--domain", "4.03",
+            "--chosen", "c",
+            "--option", "c",
+            "--why-not", "n/a",
+        ]
+    )
+    assert rc == 0, out
+    warnings = [ln for ln in out.splitlines() if "WARNING domain 4.03" in ln]
+    assert len(warnings) == 1, out
+    assert before["id"] in warnings[0], warnings[0]
+    assert "restored" in warnings[0], warnings[0]
+    # both writes were attempted exactly once: the replacement, then the restore
+    assert len(domain_inserts) == 2, domain_inserts
+    # the row is back, one copy, with the seed word and nothing fabricated
+    [restored] = rows(ns, "domain", "num=eq.4.03")
+    assert restored["status"] == auger.DOMAIN_SEED_STATUS, restored
+    for key in ("id", "num", "name", "triage", "ring_floor", "owner", "trigger",
+                "containment", "project_id", "terminating_ring"):
+        assert restored.get(key) == before.get(key), (key, restored)
+    # and the answer itself was never at risk
+    assert row(ns, "decision", "id=eq.D-603")["domain"] == "4.03"
 
 
 def test_a_domain_whose_row_is_gone_is_reported_absent_not_skipped(project: dict):

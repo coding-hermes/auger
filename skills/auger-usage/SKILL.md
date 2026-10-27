@@ -266,16 +266,17 @@ python3 auger.py -n <ns> recall "any seed phrase"   # proves embeddings
   (verified live 2026-09-29 — values render in dump/export). Older rows may
   still print «—»; read that as "not recorded", not "no cost".
 - **`(row status NOT-REACHED)` beside an answered domain identifies a failed seed-row
-  advance, not harmless display noise (AUG-059-R2, filed 2026-10-27).** Auger
-  records the decision/question evidence and then attempts to retire the seed
-  row. When the substrate rejects that advance write — for example, its PATCH
-  refuses `terminating_ring: null` with 422 — auger skips the failure by design,
-  leaving the row at `NOT-REACHED`. Treat the suffix as a surfaced warning and
-  drift signal: the evidence count is real, but the stored seed-row status is
-  stale and the failed write needs investigation. Do not dismiss or distrust
-  the parenthetical; use it together with the leading `answered` state and the
-  `decisions/questions` count. Advances currently work only for domains whose
-  grid entry has an integer terminating ring.
+  advance, not harmless display noise (AUG-059-R2, fixed 2026-10-27).** Auger
+  records the decision/question evidence and then retires the seed row. Null-ring
+  domains (35 of the 44, whose grid header reads `terminating_ring: null`) advance
+  through a delete+insert rewrite because the substrate's PATCH refuses the stored
+  null with 422. If even the rewrite fails, `answer` still exits 0 with the
+  decision stored but prints one `WARNING domain <num> row <id>: ...` line naming
+  the substrate's error, and the suffix persists as the drift signal: the evidence
+  count is real, but the stored seed-row status is stale and the failed write
+  needs investigation. Do not dismiss or distrust the parenthetical; use it
+  together with the leading `answered` state, the `decisions/questions` count, and
+  the WARNING line from the answer that produced it.
 - **On a gridless namespace the coverage map is blind to your answers
   (AUG-112, filed 2026-10-27).** Without `init --seed-domains` the rows are
   absent, and `status` prints "answered 0" plus "44 absent" even when decisions
