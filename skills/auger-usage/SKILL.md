@@ -179,16 +179,16 @@ python3 auger.py -n <ns> recall "any seed phrase"   # proves embeddings
   2026-09-23).** A nonexistent `--question-id` (and a duplicate `--id`) now
   refuses with nothing stored, so the retry that used to duplicate a decision
   id is gone; decision ids are still not unique-keyed in the store itself.
-- **`--domain` IS validated against the canonical grid (AUG-038 closed, commit
-  5422123) — the accepted form is the bare zero-padded number.** `--domain 4.05`
-  rc=0; `4.05-data`, `4.05=data`, `data`, `4.9`, `4.99` and `notanumber` each
-  refuse rc=1 with "nothing was stored" (re-verified live 2026-10-27). The grid
-  FILES are named `4.05-data.md` and the refusal's own example prints
-  `4.05=data`, so the two tokens a reader is most likely to try are the two that
-  refuse — pass the number.
-- **`status`'s coverage display is NOT one-index-off** (stale claim, measured
-  2026-10-27): its 44 `(num, name)` pairs are exactly the 44 grid file names
-  (`4.05  data` ↔ `4.05-data.md`), so a number copied from `status` is correct.
+- **`--domain` takes one canonical grid number only (AUG-038 closed, commit
+  5422123).** The accepted form is a zero-padded number in the inclusive range
+  `4.01-4.44`, for example `--domain 4.05`; the number is then resolved to the
+  grid name. Unknown or malformed values — including `4.05-data`, `4.05=data`,
+  `data`, `4.9`, `4.99`, and `notanumber` — refuse rc=1 with "nothing was
+  stored". The grid filename `4.05-data.md` and the refusal hint `(e.g.
+  4.05=data)` are descriptive, not accepted CLI syntax: pass the number itself.
+- **`status`'s coverage display preserves the grid's number/name pairs.** Its 44
+  pairs are exactly the 44 grid file names (`4.05  data` ↔ `4.05-data.md`), so
+  a number copied from `status` is correct.
 - **`dump --config` full ids only (AUG-037):** the help's `D-001=O2`
   shorthand is discarded as "unparsed" at rc=0; write `D-001=D-001-O2`
   (option labels also accepted per verdict, per the note above).
@@ -265,16 +265,17 @@ python3 auger.py -n <ns> recall "any seed phrase"   # proves embeddings
   closed): `record option <label> --costs … --breaks …` fills them now**
   (verified live 2026-09-29 — values render in dump/export). Older rows may
   still print «—»; read that as "not recorded", not "no cost".
-- **`(row status NOT-REACHED)` beside an answered domain means the ROW ADVANCE
-  FAILED — not a display quirk (AUG-059-R2, filed 2026-10-27).** AUG-059 closed
-  the advance (`answer` retires the seed word), but the substrate REFUSES the
-  PATCH for the 35 of the 44 domains whose grid header says
-  `terminating_ring: null` (422 "Column 'terminating_ring' (integer) requires an
-  integer number, got null"), and auger skips that failure by design — so on
-  those domains the parenthetical persists forever. The coverage COUNT is still
-  right: trust `answered` and the `decisions/questions` count for what you have
-  covered, do NOT trust the stored status word, and expect that advance to work
-  only for domains with an integer terminating ring.
+- **`(row status NOT-REACHED)` beside an answered domain identifies a failed seed-row
+  advance, not harmless display noise (AUG-059-R2, filed 2026-10-27).** Auger
+  records the decision/question evidence and then attempts to retire the seed
+  row. When the substrate rejects that advance write — for example, its PATCH
+  refuses `terminating_ring: null` with 422 — auger skips the failure by design,
+  leaving the row at `NOT-REACHED`. Treat the suffix as a surfaced warning and
+  drift signal: the evidence count is real, but the stored seed-row status is
+  stale and the failed write needs investigation. Do not dismiss or distrust
+  the parenthetical; use it together with the leading `answered` state and the
+  `decisions/questions` count. Advances currently work only for domains whose
+  grid entry has an integer terminating ring.
 - **On a gridless namespace the coverage map is blind to your answers
   (AUG-112, filed 2026-10-27).** Without `init --seed-domains` the rows are
   absent, and `status` prints "answered 0" plus "44 absent" even when decisions

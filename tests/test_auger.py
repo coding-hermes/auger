@@ -9881,7 +9881,17 @@ def test_answer_refuses_a_malformed_domain_the_same_way(project, tmp_path, monke
     monkeypatch.setenv(auger.DOMAIN_GRID_ENV, str(tmp_path))
     # The retired 9.xx identifiers are user-input regressions, not graph fixtures: they
     # remain refused rather than becoming an undocumented compatibility mode.
-    for bad in ("4.5", "4.99", "9.01", "9.02", "45", "data", ""):
+    for bad in (
+        "4.5",
+        "4.99",
+        "9.01",
+        "9.02",
+        "45",
+        "data",
+        "4.05-data",
+        "4.05=data",
+        "",
+    ):
         if not bad:
             continue  # the empty value keeps its existing contract (tested below)
         with pytest.raises(SystemExit) as ei:
