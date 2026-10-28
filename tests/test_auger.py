@@ -9332,6 +9332,87 @@ def test_a_failed_rewrite_restores_the_original_row(project, monkeypatch):
     assert row(ns, "decision", "id=eq.D-603")["domain"] == "4.03"
 
 
+def test_a_question_row_stored_with_nulls_still_takes_a_partial_patch(project: dict):
+    """GATE-RED-002: the substrate writes the null its own PATCH then refuses.
+
+    Its INSERT normalization materializes every OMITTED declared column as an explicit null in the
+    stored line; its PATCH validates the MERGED row, so a body naming only `jev_already_answered`
+    is answered 422 on `proposed_by_model` — a column the payload never mentions, and one no
+    payload can clear. `patch_or_rewrite` must still record the change, leave the columns nobody
+    set unset, and leave the values the row really carries alone (the pre-GATE-RED-002 workaround
+    blanked them to get past the validator).
+    """
+    ns, pid = project["ns"], project["pid"]
+    auger.insert(
+        ns,
+        "question",
+        {
+            "id": "Q-000001",
+            "project_id": pid,
+            "domain": "4.05",
+            "text": Q_WATCH,
+            "ring": 1,
+            "qclass": "",
+            "status": "open",
+            "jev_already_answered": -1.0,
+            "jev_checked_at": "",
+            "proposed_by_model": "large-model",
+            "scored_by_model": "jev",
+        },
+    )
+    stored = row(ns, "question", "id=eq.Q-000001")
+    # the substrate materialized the omitted column — this null is why the PATCH below is refused
+    assert stored.get("generation_cost") is None, stored
+
+    with pytest.raises(SystemExit) as refusal:
+        auger.patch(ns, "question", "Q-000001", {"jev_already_answered": 0.91})
+    assert "got null" in str(refusal.value), refusal.value
+
+    assert auger.patch_or_rewrite(
+        ns, "question", "Q-000001", {"jev_already_answered": 0.91}
+    ) == {"updated": 1}
+    moved = row(ns, "question", "id=eq.Q-000001")
+    assert moved["jev_already_answered"] == pytest.approx(0.91), moved
+    assert moved["proposed_by_model"] == "large-model", moved
+    assert moved["scored_by_model"] == "jev", moved
+    assert moved.get("generation_cost") is None, moved
+
+
+def test_a_refused_rewrite_puts_the_question_row_back(project: dict, monkeypatch):
+    """GATE-RED-002: the rewrite may fail, the row may not be lost (AUG-059-R2's rule, one table over).
+
+    The replacement INSERT is forced to fail once, so the fallback must put the row it deleted back
+    before it raises — and the restored row must read exactly as it was stored: same id, same text,
+    same provenance, same nulls.
+    """
+    ns, pid = project["ns"], project["pid"]
+    store_questions(ns, pid, ("Q-000001", Q_WATCH, "open"))
+    before = row(ns, "question", "id=eq.Q-000001")
+    real_insert = auger.insert
+    question_inserts: list = []
+
+    def flaky_insert(ns_, table, rows_):
+        if table == "question":
+            question_inserts.append(rows_)
+            if len(question_inserts) == 1:
+                raise SystemExit(
+                    "insert question failed (0): {'error': 'transport: probe'}"
+                )
+        return real_insert(ns_, table, rows_)
+
+    monkeypatch.setattr(auger, "insert", flaky_insert)
+    with pytest.raises(SystemExit) as failure:
+        auger.patch_or_rewrite(
+            ns, "question", "Q-000001", {"jev_already_answered": 0.91}
+        )
+    assert "restored" in str(failure.value), failure.value
+    # both writes were attempted exactly once: the replacement, then the restore
+    assert len(question_inserts) == 2, question_inserts
+    restored = row(ns, "question", "id=eq.Q-000001")
+    for key in ("id", "project_id", "text", "ring", "status", "jev_already_answered"):
+        assert restored.get(key) == before.get(key), (key, restored, before)
+
+
 def test_a_domain_whose_row_is_gone_is_reported_absent_not_skipped(project: dict):
     """One row moved off the grid: 4.05 prints ABSENT, the moved number prints off-grid."""
     grid_or_skip()

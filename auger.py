@@ -44,7 +44,6 @@ Hard-won rules encoded here:
 from __future__ import annotations
 
 import argparse
-import concurrent.futures
 import contextlib
 import io
 import json
@@ -816,6 +815,111 @@ def patch(ns: str, table: str, pk: str, values: dict) -> dict:
     if st != 200:
         raise SystemExit(f"patch {table} failed ({st}): {body}")
     return body
+
+
+#: The substrate's wording when a PATCH is refused not because of the PAYLOAD but because the row it
+#: read back carries an explicit JSON null in a declared column (GATE-RED-002, AUG-059-R2).
+_NULL_REFUSAL = "got null"
+
+
+def _refused_a_stored_null(status: int, body) -> bool:
+    """True when this PATCH response refuses the row's STORED null, not the values sent.
+
+    Measured live against the running substrate (GATE-RED-002, 2026-10-28, throwaway namespace):
+    the declaration the API serves for `question` types all twelve columns and carries no
+    nullability; an INSERT that OMITS `proposed_by_model`/`scored_by_model`/`generation_cost` is
+    answered 201 and the omitted columns are materialized as explicit `null`s IN THE STORED LINE;
+    a PATCH whose body names only `jev_already_answered`/`jev_checked_at` is then answered
+    `422 UNPROCESSABLE_ENTITY: Column 'proposed_by_model' (varchar) requires a string, got null`,
+    because the substrate validates the MERGED row. No payload can repair that: re-sending the
+    null is refused too, and omitting a key cannot take it out of a line that already has it.
+
+    So the refusal is about the row image, never about the payload — which is what makes the
+    rewrite fallback below both safe (the payload was legal) and necessary (nothing else writes).
+    """
+    if status != 422 or not isinstance(body, dict):
+        return False
+    if str(body.get("code") or "").upper() != "UNPROCESSABLE_ENTITY":
+        return False
+    return _NULL_REFUSAL in str(body.get("error") or "")
+
+
+def patch_or_rewrite(ns: str, table: str, pk: str, values: dict) -> dict:
+    """`patch`, and when the substrate refuses the row's stored nulls, rewrite the row instead.
+
+    Every partial PATCH of a row some writer stored with a null-valued declared column 422s
+    (`_refused_a_stored_null` explains the measurement). The row still has to move: `question`'s
+    `jev_already_answered`/`jev_checked_at` are what PROPAGATE's gate records, and a question
+    stored by `ask`, by `insert_question` or by any older version of this file carries exactly
+    those nulls. So the refusal falls back to the AUG-059-R2 write shape: DELETE the row and
+    INSERT the same image back with the change applied and every null-valued key DROPPED from the
+    body (an explicit null is refused at INSERT too, and the omission re-materializes as null —
+    the stored shape is byte-equivalent to what the original write produced).
+
+    What this deliberately does NOT do is FABRICATE a value for the nullable column to satisfy the
+    validator: a blank `proposed_by_model` or a `0.0` generation cost would be a claim nobody made
+    about a row this verb was only trying to mark as gate-checked. Omitting the key states nothing.
+
+    Ordering is delete-then-insert, for AUG-059-R2's reason: the reverse lets one DELETE take both
+    copies of a duplicated primary key. If the delete landed and the insert did not, the ORIGINAL
+    row is put back before the failure is raised — the update may fail, the row may not be lost.
+    """
+    st, body, _ = db(tbl(ns, table, f"pk=eq.{pk}"), "PATCH", values)
+    if st == 200:
+        return body
+    if not _refused_a_stored_null(st, body):
+        raise SystemExit(f"patch {table} failed ({st}): {body}")
+    return _rewrite_row_via_pk(ns, table, pk, values, body)
+
+
+def _rewrite_row_via_pk(ns: str, table: str, pk: str, values: dict, refusal) -> dict:
+    """The AUG-059-R2 rewrite behind `patch_or_rewrite`, generalised off the `domain` table.
+
+    The row's CURRENT image is read back first and is what the replacement is built from, so a
+    column this call does not name keeps the value it had (or stays null, by being dropped). A
+    rewrite that cannot be built or that fails reports the substrate's own refusal plus what it
+    managed to do, never a bare status.
+    """
+    key = PRIMARY.get(table, "id")
+    try:
+        matched = [
+            r for r in select(ns, table, f"{key}=eq.{pk}") if str(r.get(key)) == str(pk)
+        ]
+    except SystemExit as read_exc:
+        raise SystemExit(
+            f"patch {table} failed (422): {refusal}; the row could not be read back for the "
+            f"rewrite ({read_exc})"
+        )
+    if not matched:
+        raise SystemExit(
+            f"patch {table} failed (422): {refusal}; no row {pk} to rewrite"
+        )
+    original = {k: v for k, v in matched[0].items() if v is not None}
+    replacement = dict(original)
+    replacement.update({k: v for k, v in values.items() if v is not None})
+    try:
+        delete_row(ns, table, pk)
+    except SystemExit as delete_exc:
+        raise SystemExit(
+            f"patch {table} failed (422): {refusal}; the rewrite could not delete {pk} "
+            f"({delete_exc}) — the row is untouched"
+        )
+    try:
+        insert(ns, table, replacement)
+    except SystemExit as insert_exc:
+        try:
+            insert(ns, table, original)
+            note = "the original row was restored unchanged"
+        except SystemExit as restore_exc:
+            note = (
+                f"the row itself could not be restored ({' '.join(str(restore_exc).split())})"
+                " — it is GONE, and its facets and edges now name a row that no longer exists"
+            )
+        raise SystemExit(
+            f"patch {table} failed (422): {refusal}; the replacement row was refused "
+            f"({insert_exc}) — {note}"
+        )
+    return {"updated": 1}
 
 
 def delete_row(ns: str, table: str, pk: str) -> dict:
@@ -2286,6 +2390,15 @@ def set_state(
     A question with no facet rows gets the full set here, so a reason always has a home.
     The facets are written BEFORE the status: a failure leaves the question in its old state
     rather than in a new one with no explanation.
+
+    The status write is `patch_or_rewrite` with the status and NOTHING else. Before GATE-RED-002
+    this body also sent `proposed_by_model=""`, `scored_by_model=""` and `generation_cost=0.0` to
+    get past the substrate's merged-row validation, which OVERWROTE the provenance every stored
+    question carries (which model proposed it, which scored it, what generating it cost) with
+    blanks the moment a question closed — and 400'd outright on a namespace whose `question`
+    declaration predates those columns. The nulls that made the validator complain are handled
+    where they are actually created (see `patch_or_rewrite`), so a row keeps its real values and
+    the ones nobody set stay unset.
     """
     if status not in QUESTION_STATES:
         raise SystemExit(
@@ -2316,16 +2429,11 @@ def set_state(
                 for i, name in enumerate(facet_set())
             ],
         )
-    return patch(
+    return patch_or_rewrite(
         ns,
         "question",
         question_id,
-        {
-            "status": status,
-            "proposed_by_model": "",
-            "scored_by_model": "",
-            "generation_cost": 0.0,
-        },
+        {"status": status},
     )
 
 
@@ -2775,7 +2883,11 @@ def propagate(
                 rep["ungated"] = pending[i:]
                 break
             checked_at = datetime.now(timezone.utc).isoformat()
-            patch(
+            # `patch_or_rewrite`: a question stored by `ask`/`insert_question` carries the
+            # substrate-materialized nulls in proposed_by_model/scored_by_model/generation_cost,
+            # and its merged-row validation refuses any partial PATCH of that row (GATE-RED-002).
+            # The gate's record must still land, so the refusal falls back to the rewrite.
+            patch_or_rewrite(
                 ns,
                 "question",
                 child,
@@ -4847,15 +4959,21 @@ def cmd_ask(a):
             ],
         },
     }
-    # AUG-110: proposer + JEV are both pure I/O waits and consume `state` independently —
-    # run them concurrently so the wall clock is max(proposer, JEV) not proposer + JEV.
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _ex:
-        _fut_gen = _ex.submit(_ask_generated_candidates, ns, pid, state, seats)
-        _fut_jev = _ex.submit(jev, state, qs)
-        generated_rc = _fut_gen.result()
-        if generated_rc is not None:
-            return generated_rc
-        ans, err = _fut_jev.result()
+    # The generated-candidate path runs FIRST and owns the ask outright when it can serve one:
+    # it generates the batch, has JEV rank/gate it and stores the winner, and it prints its own
+    # completeness. Only when it declines (no seats, no candidates, or JEV unreachable for the
+    # batch) is the legacy single-subject question below needed.
+    #
+    # AUG-110 speculatively started BOTH (this call and the legacy `jev(state, qs)`) in a thread
+    # pool to overlap two remote waits — but the legacy answer was then DISCARDED whenever the
+    # candidate path answered, so the common path paid JEV twice for one question (GATE-RED-002:
+    # the stored-question-context test pins exactly one JEV call and saw two). A duplicate paid
+    # model call is not worth the overlap it buys on a path that only runs when generation fails,
+    # so the speculation is gone: the fallback pays its own round trip, and nothing is asked twice.
+    generated_rc = _ask_generated_candidates(ns, pid, state, seats)
+    if generated_rc is not None:
+        return generated_rc
+    ans, err = jev(state, qs)
     print(f"project {pid}  |  {ns}")
     print(
         f"low-confidence decisions (<{T_CONFIDENT}): {len(seats)}   open questions: {len(unans)}   unknowns: {len(unknown)}"
