@@ -30,6 +30,14 @@ post-write push but not a full-fleet `s3 sync all push` (deadline 3600s). See
 still reproduce, and the 992s of extra wall time is that ladder multiplied by
 the live namespaces.
 
+Such a namespace is now left WHOLE rather than half-deleted (AUG-117): when the
+`DELETE` does not settle, teardown keeps the directory with the surviving
+registry mapping and says so on stderr. A row whose directory is still there is
+repairable by the next `DELETE`; a row whose directory was removed under it is a
+permanent ghost — one that is indistinguishable from lost data. Measured
+2026-10-27 before the fix: 15,268 of 15,932 registered namespaces were exactly
+that, 98.4% of the listing.
+
 Do not run a correctness suite while a full-fleet sync push is in flight:
 
     pgrep -af "duckbrain.js s3 sync all push"    # must print nothing

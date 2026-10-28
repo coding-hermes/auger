@@ -6650,6 +6650,95 @@ def test_teardown_reports_persistent_409_and_listed_residue(offline_duckbrain):
     assert any("still listed" in problem for problem in problems), problems
 
 
+# ================================================================= AUG-117: both halves or neither
+# The measured leak (2026-10-27): teardown ran `shutil.rmtree` UNCONDITIONALLY after recording
+# a failed DELETE, so a 409 "Push in flight" or a 429 left the registry mapping standing with
+# no directory under it — 15,268 ghost rows out of 15,932 registered namespaces (98.4% of the
+# listing was auger test garbage). A row without its directory is not a leak the next run can
+# repair: nothing distinguishes it from a namespace whose data was lost. The rule is therefore
+# BOTH OR NEITHER — the DELETE decides, and the directory follows it.
+
+
+def test_teardown_keeps_the_directory_when_the_delete_is_refused(
+    offline_duckbrain, capsys
+):
+    """A refused DELETE (409) must leave the directory AND the registry row standing.
+
+    The accepted answer: the namespace stays consistent — listed and on disk, repairable by
+    a later DELETE — the incomplete teardown is stated on stderr, and nothing raises HERE.
+    The raise belongs to the namespace's owner, `ns_created`, which turns a non-empty
+    problem list into `pytest.fail`; this case asserts that list is non-empty, i.e. the
+    fixture would have failed the test rather than skipping it silently.
+
+    The pre-fix code deleted the directory under the surviving row, which is exactly the
+    ghost row this case is about — the `os.path.isdir` assertion is the mutation it pins.
+    """
+    backoffs = list(conftest.TEARDOWN_CONFLICT_BACKOFFS)
+    fake = offline_duckbrain(
+        [(409, {"error": "sync push in progress"}, {})] * (len(backoffs) + 1)
+        + [(200, REGISTRY, {})]
+    )
+    path = ns_path(fake.ns)
+    tables = os.path.join(path, "tables")
+    os.makedirs(tables)
+    marker = os.path.join(tables, "decision.json")
+    with open(marker, "w", encoding="utf-8") as fh:
+        fh.write("[]")
+
+    problems = teardown_namespace(fake.ns)  # AC: the case passes — no exception
+
+    assert os.path.isdir(path), (
+        "the directory was removed under a registry row that survived (AUG-117 ghost row)"
+    )
+    with open(marker, encoding="utf-8") as fh:
+        assert fh.read() == "[]", "the namespace's data was removed with the directory"
+    assert fake.registered is True, "the 409 control must leave a real listed residue"
+    assert any("returned 409" in problem for problem in problems), problems
+    assert not any("directory still present" in problem for problem in problems), (
+        f"a KEPT directory was reported as a removal failure: {problems}"
+    )
+    err = capsys.readouterr().err
+    assert fake.ns in err and "409" in err and "KEPT" in err, (
+        f"the incomplete teardown was not stated on stderr: {err!r}"
+    )
+
+
+def test_teardown_removes_the_directory_on_any_2xx_delete(offline_duckbrain):
+    """The other arm: a 204 (a 2xx that is neither 200 nor 404) removes both halves.
+
+    Without this arm the fix could "pass" by never removing anything. The registry payload
+    is scripted explicitly because this fake flips `registered` only on 200/404.
+    """
+    fake = offline_duckbrain([(204, {}, {}), (200, {"namespaces": []}, {})])
+    path = ns_path(fake.ns)
+    os.makedirs(os.path.join(path, "tables"))
+
+    assert teardown_namespace(fake.ns) == []
+    assert not os.path.exists(path), "a settled DELETE must still remove the directory"
+
+
+def test_a_429_retry_that_succeeds_clears_the_mapping_and_the_directory(offline_duckbrain):
+    """429 then success: NO residue of either shape — mapping gone AND directory gone.
+
+    The ordering fix must not turn the retry path into a hoarder: when the transport's own
+    retry gets the DELETE through, the directory is removed normally, so neither a
+    mapping-only row (the ghost) nor a dir-only orphan can survive.
+    """
+    fake = offline_duckbrain(
+        [
+            (429, RETRY_HINT_BODY, {}),  # the limiter refuses the first DELETE
+            (200, {"deleted": True}, {}),  # the module's retry gets it through
+            (200, {"namespaces": []}, {}),  # registry re-check: absent
+        ]
+    )
+    path = ns_path(fake.ns)
+    os.makedirs(os.path.join(path, "tables"))
+
+    assert teardown_namespace(fake.ns) == []
+    assert not os.path.exists(path), "the retried DELETE settled, so the directory must go"
+    assert fake.registered is False, "the retried DELETE must clear the registry mapping"
+
+
 # ================================================================= the just-deleted lag on the audit (AUG-080)
 # The gate audit is the surface the 2026-09-25 false-positive fired on: teardown's own
 # re-check had already confirmed the namespace gone, yet the session-wide `leftovers`

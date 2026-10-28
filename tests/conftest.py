@@ -13,9 +13,14 @@ Three rules shape this file, all of them cost-places in the shell suite it repla
     them this run's leaks — the tag makes every session's names disjoint, so the
     prefix scan can never report another run's in-flight namespace.
   * TEARDOWN GOES DOWN BOTH PATHS — `DELETE /api/namespaces/<ns>` (the registry mapping
-    plus the directory) and `shutil.rmtree` of `~/duckbrain/namespaces/<ns>`. Whatever a
-    path could not fix is RETURNED to the caller and raised by the fixture, never
-    swallowed: a namespace that could not be removed is an error, not a footnote.
+    plus the directory) and `shutil.rmtree` of `~/duckbrain/namespaces/<ns>` — but the
+    DELETE GOES FIRST AND DECIDES (AUG-117): the directory is removed only when the DELETE
+    settled (2xx, or 404 = already gone). A REFUSED DELETE (409 push in flight, 429 rate
+    limit, 5xx) leaves the registry mapping standing, so the directory stays standing with
+    it; removing the directory under a surviving row is what made 15,268 of the registry's
+    15,932 rows ghosts. Whatever a path could not fix is RETURNED to the caller and raised
+    by the fixture, never swallowed: a namespace that could not be removed is an error,
+    not a footnote.
   * THE LIVE DEPENDENCY IS EXPLICIT. Every test that needs DuckBrain depends on the
     `live_service` fixture, which probes the API and either skips naming `DUCKBRAIN_URL`
     and the remedy, or (under `AUGER_REQUIRE_LIVE=1`) fails hard. There is no path where
@@ -203,12 +208,19 @@ def teardown_namespace(ns: str) -> list[str]:
     a short bounded retry budget; if it persists, the failure and registry evidence
     are reported rather than hidden or retried for ten minutes (REVIEW-AUGER-005).
 
+    THE DELETE DECIDES WHETHER THE DIRECTORY IS REMOVED (AUG-117). The two paths are not
+    independent: the registry mapping and the directory are two halves of ONE namespace, so
+    it is BOTH or NEITHER. Removing `~/duckbrain/namespaces/<ns>` after a refused DELETE
+    (409 Push in flight, 429 rate limit, 5xx) leaves a registry row that points at nothing —
+    a namespace that is listed but cannot exist — and that is not a leak the next run can
+    clean up, because nothing distinguishes it from a namespace whose data was lost. Measured
+    2026-10-27: 15,268 such ghost rows out of 15,932 (98.4% of the listing was test garbage).
+    So a refused DELETE keeps the directory (stated loudly on stderr, and returned as a
+    problem so the fixture still fails the test) and a settled DELETE removes it.
+
     The deletion goes through `auger.delete_namespace`, never a hand-rolled request: that
-    call is the one the 429 retry exists for. A 429 landing on a bare DELETE leaves the
-    registry row behind while this function still removes the directory — a namespace that
-    is listed but does not exist — which is the leak this teardown was observed to produce.
-    Routing it through the module means the retry budget, the Retry-After handling and the
-    "no bypass" property are all one implementation, proved in `test_auger.py`.
+    call is the one the 429 retry exists for, so the retry budget, the Retry-After handling
+    and the "no bypass" property are all one implementation, proved in `test_auger.py`.
     """
     if not ns.startswith(TEST_NS_PREFIX):
         raise ValueError(
@@ -221,24 +233,42 @@ def teardown_namespace(ns: str) -> list[str]:
     # most of its ~19.5 minute wall time in teardown backoff. The session-wide flock
     # below prevents sibling pytest legs from causing that contention; a short bounded
     # retry still permits DuckBrain's own just-started native push to finish. A conflict
-    # that survives all six waits is not reinterpreted as success: teardown still
-    # removes any local directory and LISTs the registry so the caller gets honest
-    # residue evidence. Worst-case conflict wait: 61s, not 600s.
+    # that survives all six waits is not reinterpreted as success: teardown still LISTs
+    # the registry so the caller gets honest residue evidence. Worst-case conflict wait:
+    # 61s, not 600s.
     status, body = auger.delete_namespace(ns)
     for backoff in TEARDOWN_CONFLICT_BACKOFFS:
         if status != 409:
             break
         time.sleep(backoff)
         status, body = auger.delete_namespace(ns)
-    if status not in (200, 404):
+
+    # 2xx = the mapping is gone (200/202/204 ...); 404 = it was already gone. Anything else
+    # means the registry row SURVIVED, and the directory must survive with it.
+    deleted = 200 <= status < 300 or status == 404
+    if not deleted:
         problems.append(
             f"DELETE /api/namespaces/{ns} returned {status}: {str(body)[:200]}"
         )
 
     path = ns_path(ns)
-    shutil.rmtree(path, ignore_errors=True)
-    if os.path.exists(path):
-        problems.append(f"directory still present: {path}")
+    if deleted:
+        shutil.rmtree(path, ignore_errors=True)
+        if os.path.exists(path):
+            problems.append(f"directory still present: {path}")
+    else:
+        # Registry mapping survived -> directory kept: a half-torn namespace whose row and
+        # directory still AGREE is repairable (a later DELETE, or an operator's cleanup,
+        # finishes it). Stated on stderr because a silent skip would read as success.
+        print(
+            f"auger: teardown of {ns} INCOMPLETE — DELETE returned {status}; "
+            f"directory KEPT at {path} so the registry mapping and the directory stay consistent",
+            file=sys.stderr,
+        )
+        if not os.path.exists(path):
+            problems.append(
+                f"directory is already gone while the registry row survived: {path}"
+            )
 
     try:
         if ns in api_namespaces():
