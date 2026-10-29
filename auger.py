@@ -6658,8 +6658,102 @@ def render_export(ns: str, project_id: str | None = None) -> str:
 
 
 def cmd_export(a):
-    print(render_export(a.namespace, a.project_id))
+    profile = getattr(a, "profile", "default") or "default"
+    if profile == "nasa":
+        print(render_export_nasa(a.namespace, a.project_id))
+    else:
+        print(render_export(a.namespace, a.project_id))
     return 0
+
+
+def render_export_nasa(ns: str, project_id: str | None = None) -> str:
+    """Render the same rows in the NASA requirement grammar (docs/playbook/NASA-SE-PLAYBOOK.md).
+
+    Additive by design: the default `export` contract is untouched, so no consumer breaks.
+    A decision becomes a requirement, its options are the alternatives, `why_not` is the
+    rationale, a verdict is the verification, and an `unknown` row is the TBD register entry
+    that must carry an owner and a closing trigger.
+    """
+    lines: list[str] = [
+        f"# Spec (NASA profile) — namespace {ns}",
+        "",
+        "Requirement grammar: one statement per decision, a stable id, a rationale, the",
+        "alternatives considered, and an explicit verification method. Unresolved items carry",
+        "an owner and a closing trigger.",
+        "",
+        "Read-only deterministic rendering. `auger export --profile nasa` writes nothing.",
+    ]
+    if project_id:
+        lines.append(f"Project context: {project_id} (not a filter).")
+
+    decisions = select(ns, "decision", "order=id.asc")
+    options = select(ns, "option", "order=id.asc")
+    unknowns = select(ns, "unknown", "order=id.asc")
+    assumptions = select(ns, "assumption", "order=id.asc")
+    verdicts = select(ns, "verdict", "order=id.asc") if "verdict" in COLS else []
+
+    options_by_decision: dict[str, list[dict]] = {}
+    for opt in options:
+        options_by_decision.setdefault(str(opt.get("decision_id") or ""), []).append(opt)
+    verdicts_by_target: dict[str, list[dict]] = {}
+    for verdict in verdicts:
+        for key in ("decision_id", "target_id", "subject_id"):
+            if verdict.get(key):
+                verdicts_by_target.setdefault(str(verdict[key]), []).append(verdict)
+                break
+
+    lines += ["", f"## Requirements ({len(decisions)} decisions)"]
+    if not decisions:
+        lines.append("### (none stored)")
+    for decision in decisions:
+        did = str(decision.get("id") or "(missing id)")
+        opts = options_by_decision.get(did, [])
+        chosen = str(decision.get("chosen") or "")
+        label = next((str(o.get("label")) for o in opts
+                      if str(o.get("id")) == chosen or str(o.get("label")) == chosen), chosen)
+        judged = verdicts_by_target.get(did, [])
+        # D = demonstration (an independent judgement observed the configuration);
+        # I = inspection (the record itself is the evidence). Never claim T without a test row.
+        method = "D" if judged else "I"
+        lines += [
+            "",
+            f"### REQ-{did}",
+            f"- statement: {label or '(undecided)'}",
+            f"- id: REQ-{did}  [V: {method}]",
+            f"- status: {decision.get('status') or 'active'}  confidence: {decision.get('confidence')}",
+            f"- rationale: {decision.get('why_not') or '(none recorded)'}",
+        ]
+        if decision.get("reversal_cost"):
+            lines.append(f"- reversal cost: {decision['reversal_cost']}")
+        if opts:
+            lines.append("- alternatives:")
+            for opt in opts:
+                mark = "active" if opt.get("active") else "inactive"
+                brk = f" — breaks: {opt['breaks']}" if opt.get("breaks") else ""
+                lines.append(f"  - {opt.get('id')} {opt.get('label')} [{mark}]{brk}")
+        for verdict in judged:
+            reason = verdict.get("reasons") or verdict.get("reason") or ""
+            lines.append(f"- verified by: {verdict.get('id')} score={verdict.get('score')} {reason}".rstrip())
+
+    lines += ["", f"## Unresolved — TBD register ({len(unknowns)})"]
+    if not unknowns:
+        lines.append("### (none stored)")
+    for unknown in unknowns:
+        lines.append(
+            f"- TBD-{unknown.get('id')} {unknown.get('text')}"
+            f" (owner: {unknown.get('owner') or 'unassigned'};"
+            f" close by: {unknown.get('trigger') or 'unscheduled'})"
+        )
+
+    lines += ["", f"## Assumptions ({len(assumptions)})"]
+    if not assumptions:
+        lines.append("### (none stored)")
+    for assumption in assumptions:
+        lines.append(
+            f"- ASM-{assumption.get('id')} {assumption.get('text')}"
+            f" (falsifier: {assumption.get('falsifier') or '(none recorded)'})"
+        )
+    return "\n".join(lines) + "\n"
 
 
 def cmd_dump(a):
@@ -7730,6 +7824,17 @@ def main(argv=None):
     s = sub.add_parser(
         "export",
         help="render every namespace table as one deterministic, read-only spec",
+    )
+    s.add_argument(
+        "--profile",
+        choices=["default", "nasa"],
+        default="default",
+        help=(
+            "rendering profile; `nasa` emits the requirement grammar from "
+            "docs/playbook/NASA-SE-PLAYBOOK.md (one requirement per decision, alternatives, "
+            "rationale, [V: T|D|A|I] verification method, TBD register). Default output is "
+            "unchanged"
+        ),
     )
     s.set_defaults(fn=cmd_export)
 
