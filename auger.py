@@ -3840,6 +3840,10 @@ def resolve_answer_domain(raw: str) -> tuple[str, str]:
     that is not one of the grid's numbers: the grid read here is THE one source of truth
     (no second table), so an unknown or malformed value can only mean a mistyped one,
     and silently storing it would fake a coverage claim the store cannot see.
+
+    The refusal prints an example, and EVERY example it prints must be a value this same
+    command accepts (AUG-115): the message used to demonstrate `4.05=<name>` — the exact
+    shape it had just refused — so a reader who copied the example stayed stuck.
     """
     value = (raw or "").strip()
     try:
@@ -3853,9 +3857,12 @@ def resolve_answer_domain(raw: str) -> tuple[str, str]:
     entry = by_num.get(value)
     if entry is None:
         allowed = f"{grid[0]['num']}-{grid[-1]['num']} ({len(grid)} domains)"
+        example = grid[4] if len(grid) > 4 else grid[0]
         raise SystemExit(
-            f"refused: unknown domain {raw!r} — --domain takes one of the canonical grid "
-            f"numbers {allowed}; nothing was stored (e.g. {grid[4]['num']}={grid[4]['name']})"
+            f"refused: unknown domain {raw!r} — --domain takes one bare canonical grid "
+            f"number, {allowed}, with nothing appended to it (no name, no '=', no '-'); "
+            f"nothing was stored. Accepted: --domain {example['num']} "
+            f"({example['num']} is the {example['name']} domain)"
         )
     return entry["num"], entry["name"]
 

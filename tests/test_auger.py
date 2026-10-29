@@ -10273,6 +10273,60 @@ def test_answer_refuses_a_malformed_domain_the_same_way(project, tmp_path, monke
     assert rows(ns, "decision", "") == []
 
 
+def examples_printed_by_domain_refusal(message: str) -> list[str]:
+    """Every grid-number-shaped token the refusal's examples clause prints (AUG-115).
+
+    Read OUT of the message, not restated: the caller hands each token back to the same
+    command, so a message that demonstrates a form it has just refused fails there. The
+    scan is deliberately wider than "the token after `--domain `" — the original bug
+    printed its example as bare prose (`4.05=<name>`), and a narrower scan would have
+    happily ignored it. Scoping starts at the clause that introduces the examples, so
+    the refusal's own prose ("--domain takes one bare canonical grid number 4.01-4.44")
+    is not read as an example. `[]` is the caller's to fail on: no example would make
+    "every example it prints is accepted" vacuously true.
+    """
+    _, sep, tail = message.partition("Accepted:")
+    assert sep, f"the refusal no longer introduces its examples with 'Accepted:': {message}"
+    examples: list[str] = []
+    for token in re.findall(r"\d+\.\d+\S*", tail):
+        token = token.rstrip(".,;:!?)]")
+        if token and token not in examples:
+            examples.append(token)
+    return examples
+
+
+def test_the_domain_refusal_prints_only_examples_the_command_accepts(
+    project, tmp_path, monkeypatch
+):
+    """AUG-115: `4.05=data` was refused, and the message then offered `4.05=stub5` as an example.
+
+    The example is not restated here — it is parsed out of a REAL refusal and handed back
+    to the SAME command, which must exit 0 and store that domain. That is the entire claim:
+    a refusal may not demonstrate the form it has just refused.
+    """
+    ns = project["ns"]
+    monkeypatch.setenv(auger.DOMAIN_GRID_ENV, str(tmp_path))
+    for n in range(1, 45):
+        write_grid_file(str(tmp_path), f"4.{n:02d}-stub{n}", GRID_KV_HEADER)
+    rc, message, out = run_cli_exit(
+        ["-n", ns, "answer", "--id", "D-410", "--domain", "4.05=data", "--chosen", "x"]
+    )
+    assert "refused" in message and "4.05=data" in message, message
+    assert "nothing was stored" in message, message
+    examples = examples_printed_by_domain_refusal(message)
+    assert examples, f"the refusal prints no accepted example to check: {message}"
+    for index, example in enumerate(examples):
+        did = f"D-411{index}"
+        rc, stored_out = run_cli(
+            ["-n", ns, "answer", "--id", did, "--domain", example, "--chosen", "x"]
+        )
+        assert rc == 0, (example, stored_out)
+        # accepted means STORED under that number, not merely non-refusing
+        assert row(ns, "decision", f"id=eq.{did}")["domain"] == example, stored_out
+    # the refused invocation itself left the record untouched
+    assert rows(ns, "decision", "id=eq.D-410") == []
+
+
 def test_answer_confirmation_names_the_canonical_grid_name(
     project, tmp_path, monkeypatch
 ):
