@@ -279,7 +279,12 @@ grid walked domain by domain, one line each, with the row's state, the grid's tr
 ring floor, the TERMINATING RING, and how many decision/question rows carry that number
 (the evidence half of "answered vs NOT-REACHED"). A grid domain with no stored row prints
 `ABSENT` and is repeated by number in an explicit list: absence is a claim of its own, and
-"we have no row for 4.21" is not the same sentence as "4.21 does not apply". A stored number
+"we have no row for 4.21" is not the same sentence as "4.21 does not apply". A grid domain
+that HOLDS evidence (a decision or question row carries its number) but has no stored row is
+not absent at all: it is counted in `answered`, its line prints `answered` with an explicit
+no-`domain`-row note, and it is named again in a list of its own — `init` without
+`--seed-domains` is a path the README permits, so the report must never answer "0" for a
+domain the store holds an answer for. A stored number
 the grid does not define prints as off-grid. When the grid cannot be read at all, `status`
 says so and claims nothing about absence — with no expected set there is nothing to be absent
 against — instead of printing a silent zero.

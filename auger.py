@@ -4196,7 +4196,12 @@ def domain_coverage(ns: str, project_id: str) -> dict:
     A stored number the grid does not define is carried too: a coverage count that cannot see a row
     is not a count. "answered" is EVIDENCE, not a status word — a domain is answered when a decision
     or a question row carries its number, so the report never depends on a status write nobody
-    performed.
+    performed. And evidence does NOT require a `domain` row (AUG-112): the README blesses `init`
+    without `--seed-domains`, so a number can be answered while the coverage map has no row for it —
+    such a number is counted in `answered`, named in `no_row_evidence`, and kept OUT of `absent`,
+    because "we hold an answer for 4.05" and "we have no row for 4.05" cannot both be the sentence
+    the report prints. Its line is never dropped either: the union below includes the numbers the
+    evidence carries, so a grid that cannot be read still cannot hide what was decided.
     """
     mine: dict = {}
     nameless: list = []
@@ -4231,7 +4236,10 @@ def domain_coverage(ns: str, project_id: str) -> dict:
         grid_error = str(exc)
     by_num = {e["num"]: e for e in grid}
     lines = []
-    for num in sorted(set(by_num) | set(mine)):
+    # The union carries the EVIDENCE numbers as well as the grid's and the rows': a decision
+    # carrying a number the grid cannot be read for (or a number no row was ever seeded for)
+    # must still get a line, or the report silently drops the one thing it was asked about.
+    for num in sorted(set(by_num) | set(mine) | set(counts)):
         r, g = mine.get(num), by_num.get(num)
         lines.append(
             {
@@ -4243,11 +4251,13 @@ def domain_coverage(ns: str, project_id: str) -> dict:
                 "off_grid": g is None,
             }
         )
-    answered = [
-        ln["num"]
-        for ln in lines
-        if ln["row"] is not None and not ln["off_grid"] and ln["evidence"] > 0
-    ]
+    # AUG-112: the row is NOT a precondition of the answer. Counting only rows-present evidence
+    # reported `answered 0` on the gridless path while a decision carried 4.05 — the report
+    # contradicting the store, and `dump`, about the same row.
+    answered = [ln["num"] for ln in lines if ln["evidence"] > 0 and not ln["off_grid"]]
+    # The numbers that carry evidence with NO `domain` row: their own class, because such a line
+    # is neither ABSENT (something IS recorded) nor a seeded row (the row was never written).
+    no_row_evidence = [ln["num"] for ln in lines if ln["row"] is None and ln["evidence"] > 0]
     present = [ln for ln in lines if ln["row"] is not None]
     seeded = sum(1 for ln in present if not ln["off_grid"])
     return {
@@ -4258,10 +4268,20 @@ def domain_coverage(ns: str, project_id: str) -> dict:
         # is a stored row without being one of the 44, and the two counts say different things.
         "rows": len(present),
         "seeded": seeded,
-        "absent": [ln["num"] for ln in lines if ln["row"] is None],
+        # ABSENT keeps its narrow meaning: a grid number with no row AND no evidence. A number
+        # that holds evidence is reported as answered instead of being counted absent.
+        "absent": [ln["num"] for ln in lines if ln["row"] is None and not ln["evidence"]],
         "off_grid": [ln["num"] for ln in present if ln["off_grid"]],
         "answered": len(answered),
-        "not_reached": seeded - len(answered),
+        # Seeded rows that hold NO evidence — subtracted over ROWS, not `seeded - answered`: an
+        # answered number with no row (the gridless path) is not part of the seeded slice, and the
+        # old subtraction went NEGATIVE for it.
+        "not_reached": sum(
+            1 for ln in present if not ln["off_grid"] and not ln["evidence"]
+        ),
+        # Evidence-bearing numbers whose `domain` row is absent, named so the report says which
+        # covered domain has no row for the coverage map.
+        "no_row_evidence": no_row_evidence,
         "nameless": nameless,
         # Rows whose STORED status is the seed's own word — the ones the default note describes.
         "seeded_status": sum(
@@ -4289,11 +4309,16 @@ def domain_line(ln: dict) -> str:
     prints ABSENT with the grid's numbers, because what is missing is the ROW, and naming what the
     grid expects while saying the row is gone is the whole point of the line. A number the grid does
     not define says so, so a stray row cannot pass for one of the 44.
+
+    A FOURTH case, because two of the three would each be half wrong (AUG-112): a number that
+    carries evidence with no `domain` row. It prints `answered` — the evidence IS the answer — and
+    says in the same line that the row is missing, so neither claim hides behind the other.
     """
     r, g = ln["row"], ln["grid"]
     stored = str((r or {}).get("status") or "")
+    no_row_evidence = r is None and bool(ln["evidence"])
     if r is None:
-        state = "ABSENT"
+        state = "answered" if no_row_evidence else "ABSENT"
     elif ln["evidence"]:
         state = "answered"
     else:
@@ -4318,6 +4343,12 @@ def domain_line(ln: dict) -> str:
         f"  {ln['num']}  {str(ln['name'])[:22]:<22} {state:<12} {grid_txt}  "
         f"terminating ring {ring_txt}  decisions/questions {ln['evidence']}"
         + ("  (off-grid: not one of the 44)" if ln["off_grid"] else "")
+        + (
+            "  (no `domain` row: the evidence is counted answered above; the coverage map"
+            " has no row for this num)"
+            if no_row_evidence
+            else ""
+        )
         + drift
     )
 
@@ -6157,6 +6188,15 @@ def cmd_status(a):
         print(domain_line(ln))
     if not cov["lines"]:
         print("  (no domain row is stored in this namespace)")
+    # AUG-112: the numbers that hold evidence with NO `domain` row — the README's gridless path.
+    # Named as its own class so nothing the user has decided disappears from the report, and so a
+    # reader can tell "answered, but the coverage map has no row" from "answered and mapped".
+    if cov["no_row_evidence"]:
+        print(
+            "  EVIDENCE WITHOUT A `domain` ROW (a decision or question row carries the num, so "
+            "these are counted in `answered` above — but no `domain` row was ever seeded for "
+            f"them, so the coverage map cannot report them as rows): {', '.join(cov['no_row_evidence'])}"
+        )
     if cov["absent"]:
         print(
             "  ABSENT (a grid domain with no stored `domain` row — absence, which is NOT the "
