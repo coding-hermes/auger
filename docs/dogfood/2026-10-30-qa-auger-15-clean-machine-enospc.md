@@ -297,3 +297,133 @@ consolidated record, and its claims were re-verified independently of the first 
 Trace marker for this record (tested commit, evidence file, run witness):
 
 ch:trace row=QA-AUGER-15 spec=docs/RELEASE.md#Verifying-the-v0.2.0-upgrade-path wave=.coding-hermes/waves/auger-foreman-2026-10-29-22-53-26.json#QA-AUGER-15 test=none:external-battery doc=docs/dogfood/2026-10-30-qa-auger-15-clean-machine-enospc.md prompt=/tmp/auger-foreman-2026-10-29-22-53-26-QA-AUGER-15-brief.txt evidence=/tmp/bunker-qa-evidence-qa15-20261030T032824Z.jsonl witness=run:bunker-mvp-agent-69129f1f tested=255fc9bf04945b0f618d8a597e91def5e093e165 verdict=none:foreman-will-judge commit=HARNESS-3ef1290202 memory=none:foreman-writes
+
+---
+
+## 11. Live re-verification by an independent dispatch (2026-10-30, 19:34Z → 20:12Z)
+
+A second worker was dispatched for this row after §1–§10 had landed but the board row was still `pending`.
+Everything in this section was measured or probed by that dispatch; none of it is copied from §1–§10.
+
+### 11.1 bunker-mvp ENOSPC — cleared (measured)
+
+`ssh root@100.115.67.116 'df -B1 /'` at **2026-10-30T19:34:31Z**:
+
+```
+/dev/sda1  160938012672  30593957888  123739774976  20%  /
+```
+
+**123,739,774,976 B available = 115.2 GiB free, 20 % used.** `bunker status` agrees — `Status: ONLINE`,
+`Version: 0.2.1`, `Uptime: 6d 21h`, `Agents: 0/50`, `Disk: 19 % (28.5 GB/149.9 GB)`. The failed 2026-10-29 run
+had **≈7.5 GB** free (142.4/149.9 GB, 95 %); this host now carries ~15× that headroom, and ~11× the harness
+floor (10 GB). The ENOSPC class is not present on this host.
+
+### 11.2 The §3 battery artifacts were re-read from disk (not trusted from this write-up)
+
+| check | command | result |
+|---|---|---|
+| zero ENOSPC | `grep -ric "No space left on device\|ENOSPC"` over the merged evidence (23 rows), the agent harvest (20 rows), `qa-run.log` and all 15 `qa-logs-1879714/*.log` | **0 matches in every file** |
+| battery completed | `cat /tmp/qa15-ev/qa-run.log` | `QA-HEAD=255fc9b…`, `HARNESS_NODE=ok`, `HARNESS-COMPOSE=ok`, `CELLS-DONE` |
+| ci-pass produced real output | `cat …/native.log` | `1 failed, 163 passed, 210 skipped in 29.75s` plus the full traceback of `test_usage_skill_describes_failed_not_reached_advances_as_drift` |
+| upgrade produced real output | `cat …/up1.log`, `tail …/up2.log` | `ERROR: Could not find a version that satisfies the requirement auger==0.2.0 (from versions: none)` / `Successfully installed auger-0.3` |
+| chaos-resource cap recorded verbatim | `jq -r .detail` on the chaos-resource row; `head …/res.log` | `rc=1 under cap (cap=3145728KB child_saw=3145728 subshell_saw=3145728 parent_saw=unlimited)`; `PARENT_CAP=unlimited SUBSHELL_CAP=3145728 CAP_EFFECTIVE=3145728 CAP_REQUESTED=3145728` |
+| the 20 agent rows and the 23 collected rows agree | `jq -r '[.cell,.status]\|@tsv'` on both files | identical cell/status sets (+`launch`, +`collect` in the merged file) |
+
+`parent_saw=unlimited` is **not** an unapplied cap and is not normalised away: the cap is applied inside the
+capped subshell the suite runs in, so the battery's own parent shell is uncapped by construction. The AC's
+"child/subshell/parent" is met as a recorded observation at all three points — two of them capped, the third
+reported as the truth.
+
+### 11.3 The §7 durable gate — verified in both directions, live
+
+* **Negative arm** (artifact on disk from the prior tick): `/tmp/qa15-refuse-1793331535.jsonl` holds exactly
+  **one** row — `{"cell":"run_battery","status":"FAIL", … "LOW ON DISK (56 GB free, 61 used on /; floor
+  100000 GB) — refusing to spawn …"}` — and its `.meta` carries `agent=` (empty). Nothing was spawned and no
+  product cell exists.
+* **Behaviour arm**: `bash ~/.hermes/scripts/test_bunker_qa_disk_preflight.sh` → **21 passed, 0 failed**.
+* **Positive arm, executed by this dispatch**: a real `bunker-qa.sh launch ~/auger` printed
+  `→ disk preflight ok: 115 GB free (20 used) on bunker-mvp (floor 10 GB)` — the gate runs on the live host,
+  after reachability and before the spawn, exactly as §7 asserts.
+
+### 11.4 A NEW host blocker observed this tick — spawn is broken, and it is NOT disk
+
+The launch above could not admit a battery at current main. `bunkerd` fails at stage `rootless-install`; from
+`journalctl -u bunkerd` on bunker-mvp, three consecutive attempts (ids `25c271dd`, `2f800c24`, `35cc666e`,
+19:38:35Z → 19:43:47Z):
+
+```
+{"level":"ERROR","msg":"spawn failed","agent_id":"35cc666e","stage":"rootless-install",
+ "error":"install rootless docker for bunker-35cc666e: enable linger for bunker-35cc666e: exit status 1
+  (output: Could not enable linger: Connection timed out\n; linger marker … absent; linger enable attempts: 3)"}
+```
+
+Each attempt rolls back (`loginctl disable-linger`, `userdel`) and leaves **no agent** (`Agents: 0/50` after
+every attempt). The harness therefore recorded exactly one HARNESS-class row and its `.meta` `agent=` is empty:
+
+```
+/tmp/bunker-qa-evidence-qa15-20261030T144200Z.jsonl
+{"cell":"run_battery","status":"FAIL","detail":"spawn failed on bunker-mvp: … enable linger … Connection timed out …"}
+```
+
+A direct probe reproduces the host fault with no auger or battery involvement: `timeout 15 loginctl
+enable-linger <user>` **hangs and never returns** (`systemd-logind` is `active`, `NRestarts=0`, one session,
+`/var/lib/systemd/linger` holds only `root`). The current blocker is a **logind/dbus hang on bunker-mvp** —
+unrelated to disk (115 GiB free) and unrelated to auger.
+
+The harness's own appended classification on that row (`[root cause: agent ssh port 22 … unreachable —
+server/network down, not a docker fault]`) is a **misattribution**: ssh is reachable (this dispatch ssh'd the
+host throughout, and the launch's own reachability gate passed) and the failure happens *during* spawn, before
+any agent ssh endpoint exists.
+
+**Consequence for the ACs:** AC 2 ("re-run the full battery at the same or a later HEAD") is discharged by the
+`255fc9b` run verified in §11.2 — a HEAD later than the failed run's `2fcff58`. A *fresher* run at current main
+`832d010` could not be admitted today for the linger reason above; that is recorded here rather than papered
+over by substituting the older evidence silently.
+
+### 11.5 Repo gate at current main `832d010` — GATE PASS
+
+```
+$ PYTHONUNBUFFERED=1 AUGER_TEST_LOCK=/tmp/auger-pytest-substrate-qa15b.lock \
+    PATH=/home/kara/auger/venv/bin:$PATH AUGER_CI=1 CI=1 bash tests/gate.sh
+== gate mode: FULL gate ==
+== syntax ==            ok
+== lint ==              All checks passed!
+== pytest ==            364 passed, 2 skipped in 1335.02s (0:22:15)
+== wrapper regression (AUG-081) ==
+gate mode regression: PASS
+AUG-116: zombie pid 2980657 classified dead (kill -0 alone would have said alive)
+AUG-081 wrapper regression: PASS
+== end-to-end smoke ==   SKIPPED [e2e-smoke]: needs a live DuckBrain namespace — arm NOT run, NOT passed
+== openapi-parity (AUG-066) ==  docs/openapi.yaml matches the generator byte-for-byte
+== docs check ==
+LIVE ARMS: ran 0; skipped 2
+  live arms SKIPPED (not passed): pytest-live, e2e-smoke
+GATE PASS
+```
+
+`rc=0`, HEAD `832d01000aaa8be2ed2134f3076c571ff49af139` == `origin/main`. The two skipped arms are named by the
+gate itself (live DuckBrain/JEV unavailable to a CI-mode run) — green here means "syntax + lint + every test
+that needs no live API", exactly the meaning CI's green carries.
+
+### 11.6 Method disclosure: why the pytest arm ran with a redirected lock
+
+The host-global substrate lock (`/tmp/auger-pytest-substrate.lock`, `tests/conftest.py:303`) was held for the
+whole window by foreign full-suite legs (two `pytest -q tests/` processes, pids `2109278` and `2253200`, from
+other sessions). A first gate run at `832d010` blocked in `locks_lock_inode_wait` for 8+ minutes without
+executing a single test and was killed. `AUGER_TEST_LOCK` is the documented override
+(`tests/conftest.py:306-308`); in CI mode the live arms are skipped, so no live substrate is touched and there
+is nothing to serialise — the redirect is faithful, and it is disclosed rather than silently changed.
+
+One intermediate attempt (`/tmp/qa15-gate2.log`) died mid-arm with `rc=1` after 15 tests and a truncated log
+(no reaper or OOM record — `earlyoom` logged memory at 80 % available and `forkbomb-reaper` recorded 0 kills);
+that attempt is **not** counted as evidence. The instrumented re-run (`PYTHONUNBUFFERED=1`) above is.
+
+### 11.7 Verdict of this dispatch
+
+The row's blocker — bunker-mvp ENOSPC invalidating the clean-machine battery — is **cleared** on three
+independent grounds: measured disk truth (§11.1), an ENOSPC-free full battery at a later HEAD with real cell
+output and a recorded cap (§11.2), and a refusal gate proven live in both directions plus 21/21 unit arms
+(§11.3). The repo gate is green at current main (§11.5). Residuals, unchanged and un-owned by this row:
+the `test_usage_skill.py` doc-drift red and its gate blind spot (§5/§5a), the act-container `test_gate_mode.sh`
+kill (§5b), the upgrade cell's expected-index-miss grading (§6), and the **new** bunker-mvp logind/linger spawn
+fault (§11.4), which will block the next battery on that host and must not be re-filed as ENOSPC.
