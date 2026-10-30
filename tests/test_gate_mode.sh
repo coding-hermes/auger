@@ -14,6 +14,40 @@ assert_contains() {
   }
 }
 
+# AUG-116: "is this process still running?" — a ZOMBIE is DEAD.
+#
+# `kill -0` succeeds for any pid that still EXISTS, and a killed process keeps
+# existing as a zombie until its parent reaps the exit status. On a normal host
+# PID 1 / systemd reaps orphans promptly, so `kill -0` on a SIGKILLed child
+# fails and the old probe was right by luck. Inside `act` the runner container's
+# PID 1 is `tail -f /dev/null`, which never calls waitpid: the stub this file
+# SIGKILLs is reparented to it, stays `<defunct>`, and `kill -0` keeps
+# succeeding — so the wrapper regression reported "STILL ALIVE" for a process
+# the wrapper had in fact killed, and the gate went red at ~35s on every clean
+# box (AUG-116; hosted CI stayed green because the GitHub runner reaps).
+#
+# The contract under test is "the arm no longer RUNS", so the state a zombie is
+# in — terminated, not scheduled, holding nothing but an unreaped exit status —
+# counts as dead. Anything else that exists still counts as alive: a genuinely
+# surviving pytest is a real wrapper failure and must still fail this file.
+proc_running() {
+  local pid="$1" state=""
+  kill -0 "$pid" 2>/dev/null || return 1          # pid is gone entirely
+  if [ -r "/proc/$pid/stat" ]; then
+    # Field 3 of /proc/<pid>/stat is the state; strip the "(comm)" field first
+    # (greedy match to the LAST ')' — a comm may itself contain spaces/parens).
+    state="$(sed -e 's/^.*) //' "/proc/$pid/stat" 2>/dev/null | cut -d' ' -f1)"
+  fi
+  if [ -z "$state" ] && command -v ps >/dev/null 2>&1; then
+    state="$(ps -o stat= -p "$pid" 2>/dev/null | tr -d '[:space:]')"
+  fi
+  case "$state" in
+    Z*) return 1 ;;                                # zombie: already dead
+    '') return 1 ;;                                # unreadable state: not provably running
+  esac
+  return 0
+}
+
 # A leaked AUGER_CI must fail before syntax/tests on a development host.
 set +e
 leaked_output="$(env -u GITHUB_ACTIONS -u CI AUGER_CI=1 GATE_MODE_ONLY=1 bash "$GATE" 2>&1)"
@@ -103,10 +137,13 @@ w1_elapsed=$((SECONDS - t0))
 }
 
 # The stub itself must be DEAD within the window (it is the direct child:
-# SIGTERM at budget, SIGKILL after --kill-after — either kills it).
+# SIGTERM at budget, SIGKILL after --kill-after — either kills it). AUG-116:
+# probed with proc_running(), not `kill -0` — inside act the SIGKILLed stub is
+# reparented to a PID 1 that never reaps, so it lingers as a ZOMBIE and a bare
+# `kill -0` reported the killed stub as "STILL ALIVE" (the clean-box red).
 stub_pid="$(cat "$d/pids.pid")"
 sleep 1
-if kill -0 "$stub_pid" 2>/dev/null; then
+if proc_running "$stub_pid"; then
   printf 'hung stub pid %s is STILL ALIVE after the wrapper returned (rc=%s) — the kill did not fire\n' "$stub_pid" "$w1_rc" >&2
   exit 1
 fi
@@ -130,6 +167,86 @@ esac
 if [ -f "$d/pids.child" ]; then
   child_pid="$(cat "$d/pids.child")"
   kill -9 "$child_pid" 2>/dev/null || true
+fi
+
+# ---------------------------------------------------------------------
+# Case W4 (AUG-116): the liveness probe must call a ZOMBIE dead — and must
+# still call a LIVE process alive.
+#
+# W1 above passes on a host whose init reaps orphans even with a bare
+# `kill -0`; it only went red inside act, where the wrapper's SIGKILLed stub
+# is reparented to `tail -f /dev/null` and becomes `<defunct>`. This case
+# builds that state hermetically and on any host: a parent that never calls
+# wait() keeps its SIGKILLed child a zombie for as long as the parent lives.
+# The parent must NOT be a shell — bash/dash reap every child they can while
+# waiting for another (measured: the zombie vanished within milliseconds), so
+# the fixture forks with python3, which is already required by the gate's own
+# `python3 -m py_compile` arm. The second half of the case is the non-vacuity
+# guard: a probe that answered "dead" unconditionally would make W1 pass for
+# the wrong reason, so a running process must still read ALIVE.
+# ---------------------------------------------------------------------
+if ! command -v python3 >/dev/null 2>&1; then
+  printf 'AUG-116 zombie case needs python3 to fork a non-reaping parent — case NOT run, NOT passed\n'
+else
+  zdir="$(mktemp -d "${TMPDIR:-/tmp}/aug116-zombie-XXXXXX")"
+  zombie_cleanup() { kill -9 "${zparent:-0}" 2>/dev/null || true; rm -rf "$zdir"; }
+  trap 'stub_cleanup; zombie_cleanup' EXIT
+
+  python3 - "$zdir" <<'PY' &
+import os, signal, sys, time
+
+zdir = sys.argv[1]
+pid = os.fork()
+if pid == 0:                      # the stub stand-in: killed below, never reaped
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    time.sleep(30)
+    os._exit(0)
+open(os.path.join(zdir, "zpid"), "w").write(str(pid))
+os.kill(pid, signal.SIGKILL)
+time.sleep(8)                     # no wait(): the child stays a zombie meanwhile
+PY
+  zparent=$!
+
+  zpid=""
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if [ -s "$zdir/zpid" ]; then zpid="$(cat "$zdir/zpid")"; break; fi
+    sleep 0.2
+  done
+  if [ -z "$zpid" ]; then
+    printf 'AUG-116 zombie fixture did not publish a pid — case NOT run, NOT passed\n' >&2
+    exit 1
+  fi
+
+  # PREMISE (asserted, not assumed): the fixture really is a zombie that a bare
+  # `kill -0` would call alive. If either half is false the case proves nothing,
+  # so a change in kernel/proc behaviour fails loudly instead of passing empty.
+  zstate=""
+  [ -r "/proc/$zpid/stat" ] && zstate="$(sed -e 's/^.*) //' "/proc/$zpid/stat" | cut -d' ' -f1)"
+  if ! kill -0 "$zpid" 2>/dev/null; then
+    printf 'AUG-116 premise failed: `kill -0 %s` did not succeed on the zombie fixture (no zombie to test)\n' "$zpid" >&2
+    exit 1
+  fi
+  if [ "$zstate" != "Z" ]; then
+    printf 'AUG-116 premise failed: fixture pid %s is in state %q, expected Z (zombie)\n' "$zpid" "${zstate:-unreadable}" >&2
+    exit 1
+  fi
+
+  if proc_running "$zpid"; then
+    printf 'AUG-116: proc_running called ZOMBIE pid %s (%s, parent %s alive) ALIVE — a killed process is not running; inside act this is the clean-box red\n' "$zpid" "$zstate" "$zparent" >&2
+    exit 1
+  fi
+  printf 'AUG-116: zombie pid %s classified dead (kill -0 alone would have said alive)\n' "$zpid"
+
+  # Non-vacuity: a genuinely running process must still read ALIVE.
+  sleep 30 &
+  live_pid=$!
+  if ! proc_running "$live_pid"; then
+    kill -9 "$live_pid" 2>/dev/null || true
+    printf 'AUG-116: proc_running called LIVE pid %s dead — the probe must not blanket-answer dead\n' "$live_pid" >&2
+    exit 1
+  fi
+  kill -9 "$live_pid" 2>/dev/null || true
+  wait "$live_pid" 2>/dev/null || true
 fi
 
 # ---------------------------------------------------------------------
