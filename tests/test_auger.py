@@ -225,9 +225,7 @@ def test_init_refuses_an_isolated_url_without_a_path_knob(monkeypatch, tmp_path)
     calls = []
     monkeypatch.setattr(auger, "db", lambda *args, **kwargs: calls.append(args))
 
-    code, msg, out = run_cli_exit(
-        ["-n", f"auger-worker074-{uuid.uuid4().hex}", "init"]
-    )
+    code, msg, out = run_cli_exit(["-n", f"auger-worker074-{uuid.uuid4().hex}", "init"])
 
     assert code == 1, out
     assert calls == []
@@ -4051,7 +4049,10 @@ def test_next_id_mints_from_the_id_law_and_ignores_out_of_law_rows(monkeypatch):
         ([], "D-001"),  # empty table: the first id, unchanged
         (["D-003", "D-CACHE-EMBED"], "D-004"),  # poison top: the legal top below it
         (["D-007", "D-007x"], "D-008"),  # a non-digit trailing char: outside the law
-        (["D-007", "D-BAND-1.0"], "D-008"),  # digits before a non-numeric tail: outside too
+        (
+            ["D-007", "D-BAND-1.0"],
+            "D-008",
+        ),  # digits before a non-numeric tail: outside too
         (["DM-01", "D-005"], "D-006"),  # another prefix's id is not a D- source
         (["D-CACHE-EMBED"], "D-001"),  # no legal row: the fallback is collision-safe
     ]
@@ -4077,7 +4078,9 @@ def test_the_mint_width_ignores_a_malformed_top_row(monkeypatch):
     assert auger.decision_id_width(MINT_NS) == 6
     # the page-safe read is still first; only the failed-law top row buys the bounded scan
     assert len(server.requests) == 2, server.requests
-    assert server.requests[0].endswith("?select=id&order=id.desc&limit=1"), server.requests[0]
+    assert server.requests[0].endswith("?select=id&order=id.desc&limit=1"), (
+        server.requests[0]
+    )
     assert server.requests[1].endswith(
         f"?select=id&order=id.desc&limit={auger.ID_LAW_SCAN_ROWS}"
     ), server.requests
@@ -6604,25 +6607,34 @@ def test_substrate_preflight_names_simulated_push_conflict_and_free_locks():
         "(probe returned 409 Push in flight)"
     )
 
-    assert conftest.substrate_preflight(
-        process_commands=[(4321, "python -m pytest tests/test_auger.py")],
-        push_probe=lambda: None,
-        lock_holder=lambda: None,
-    ) is None
+    assert (
+        conftest.substrate_preflight(
+            process_commands=[(4321, "python -m pytest tests/test_auger.py")],
+            push_probe=lambda: None,
+            lock_holder=lambda: None,
+        )
+        is None
+    )
 
 
 def test_substrate_preflight_names_full_fleet_process_and_foreign_lock():
     """The process and lock arms both carry a concrete PID in their named cause."""
-    assert conftest.substrate_preflight(
-        process_commands=[(2385306, "node bin/duckbrain.js s3 sync all push")],
-        push_probe=lambda: None,
-        lock_holder=lambda: None,
-    ) == "AUGER_BLOCKED_BY: full-fleet sync push pid 2385306"
-    assert conftest.substrate_preflight(
-        process_commands=[],
-        push_probe=lambda: None,
-        lock_holder=lambda: 9876,
-    ) == "AUGER_BLOCKED_BY: foreign AUGER_TEST_LOCK holder pid 9876"
+    assert (
+        conftest.substrate_preflight(
+            process_commands=[(2385306, "node bin/duckbrain.js s3 sync all push")],
+            push_probe=lambda: None,
+            lock_holder=lambda: None,
+        )
+        == "AUGER_BLOCKED_BY: full-fleet sync push pid 2385306"
+    )
+    assert (
+        conftest.substrate_preflight(
+            process_commands=[],
+            push_probe=lambda: None,
+            lock_holder=lambda: 9876,
+        )
+        == "AUGER_BLOCKED_BY: foreign AUGER_TEST_LOCK holder pid 9876"
+    )
 
 
 def test_teardown_reports_persistent_409_and_listed_residue(offline_duckbrain):
@@ -6717,7 +6729,9 @@ def test_teardown_removes_the_directory_on_any_2xx_delete(offline_duckbrain):
     assert not os.path.exists(path), "a settled DELETE must still remove the directory"
 
 
-def test_a_429_retry_that_succeeds_clears_the_mapping_and_the_directory(offline_duckbrain):
+def test_a_429_retry_that_succeeds_clears_the_mapping_and_the_directory(
+    offline_duckbrain,
+):
     """429 then success: NO residue of either shape — mapping gone AND directory gone.
 
     The ordering fix must not turn the retry path into a hoarder: when the transport's own
@@ -6735,8 +6749,12 @@ def test_a_429_retry_that_succeeds_clears_the_mapping_and_the_directory(offline_
     os.makedirs(os.path.join(path, "tables"))
 
     assert teardown_namespace(fake.ns) == []
-    assert not os.path.exists(path), "the retried DELETE settled, so the directory must go"
-    assert fake.registered is False, "the retried DELETE must clear the registry mapping"
+    assert not os.path.exists(path), (
+        "the retried DELETE settled, so the directory must go"
+    )
+    assert fake.registered is False, (
+        "the retried DELETE must clear the registry mapping"
+    )
 
 
 # ================================================================= the just-deleted lag on the audit (AUG-080)
@@ -8960,8 +8978,8 @@ def test_status_reports_coverage_and_the_terminating_ring_per_domain(decided: di
     reported = coverage_lines(out)
     assert len(reported) == 44, f"{len(reported)} domain line(s):\n{out}"
     assert (
-        "answered 2 (a decision or question row carries the num) | NOT-REACHED 42 (no such row)"
-        in out
+        "answered 2 (a decision or question row carries the num) | NOT-REACHED 42 "
+        "(a seeded row with no decision or question row carrying the num)" in out
     ), out
 
     answered = next(ln for ln in reported if ln.strip().startswith("4.05"))
@@ -8985,6 +9003,44 @@ def test_status_reports_coverage_and_the_terminating_ring_per_domain(decided: di
     # the stored row and the derived evidence word agree instead of contradicting on one line.
     assert stored["4.05"]["status"] == auger.DOMAIN_REACHED_STATUS, stored["4.05"]
     assert "NOT-REACHED" not in answered, answered
+
+
+def test_status_never_claims_a_not_reached_row_does_not_exist(project: dict):
+    """AUG-114: the NOT-REACHED parenthetical must describe the counter it sits beside.
+
+    `not_reached` counts SEEDED, on-grid `domain` rows whose num no decision or question row
+    carries — the rows exist, they just hold no evidence. The summary said
+    `NOT-REACHED N (no such row)`: the ABSENT claim, which the header line printed above it
+    flatly contradicted (`44 in the grid | 44 seeded | 0 absent`). Two sentences about the
+    same 44 rows cannot both be true, and a reader who trusted the parenthetical would go
+    looking for rows that were already there.
+
+    The count is pinned to the lines here, not just to its own number: every row the counter
+    names prints its own NOT-REACHED coverage line, so a gloss that claims absence can never
+    be the sentence the report prints. The same reasoning pins the answered clause — the two
+    are one partition of the seeded slice, split by whether evidence carries the num.
+    """
+    ns = project["ns"]
+    seed_grid(ns)
+    rc, out = run_cli(["-n", ns, "status"])
+    assert rc == 0, out
+    # the header states the seeded/absent split the parenthetical used to contradict
+    assert "44 in the grid | 44 seeded | 0 absent" in out, out
+    m = re.search(r"NOT-REACHED (\d+) \(([^)]*)\)", out)
+    assert m, f"no NOT-REACHED summary line in:\n{out}"
+    counted, gloss = int(m.group(1)), m.group(2)
+    assert counted == 44, (counted, out)
+    assert gloss == "a seeded row with no decision or question row carrying the num", (
+        gloss
+    )
+    assert "no such row" not in out, out
+    # the counter is about rows that EXIST: each counted row prints its own coverage line
+    lines = coverage_lines(out)
+    assert len(lines) == 44, f"{len(lines)} coverage line(s):\n{out}"
+    assert sum("NOT-REACHED" in ln for ln in lines) == counted, out
+    assert len(rows(ns, "domain", "")) == counted, out
+    # ABSENT stays a claim about stored rows: none here, so the report makes none
+    assert "ABSENT (a grid domain with no stored" not in out, out
 
 
 def test_a_decision_advances_the_domain_row_status_and_the_line_agrees(
@@ -9162,7 +9218,9 @@ def test_null_ring_domain_rows_advance_through_the_real_write_path(project):
     """
     grid = grid_or_skip()
     null_ring = {e["num"] for e in grid if e["terminating_ring"] is None}
-    assert {"4.03", "4.09"} <= null_ring, "the AC's named arms must be null-ring domains"
+    assert {"4.03", "4.09"} <= null_ring, (
+        "the AC's named arms must be null-ring domains"
+    )
     ns = project["ns"]
     seed_grid(ns)
     before = {
@@ -9175,12 +9233,19 @@ def test_null_ring_domain_rows_advance_through_the_real_write_path(project):
     for did, num in (("D-403", "4.03"), ("D-409", "4.09"), ("D-405", "4.05")):
         rc, out = run_cli(
             [
-                "-n", ns, "answer",
-                "--id", did,
-                "--domain", num,
-                "--chosen", "c",
-                "--option", "c",
-                "--why-not", "n/a",
+                "-n",
+                ns,
+                "answer",
+                "--id",
+                did,
+                "--domain",
+                num,
+                "--chosen",
+                "c",
+                "--option",
+                "c",
+                "--why-not",
+                "n/a",
             ]
         )
         assert rc == 0, out
@@ -9190,19 +9255,36 @@ def test_null_ring_domain_rows_advance_through_the_real_write_path(project):
         assert stored["status"] == auger.DOMAIN_REACHED_STATUS, stored
         # the rewrite changed the status and NOTHING else — no ring was invented to satisfy
         # the validator, and every field the seed wrote survived byte-for-byte
-        for key in ("id", "num", "name", "triage", "ring_floor", "owner", "trigger",
-                    "containment", "project_id", "terminating_ring"):
+        for key in (
+            "id",
+            "num",
+            "name",
+            "triage",
+            "ring_floor",
+            "owner",
+            "trigger",
+            "containment",
+            "project_id",
+            "terminating_ring",
+        ):
             assert stored.get(key) == before[num].get(key), (num, key, stored)
 
     # idempotent: a second decision in a null-ring domain moves nothing and says nothing
     rc, out = run_cli(
         [
-            "-n", ns, "answer",
-            "--id", "D-4031",
-            "--domain", "4.03",
-            "--chosen", "c",
-            "--option", "c",
-            "--why-not", "n/a",
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-4031",
+            "--domain",
+            "4.03",
+            "--chosen",
+            "c",
+            "--option",
+            "c",
+            "--why-not",
+            "n/a",
         ]
     )
     assert rc == 0, out
@@ -9244,18 +9326,27 @@ def test_a_refused_advance_warns_once_and_costs_nothing(project, monkeypatch):
         return real_patch(ns_, table, pk, values)
 
     def refusing_delete(ns_, table, pk):
-        raise SystemExit(f"delete domain failed (503): {{'error': 'SERIALIZER_LOCKED {pk}'}}")
+        raise SystemExit(
+            f"delete domain failed (503): {{'error': 'SERIALIZER_LOCKED {pk}'}}"
+        )
 
     monkeypatch.setattr(auger, "patch", refusing_patch)
     monkeypatch.setattr(auger, "delete_row", refusing_delete)
     rc, out = run_cli(
         [
-            "-n", ns, "answer",
-            "--id", "D-505",
-            "--domain", "4.05",
-            "--chosen", "c",
-            "--option", "c",
-            "--why-not", "n/a",
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-505",
+            "--domain",
+            "4.05",
+            "--chosen",
+            "c",
+            "--option",
+            "c",
+            "--why-not",
+            "n/a",
         ]
     )
     assert rc == 0, out
@@ -9269,7 +9360,9 @@ def test_a_refused_advance_warns_once_and_costs_nothing(project, monkeypatch):
     # no data loss: the decision landed and finalized, the domain row is untouched
     stored_decision = row(ns, "decision", "id=eq.D-505")
     assert stored_decision["domain"] == "4.05", stored_decision
-    assert stored_decision["status"] == "decided", stored_decision  # finalized, not pending_memory
+    assert stored_decision["status"] == "decided", (
+        stored_decision
+    )  # finalized, not pending_memory
     stored_after = row(ns, "domain", "num=eq.4.05")
     assert stored_after["status"] == auger.DOMAIN_SEED_STATUS, stored_after
     # `status` names the same drift: the row holds evidence but still reads NOT-REACHED
@@ -9300,19 +9393,28 @@ def test_a_failed_rewrite_restores_the_original_row(project, monkeypatch):
         if table == "domain":
             domain_inserts.append(rows_)
             if len(domain_inserts) == 1:
-                raise SystemExit("insert domain failed (0): {'error': 'transport: probe'}")
+                raise SystemExit(
+                    "insert domain failed (0): {'error': 'transport: probe'}"
+                )
             return real_insert(ns_, table, rows_)
         return real_insert(ns_, table, rows_)
 
     monkeypatch.setattr(auger, "insert", flaky_insert)
     rc, out = run_cli(
         [
-            "-n", ns, "answer",
-            "--id", "D-603",
-            "--domain", "4.03",
-            "--chosen", "c",
-            "--option", "c",
-            "--why-not", "n/a",
+            "-n",
+            ns,
+            "answer",
+            "--id",
+            "D-603",
+            "--domain",
+            "4.03",
+            "--chosen",
+            "c",
+            "--option",
+            "c",
+            "--why-not",
+            "n/a",
         ]
     )
     assert rc == 0, out
@@ -9325,8 +9427,18 @@ def test_a_failed_rewrite_restores_the_original_row(project, monkeypatch):
     # the row is back, one copy, with the seed word and nothing fabricated
     [restored] = rows(ns, "domain", "num=eq.4.03")
     assert restored["status"] == auger.DOMAIN_SEED_STATUS, restored
-    for key in ("id", "num", "name", "triage", "ring_floor", "owner", "trigger",
-                "containment", "project_id", "terminating_ring"):
+    for key in (
+        "id",
+        "num",
+        "name",
+        "triage",
+        "ring_floor",
+        "owner",
+        "trigger",
+        "containment",
+        "project_id",
+        "terminating_ring",
+    ):
         assert restored.get(key) == before.get(key), (key, restored)
     # and the answer itself was never at risk
     assert row(ns, "decision", "id=eq.D-603")["domain"] == "4.03"
@@ -10286,7 +10398,9 @@ def examples_printed_by_domain_refusal(message: str) -> list[str]:
     "every example it prints is accepted" vacuously true.
     """
     _, sep, tail = message.partition("Accepted:")
-    assert sep, f"the refusal no longer introduces its examples with 'Accepted:': {message}"
+    assert sep, (
+        f"the refusal no longer introduces its examples with 'Accepted:': {message}"
+    )
     examples: list[str] = []
     for token in re.findall(r"\d+\.\d+\S*", tail):
         token = token.rstrip(".,;:!?)]")
@@ -10949,8 +11063,12 @@ def test_live_namespace_prefix_is_unique_per_pytest_process():
         for _ in range(2)
     ]
 
-    assert all(re.fullmatch(r"auger-pytest-[0-9a-f]{8}-", p) for p in prefixes), prefixes
-    assert len(set(prefixes)) == 2, f"two sessions shared one namespace prefix: {prefixes}"
+    assert all(re.fullmatch(r"auger-pytest-[0-9a-f]{8}-", p) for p in prefixes), (
+        prefixes
+    )
+    assert len(set(prefixes)) == 2, (
+        f"two sessions shared one namespace prefix: {prefixes}"
+    )
 
 
 #: Two concurrent pytest LEGS (a gate.sh arm plus a sibling run) failed the same three
