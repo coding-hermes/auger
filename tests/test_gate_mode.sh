@@ -76,7 +76,37 @@ assert_contains "$github_output" "gate mode: hosted-ci-skip"
 ci_output="$(env -u GITHUB_ACTIONS AUGER_CI=1 CI=1 GATE_MODE_ONLY=1 bash "$GATE" 2>&1)"
 assert_contains "$ci_output" "gate mode: hosted-ci-skip"
 
-printf 'gate mode regression: PASS\n'
+# A clean live-mode box must name each unavailable prerequisite before syntax,
+# pytest, or the smoke arm can start. Isolate HOME and the environment so a
+# developer's local credentials cannot make this negative control vacuous.
+preflight_home="$(mktemp -d "${TMPDIR:-/tmp}/aug116-preflight-XXXXXX")"
+trap 'rm -rf "$preflight_home"' EXIT
+run_preflight_probe(){
+  local output status
+  set +e
+  output="$(timeout 5s env -i PATH="$PATH" HOME="$preflight_home" GATE_FULL=1 "$@" bash "$GATE" 2>&1)"
+  status=$?
+  set -e
+  [[ "$status" -eq 2 ]] || {
+    printf 'live prerequisite preflight exited %s (expected 2):\n%s\n' "$status" "$output" >&2
+    exit 1
+  }
+  [[ "$output" != *"== syntax =="* ]] || {
+    printf 'live prerequisite check ran later gate arms:\n%s\n' "$output" >&2
+    exit 1
+  }
+  printf '%s\n' "$output"
+}
+preflight_output="$(run_preflight_probe AUGER_CI=0)"
+assert_contains "$preflight_output" "DuckBrain URL missing"
+preflight_output="$(run_preflight_probe AUGER_CI=0 DUCKBRAIN_URL=http://127.0.0.1:3000)"
+assert_contains "$preflight_output" "DuckBrain API key missing"
+mkdir -p "$preflight_home/.duckbrain"
+printf 'test-only-token\n' > "$preflight_home/.duckbrain/token"
+preflight_output="$(run_preflight_probe AUGER_CI=0 DUCKBRAIN_URL=http://127.0.0.1:3000)"
+assert_contains "$preflight_output" "JEV/OpenRouter key missing"
+
+printf 'gate prerequisite preflight: PASS\n'
 
 # =====================================================================
 # AUG-081: the gate's pytest wrapper must kill a HUNG process group.

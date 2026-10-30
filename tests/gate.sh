@@ -49,6 +49,28 @@ if [ "${GATE_MODE_ONLY:-0}" = "1" ]; then
   exit 0
 fi
 
+require_live_prerequisites(){
+  [ "$GATE_MODE" = "live" ] || return 0
+  if [ -z "${DUCKBRAIN_URL:-}" ]; then
+    echo "ERROR: DuckBrain URL missing — set DUCKBRAIN_URL before running the live gate (or use AUGER_CI=1 on hosted CI)." >&2
+    return 1
+  fi
+  if [ -z "${DUCKBRAIN_API_KEY:-}" ] &&
+     [ ! -s "$HOME/.duckbrain/foreman-status.token" ] &&
+     [ ! -s "$HOME/.duckbrain/token" ]; then
+    echo "ERROR: DuckBrain API key missing — set DUCKBRAIN_API_KEY or provide ~/.duckbrain/foreman-status.token before running the live gate." >&2
+    return 1
+  fi
+  if [ -z "${OPENROUTER_API_KEY:-}" ] && [ -z "${OR_API_KEY:-}" ] &&
+     ! grep -qE 'sk-or-v1-[A-Za-z0-9_-]{20,}' "$HOME/.hermes/.env" 2>/dev/null; then
+    echo "ERROR: JEV/OpenRouter key missing — set OPENROUTER_API_KEY or OR_API_KEY, or provide a key in ~/.hermes/.env before running the live gate." >&2
+    return 1
+  fi
+}
+if ! require_live_prerequisites; then
+  exit 2
+fi
+
 # INT-GITREINS-20260927-01: doc-only fast path.
 # When the latest commit touches ONLY documentation files (no .py, no tests/),
 # skip the expensive pytest + e2e-smoke arms. The docs-check arm still runs.
