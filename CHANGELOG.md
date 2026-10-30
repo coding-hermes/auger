@@ -18,6 +18,10 @@ Tagged v0.3.0 on 2026-10-22.
 
 ## Unreleased
 
+- `status`'s coverage summary no longer calls a seeded NOT-REACHED domain a missing row: the
+  `NOT-REACHED N` half now carries the gloss its counter implements — "a seeded row with no
+  decision or question row carrying the num" — instead of "(no such row)", the ABSENT claim the
+  header line above it contradicted (AUG-114)
 - pyproject.toml: `dev` extra (`pip install -e '.[dev]'`) installs pytest + PyYAML — the clean
   dev install can collect the OpenAPI parity suite (QA-AUGER-12-R2); runtime install stays
   stdlib-only

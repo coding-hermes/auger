@@ -277,7 +277,12 @@ question/edge rows, and prints the report. Two coverage blocks come out of that:
 grouped by the domain string they carry, and — from the stored `domain` rows — the method's
 grid walked domain by domain, one line each, with the row's state, the grid's triage score and
 ring floor, the TERMINATING RING, and how many decision/question rows carry that number
-(the evidence half of "answered vs NOT-REACHED"). A grid domain with no stored row prints
+(the evidence half of "answered vs NOT-REACHED"). The two halves are the same sentence on one
+line — `answered N (a decision or question row carries the num) | NOT-REACHED N (a seeded row
+with no decision or question row carrying the num)` — and each counts exactly what its own
+gloss says: the NOT-REACHED half names rows that ARE stored and hold no evidence (AUG-114; it
+used to read "(no such row)", the absence claim, while the header on the line above said the
+rows were seeded). Absence is a separate class, and a grid domain with no stored row prints
 `ABSENT` and is repeated by number in an explicit list: absence is a claim of its own, and
 "we have no row for 4.21" is not the same sentence as "4.21 does not apply". A grid domain
 that HOLDS evidence (a decision or question row carries its number) but has no stored row is

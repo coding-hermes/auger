@@ -4264,7 +4264,9 @@ def domain_coverage(ns: str, project_id: str) -> dict:
     answered = [ln["num"] for ln in lines if ln["evidence"] > 0 and not ln["off_grid"]]
     # The numbers that carry evidence with NO `domain` row: their own class, because such a line
     # is neither ABSENT (something IS recorded) nor a seeded row (the row was never written).
-    no_row_evidence = [ln["num"] for ln in lines if ln["row"] is None and ln["evidence"] > 0]
+    no_row_evidence = [
+        ln["num"] for ln in lines if ln["row"] is None and ln["evidence"] > 0
+    ]
     present = [ln for ln in lines if ln["row"] is not None]
     seeded = sum(1 for ln in present if not ln["off_grid"])
     return {
@@ -4277,7 +4279,9 @@ def domain_coverage(ns: str, project_id: str) -> dict:
         "seeded": seeded,
         # ABSENT keeps its narrow meaning: a grid number with no row AND no evidence. A number
         # that holds evidence is reported as answered instead of being counted absent.
-        "absent": [ln["num"] for ln in lines if ln["row"] is None and not ln["evidence"]],
+        "absent": [
+            ln["num"] for ln in lines if ln["row"] is None and not ln["evidence"]
+        ],
         "off_grid": [ln["num"] for ln in present if ln["off_grid"]],
         "answered": len(answered),
         # Seeded rows that hold NO evidence — subtracted over ROWS, not `seeded - answered`: an
@@ -5128,7 +5132,9 @@ def insert_decision(ns: str, row: dict) -> str:
     raise SystemExit(f"insert decision failed ({st}): {body}")
 
 
-def finalize_decision(ns: str, did: str, status: str, scope: str = DEFAULT_SCOPE) -> None:
+def finalize_decision(
+    ns: str, did: str, status: str, scope: str = DEFAULT_SCOPE
+) -> None:
     """Set a provisional decision's FINAL status without inventing a scope.
 
     AUG-009's contract covers this UPDATE too, and the two substrates force two different shapes:
@@ -5927,7 +5933,9 @@ def cmd_answer(a):
     # a REFUSED advance is not silent — one WARNING line names the domain, the row id and the
     # substrate's own error, and the drift note names the row left behind on the next render.
     if advance["reached"]:
-        print(f"  domain     {row['domain']} -> {advance['reached']} (seed status retired)")
+        print(
+            f"  domain     {row['domain']} -> {advance['reached']} (seed status retired)"
+        )
     if advance["warning"]:
         print(f"  {advance['warning']}")
     # The walk's own report (AUG-027): `impact["lines"]` carries one line per member the pass
@@ -6187,9 +6195,17 @@ def cmd_status(a):
             f"\ndomain grid coverage ({cov['grid']} in the grid | {cov['seeded']} seeded | "
             f"{len(cov['absent'])} absent):"
         )
+        # AUG-114: the parenthetical must describe the counter, and the counter is
+        # `not_reached` — seeded, on-grid rows whose num NO decision or question carries. It
+        # said "(no such row)", which is the ABSENT claim (`absent`, printed in the header
+        # above): a run with 44 seeded rows printed "44 seeded | 0 absent" on one line and
+        # "NOT-REACHED 44 (no such row)" on the next. The gloss now names what the counter
+        # names — a row that IS stored ("seeded") and holds no evidence — so the summary
+        # agrees with the per-domain lines below it and with the drift line beneath them.
         print(
             f"  answered {cov['answered']} (a decision or question row carries the num) | "
-            f"NOT-REACHED {cov['not_reached']} (no such row)"
+            f"NOT-REACHED {cov['not_reached']} "
+            "(a seeded row with no decision or question row carrying the num)"
         )
     for ln in cov["lines"]:
         print(domain_line(ln))
@@ -6694,7 +6710,9 @@ def render_export_nasa(ns: str, project_id: str | None = None) -> str:
 
     options_by_decision: dict[str, list[dict]] = {}
     for opt in options:
-        options_by_decision.setdefault(str(opt.get("decision_id") or ""), []).append(opt)
+        options_by_decision.setdefault(str(opt.get("decision_id") or ""), []).append(
+            opt
+        )
     verdicts_by_target: dict[str, list[dict]] = {}
     for verdict in verdicts:
         for key in ("decision_id", "target_id", "subject_id"):
@@ -6709,8 +6727,14 @@ def render_export_nasa(ns: str, project_id: str | None = None) -> str:
         did = str(decision.get("id") or "(missing id)")
         opts = options_by_decision.get(did, [])
         chosen = str(decision.get("chosen") or "")
-        label = next((str(o.get("label")) for o in opts
-                      if str(o.get("id")) == chosen or str(o.get("label")) == chosen), chosen)
+        label = next(
+            (
+                str(o.get("label"))
+                for o in opts
+                if str(o.get("id")) == chosen or str(o.get("label")) == chosen
+            ),
+            chosen,
+        )
         judged = verdicts_by_target.get(did, [])
         # D = demonstration (an independent judgement observed the configuration);
         # I = inspection (the record itself is the evidence). Never claim T without a test row.
@@ -6733,7 +6757,9 @@ def render_export_nasa(ns: str, project_id: str | None = None) -> str:
                 lines.append(f"  - {opt.get('id')} {opt.get('label')} [{mark}]{brk}")
         for verdict in judged:
             reason = verdict.get("reasons") or verdict.get("reason") or ""
-            lines.append(f"- verified by: {verdict.get('id')} score={verdict.get('score')} {reason}".rstrip())
+            lines.append(
+                f"- verified by: {verdict.get('id')} score={verdict.get('score')} {reason}".rstrip()
+            )
 
     lines += ["", f"## Unresolved — TBD register ({len(unknowns)})"]
     if not unknowns:
