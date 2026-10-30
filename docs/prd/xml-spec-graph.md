@@ -1,7 +1,7 @@
 # PRD: Auger XML Spec Graph — author once, select precisely, verify the whole chain
 
 **Project:** Auger (`coding-hermes/auger`) · **Status:** proposed · **Effort:** L
-**Board work:** `AUG-118`, `AUG-119`, `AUG-120` · GitReins integration: `GR-154`
+**Board work:** `AUG-118`–`AUG-124` · GitReins integration: `GR-154`, `GR-155`
 **Primary source:** Oct 15 discussion on XML specs; follow-up clarification that the target is Auger, not the SpecLang suite.
 **Traceability doctrine:** `docs/traceability-doctrine.md` in GitReins and the `coding-hermes-traceability` skill.
 
@@ -19,11 +19,13 @@ The October 15 discussion established these needs:
 - A tool should retrieve only the relevant sections across several spec files, not read a large Markdown corpus to find them.
 - PRD statements, spec requirements, acceptance criteria, implementation, and verification should be linked and auditable.
 
-The later Auger clarification adds two connected integrations: approved Auger plans should create/manage canonical tasks through boardctl, and GitReins should optionally check staged changes against the assembled specs and `ch:trace` rules. This PRD treats them as integration edges of the same traceable lifecycle, not as a second task database or a new GitReins backend.
+The later Auger clarification adds connected integrations: approved Auger plans should create/manage canonical tasks through boardctl, and GitReins should optionally check staged changes against the assembled specs and `ch:trace` rules. The owner’s follow-up further requires task packets to name exact in-scope and out-of-scope spec blocks, and requires GitReins to evaluate the canonical board task and its spec/test bundle—not trust the worker’s self-report. Verification and test obligations must be structured spec nodes too; for example, a database migration requirement must bring its migration-file test into the selected context. This PRD treats these as integration edges of the same traceable lifecycle, not as a second task database or a new GitReins backend.
 
 ## Current state and measured problem
 
-**Live repository:** `~/auger`, remote `git@github.com:coding-hermes/auger.git`, `main` at `89637db` when measured. The board had 211 rows; `AUG-118`, `AUG-119`, and `AUG-120` are pending P1 work. GitReins has `docs/traceability-doctrine.md`; its paired task is `GR-154`.
+**Baseline (original PRD measurement):** the live repository was `~/auger`, remote `git@github.com:coding-hermes/auger.git`, `main` at `89637db`; the board had 211 rows and `AUG-118`, `AUG-119`, and `AUG-120` were pending P1 work. GitReins already carried `docs/traceability-doctrine.md` and paired task `GR-154`. This is the preserved baseline, not a claim about current totals.
+
+**Current follow-up (2026-10-30):** `boardctl stats --json` reports 214 Auger rows. `AUG-118` through `AUG-124` are now pending feature tasks; GitReins `GR-154` and `GR-155` are pending. These are task filings and a PRD extension only; no implementation is claimed.
 
 **Auger does not yet provide the requested XML spec graph.** The `auger export` and `auger export --profile nasa` paths render Markdown from DuckBrain tables. They do not parse XML specs, select XML attributes, resolve cross-document inclusions, or expose a staged-diff spec-alignment interface. Auger’s current design document (`docs/DESIGN.md`) describes its DuckBrain decision registers and Markdown export; it is not an XML requirements language.
 
@@ -120,6 +122,16 @@ When enabled, the hook passes the staged diff and repository/spec root to Auger�
 
 Deterministic checks (schema, references, missing trace fields, unresolved evidence IDs) may block when configured. Semantic claims such as “this code contradicts the requirement” must include evidence and a calibrated uncertainty outcome; the check must not invent missing rationale or auto-edit code/spec text. Define timeout, missing Auger binary, and checker error behavior explicitly for each mode. Reuse GitReins’ existing review/evaluator path rather than adding another LLM provider or judge service.
 
+### 6. Task scope, test obligations, and judge packet
+
+Treat each work item as either a small spec itself or a reference-bearing task packet. The packet names the exact active/inactive XML IDs in scope, the IDs explicitly out of scope plus why they are excluded, and the source document/version/digest. Its board acceptance criteria remain the canonical executable contract. A broad parent spec is not a substitute for the task’s own bounded scope.
+
+Verification obligations are first-class graph nodes linked to the requirement they prove. Each node carries a stable ID, lifecycle/version, method/type, target artifact or code surface, tracked test reference (path and test name) or manual procedure, runner/selector metadata, fixture/precondition, expected assertion/result, and evidence form. The node describes what to run; consumers invoke the repository’s configured test harness or an explicitly supported test selector. XML never supplies an arbitrary shell string for the judge to execute. Selecting a requirement returns its linked test/verification obligations and declared graph closure in the same minimal bundle; it must not return unrelated tests or silently omit inactive/stale obligations.
+
+For a database migration requirement, the graph must identify the migration file and a test that starts from the supported prior schema, applies that file against an isolated database, and asserts the resulting schema/data invariants. If rollback is supported, the obligation includes the rollback path and its assertions; if it is not supported, that fact and rationale are explicit. A passing package suite, an agent’s “tests passed” summary, or a test that never loads the named migration file does not satisfy this obligation.
+
+The Auger→GitReins bridge builds an immutable judge packet from the canonical boardctl row plus Auger’s assembled in-scope/out-of-scope spec, trace, and test nodes. It carries the board-row ID (or a recorded collision-safe mapping), board acceptance criteria verbatim, source revisions/digests, and an exact test plan. It validates `ch:trace` before creating/starting the GitReins evaluation. The GitReins judge independently reads the packet and grades the committed tree, actual tests, and resolved spec links; it never treats `worker_summary`, commit prose, or a missing artifact as proof. GitReins reuses its existing task lifecycle, Tier 1 gates, Tier 2 evaluator, and verdict storage; it does not implement a second XML parser or judge backend.
+
 ## Core loops and closure rules
 
 1. **Authoring loop:** edit XML → validate schema/IDs/edges → run focused assembly → review rendered view. Closed when validation passes, references resolve, and generated views are reproducible. A recurrence becomes a validator regression test.
@@ -153,6 +165,9 @@ Every finding names the class, rule, source and target IDs, evidence, and the re
 - **R11 — Staged-change checker:** The Auger checker shall accept staged diff + repository/spec root, return machine-readable findings with source evidence, and shall not mutate code, XML, or board state.
 - **R12 — GitReins integration:** GitReins shall expose an opt-in, bounded spec-alignment guard that reuses the Auger checker and GitReins’ existing policy/evaluator; disabled behavior shall remain unchanged.
 - **R13 — Semantic honesty:** Semantic contradiction findings shall include evidence and uncertainty; no checker shall fabricate a rationale, claim verification from metadata alone, or auto-edit source text.
+- **R14 — Scoped task packet:** Every task exported to boardctl shall be an exact mini-spec or carry stable XML references for in-scope and explicitly out-of-scope blocks, with exclusion reasons, lifecycle state, source version/digest, acceptance criteria, and `ch:trace` anchors.
+- **R15 — Structured verification obligations:** Requirements shall link to typed test/verification nodes containing target artifact, method, tracked test reference (path/name) or manual procedure, runner/selector, fixture/precondition, expected assertion, and evidence form. Consumers use the repository’s configured test harness; XML cannot provide arbitrary shell text to execute. A migration requirement shall require a tracked test that applies the named migration file from a supported prior schema and asserts the resulting schema/data; rollback is tested when declared supported.
+- **R16 — Boardctl-sourced GitReins judgment:** GitReins shall consume the canonical boardctl task and Auger-assembled scoped spec/test packet, validate `ch:trace` before evaluation, and judge the actual committed tree/tests independently of worker self-report. It shall preserve the board ID or record an explicit mapping and reuse existing GitReins evaluation surfaces.
 
 ## Acceptance criteria
 
@@ -171,8 +186,13 @@ Every finding names the class, rule, source and target IDs, evidence, and the re
 - **AC-13 (T):** Given a source comment/docs file in the wrong spec section or contradicting its selected requirement, when semantic review is enabled, then the finding includes both source locations, evidence excerpt/digest, and uncertainty; no code or text is auto-edited; proof: paired positive/negative fixtures and unchanged-tree hash check.
 - **AC-14 (C):** Given a representative Auger project selector, when `auger spec assemble` runs, then it reports selected-block count, dependency count, input bytes, output bytes, and elapsed time; proof: checked-in benchmark fixture produces a JSON report and reads no unselected document bodies beyond the index needed for selection.
 - **AC-15 (M):** Given the feature complete, when an external reviewer follows a sample `ch:trace` from requirement through board row, code, test, verdict and commit, then every link resolves and the verdict is reachable from the published tip; proof: sample end-to-end trace artifact in `docs/prd/evidence/`.
+- **AC-16 (T):** Given a task packet containing in-scope and out-of-scope XML references across multiple files, active and inactive blocks, and unrelated decoys, when Auger assembles the task context, then it returns only the task, in-scope blocks and required graph closure, plus the explicit out-of-scope IDs/reasons; each returned block includes source ID, file, version, and status; proof: `tests/test_task_context.py::test_scope_and_exclusions_are_explicit`.
+- **AC-17 (T):** Given a requirement linked to a database migration verification node, when Auger assembles the requirement, then the same bundle includes the exact migration path, supported prior-schema fixture, tracked test path/name, runner/selector metadata, expected schema/data assertions, and rollback test obligation when rollback is declared supported; proof: a fixture whose test actually applies the named migration file and fails when that file is replaced by a no-op.
+- **AC-18 (T):** Given an approved boardctl task and its XML task/test references, when Auger creates the GitReins packet, then the packet preserves the board acceptance criteria verbatim, in/out-of-scope refs, exact test obligations, board ID or explicit ID mapping, and source digests; read-back equals the approved input and repeated export is idempotent; proof: an isolated boardctl/GitReins fixture with byte/digest comparison.
+- **AC-19 (T):** Given a missing, stale, ambiguous, or out-of-scope `ch:trace` reference, when the boardctl→GitReins handoff is requested, then no GitReins judge starts and the result names the invalid row/spec/test IDs; a valid trace starts the existing GitReins lifecycle with the same board acceptance criteria; proof: paired negative/positive integration tests asserting the judge invocation count.
+- **AC-20 (T):** Given a worker summary that claims a test passed while the required migration test is absent or fails on the committed tree, when GitReins evaluates the task packet, then the verdict is not PASS and cites the missing/failed test obligation; proof: a judge-context integration fixture with a deliberately false worker summary and a red migration test.
 
-**Requirement-to-acceptance coverage:** R1→AC-2, AC-5; R2→AC-1, AC-2; R3→AC-1, AC-3; R4→AC-1, AC-2, AC-3, AC-5; R5→AC-3, AC-14; R6→AC-4, AC-5; R7→AC-2; R8→AC-6, AC-7; R9→AC-6, AC-7; R10→AC-8, AC-9, AC-15; R11→AC-8, AC-9; R12→AC-10, AC-11, AC-12; R13→AC-12, AC-13.
+**Requirement-to-acceptance coverage:** R1→AC-2, AC-5; R2→AC-1, AC-2; R3→AC-1, AC-3; R4→AC-1, AC-2, AC-3, AC-5; R5→AC-3, AC-14, AC-16; R6→AC-4, AC-5; R7→AC-2; R8→AC-6, AC-7; R9→AC-6, AC-7, AC-18; R10→AC-8, AC-9, AC-15, AC-16, AC-19; R11→AC-8, AC-9; R12→AC-10, AC-11, AC-12, AC-18, AC-19, AC-20; R13→AC-12, AC-13, AC-20; R14→AC-16, AC-18, AC-19; R15→AC-17, AC-20; R16→AC-18, AC-19, AC-20.
 
 ## Success criteria — replayable proofs
 
@@ -180,14 +200,16 @@ Every finding names the class, rule, source and target IDs, evidence, and the re
 - Replay a shared-block change: one XML source edit updates every generated spec view; the test proves no duplicate source text is maintained.
 - Replay an intentionally missing `ch:trace row=` in a staged fixture: the checker names the missing field and correct source location; GitReins blocks only when configured `block`.
 - Replay a valid, approved plan: boardctl writes exactly one canonical row per approved task and the read-back proves the criteria and spec links survived.
+- Replay a database-migration requirement: one targeted query returns the named migration file, supported prior-schema fixture, apply test, expected schema/data assertions, and rollback test when supported; replace that migration with a no-op and prove the required test fails.
+- Replay a false worker claim: the task packet is built from the canonical boardctl row and XML test obligation, the worker summary is excluded from judge authority, and an absent or failing named test cannot produce an integration-level PASS.
 - Report current `docs/` corpus size, selected-bundle size, and lookup latency from the same reproducible fixture. Target: selected bundle excludes unrelated blocks and is materially smaller than full-corpus input; do not claim savings without reporting actual measured bytes.
 - Demonstrate disabled GitReins flag behavior is unchanged and the enabled path creates no unbounded or orphan process.
 
 ## Scope
 
-**In scope:** XML schema/versioning; stable IDs and metadata; modular block references; attribute selectors; deterministic cross-file assembly; generated Markdown view; verification/trace relationship model; boardctl plan export after explicit approval; read-only staged-diff checker; opt-in GitReins flag and policy; skills/playbook, docs, fixtures, CI tests, and traceability evidence.
+**In scope:** XML schema/versioning; stable IDs and metadata; modular block references; attribute selectors; deterministic cross-file assembly; generated Markdown view; verification/test obligation graph; task-level in/out-of-scope bundles; boardctl plan export after explicit approval; boardctl-sourced GitReins judge packets; read-only staged-diff checker; opt-in GitReins flag and policy; skills/playbook, docs, fixtures, CI tests, and traceability evidence.
 
-**Out of scope:** replacing DuckBrain as Auger’s decision store; replacing boardctl or the scheduler; automatic task dispatch or completion; silently mutating specs/code to “fix” a finding; arbitrary URL/entity expansion; mandatory GitReins enablement in all repositories; migrating every existing Markdown doc in one wave; a second LLM evaluator/backend; treating an unverified claim as a passing verdict.
+**Out of scope:** replacing DuckBrain as Auger’s decision store; replacing boardctl or the scheduler; automatic task dispatch or completion; silently mutating specs/code to “fix” a finding; arbitrary URL/entity expansion; mandatory GitReins enablement in all repositories; migrating every existing Markdown doc in one wave; a second LLM evaluator/backend; treating an unverified claim as a passing verdict; accepting worker summaries as judge evidence.
 
 ## Boundaries and source authority
 
@@ -201,10 +223,13 @@ Every finding names the class, rule, source and target IDs, evidence, and the re
 
 ## Proposed sequencing and owners
 
-1. **AUG-118 — XML spec graph and selection.** Agree the smallest schema, IDs, references, selectors, and rendering contract; then implement validator/assembler and fixtures.
-2. **AUG-120 — Auger spec-alignment interface.** Build after the XML graph contract is stable; provide deterministic JSON, `ch:trace` rules, and staged-diff fixtures.
-3. **AUG-119 — approved boardctl plan lifecycle.** Implement with digest-bound approval, boardctl-only writes, idempotency, and read-back. This can proceed alongside schema work after task/spec ID mapping is agreed.
-4. **GR-154 — GitReins hook flag.** Implement against AUG-120’s published interface; preserve disabled behavior, bound runtime, test warn/block and infrastructure failures.
+1. **AUG-118 — XML source graph and selection foundation.** Agree the smallest schema, stable IDs, references, selectors, and rendering contract; then implement validator/assembler and fixtures.
+2. **AUG-121/AUG-122 — scoped task contracts and one-pass context retrieval.** Encode in/out-of-scope IDs and provide the minimal task/code-to-spec bundle with active state and provenance.
+3. **AUG-123 — structured verification/test obligations.** Extend the schema/selection graph with typed verification and test nodes, including the migration-file apply-test contract; no arbitrary XML shell execution.
+4. **AUG-119/AUG-120 — boardctl lifecycle and staged-change checker.** Require digest-bound approval for board writes and provide deterministic JSON plus `ch:trace`/staged-diff checks.
+5. **AUG-124 — boardctl-to-GitReins packet.** Depends on AUG-119, AUG-120, AUG-121, AUG-122, and AUG-123; package the canonical row plus exact scope, `ch:trace`, and test bundle, and refuse judge handoff until references resolve.
+6. **GR-154 — GitReins pre-commit flag.** Implement against AUG-120’s published checker interface; preserve disabled behavior, bound runtime, and test warn/block/infrastructure outcomes.
+7. **GR-155 — independent GitReins judge intake.** Depends on GR-154 and consumes AUG-124’s packet through the existing GitReins task/judge lifecycle; grade the real tree/tests, not worker self-report. It is distinct from GR-154’s pre-commit flag/checker invocation.
 
 Cross-repo acceptance must be evaluated against the exact Auger checker version and GitReins commit. The `ch:trace` graph itself requires row → spec → wave → test → evidence → witness → verdict → commit → memory, with all eleven marker fields present or explicitly absent by reason.
 
