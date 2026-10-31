@@ -51,6 +51,7 @@ import math
 import os
 import re
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import time
@@ -7705,8 +7706,11 @@ def cmd_api(a):
 # Additive by construction: nothing here is reachable from `export`/`render_export`, so the Markdown
 # export contract is byte-identical to before — tests/test_xml_specs.py pins that with a golden.
 # ch:trace row=AUG-118 spec=docs/SPEC-003-xml-specs.md#assembly-and-selection
+# ch:trace row=AUG-123 spec=docs/prd/xml-spec-graph.md#R15 test=tests/test_verification_graph.py doc=docs/XML-SPEC-SCHEMA.md
 
-SPEC_SCHEMA_VERSION = "1.0"  # the version this code emits; SPEC_SCHEMA_VERSIONS is what it accepts
+SPEC_SCHEMA_VERSION = (
+    "1.0"  # the version this code emits; SPEC_SCHEMA_VERSIONS is what it accepts
+)
 SPEC_SCHEMA_VERSIONS = ("1.0",)
 SPEC_XML_NAMESPACE = "urn:auger:spec:1"
 SPEC_BLOCK_KINDS = ("section", "requirement", "acceptance", "verification")
@@ -7790,7 +7794,10 @@ def _spec_read_document(path: Path, root: Path):
             f"{rel}: schema-version {found} "
             f"(supported: {', '.join(SPEC_SCHEMA_VERSIONS)})",
         )
-    if not (element.get("id") or "").strip() or not (element.get("version") or "").strip():
+    if (
+        not (element.get("id") or "").strip()
+        or not (element.get("version") or "").strip()
+    ):
         raise SpecError(
             "missing-document-metadata", f"{rel}: <spec> requires id and version"
         )
@@ -7816,7 +7823,9 @@ def _spec_include_target(element, rel: str, root: Path) -> str:
             "include-outside-root", f"{rel}: include src {src!r} escapes {root}"
         ) from None
     if not target.is_file():
-        raise SpecError("unresolved-include", f"{rel}: include src {src!r} is not a file")
+        raise SpecError(
+            "unresolved-include", f"{rel}: include src {src!r} is not a file"
+        )
     return target_rel
 
 
@@ -7924,8 +7933,15 @@ def _spec_block(element, rel: str, order: int) -> dict:
     }
 
 
-def _spec_collect(element, rel: str, root: Path, documents: dict, stack: list,
-                  out: list, spliced: dict) -> None:
+def _spec_collect(
+    element,
+    rel: str,
+    root: Path,
+    documents: dict,
+    stack: list,
+    out: list,
+    spliced: dict,
+) -> None:
     """Walk a document in order, splicing included fragments at their <include> site.
 
     A fragment may be spliced at exactly ONE site in a corpus: reuse across documents is by
@@ -7937,7 +7953,9 @@ def _spec_collect(element, rel: str, root: Path, documents: dict, stack: list,
         if local == "include":
             target = _spec_include_target(child, rel, root)
             if target not in documents:
-                raise SpecError("unresolved-include", f"{rel}: {target} was not indexed")
+                raise SpecError(
+                    "unresolved-include", f"{rel}: {target} was not indexed"
+                )
             origin = spliced.get(target)
             if origin is not None:
                 raise SpecError(
@@ -7947,7 +7965,13 @@ def _spec_collect(element, rel: str, root: Path, documents: dict, stack: list,
                 )
             spliced[target] = rel
             _spec_collect(
-                documents[target], target, root, documents, stack + [target], out, spliced
+                documents[target],
+                target,
+                root,
+                documents,
+                stack + [target],
+                out,
+                spliced,
             )
             continue
         if local not in SPEC_BLOCK_KINDS:
@@ -8001,10 +8025,17 @@ def _spec_validate_blocks(blocks: list) -> dict:
     for block in blocks:
         previous = by_id.get(block["id"])
         if previous is not None:
+            owners = [
+                candidate["id"]
+                for candidate in blocks
+                if candidate["kind"] == "requirement"
+                and block["id"] in candidate["refs"].get("verifies", ())
+            ]
+            owner_detail = f"; referenced by {', '.join(owners)}" if owners else ""
             raise SpecError(
                 "duplicate-id",
                 f"{block['id']} declared in {previous['source_file']} "
-                f"and {block['source_file']}",
+                f"and {block['source_file']}{owner_detail}",
             )
         by_id[block["id"]] = block
     for block in blocks:
@@ -8021,12 +8052,18 @@ def _spec_validate_blocks(blocks: list) -> dict:
                         "reference-cycle",
                         f"{block['id']} {attribute}={target} (self reference)",
                     )
-                if attribute == "verifies" and found["kind"] != "requirement":
-                    raise SpecError(
-                        "invalid-reference-type",
-                        f"{block['id']} verifies={target} but {target} is a "
-                        f"{found['kind']}",
+                if attribute == "verifies":
+                    valid_target = (
+                        found["kind"] == "requirement"
+                        if block["kind"] != "requirement"
+                        else found["kind"] in {"verification", "test"}
                     )
+                    if not valid_target:
+                        raise SpecError(
+                            "invalid-reference-type",
+                            f"{block['id']} verifies={target} but {target} is a "
+                            f"{found['kind']}",
+                        )
     _spec_refuse_reference_cycles(by_id)
     return by_id
 
@@ -8091,8 +8128,16 @@ def _spec_matches(block: dict, ids, kinds, applies_to, statuses, versions) -> bo
     return True
 
 
-def select_spec_blocks(blocks: list, *, ids=(), kinds=(), applies_to=(), statuses=(),
-                       versions=(), closure: bool = True) -> tuple:
+def select_spec_blocks(
+    blocks: list,
+    *,
+    ids=(),
+    kinds=(),
+    applies_to=(),
+    statuses=(),
+    versions=(),
+    closure: bool = True,
+) -> tuple:
     """Select by id/attributes and expand ONLY the explicit dependency closure.
 
     Closure edges: forward `depends-on`, plus INVERSE `verifies` (a block that declares it verifies
@@ -8146,9 +8191,13 @@ def select_spec_blocks(blocks: list, *, ids=(), kinds=(), applies_to=(), statuse
     return selection, records
 
 
-def render_spec_assembly(records: list, *, selection: str,
-                         fmt: str = "markdown",
-                         schema_version: str = SPEC_SCHEMA_VERSION) -> str:
+def render_spec_assembly(
+    records: list,
+    *,
+    selection: str,
+    fmt: str = "markdown",
+    schema_version: str = SPEC_SCHEMA_VERSION,
+) -> str:
     """Render a selected bundle. Deterministic: same inputs, byte-identical output."""
     matched = sum(1 for record in records if record["why"] == "matched")
     counts = {
@@ -8205,7 +8254,9 @@ def render_spec_assembly(records: list, *, selection: str,
         if block["applies_to"]:
             lines.append(f"- applies-to: {' '.join(block['applies_to'])}")
         if block["method"]:
-            label = "verification" if block["kind"] in SPEC_REQUIRES_METHOD else "method"
+            label = (
+                "verification" if block["kind"] in SPEC_REQUIRES_METHOD else "method"
+            )
             lines.append(f"- {label}: {block['method']}")
         for attribute in SPEC_EDGE_ATTRS:
             targets = block["refs"].get(attribute)
@@ -8298,7 +8349,10 @@ def _add_spec_selectors(parser) -> None:
         "--id", action="append", metavar="BLOCK-ID", help="select this exact block id"
     )
     parser.add_argument(
-        "--kind", action="append", choices=SPEC_BLOCK_KINDS, help="select this block kind"
+        "--kind",
+        action="append",
+        choices=SPEC_BLOCK_KINDS,
+        help="select this block kind",
     )
     parser.add_argument(
         "--applies-to",
@@ -8318,7 +8372,6 @@ def _add_spec_selectors(parser) -> None:
         metavar="X.Y.Z",
         help="select this block version attribute",
     )
-
 
 
 # ---------------------------------------------------------------- XML spec graph (AUG-118/AUG-123)
@@ -8400,6 +8453,23 @@ def validate_xml_specs(spec_root):
             resolved = (repository_root / test_path).resolve()
             if not resolved.is_relative_to(repository_root) or not resolved.is_file():
                 raise SpecValidationError(f"stale-test-ref: {node_id}: {test_path}")
+            relative_test_path = resolved.relative_to(repository_root).as_posix()
+            tracked = subprocess.run(
+                [
+                    "git",
+                    "-C",
+                    str(repository_root),
+                    "ls-files",
+                    "--error-unmatch",
+                    "--",
+                    relative_test_path,
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if tracked.returncode != 0 or tracked.stdout.strip() != relative_test_path:
+                raise SpecValidationError(f"untracked-test-ref: {node_id}: {test_path}")
             try:
                 tree = ast.parse(
                     resolved.read_text(encoding="utf-8"), filename=str(resolved)
@@ -8844,7 +8914,9 @@ def main(argv=None):
         help="emit only the matched blocks (no depends-on/verifies closure)",
     )
     asm.add_argument(
-        "--format", choices=("markdown", "json"), default="markdown",
+        "--format",
+        choices=("markdown", "json"),
+        default="markdown",
         help="output format (default markdown)",
     )
     asm.add_argument(
