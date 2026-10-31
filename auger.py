@@ -7691,6 +7691,166 @@ def cmd_api(a):
     return serve(a.host, a.port)
 
 
+# ---------------------------------------------------------------- XML spec graph (AUG-118/AUG-123)
+
+
+class SpecValidationError(ValueError):
+    """A typed XML specification graph integrity failure."""
+
+
+SPEC_RUNNERS = {"pytest": (sys.executable, "-m", "pytest")}
+SPEC_BLOCK_TAGS = {"requirement", "verification", "test"}
+
+
+def _xml_spec_documents(spec_root):
+    from pathlib import Path
+    from xml.etree import ElementTree as ET
+
+    root = Path(spec_root).resolve()
+    if not root.is_dir():
+        raise SpecValidationError(f"missing-spec-root: {root}")
+    documents = []
+    for path in sorted(root.rglob("*.xml")):
+        try:
+            document = ET.parse(path).getroot()
+        except (ET.ParseError, OSError) as exc:
+            raise SpecValidationError(f"invalid-xml: {path}: {exc}") from exc
+        if document.tag != "spec":
+            raise SpecValidationError(f"invalid-root: {path}: expected <spec>")
+        documents.append((path, document))
+    return root, documents
+
+
+def validate_xml_specs(spec_root):
+    """Validate graph IDs, typed links and tracked test references under a spec root."""
+    import ast
+    from pathlib import Path
+
+    root, documents = _xml_spec_documents(spec_root)
+    repository_root = Path(__file__).resolve().parent
+    nodes = {}
+    for _, document in documents:
+        for node in document.iter():
+            if node.tag not in SPEC_BLOCK_TAGS:
+                continue
+            node_id = node.get("id")
+            if not node_id:
+                raise SpecValidationError(f"missing-id: <{node.tag}>")
+            if node_id in nodes:
+                raise SpecValidationError(f"duplicate-id: {node_id}")
+            nodes[node_id] = node
+    for node_id, node in nodes.items():
+        if node.tag == "requirement":
+            refs = node.get("verifies", "").split()
+            refs.extend(
+                child.get("ref", "") for child in node.findall("verification-ref")
+            )
+            if not refs:
+                raise SpecValidationError(f"missing-verification-ref: {node_id}")
+            for ref in refs:
+                if ref not in nodes:
+                    raise SpecValidationError(f"dangling-test-ref: {node_id} -> {ref}")
+                if nodes[ref].tag not in {"verification", "test"}:
+                    raise SpecValidationError(f"wrong-ref-type: {node_id} -> {ref}")
+        if node.tag not in {"verification", "test"}:
+            continue
+        target = node.get("verifies")
+        if target and (target not in nodes or nodes[target].tag != "requirement"):
+            raise SpecValidationError(
+                f"dangling-requirement-ref: {node_id} -> {target}"
+            )
+        if node.get("type", "test") not in {"test", "manual", "analysis", "inspection"}:
+            raise SpecValidationError(f"invalid-verification-type: {node_id}")
+        if node.tag == "test" or node.get("type") == "test":
+            runner = node.get("runner", "")
+            selector = node.get("selector", "")
+            test_path = node.get("path", "")
+            if runner not in SPEC_RUNNERS or not selector or not test_path:
+                raise SpecValidationError(f"invalid-test-ref: {node_id}")
+            resolved = (repository_root / test_path).resolve()
+            if not resolved.is_relative_to(repository_root) or not resolved.is_file():
+                raise SpecValidationError(f"stale-test-ref: {node_id}: {test_path}")
+            try:
+                tree = ast.parse(
+                    resolved.read_text(encoding="utf-8"), filename=str(resolved)
+                )
+            except (SyntaxError, OSError) as exc:
+                raise SpecValidationError(f"stale-test-ref: {node_id}: {exc}") from exc
+            if not any(
+                isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and item.name == selector
+                for item in ast.walk(tree)
+            ):
+                raise SpecValidationError(
+                    f"stale-test-ref: {node_id}: selector {selector}"
+                )
+            migration = node.get("migration")
+            if migration:
+                migration_path = (repository_root / migration).resolve()
+                if (
+                    not migration_path.is_relative_to(repository_root)
+                    or not migration_path.is_file()
+                ):
+                    raise SpecValidationError(
+                        f"stale-migration-ref: {node_id}: {migration}"
+                    )
+                fixture = node.get("fixture", "")
+                fixture_path = (repository_root / fixture).resolve()
+                if (
+                    not fixture_path.is_relative_to(repository_root)
+                    or not fixture_path.is_file()
+                ):
+                    raise SpecValidationError(
+                        f"stale-fixture-ref: {node_id}: {fixture}"
+                    )
+                if not node.get("assertions", "").strip():
+                    raise SpecValidationError(
+                        f"incomplete-migration-obligation: {node_id}"
+                    )
+    return nodes
+
+
+def assemble_xml_requirement(spec_root, requirement_id):
+    """Return the requirement and its linked verification obligations as data only."""
+    nodes = validate_xml_specs(spec_root)
+    requirement = nodes.get(requirement_id)
+    if requirement is None or requirement.tag != "requirement":
+        raise SpecValidationError(f"unknown-requirement: {requirement_id}")
+    refs = requirement.get("verifies", "").split()
+    refs.extend(
+        child.get("ref", "") for child in requirement.findall("verification-ref")
+    )
+    obligations = []
+    for ref in dict.fromkeys(refs):
+        node = nodes[ref]
+        runner = node.get("runner")
+        obligations.append(
+            {
+                "id": ref,
+                "type": node.get("type", "test"),
+                "path": node.get("path"),
+                "selector": node.get("selector"),
+                "runner": list(SPEC_RUNNERS[runner]) if runner else None,
+                "fixture": node.get("fixture"),
+                "migration": node.get("migration"),
+                "assertions": node.get("assertions"),
+            }
+        )
+    return {"id": requirement_id, "verifications": obligations}
+
+
+def cmd_spec_validate(args):
+    nodes = validate_xml_specs(args.root)
+    print(json.dumps({"status": "valid", "nodes": sorted(nodes)}, sort_keys=True))
+    return 0
+
+
+def cmd_spec_assemble(args):
+    bundle = assemble_xml_requirement(args.root, args.requirement)
+    print(json.dumps(bundle, sort_keys=True, separators=(",", ":")))
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="auger", description="spec drilling backed by DuckBrain"
@@ -8019,6 +8179,20 @@ def main(argv=None):
     r.add_argument("--costs", help="what choosing this option costs")
     r.add_argument("--breaks", help="what choosing this option breaks")
     r.set_defaults(fn=cmd_record_option)
+
+    s = sub.add_parser("spec", help="validate and assemble typed XML spec graphs")
+    spec_sub = s.add_subparsers(dest="spec_cmd", required=True)
+    spec_validate = spec_sub.add_parser(
+        "validate", help="validate XML IDs and test references"
+    )
+    spec_validate.add_argument("root", help="repository spec directory")
+    spec_validate.set_defaults(fn=cmd_spec_validate)
+    spec_assemble = spec_sub.add_parser(
+        "assemble", help="assemble a requirement and its obligations"
+    )
+    spec_assemble.add_argument("root", help="repository spec directory")
+    spec_assemble.add_argument("requirement", help="stable requirement ID")
+    spec_assemble.set_defaults(fn=cmd_spec_assemble)
 
     a = ap.parse_args(argv)
     return a.fn(a)
