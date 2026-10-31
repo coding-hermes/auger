@@ -47,7 +47,7 @@ The canonical local consumer uses the generated spec at the repository's absolut
 
 An operation is read-only only if it does not write DuckBrain rows, namespace declarations, embedded memories, or local files. Calls to JEV or an embedding provider can incur external cost; they are read-only with respect to auger's records, but the API/MCP descriptions must disclose the external call and failure behavior. `dump --out` is excluded from HTTP because it writes a local file.
 
-Classification of all 17 top-level CLI verbs (including subcommands/flags):
+Classification of all 18 top-level CLI verbs (including subcommands/flags):
 
 | Verb | Classification | Reason / MCP treatment |
 |---|---|---|
@@ -67,6 +67,7 @@ Classification of all 17 top-level CLI verbs (including subcommands/flags):
 | `serve` | Read-only | Existing embedding search and health/status routes; no row writes. Keep distinct from the new API. |
 | `verdict` | Mixed | `--list` is read-only; recording a supplied or JEV-derived verdict writes a verdict row. Expose list only initially; gate all record forms. |
 | `record` | Mutating | Every subcommand writes a register row; gated. |
+| `plan` | Mutating (local ledger + canonical board) | `draft`/`approve`/`reject` append to Auger's own append-only plan ledger; `export` writes canonical task rows through the boardctl CLI after a digest-bound approval. It is NOT exposed over HTTP/MCP: it mutates a second authority (the board) whose own writer is boardctl, so it stays a human-driven CLI. `show` and `reconcile --json` are read-only in effect (reconcile appends only to the local ledger). |
 
 The only agent-safe operations in the initial MCP surface are the read-only API operations above. The current API must have no MCP-visible write operation. When write operations are later considered, expose them through the MCP approval gate (human confirmation per invocation); never rely on an agent prompt, a tool description, or the fact that the service is local as the gate. Direct HTTP writes must also be absent until an independently enforced authorization/approval boundary exists. A future write-capable release is a new scope decision if the existing Muster approval contract cannot enforce this.
 

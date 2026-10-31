@@ -5,11 +5,11 @@ write. This is the contract — the verb names are public, and every argument li
 exists in the verb's `add_parser` definition in `auger.py`. If the code and this file
 disagree, the code wins and this file is a bug.
 
-The 17 top-level verbs — one `add_parser` registration each in `auger.py`, and the count here is
+The 18 top-level verbs — one `add_parser` registration each in `auger.py`, and the count here is
 the registry's own, not a hand-kept tally — in the order `auger --help` lists them:
 
 ```
-init  start  bundle  ask  answer  check  status  toggle  dump  export  propagate  feedback  recall  serve  api  verdict  record
+init  start  bundle  ask  answer  check  status  toggle  dump  export  propagate  feedback  recall  serve  api  verdict  record  plan
 ```
 
 Conventions every verb shares:
@@ -594,3 +594,63 @@ with an empty required field; an assumption without a falsifier; a `record optio
 neither `--costs` nor `--breaks`; a PATCH that changes nothing; anything in any other table —
 `record` never touches decisions, questions, edges, facets, or the `active` selection flags
 (a costs/breaks record is not a toggle).
+
+---
+
+## plan
+
+A DRAFT PLAN is Auger's own artifact, never board state: a versioned, digest-addressed bundle
+of tasks. The canonical board stays boardctl's, and the only path from a plan to the board is
+an **approval bound to the exact bytes** — the write boundary of AUG-119.
+
+- `auger plan draft --plan ID --from FILE`
+- `auger plan approve --plan ID [--digest SHA] --by WHO [--note TEXT]`
+- `auger plan reject --plan ID [--digest SHA] --by WHO --reason TEXT`
+- `auger plan export --plan ID [--board DIR] [--update] [--dry-run]`
+- `auger plan reconcile --plan ID [--board DIR] [--json]`
+- `auger plan show --plan ID [--json]`
+
+**Plan document** (`--from`, JSON): `{plan_id, project?, spec?, tasks:[...]}`, one task per
+board row — `id` (boardctl's own shape, `^[A-Z][A-Z0-9]+(-[A-Z0-9]+)+$`), `title`,
+`acceptance_criteria` (a string or a list of lines, required, never empty), `depends_on`,
+`priority` (default `P2`), `complexity` (default `2`), `capability_tags`, `spec_anchors`,
+`verification` (the expected verification evidence), and an optional `trace` object overriding
+any of the eleven trace fields. `draft` refuses an id boardctl would reject, a blank criterion,
+a duplicate task id, a self-dependency, a tag containing a comma, a blank trace value, a
+`none:` with no reason, and a task with neither `spec_anchors` nor an explicit
+`trace.spec: "none:<reason>"` — an absent link is stated, never left empty and never invented.
+
+**Ledger:** append-only JSONL at `--plans-dir`, `$AUGER_PLANS_DIR`, else `~/.auger/plans`,
+one file per plan id. Events: `draft` (immutable plan body + `sha256` digest over its canonical
+JSON), `approval` / `rejection` (a named person, a timestamp, the version and the digest), and
+`export` / `reconcile` records. Each `draft` appends the next version; an unchanged plan is
+reported `unchanged` and mints no version.
+
+**Approval boundary.** `export` refuses — before any boardctl call, so `tasks.jsonl` and
+`events.jsonl` stay byte-identical — when the current digest is unapproved, when the only
+approval on record signs a *different* digest (STALE), or when the current digest was rejected.
+`approve`/`reject` bind to the CURRENT draft only; `--digest` must match it (full sha256 or a
+prefix), and an unnamed signer (`--by` blank) is refused. A later approval of a new digest is
+the way out of a rejection.
+
+**Writes:** `export` invokes the boardctl CLI — `boardctl show` to read, `boardctl create` to
+add a missing row, `boardctl update` to rewrite `title`/`priority`/`acceptance_criteria` of a
+drifted row (only with `--update`). Each row's `reasoning` carries deterministic provenance
+(`plan=<id>@v<n> digest=<sha>`, the spec anchors, one `verify:` line per expected verification
+evidence, and one complete `ch:trace` marker with all eleven doctrine fields). After the writes,
+every planned row is READ BACK over `boardctl show` and compared field by field — id, title,
+priority, complexity, dependencies, tags, acceptance criteria, provenance — and a mismatch is
+reported as `MISMATCH`, not as success. Export is idempotent: a second run of the same approved
+plan reports `unchanged` and writes nothing (both board files byte-identical). A partial run
+names what landed (`created`) and what did not (`failed`/`drift`/`skipped`), exits non-zero, and
+resumes — rows already on the board are detected and left alone, so nothing is duplicated.
+`--dry-run` reports the same plan without writing either the board or the ledger.
+`reconcile` uses only `boardctl show` and records status/worker-status/commit/guard/ci/blocked/
+evidence/verdict per planned row into the ledger: board evidence flows INTO Auger, while Auger
+never dispatches, completes or rewrites canonical board state.
+
+**Never writes:** the board without an approval bound to the current digest; a second task
+store or a direct JSONL board file; a plan version that changes nothing; a row for a task whose
+external dependency is missing (the preflight refuses before the first write); a reconcile that
+mutates the board. `$AUGER_BOARD_DIR` sets the default `--board`, `$AUGER_BOARDCTL` the binary
+name; a missing `boardctl` is a named refusal, never a silent no-op.

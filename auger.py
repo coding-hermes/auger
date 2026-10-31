@@ -45,12 +45,15 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import io
 import json
 import math
 import os
 import re
+import shutil
 import sqlite3
+import subprocess
 import sys
 import time
 import urllib.error
@@ -7691,6 +7694,1084 @@ def cmd_api(a):
     return serve(a.host, a.port)
 
 
+# ---------------------------------------------------------------- plan ledger + boardctl (AUG-119)
+# A DRAFT PLAN is Auger's own artifact, never board state. It lives in an append-only JSONL
+# ledger (one file per plan id) holding three kinds of event: `draft` (an immutable, versioned,
+# digest-addressed plan body), `approval` / `rejection` (a person signing or refusing THE BYTES
+# of one version) and `export` / `reconcile` records (what was attempted against the board, and
+# what the board said back).
+#
+# Two boundaries are structural, not conventions:
+#   * The canonical board is boardctl's. Every board read goes through `boardctl show`, every
+#     board write through `boardctl create` / `boardctl update`. There is no second task store,
+#     no direct JSONL writer, and no dispatch path here — reconcile reads and records, it never
+#     advances a task.
+#   * "Approved" means a digest equality. An export unapproved, approved against different
+#     bytes, or explicitly rejected refuses BEFORE the first boardctl call, so `tasks.jsonl`
+#     and `events.jsonl` stay byte-identical (proved in tests/test_plan_board.py).
+PLANS_DIR_ENV = "AUGER_PLANS_DIR"
+PLANS_DEFAULT_DIR = "~/.auger/plans"
+BOARD_DIR_ENV = "AUGER_BOARD_DIR"
+BOARDCTL_ENV = "AUGER_BOARDCTL"
+BOARDCTL_DEFAULT = "boardctl"
+BOARDCTL_TIMEOUT_S = 120
+PLAN_SCHEMA = "auger.plan/v1"
+PLAN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+#: boardctl's own task-id contract — `create` refuses anything that does not match it.
+PLAN_TASK_ID_RE = re.compile(r"^[A-Z][A-Z0-9]+(-[A-Z0-9]+)+$")
+PLAN_PRIORITY_RE = re.compile(r"^P[0-9]$")
+#: The traceability doctrine's eleven fields, in the doctrine's order (row is authored).
+TRACE_FIELDS = (
+    "row",
+    "spec",
+    "wave",
+    "test",
+    "doc",
+    "prompt",
+    "evidence",
+    "witness",
+    "verdict",
+    "commit",
+    "memory",
+)
+TRACE_NONE = "none:"
+#: Defaults for the trace fields a draft cannot honestly fill yet. Every one is an explicit
+#: `none:<reason>` — an absent link is stated, never left blank and never invented.
+PLAN_TRACE_DEFAULTS = {
+    "wave": "none:not-dispatched",
+    "test": "none:no-test-named",
+    "doc": "none:no-doc-named",
+    "prompt": "none:not-dispatched",
+    "evidence": "none:not-produced-at-draft-time",
+    "witness": "none:not-dispatched",
+    "verdict": "none:not-judged",
+    "commit": "none:not-implemented",
+    "memory": "none:not-written",
+}
+#: Row fields `boardctl update` can rewrite. Everything else is create-only, so a drift in one
+#: of those is REFUSED rather than silently left standing.
+PLAN_UPDATABLE_FIELDS = frozenset({"title", "priority", "acceptance_criteria"})
+
+
+def plan_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _plan_refuse(message: str) -> None:
+    raise SystemExit(f"refused: {message}")
+
+
+def plans_dir(explicit: str | None = None) -> str:
+    """The plan ledger root: `--plans-dir`, then `$AUGER_PLANS_DIR`, then `~/.auger/plans`."""
+    raw = (explicit or "").strip() or os.environ.get(PLANS_DIR_ENV, "").strip()
+    return os.path.abspath(os.path.expanduser(raw)) if raw else os.path.expanduser(
+        PLANS_DEFAULT_DIR
+    )
+
+
+def plan_ledger_path(plan_id: str, root: str | None = None) -> str:
+    if not PLAN_ID_RE.match(plan_id or ""):
+        _plan_refuse(
+            f"plan id {plan_id!r} is not usable as a ledger name (expected "
+            f"{PLAN_ID_RE.pattern}); nothing was written"
+        )
+    return os.path.join(root or plans_dir(), f"{plan_id}.jsonl")
+
+
+def plan_json_canonical(obj) -> str:
+    """The ONE serialization a digest is taken over: sorted keys, no whitespace, ASCII."""
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def plan_digest(plan: dict) -> str:
+    return hashlib.sha256(plan_json_canonical(plan).encode("utf-8")).hexdigest()
+
+
+def plan_ledger_read(plan_id: str, root: str | None = None) -> list:
+    path = plan_ledger_path(plan_id, root)
+    if not os.path.exists(path):
+        return []
+    events = []
+    with open(path, encoding="utf-8") as fh:
+        for lineno, line in enumerate(fh, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise SystemExit(
+                    f"refused: plan ledger {path}:{lineno} is not JSON ({exc}) — refusing to "
+                    "guess at a ledger whose history is unreadable; nothing was written"
+                ) from exc
+            if not isinstance(event, dict) or not event.get("kind"):
+                raise SystemExit(
+                    f"refused: plan ledger {path}:{lineno} is not a plan event (needs `kind`) — "
+                    "nothing was written"
+                )
+            events.append(event)
+    return events
+
+
+def plan_ledger_append(plan_id: str, event: dict, root: str | None = None) -> str:
+    """Append ONE event line. Append-only by construction: no code path rewrites the file."""
+    path = plan_ledger_path(plan_id, root)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    payload = plan_json_canonical(event) + "\n"
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(payload)
+        fh.flush()
+        os.fsync(fh.fileno())
+    return path
+
+
+def _plan_trace_value(raw, what: str, default: str) -> str:
+    """A trace field is either a real value or an EXPLICIT `none:<reason>` — never blank."""
+    if raw is None:
+        return default
+    value = str(raw).strip()
+    if not value:
+        _plan_refuse(
+            f"{what} was given but is blank — a trace field is a value or `none:<reason>`; "
+            "an empty string claims a link without saying which"
+        )
+    if value.lower().startswith(TRACE_NONE) and len(value) == len(TRACE_NONE):
+        _plan_refuse(f"{what}={value!r} carries no reason — write `none:<why it is absent>`")
+    return value
+
+
+def _plan_lines(raw, what: str, *, required: bool = False) -> list:
+    """Normalize a string / list-of-strings field into stripped non-empty lines."""
+    if raw is None:
+        items: list = []
+    elif isinstance(raw, str):
+        items = [ln.strip() for ln in raw.splitlines()]
+    elif isinstance(raw, (list, tuple)):
+        items = []
+        for entry in raw:
+            if not isinstance(entry, str):
+                _plan_refuse(
+                    f"{what} contains a {type(entry).__name__}, not a string — "
+                    "every entry must be text"
+                )
+            items.extend([ln.strip() for ln in entry.splitlines()])
+    else:
+        _plan_refuse(
+            f"{what} must be a string or a list of strings (got {type(raw).__name__})"
+        )
+    items = [item for item in items if item]
+    if required and not items:
+        _plan_refuse(f"{what} is required and was empty")
+    return items
+
+
+def normalize_plan_task(raw, index: int) -> dict:
+    """Validate + materialize one task. Defaults are explicit; nothing is inferred."""
+    if not isinstance(raw, dict):
+        _plan_refuse(f"task #{index + 1} is a {type(raw).__name__}, not an object")
+    task_id = str(raw.get("id") or "").strip()
+    if not PLAN_TASK_ID_RE.match(task_id):
+        _plan_refuse(
+            f"task #{index + 1} id {task_id!r} is not boardctl's task-id shape "
+            f"{PLAN_TASK_ID_RE.pattern} (e.g. AUG-200) — boardctl would refuse to create it"
+        )
+    title = str(raw.get("title") or "").strip()
+    if not title:
+        _plan_refuse(f"task {task_id}: title is required")
+    if "\n" in title:
+        _plan_refuse(f"task {task_id}: title is one line (a row title is a single line)")
+    priority = str(raw.get("priority") or "P2").strip().upper()
+    if not PLAN_PRIORITY_RE.match(priority):
+        _plan_refuse(f"task {task_id}: priority {priority!r} is not P0..P9")
+    try:
+        complexity = int(raw.get("complexity", 2))
+    except (TypeError, ValueError):
+        _plan_refuse(f"task {task_id}: complexity must be an integer")
+    if complexity < 1:
+        _plan_refuse(f"task {task_id}: complexity {complexity} is below 1")
+    criteria = _plan_lines(
+        raw.get("acceptance_criteria"), f"task {task_id} acceptance_criteria", required=True
+    )
+    deps = _plan_lines(raw.get("depends_on"), f"task {task_id} depends_on")
+    for dep in deps:
+        if not PLAN_TASK_ID_RE.match(dep):
+            _plan_refuse(
+                f"task {task_id}: dependency {dep!r} is not a boardctl task id "
+                f"({PLAN_TASK_ID_RE.pattern})"
+            )
+        if dep == task_id:
+            _plan_refuse(f"task {task_id} depends on itself")
+    tags = _plan_lines(raw.get("capability_tags"), f"task {task_id} capability_tags")
+    for tag in tags:
+        if "," in tag:
+            _plan_refuse(
+                f"task {task_id}: capability tag {tag!r} contains a comma, which boardctl "
+                "would split into two tags"
+            )
+    anchors = _plan_lines(
+        raw.get("spec_anchors") or raw.get("spec"), f"task {task_id} spec_anchors"
+    )
+    verification = _plan_lines(
+        raw.get("verification") or raw.get("expected_verification"),
+        f"task {task_id} verification",
+    )
+    if "trace" in raw and not isinstance(raw.get("trace"), dict):
+        _plan_refuse(
+            f"task {task_id}: `trace` must be an object of field overrides "
+            f"(got {type(raw.get('trace')).__name__})"
+        )
+    trace_raw = raw.get("trace") if isinstance(raw.get("trace"), dict) else {}
+    trace = {"row": task_id}
+    for field in TRACE_FIELDS:
+        if field == "row":
+            continue
+        if field == "spec":
+            if trace_raw.get("spec") is not None:
+                trace["spec"] = _plan_trace_value(
+                    trace_raw["spec"], f"task {task_id} trace.spec", ""
+                )
+            elif anchors:
+                trace["spec"] = ",".join(anchors)
+            else:
+                _plan_refuse(
+                    f"task {task_id}: no source spec anchor — give `spec_anchors` or an "
+                    'explicit `"trace": {"spec": "none:<reason>"}`'
+                )
+            continue
+        trace[field] = _plan_trace_value(
+            trace_raw.get(field), f"task {task_id} trace.{field}", PLAN_TRACE_DEFAULTS[field]
+        )
+    return {
+        "id": task_id,
+        "title": title,
+        "priority": priority,
+        "complexity": complexity,
+        "depends_on": deps,
+        "capability_tags": tags,
+        "acceptance_criteria": criteria,
+        "spec_anchors": anchors,
+        "verification": verification,
+        "trace": trace,
+    }
+
+
+def normalize_plan(raw, plan_id: str | None = None) -> dict:
+    """Validate an authored plan document into the object a digest is taken over."""
+    if not isinstance(raw, dict):
+        _plan_refuse(f"the plan source is a {type(raw).__name__}, not an object")
+    pid = str(plan_id or raw.get("plan_id") or "").strip()
+    if not PLAN_ID_RE.match(pid):
+        _plan_refuse(
+            f"plan id {pid!r} is required and must match {PLAN_ID_RE.pattern} "
+            "(--plan, or `plan_id` in the source)"
+        )
+    tasks_raw = raw.get("tasks")
+    if not isinstance(tasks_raw, list) or not tasks_raw:
+        _plan_refuse(f"plan {pid}: `tasks` must be a non-empty list")
+    tasks = [normalize_plan_task(entry, i) for i, entry in enumerate(tasks_raw)]
+    seen: set = set()
+    for task in tasks:
+        if task["id"] in seen:
+            _plan_refuse(f"plan {pid}: task id {task['id']} appears more than once")
+        seen.add(task["id"])
+    return {
+        "schema": PLAN_SCHEMA,
+        "plan_id": pid,
+        "project": str(raw.get("project") or "").strip(),
+        "spec": str(raw.get("spec") or "").strip(),
+        "tasks": tasks,
+    }
+
+
+def plan_topological_order(tasks: list) -> list:
+    """Dependencies first, plan order preserved; a cycle is refused by name."""
+    by_id = {task["id"]: task for task in tasks}
+    order: list = []
+    state: dict = {}  # id -> "visiting" | "done"
+
+    def visit(task: dict, chain: list) -> None:
+        mark = state.get(task["id"])
+        if mark == "done":
+            return
+        if mark == "visiting":
+            cycle = " -> ".join(chain + [task["id"]])
+            _plan_refuse(f"dependency cycle: {cycle} — nothing was written")
+        state[task["id"]] = "visiting"
+        for dep in task["depends_on"]:
+            if dep in by_id:
+                visit(by_id[dep], chain + [task["id"]])
+        state[task["id"]] = "done"
+        order.append(task)
+
+    for task in tasks:
+        visit(task, [])
+    return order
+
+
+def plan_state(plan_id: str, root: str | None = None) -> dict:
+    """The current draft, the decision bound to its digest, and the recorded history."""
+    events = plan_ledger_read(plan_id, root)
+    drafts = [event for event in events if event.get("kind") == "draft"]
+    if not drafts:
+        raise SystemExit(
+            f"refused: no draft plan {plan_id!r} in {plans_dir(root)} — "
+            "`auger plan draft --plan <id> --from <file>` writes the first version"
+        )
+    latest = max(drafts, key=lambda event: int(event.get("version") or 0))
+    version = int(latest["version"])
+    digest = str(latest["digest"])
+    decisions = [
+        event
+        for event in events
+        if event.get("kind") in ("approval", "rejection")
+        and event.get("version") == version
+        and event.get("digest") == digest
+    ]
+    return {
+        "plan_id": plan_id,
+        "version": version,
+        "digest": digest,
+        "plan": latest.get("plan") or {},
+        "draft": latest,
+        "decision": decisions[-1] if decisions else None,
+        "all_decisions": [e for e in events if e.get("kind") in ("approval", "rejection")],
+        "exports": [e for e in events if e.get("kind") == "export"],
+        "reconciles": [e for e in events if e.get("kind") == "reconcile"],
+        "ledger": plan_ledger_path(plan_id, root),
+    }
+
+
+def plan_require_approval(state: dict) -> dict:
+    """Fail closed unless a person approved THESE bytes. No board call happens before this."""
+    plan_id = state["plan_id"]
+    version = state["version"]
+    digest = state["digest"]
+    decision = state["decision"]
+    if decision is None:
+        stale = [e for e in state["all_decisions"] if e.get("kind") == "approval"]
+        if stale:
+            last = stale[-1]
+            raise SystemExit(
+                f"refused: plan {plan_id} v{version} digest {digest} has no approval bound to "
+                f"it — the only approval on record signs v{last.get('version')} digest "
+                f"{last.get('digest')}, which is STALE (the draft changed after it was "
+                "approved); nothing was written to the board. Approve the current bytes: "
+                f"auger plan approve --plan {plan_id} --digest {digest} --by <you>"
+            )
+        raise SystemExit(
+            f"refused: plan {plan_id} v{version} digest {digest} is an UNAPPROVED draft — a "
+            "draft never writes the board. Approve the exact bytes first: "
+            f"auger plan approve --plan {plan_id} --digest {digest} --by <you>"
+        )
+    if decision.get("kind") == "rejection":
+        raise SystemExit(
+            f"refused: plan {plan_id} v{version} digest {digest} was REJECTED by "
+            f"{decision.get('by') or '(unnamed)'} "
+            f"({decision.get('reason') or 'no reason recorded'}); nothing was written to the "
+            "board. Re-draft, then approve the new digest."
+        )
+    return decision
+
+
+def boardctl_binary() -> str:
+    raw = os.environ.get(BOARDCTL_ENV, "").strip() or BOARDCTL_DEFAULT
+    if os.sep in raw:
+        resolved = raw if os.access(raw, os.X_OK) else None
+    else:
+        resolved = shutil.which(raw)
+    if not resolved:
+        raise SystemExit(
+            f"refused: boardctl not found ({raw!r}); the canonical board is only written "
+            f"through boardctl — put it on PATH or set {BOARDCTL_ENV}"
+        )
+    return resolved
+
+
+def board_dir(explicit: str | None = None) -> str:
+    """The board root handed to `boardctl -C`: the flag, then `$AUGER_BOARD_DIR`, then cwd."""
+    raw = (explicit or "").strip() or os.environ.get(BOARD_DIR_ENV, "").strip() or "."
+    return os.path.abspath(os.path.expanduser(raw))
+
+
+def boardctl_run(board: str, *args: str, timeout: int = BOARDCTL_TIMEOUT_S) -> tuple:
+    """Invoke the boardctl CLI exactly once. Returns (rc, stdout, stderr); never raises on rc."""
+    argv = [boardctl_binary(), "-C", board, *args]
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return 124, "", f"boardctl {args[0]} timed out after {timeout}s"
+    except OSError as exc:
+        return 2, "", f"boardctl could not run: {exc}"
+    return proc.returncode, proc.stdout or "", proc.stderr or ""
+
+
+def _first_line(text: str) -> str:
+    for line in (text or "").splitlines():
+        if line.strip():
+            return line.strip()
+    return ""
+
+
+def board_row(board: str, task_id: str) -> tuple:
+    """Read ONE canonical row over `boardctl show`. (ok, row-or-None, detail)."""
+    rc, out, err = boardctl_run(board, "show", task_id)
+    text = (err or out).strip()
+    if rc != 0:
+        if "not found" in text.lower():
+            return True, None, text
+        return False, None, _first_line(text) or f"boardctl show exited {rc}"
+    try:
+        row = json.loads(out)
+    except json.JSONDecodeError as exc:
+        return (
+            False,
+            None,
+            f"boardctl show {task_id} did not print JSON ({exc}): {_first_line(out)}",
+        )
+    if not isinstance(row, dict):
+        return False, None, f"boardctl show {task_id} printed {type(row).__name__}, not a row"
+    return True, row, ""
+
+
+def plan_acceptance_text(task: dict) -> str:
+    return "\n".join(task["acceptance_criteria"])
+
+
+def plan_trace_marker(task: dict) -> str:
+    trace = task["trace"]
+    return "ch:trace " + " ".join(f"{field}={trace[field]}" for field in TRACE_FIELDS)
+
+
+def plan_reasoning(task: dict, plan: dict, version: int, digest: str) -> str:
+    """The row's provenance, deterministic from the approved plan so read-back can compare it."""
+    lines = [f"plan={plan['plan_id']}@v{version} digest={digest}"]
+    if plan.get("project"):
+        lines.append(f"project: {plan['project']}")
+    if task["spec_anchors"]:
+        lines.append("spec: " + "; ".join(task["spec_anchors"]))
+    else:
+        lines.append("spec: " + task["trace"]["spec"])
+    if task["verification"]:
+        for entry in task["verification"]:
+            lines.append(f"verify: {entry}")
+    else:
+        lines.append("verify: none:no-verification-declared")
+    lines.append(plan_trace_marker(task))
+    return "\n".join(lines)
+
+
+def _plan_short(value, limit: int = 72) -> str:
+    text = str(value).replace("\n", "\\n")
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def plan_row_differences(
+    row: dict, task: dict, plan: dict, version: int, digest: str
+) -> list:
+    """Every planned field that differs from the canonical row, named exactly (and briefly)."""
+
+    def compare(name: str, planned, actual) -> list:
+        if planned == actual:
+            return []
+        return [f"{name}: planned {_plan_short(planned)!r}, board {_plan_short(actual)!r}"]
+
+    diffs = []
+    diffs += compare("title", task["title"], str(row.get("title") or ""))
+    diffs += compare("priority", task["priority"], str(row.get("priority") or ""))
+    board_complexity = row.get("complexity")
+    diffs += compare(
+        "complexity",
+        int(task["complexity"]),
+        board_complexity
+        if isinstance(board_complexity, (int, float))
+        else str(board_complexity),
+    )
+    board_deps = row.get("depends_on") or []
+    if not isinstance(board_deps, list):
+        board_deps = [board_deps]
+    diffs += compare(
+        "depends_on", sorted(task["depends_on"]), sorted(str(d) for d in board_deps)
+    )
+    board_tags = row.get("capability_tags") or []
+    if not isinstance(board_tags, list):
+        board_tags = [board_tags]
+    diffs += compare(
+        "capability_tags",
+        sorted(task["capability_tags"]),
+        sorted(str(t) for t in board_tags),
+    )
+    diffs += compare(
+        "acceptance_criteria",
+        plan_acceptance_text(task),
+        str(row.get("acceptance_criteria") or ""),
+    )
+    # Reasoning is the row's provenance record, and boardctl cannot rewrite it: a mismatch
+    # means "this row was not created from this plan", which is what the short line says.
+    planned_reasoning = plan_reasoning(task, plan, version, digest)
+    actual_reasoning = str(row.get("reasoning") or "")
+    if planned_reasoning != actual_reasoning:
+        if not actual_reasoning:
+            diffs.append(
+                "reasoning: board row carries none — no "
+                f"plan={plan['plan_id']}@v{version} digest={digest[:12]} provenance"
+            )
+        else:
+            diffs.append(
+                "reasoning: row provenance is not this plan "
+                f"(expected plan={plan['plan_id']}@v{version} digest={digest[:12]})"
+            )
+    return diffs
+
+
+def plan_create(board: str, task: dict, plan: dict, version: int, digest: str):
+    args = [
+        "create",
+        "--id",
+        task["id"],
+        "--title",
+        task["title"],
+        "--priority",
+        task["priority"],
+        "--complexity",
+        str(task["complexity"]),
+        "--reasoning",
+        plan_reasoning(task, plan, version, digest),
+        "--acceptance-criteria",
+        plan_acceptance_text(task),
+    ]
+    if task["depends_on"]:
+        args += ["--depends-on", ",".join(task["depends_on"])]
+    if task["capability_tags"]:
+        args += ["--capability-tags", ",".join(task["capability_tags"])]
+    return boardctl_run(board, *args)
+
+
+def plan_update(board: str, task: dict) -> tuple:
+    return boardctl_run(
+        board,
+        "update",
+        task["id"],
+        "--title",
+        task["title"],
+        "--priority",
+        task["priority"],
+        "--acceptance-criteria",
+        plan_acceptance_text(task),
+    )
+
+
+def plan_export(
+    plan_id: str,
+    board: str,
+    *,
+    update: bool = False,
+    dry_run: bool = False,
+    ledger_root: str | None = None,
+) -> int:
+    """Write the APPROVED plan through boardctl, then read every row back and compare.
+
+    Ordering matters and is load-bearing: the approval gate, the dependency preflight and the
+    topology all run BEFORE the first `create`, so an unapproved / stale / rejected plan (or a
+    plan whose external dependency does not exist) leaves the board files untouched.
+    """
+    state = plan_state(plan_id, ledger_root)
+    approval = plan_require_approval(state)
+    plan = state["plan"]
+    version = state["version"]
+    digest = state["digest"]
+    tasks = plan["tasks"]
+    order = plan_topological_order(tasks)
+    plan_ids = {task["id"] for task in tasks}
+    external = sorted({dep for task in tasks for dep in task["depends_on"] if dep not in plan_ids})
+    for dep in external:
+        ok, row, why = board_row(board, dep)
+        if not ok:
+            raise SystemExit(
+                f"refused: could not read board row {dep}: {why} — nothing was written"
+            )
+        if row is None:
+            raise SystemExit(
+                f"refused: a planned task depends on {dep}, which is neither in the plan nor "
+                f"on the board at {board} — nothing was written"
+            )
+
+    results: list = []
+    failed: str | None = None
+    for task in order:
+        if failed is not None:
+            results.append(
+                {"id": task["id"], "action": "skipped", "detail": f"earlier task {failed} failed"}
+            )
+            continue
+        ok, row, why = board_row(board, task["id"])
+        if not ok:
+            results.append({"id": task["id"], "action": "failed", "detail": why})
+            failed = task["id"]
+            continue
+        if row is None:
+            if dry_run:
+                results.append({"id": task["id"], "action": "create", "detail": "absent from board"})
+                continue
+            rc, out, err = plan_create(board, task, plan, version, digest)
+            if rc != 0:
+                results.append(
+                    {
+                        "id": task["id"],
+                        "action": "failed",
+                        "detail": f"boardctl create exited {rc}: "
+                        f"{_first_line(err or out) or 'no output'}",
+                    }
+                )
+                failed = task["id"]
+                continue
+            results.append({"id": task["id"], "action": "created", "detail": ""})
+            continue
+        diffs = plan_row_differences(row, task, plan, version, digest)
+        if not diffs:
+            results.append({"id": task["id"], "action": "unchanged", "detail": ""})
+            continue
+        names = {diff.split(":", 1)[0] for diff in diffs}
+        blocked = sorted(names - PLAN_UPDATABLE_FIELDS)
+        if dry_run:
+            action = "would-drift" if blocked else "would-update"
+            results.append({"id": task["id"], "action": action, "detail": "; ".join(diffs)})
+            continue
+        if blocked:
+            results.append(
+                {
+                    "id": task["id"],
+                    "action": "drift",
+                    "detail": "; ".join(diffs)
+                    + " (boardctl update cannot rewrite "
+                    + ", ".join(blocked)
+                    + ")",
+                }
+            )
+            failed = task["id"]
+            continue
+        if not update:
+            results.append(
+                {
+                    "id": task["id"],
+                    "action": "drift",
+                    "detail": "; ".join(diffs)
+                    + " (re-run with --update to rewrite title/priority/acceptance_criteria)",
+                }
+            )
+            failed = task["id"]
+            continue
+        rc, out, err = plan_update(board, task)
+        if rc != 0:
+            results.append(
+                {
+                    "id": task["id"],
+                    "action": "failed",
+                    "detail": f"boardctl update exited {rc}: "
+                    f"{_first_line(err or out) or 'no output'}",
+                }
+            )
+            failed = task["id"]
+            continue
+        results.append({"id": task["id"], "action": "updated", "detail": "; ".join(diffs)})
+
+    mismatches: list = []
+    if not dry_run:
+        written = {
+            entry["id"]
+            for entry in results
+            if entry["action"] in ("created", "updated", "unchanged")
+        }
+        for task in order:
+            if task["id"] not in written:
+                continue
+            ok, row, why = board_row(board, task["id"])
+            if not ok:
+                mismatches.append(f"{task['id']}: read-back failed: {why}")
+                continue
+            if row is None:
+                mismatches.append(f"{task['id']}: absent from the board after the write")
+                continue
+            diffs = plan_row_differences(row, task, plan, version, digest)
+            if diffs:
+                mismatches.append(f"{task['id']}: " + "; ".join(diffs))
+
+    ok_run = (
+        not mismatches
+        and all(
+            entry["action"] in ("created", "updated", "unchanged", "create", "would-update")
+            for entry in results
+        )
+        and not dry_run
+    )
+    clean = not mismatches and all(
+        entry["action"] in ("created", "updated", "unchanged", "create", "would-update")
+        for entry in results
+    )
+    if not dry_run:
+        plan_ledger_append(
+            plan_id,
+            {
+                "kind": "export",
+                "plan_id": plan_id,
+                "version": version,
+                "digest": digest,
+                "ts": plan_now(),
+                "board": board,
+                "approved_by": approval.get("by"),
+                "update_mode": bool(update),
+                "results": results,
+                "mismatches": mismatches,
+                "ok": ok_run,
+            },
+            ledger_root,
+        )
+    print(
+        plan_export_report(plan_id, version, digest, board, results, mismatches, dry_run)
+    )
+    return 0 if clean else 1
+
+
+def plan_export_report(
+    plan_id: str,
+    version: int,
+    digest: str,
+    board: str,
+    results: list,
+    mismatches: list,
+    dry_run: bool,
+) -> str:
+    counts: Counter = Counter(entry["action"] for entry in results)
+    lines = [
+        f"plan {plan_id} v{version} digest={digest}",
+        f"board {board}",
+    ]
+    if dry_run:
+        lines.append("dry run: reads only — no boardctl write, no ledger event")
+    for entry in results:
+        line = f"  {entry['action']:<11} {entry['id']}"
+        if entry["detail"]:
+            line += f"  {entry['detail']}"
+        lines.append(line)
+    written = counts["created"] + counts["updated"] + counts["unchanged"]
+    if not dry_run and written:
+        lines.append(
+            f"read-back: {written - len(mismatches)}/{written} row(s) verified — "
+            "ids, acceptance criteria, dependencies and trace provenance match the plan"
+        )
+    elif not dry_run:
+        lines.append("read-back: no row was written, so nothing was read back")
+    for mismatch in mismatches:
+        lines.append(f"  MISMATCH {mismatch}")
+    tally = ", ".join(f"{counts[a]} {a}" for a in sorted(counts) if counts[a])
+    if dry_run:
+        lines.append(f"RESULT: would change the board ({tally or 'nothing to do'}) — nothing written")
+    elif mismatches:
+        lines.append(f"RESULT: FAILED — read-back disagrees with the plan ({tally})")
+    elif all(
+        counts[action] == 0 for action in ("failed", "drift", "skipped")
+    ):
+        lines.append(f"RESULT: board matches the approved plan ({tally})")
+    else:
+        lines.append(
+            f"RESULT: PARTIAL — {tally}; re-run the same export to resume (rows already "
+            "written are detected and left alone)"
+        )
+    return "\n".join(lines)
+
+
+def plan_reconcile(
+    plan_id: str,
+    board: str,
+    *,
+    ledger_root: str | None = None,
+    as_json: bool = False,
+) -> int:
+    """Record what the CANONICAL board says about each planned row — read-only on the board.
+
+    Auger never dispatches, completes or rewrites a row here: the only boardctl verb used is
+    `show`, and the record lands in Auger's own ledger. Status/commit/verdict evidence is
+    therefore reconciled INTO Auger without Auger becoming a second board.
+    """
+    state = plan_state(plan_id, ledger_root)
+    plan = state["plan"]
+    rows: list = []
+    unreadable = 0
+    for task in plan["tasks"]:
+        ok, row, why = board_row(board, task["id"])
+        if not ok:
+            unreadable += 1
+            rows.append({"id": task["id"], "readable": False, "error": why})
+            continue
+        if row is None:
+            rows.append({"id": task["id"], "readable": True, "present": False})
+            continue
+        detail = row.get("detail") if isinstance(row.get("detail"), dict) else {}
+        evidence = detail.get("evidence") if isinstance(detail.get("evidence"), list) else []
+        verdict = detail.get("verdict")
+        rows.append(
+            {
+                "id": task["id"],
+                "readable": True,
+                "present": True,
+                "status": row.get("status") or f"{TRACE_NONE}no-status-on-row",
+                "worker_status": row.get("worker_status")
+                or f"{TRACE_NONE}no-worker-status-on-row",
+                "commit": row.get("commit_hash") or f"{TRACE_NONE}no-commit-recorded",
+                "guard": row.get("guard_result") or f"{TRACE_NONE}no-guard-recorded",
+                "ci": row.get("ci_result") or f"{TRACE_NONE}no-ci-recorded",
+                "blocked_reason": row.get("blocked_reason") or f"{TRACE_NONE}not-blocked",
+                "evidence": evidence,
+                "verdict": str(verdict) if verdict else f"{TRACE_NONE}not-on-board-row",
+            }
+        )
+    record = {
+        "kind": "reconcile",
+        "plan_id": plan_id,
+        "version": state["version"],
+        "digest": state["digest"],
+        "ts": plan_now(),
+        "board": board,
+        "rows": rows,
+    }
+    path = plan_ledger_append(plan_id, record, ledger_root)
+    if as_json:
+        print(json.dumps(record, indent=2, sort_keys=True))
+        return 0 if not unreadable else 1
+    lines = [
+        f"plan {plan_id} v{state['version']} digest={state['digest']}",
+        f"board {board}  (read-only: boardctl show only, no dispatch, no write)",
+        f"reconciled into {path}",
+    ]
+    for entry in rows:
+        if not entry["readable"]:
+            lines.append(f"  {entry['id']:<12} UNREADABLE  {entry['error']}")
+            continue
+        if not entry["present"]:
+            lines.append(f"  {entry['id']:<12} absent from the board")
+            continue
+        commit = entry["commit"]
+        short = commit[:12] if len(commit) >= 12 and not commit.startswith(TRACE_NONE) else commit
+        lines.append(
+            f"  {entry['id']:<12} status={entry['status']:<10} "
+            f"worker={entry['worker_status']:<12} guard={entry['guard']} ci={entry['ci']} "
+            f"commit={short} evidence={len(entry['evidence'])}"
+        )
+        lines.append(f"  {'':<12} verdict={entry['verdict']} blocked={entry['blocked_reason']}")
+    present = sum(1 for entry in rows if entry.get("present"))
+    lines.append(
+        f"RESULT: {present}/{len(rows)} planned row(s) reconciled from the canonical board"
+        + (f"; {unreadable} unreadable" if unreadable else "")
+    )
+    print("\n".join(lines))
+    return 0 if not unreadable else 1
+
+
+def plan_decision_summary(state: dict) -> str:
+    decision = state["decision"]
+    if decision is None:
+        return "no approval bound to this digest (export refuses)"
+    if decision.get("kind") == "rejection":
+        return (
+            f"REJECTED by {decision.get('by')} at {decision.get('ts')} "
+            f"({decision.get('reason') or 'no reason recorded'})"
+        )
+    return f"approved by {decision.get('by')} at {decision.get('ts')} (digest-bound)"
+
+
+def cmd_plan_draft(a):
+    """Validate an authored plan document, digest it and append it as the next version."""
+    try:
+        with open(a.source, encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except FileNotFoundError:
+        raise SystemExit(f"refused: plan source {a.source} does not exist") from None
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"refused: plan source {a.source} is not JSON ({exc})") from exc
+    plan = normalize_plan(raw, a.plan)
+    digest = plan_digest(plan)
+    root = plans_dir(a.plans_dir)
+    prior = [
+        event
+        for event in plan_ledger_read(plan["plan_id"], root)
+        if event.get("kind") == "draft"
+    ]
+    if prior and prior[-1].get("digest") == digest:
+        print(
+            f"unchanged: plan {plan['plan_id']} v{prior[-1]['version']} already carries "
+            f"digest {digest} — no new version was written"
+        )
+        return 0
+    version = max((int(event.get("version") or 0) for event in prior), default=0) + 1
+    path = plan_ledger_append(
+        plan["plan_id"],
+        {
+            "kind": "draft",
+            "plan_id": plan["plan_id"],
+            "version": version,
+            "digest": digest,
+            "ts": plan_now(),
+            "plan": plan,
+        },
+        root,
+    )
+    print(
+        f"draft {plan['plan_id']} v{version} digest={digest} tasks={len(plan['tasks'])} "
+        f"-> {path} (no board write: export needs an approval bound to this digest)"
+    )
+    return 0
+
+
+def _plan_require_by(raw: str, verb: str) -> str:
+    who = (raw or "").strip()
+    if not who:
+        raise SystemExit(
+            f"refused: plan {verb} needs --by <who> — an approval is a person signing specific "
+            "bytes, and an unnamed signature is not one"
+        )
+    return who
+
+
+def _plan_digest_arg(raw: str | None, state: dict, verb: str) -> str:
+    given = (raw or "").strip()
+    if not given:
+        return state["digest"]
+    if not given.startswith(state["digest"]):
+        raise SystemExit(
+            f"refused: {verb} names digest {given}, but the current draft of "
+            f"{state['plan_id']} is v{state['version']} digest {state['digest']} — the bytes "
+            "on disk are not the bytes named; re-draft or re-read `auger plan show`. "
+            "Nothing was written"
+        )
+    return state["digest"]
+
+
+def cmd_plan_approve(a):
+    state = plan_state(a.plan, plans_dir(a.plans_dir))
+    digest = _plan_digest_arg(a.digest, state, "approve")
+    who = _plan_require_by(a.by, "approve")
+    path = plan_ledger_append(
+        state["plan_id"],
+        {
+            "kind": "approval",
+            "plan_id": state["plan_id"],
+            "version": state["version"],
+            "digest": digest,
+            "ts": plan_now(),
+            "by": who,
+            "note": (a.note or "").strip(),
+        },
+        plans_dir(a.plans_dir),
+    )
+    print(
+        f"approved plan {state['plan_id']} v{state['version']} digest={digest} by {who} "
+        f"-> {path} (export may now write the board)"
+    )
+    return 0
+
+
+def cmd_plan_reject(a):
+    state = plan_state(a.plan, plans_dir(a.plans_dir))
+    digest = _plan_digest_arg(a.digest, state, "reject")
+    who = _plan_require_by(a.by, "reject")
+    reason = (a.reason or "").strip()
+    if not reason:
+        raise SystemExit(
+            "refused: plan reject needs --reason — a refusal without a reason cannot be acted on"
+        )
+    path = plan_ledger_append(
+        state["plan_id"],
+        {
+            "kind": "rejection",
+            "plan_id": state["plan_id"],
+            "version": state["version"],
+            "digest": digest,
+            "ts": plan_now(),
+            "by": who,
+            "reason": reason,
+        },
+        plans_dir(a.plans_dir),
+    )
+    print(
+        f"rejected plan {state['plan_id']} v{state['version']} digest={digest} by {who} "
+        f"({reason}) -> {path} (export refuses until a new digest is approved)"
+    )
+    return 0
+
+
+def cmd_plan_export(a):
+    return plan_export(
+        a.plan,
+        board_dir(a.board),
+        update=bool(a.update),
+        dry_run=bool(a.dry_run),
+        ledger_root=plans_dir(a.plans_dir),
+    )
+
+
+def cmd_plan_reconcile(a):
+    return plan_reconcile(
+        a.plan,
+        board_dir(a.board),
+        ledger_root=plans_dir(a.plans_dir),
+        as_json=bool(a.json),
+    )
+
+
+def cmd_plan_show(a):
+    state = plan_state(a.plan, plans_dir(a.plans_dir))
+    if a.json:
+        print(
+            json.dumps(
+                {
+                    "plan_id": state["plan_id"],
+                    "version": state["version"],
+                    "digest": state["digest"],
+                    "plan": state["plan"],
+                    "decision": state["decision"],
+                    "exports": state["exports"],
+                    "reconciles": state["reconciles"],
+                    "ledger": state["ledger"],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+    plan = state["plan"]
+    lines = [
+        f"plan {state['plan_id']} v{state['version']} digest={state['digest']}",
+        f"ledger {state['ledger']}",
+    ]
+    if plan.get("project"):
+        lines.append(f"project {plan['project']}")
+    if plan.get("spec"):
+        lines.append(f"spec document {plan['spec']}")
+    lines.append(f"approval: {plan_decision_summary(state)}")
+    lines.append(f"tasks ({len(plan.get('tasks', []))}):")
+    for task in plan.get("tasks", []):
+        deps = ",".join(task["depends_on"]) or "-"
+        lines.append(
+            f"  {task['id']:<12} {task['priority']} c{task['complexity']} deps={deps:<12} "
+            f"{task['title']}"
+        )
+        lines.append(f"  {'':<12} {plan_trace_marker(task)}")
+    if state["exports"]:
+        last = state["exports"][-1]
+        lines.append(
+            f"last export: {last.get('ts')} ok={last.get('ok')} "
+            f"board={last.get('board')}"
+        )
+    else:
+        lines.append("last export: none:never-exported")
+    if state["reconciles"]:
+        last = state["reconciles"][-1]
+        lines.append(f"last reconcile: {last.get('ts')} board={last.get('board')}")
+    else:
+        lines.append("last reconcile: none:never-reconciled")
+    print("\n".join(lines))
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="auger", description="spec drilling backed by DuckBrain"
@@ -8019,6 +9100,99 @@ def main(argv=None):
     r.add_argument("--costs", help="what choosing this option costs")
     r.add_argument("--breaks", help="what choosing this option breaks")
     r.set_defaults(fn=cmd_record_option)
+
+    s = sub.add_parser(
+        "plan",
+        help="draft, approve and export board plans through boardctl (AUG-119)",
+    )
+    plan_sub = s.add_subparsers(dest="plan_cmd", required=True)
+    plans_dir_help = (
+        f"plan ledger root (default ${PLANS_DIR_ENV}, else {PLANS_DEFAULT_DIR}); "
+        "the ledger is append-only JSONL, one file per plan id"
+    )
+
+    p = plan_sub.add_parser(
+        "draft",
+        help="validate a plan document and append the next version (no board write)",
+    )
+    p.add_argument("--plan", required=True, help="plan id (ledger name), e.g. AUG-PLAN-1")
+    p.add_argument(
+        "--from",
+        dest="source",
+        required=True,
+        metavar="FILE",
+        help="JSON plan document: {plan_id, project?, spec?, tasks:[{id,title,priority?,"
+        "complexity?,depends_on?,capability_tags?,acceptance_criteria,spec_anchors?,"
+        "verification?,trace?}]}",
+    )
+    p.add_argument("--plans-dir", default=None, help=plans_dir_help)
+    p.set_defaults(fn=cmd_plan_draft)
+
+    p = plan_sub.add_parser(
+        "approve",
+        help="sign the CURRENT draft digest — the only thing that allows a board write",
+    )
+    p.add_argument("--plan", required=True)
+    p.add_argument(
+        "--digest",
+        default=None,
+        help="the digest being approved (full sha256 or a prefix); omitted = the current "
+        "draft's digest, a value that is not the current digest is refused as stale",
+    )
+    p.add_argument("--by", required=True, help="who is signing (a person, recorded in the ledger)")
+    p.add_argument("--note", default=None, help="optional note recorded with the approval")
+    p.add_argument("--plans-dir", default=None, help=plans_dir_help)
+    p.set_defaults(fn=cmd_plan_approve)
+
+    p = plan_sub.add_parser(
+        "reject", help="refuse the current draft digest — export then refuses until re-drafted"
+    )
+    p.add_argument("--plan", required=True)
+    p.add_argument("--digest", default=None, help="the digest being rejected (full or a prefix)")
+    p.add_argument("--by", required=True, help="who is refusing")
+    p.add_argument("--reason", required=True, help="why (a refusal needs a reason)")
+    p.add_argument("--plans-dir", default=None, help=plans_dir_help)
+    p.set_defaults(fn=cmd_plan_reject)
+
+    p = plan_sub.add_parser(
+        "export",
+        help="write the APPROVED plan through boardctl, then read every row back",
+    )
+    p.add_argument("--plan", required=True)
+    p.add_argument(
+        "--board",
+        default=None,
+        help=f"board root for `boardctl -C` (default ${BOARD_DIR_ENV}, else the cwd)",
+    )
+    p.add_argument(
+        "--update",
+        action="store_true",
+        help="rewrite title/priority/acceptance_criteria of a drifted existing row "
+        "(other fields are create-only and a drift in them is still refused)",
+    )
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="report what would change; writes neither the board nor the ledger",
+    )
+    p.add_argument("--plans-dir", default=None, help=plans_dir_help)
+    p.set_defaults(fn=cmd_plan_export)
+
+    p = plan_sub.add_parser(
+        "reconcile",
+        help="record board status/commit/verdict evidence into the ledger (read-only on the board)",
+    )
+    p.add_argument("--plan", required=True)
+    p.add_argument("--board", default=None, help="board root for `boardctl -C`")
+    p.add_argument("--json", action="store_true", help="emit the reconcile record as JSON")
+    p.add_argument("--plans-dir", default=None, help=plans_dir_help)
+    p.set_defaults(fn=cmd_plan_reconcile)
+
+    p = plan_sub.add_parser("show", help="the current draft, its approval state and its history")
+    p.add_argument("--plan", required=True)
+    p.add_argument("--json", action="store_true", help="emit the whole ledger state as JSON")
+    p.add_argument("--plans-dir", default=None, help=plans_dir_help)
+    p.set_defaults(fn=cmd_plan_show)
 
     a = ap.parse_args(argv)
     return a.fn(a)

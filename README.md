@@ -175,6 +175,8 @@ auger bundle      group decisions into named bundles (add / member subcommands)
 auger export      render the whole namespace as one readable spec document
 auger verdict     judge a configuration good/bad with reasons, on the record (DESIGN R11)
 auger record ...  write the registers: break, assumption, unknown, option costs/breaks
+auger plan        draft a versioned plan, approve its digest, export it through boardctl
+                  (draft / approve / reject / export / reconcile / show)
 auger api         serve auger's read-first HTTP API (Muster contract on :8768)
 ```
 
