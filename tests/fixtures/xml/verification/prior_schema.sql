@@ -1,0 +1,1 @@
+CREATE TABLE prior_record (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
