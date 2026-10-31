@@ -52,12 +52,15 @@ import os
 import re
 import sqlite3
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
-from collections import Counter
+import xml.etree.ElementTree as ET
+from collections import Counter, deque
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 AUGER_VERSION = "0.3"
@@ -7691,6 +7694,632 @@ def cmd_api(a):
     return serve(a.host, a.port)
 
 
+# ---------------------------------------------------------------- XML spec graph (AUG-118)
+# XML specifications are authored as versioned documents; specs/schema/auger-spec-1.0.xsd is the
+# normative grammar and this code is its executable half. Every block carries a stable
+# repository-unique `id` plus typed metadata (`kind`, `status`, `version`, `applies-to`, verification
+# method) and typed reference edges. `assemble` selects by id/attributes and emits the matched
+# blocks PLUS their explicit dependency closure, in corpus order, citing the declaring file for
+# every block. Design record and rationale: docs/SPEC-003-xml-specs.md.
+#
+# Additive by construction: nothing here is reachable from `export`/`render_export`, so the Markdown
+# export contract is byte-identical to before — tests/test_xml_specs.py pins that with a golden.
+# ch:trace row=AUG-118 spec=docs/SPEC-003-xml-specs.md#assembly-and-selection
+
+SPEC_SCHEMA_VERSION = "1.0"  # the version this code emits; SPEC_SCHEMA_VERSIONS is what it accepts
+SPEC_SCHEMA_VERSIONS = ("1.0",)
+SPEC_XML_NAMESPACE = "urn:auger:spec:1"
+SPEC_BLOCK_KINDS = ("section", "requirement", "acceptance", "verification")
+SPEC_STATUSES = ("active", "deprecated", "superseded")
+SPEC_VERIFICATION_METHODS = ("test", "demo", "analysis", "inspection")
+# Typed ID edges. EVERY one must resolve; only the closure attributes are followed by assembly,
+# so `refs`/`implements`/`supersedes` stay navigable and never silently expand a bundle.
+SPEC_EDGE_ATTRS = ("depends-on", "verifies", "refs", "implements", "supersedes")
+SPEC_FORWARD_CLOSURE_ATTRS = ("depends-on",)
+# A block that VERIFIES a selected block belongs to that block's explicit dependency closure: a
+# requirement without its acceptance criteria and verification plan is not the selected contract.
+SPEC_INVERSE_CLOSURE_ATTRS = ("verifies",)
+# Blocks whose verification METHOD is mandatory metadata (`verification=`); a <verification> block
+# carries the same closed set under `method=`.
+SPEC_REQUIRES_METHOD = ("requirement", "acceptance")
+SPEC_ID_RE = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$")
+SPEC_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+SPEC_APPLIES_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
+SPEC_ID_MAX_LEN = 80
+SPEC_FORBIDDEN_DECL_RE = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)", re.IGNORECASE)
+
+
+class SpecError(ValueError):
+    """A typed XML specification refusal: `code` names the rule, `detail` names the evidence."""
+
+    def __init__(self, code: str, detail: str):
+        super().__init__(f"{code}: {detail}")
+        self.code = code
+        self.detail = detail
+
+
+def _spec_local(tag: str) -> str:
+    """The element's local name, namespace stripped (stdlib ElementTree keeps `{ns}tag`)."""
+    return tag.rsplit("}", 1)[-1]
+
+
+def _spec_namespace(tag: str) -> str:
+    """The element's namespace, or '' for an unnamespaced document."""
+    return tag[1:].split("}", 1)[0] if tag.startswith("{") else ""
+
+
+def _spec_text(element) -> str:
+    """Normalized body text: full prose for a leaf, the block's own intro for a section."""
+    nested = [child for child in element if _spec_local(child.tag) in SPEC_BLOCK_KINDS]
+    if nested:
+        return " ".join((element.text or "").split())
+    return " ".join("".join(element.itertext()).split())
+
+
+def _spec_read_document(path: Path, root: Path):
+    """Parse one XML document, refusing entity declarations before any element is built."""
+    rel = path.relative_to(root).as_posix()
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        raise SpecError("unreadable-document", f"{rel}: {exc}") from None
+    if SPEC_FORBIDDEN_DECL_RE.search(raw.decode("utf-8", "replace")):
+        raise SpecError(
+            "external-entity-forbidden",
+            f"{rel}: DOCTYPE/ENTITY declarations are refused "
+            "(no entity expansion, no network fetch)",
+        )
+    try:
+        element = ET.fromstring(raw)
+    except ET.ParseError as exc:
+        raise SpecError("invalid-xml", f"{rel}: {exc}") from None
+    namespace = _spec_namespace(element.tag)
+    if namespace and namespace != SPEC_XML_NAMESPACE:
+        raise SpecError(
+            "unsupported-namespace",
+            f"{rel}: {namespace} (supported: {SPEC_XML_NAMESPACE})",
+        )
+    local = _spec_local(element.tag)
+    if local != "spec":
+        raise SpecError("invalid-root", f"{rel}: <{local}> (expected <spec>)")
+    declared = element.get("schema-version")
+    if declared not in SPEC_SCHEMA_VERSIONS:
+        found = "absent" if declared is None else declared
+        raise SpecError(
+            "unsupported-schema-version",
+            f"{rel}: schema-version {found} "
+            f"(supported: {', '.join(SPEC_SCHEMA_VERSIONS)})",
+        )
+    if not (element.get("id") or "").strip() or not (element.get("version") or "").strip():
+        raise SpecError(
+            "missing-document-metadata", f"{rel}: <spec> requires id and version"
+        )
+    return element
+
+
+def _spec_include_target(element, rel: str, root: Path) -> str:
+    """Resolve an <include src> to a repository-relative path inside the spec root."""
+    src = (element.get("src") or "").strip()
+    if not src:
+        raise SpecError("invalid-include", f"{rel}: <include> requires src")
+    if "://" in src or src.startswith("/") or ".." in Path(src).parts:
+        raise SpecError(
+            "remote-reference-rejected",
+            f"{rel}: include src {src!r} "
+            "(only repository-relative local files are allowed)",
+        )
+    target = (root / src).resolve()
+    try:
+        target_rel = target.relative_to(root).as_posix()
+    except ValueError:
+        raise SpecError(
+            "include-outside-root", f"{rel}: include src {src!r} escapes {root}"
+        ) from None
+    if not target.is_file():
+        raise SpecError("unresolved-include", f"{rel}: include src {src!r} is not a file")
+    return target_rel
+
+
+def _spec_include_map(documents: dict, root: Path) -> dict:
+    """Every document's include targets, with include cycles refused before any traversal."""
+    include_map = {}
+    for rel in sorted(documents):
+        targets = []
+        for element in documents[rel].iter():
+            if _spec_local(element.tag) == "include":
+                targets.append(_spec_include_target(element, rel, root))
+        include_map[rel] = tuple(targets)
+    state: dict[str, str] = {}
+
+    def visit(rel: str, path: list) -> None:
+        mark = state.get(rel)
+        if mark == "done":
+            return
+        if mark == "open":
+            start = path.index(rel)
+            raise SpecError("include-cycle", " -> ".join(path[start:] + [rel]))
+        state[rel] = "open"
+        for target in include_map.get(rel, ()):
+            visit(target, path + [rel])
+        state[rel] = "done"
+
+    for rel in sorted(documents):
+        visit(rel, [])
+    return include_map
+
+
+def _spec_block(element, rel: str, order: int) -> dict:
+    """Validate one block's stable identity and typed metadata, and index its edges."""
+    kind = _spec_local(element.tag)
+    block_id = (element.get("id") or "").strip()
+    if not block_id:
+        raise SpecError("missing-id", f"{rel}: <{kind}> has no id")
+    if len(block_id) > SPEC_ID_MAX_LEN or not SPEC_ID_RE.match(block_id):
+        raise SpecError(
+            "invalid-id",
+            f"{rel}: {block_id!r} (expected UPPER-CASE alphanumerics with at least one "
+            f"dash, at most {SPEC_ID_MAX_LEN} chars)",
+        )
+    declared_kind = (element.get("kind") or "").strip()
+    if not declared_kind:
+        raise SpecError("missing-kind", f"{rel}: {block_id} has no kind attribute")
+    if declared_kind != kind:
+        raise SpecError(
+            "kind-mismatch", f"{rel}: {block_id} kind={declared_kind!r} vs <{kind}>"
+        )
+    status = (element.get("status") or "").strip()
+    if status not in SPEC_STATUSES:
+        found = status or "absent"
+        raise SpecError(
+            "invalid-status",
+            f"{rel}: {block_id} status={found!r} (one of: {', '.join(SPEC_STATUSES)})",
+        )
+    version = (element.get("version") or "").strip()
+    if not SPEC_VERSION_RE.match(version):
+        found = version or "absent"
+        raise SpecError(
+            "invalid-version",
+            f"{rel}: {block_id} version={found!r} (expected X.Y.Z)",
+        )
+    applies_to = tuple((element.get("applies-to") or "").split())
+    for token in applies_to:
+        if not SPEC_APPLIES_RE.match(token):
+            raise SpecError(
+                "invalid-applies-to",
+                f"{rel}: {block_id} applies-to={token!r} "
+                "(expected dotted tokens like auger.export)",
+            )
+    method = ""
+    if kind in SPEC_REQUIRES_METHOD:
+        method = (element.get("verification") or "").strip()
+        attribute = "verification"
+    elif kind == "verification":
+        method = (element.get("method") or "").strip()
+        attribute = "method"
+    if kind in SPEC_REQUIRES_METHOD or kind == "verification":
+        if method not in SPEC_VERIFICATION_METHODS:
+            found = method or "absent"
+            raise SpecError(
+                "invalid-verification-method",
+                f"{rel}: {block_id} {attribute}={found!r} "
+                f"(one of: {', '.join(SPEC_VERIFICATION_METHODS)})",
+            )
+    refs = {}
+    for attribute in SPEC_EDGE_ATTRS:
+        targets = tuple((element.get(attribute) or "").split())
+        if targets:
+            refs[attribute] = targets
+    return {
+        "id": block_id,
+        "kind": kind,
+        "status": status,
+        "version": version,
+        "applies_to": applies_to,
+        "method": method,
+        "refs": refs,
+        "text": _spec_text(element),
+        "source": f"{rel}#{block_id}",
+        "source_file": rel,
+        "order": order,
+    }
+
+
+def _spec_collect(element, rel: str, root: Path, documents: dict, stack: list,
+                  out: list, spliced: dict) -> None:
+    """Walk a document in order, splicing included fragments at their <include> site.
+
+    A fragment may be spliced at exactly ONE site in a corpus: reuse across documents is by
+    explicit ID reference (`depends-on`/`verifies`), not by including the same block twice.
+    A second splice is refused instead of silently duplicating or silently skipping blocks.
+    """
+    for child in element:
+        local = _spec_local(child.tag)
+        if local == "include":
+            target = _spec_include_target(child, rel, root)
+            if target not in documents:
+                raise SpecError("unresolved-include", f"{rel}: {target} was not indexed")
+            origin = spliced.get(target)
+            if origin is not None:
+                raise SpecError(
+                    "duplicate-include",
+                    f"{rel} includes {target}, already spliced into {origin} "
+                    "(reuse a block by ID reference instead of including it twice)",
+                )
+            spliced[target] = rel
+            _spec_collect(
+                documents[target], target, root, documents, stack + [target], out, spliced
+            )
+            continue
+        if local not in SPEC_BLOCK_KINDS:
+            raise SpecError(
+                "unknown-element",
+                f"{rel}: <{local}> is not a spec block "
+                f"(one of: {', '.join(SPEC_BLOCK_KINDS)}, include)",
+            )
+        out.append(_spec_block(child, rel, len(out)))
+
+
+def _spec_refuse_reference_cycles(by_id: dict) -> None:
+    """Refuse any cycle over the typed reference graph, naming the path."""
+    edges = {
+        block_id: sorted(
+            target
+            for attribute in SPEC_EDGE_ATTRS
+            for target in block["refs"].get(attribute, ())
+        )
+        for block_id, block in by_id.items()
+    }
+    state: dict[str, str] = {}
+    for start in sorted(edges):
+        if state.get(start) == "done":
+            continue
+        state[start] = "open"
+        path = [start]
+        stack = [(start, iter(edges[start]))]
+        while stack:
+            node, pending = stack[-1]
+            target = next(pending, None)
+            if target is None:
+                state[node] = "done"
+                stack.pop()
+                path.pop()
+                continue
+            mark = state.get(target)
+            if mark == "open":
+                begin = path.index(target)
+                raise SpecError("reference-cycle", " -> ".join(path[begin:] + [target]))
+            if mark == "done":
+                continue
+            state[target] = "open"
+            path.append(target)
+            stack.append((target, iter(edges[target])))
+
+
+def _spec_validate_blocks(blocks: list) -> dict:
+    """Repository-wide ID and edge constraints. Returns the id -> block index."""
+    by_id: dict = {}
+    for block in blocks:
+        previous = by_id.get(block["id"])
+        if previous is not None:
+            raise SpecError(
+                "duplicate-id",
+                f"{block['id']} declared in {previous['source_file']} "
+                f"and {block['source_file']}",
+            )
+        by_id[block["id"]] = block
+    for block in blocks:
+        for attribute, targets in block["refs"].items():
+            for target in targets:
+                found = by_id.get(target)
+                if found is None:
+                    raise SpecError(
+                        "unresolved-reference",
+                        f"{block['id']} {attribute}={target} (no block with that id)",
+                    )
+                if target == block["id"]:
+                    raise SpecError(
+                        "reference-cycle",
+                        f"{block['id']} {attribute}={target} (self reference)",
+                    )
+                if attribute == "verifies" and found["kind"] != "requirement":
+                    raise SpecError(
+                        "invalid-reference-type",
+                        f"{block['id']} verifies={target} but {target} is a "
+                        f"{found['kind']}",
+                    )
+    _spec_refuse_reference_cycles(by_id)
+    return by_id
+
+
+def load_spec_corpus(spec_root) -> tuple:
+    """Parse and validate every XML document under a spec root.
+
+    Returns (root, documents_by_relpath, blocks_in_corpus_order). Any integrity failure raises a
+    typed SpecError BEFORE a caller can render, so a refusal never yields a partial document.
+    """
+    root = Path(spec_root).expanduser()
+    if not root.is_dir():
+        raise SpecError("missing-spec-root", f"{spec_root} is not a directory")
+    root = root.resolve()
+    paths = sorted(path for path in root.rglob("*.xml") if path.is_file())
+    if not paths:
+        raise SpecError("empty-corpus", f"no *.xml documents under {root}")
+    documents = {
+        path.relative_to(root).as_posix(): _spec_read_document(path, root)
+        for path in paths
+    }
+    include_map = _spec_include_map(documents, root)
+    included = {target for targets in include_map.values() for target in targets}
+    blocks: list = []
+    spliced: dict = {}
+    for rel in sorted(documents):
+        if rel in included:
+            continue  # a fragment: its blocks are assembled at their <include> site
+        _spec_collect(documents[rel], rel, root, documents, [rel], blocks, spliced)
+    if not blocks:
+        raise SpecError(
+            "no-root-document", f"{root}: every document is included by another"
+        )
+    _spec_validate_blocks(blocks)
+    return root, documents, blocks
+
+
+def _spec_describe_selection(ids, kinds, applies_to, statuses, versions) -> str:
+    pairs = (
+        ("id", ids),
+        ("kind", kinds),
+        ("applies-to", applies_to),
+        ("status", statuses),
+        ("version", versions),
+    )
+    parts = [f"{label}={value}" for label, values in pairs for value in values]
+    return ", ".join(parts)
+
+
+def _spec_matches(block: dict, ids, kinds, applies_to, statuses, versions) -> bool:
+    """Attribute matching: AND across criteria, OR within one criterion's repeated values."""
+    if ids and block["id"] not in ids:
+        return False
+    if kinds and block["kind"] not in kinds:
+        return False
+    if applies_to and not (set(applies_to) & set(block["applies_to"])):
+        return False
+    if statuses and block["status"] not in statuses:
+        return False
+    if versions and block["version"] not in versions:
+        return False
+    return True
+
+
+def select_spec_blocks(blocks: list, *, ids=(), kinds=(), applies_to=(), statuses=(),
+                       versions=(), closure: bool = True) -> tuple:
+    """Select by id/attributes and expand ONLY the explicit dependency closure.
+
+    Closure edges: forward `depends-on`, plus INVERSE `verifies` (a block that declares it verifies
+    a selected block is part of that block's explicit closure — its acceptance criterion or
+    verification plan). Every other typed edge must resolve but never expands a bundle.
+    Returns (selection_text, ordered records covering matched + dependency blocks).
+    """
+    ids = tuple(ids)
+    kinds = tuple(kinds)
+    applies_to = tuple(applies_to)
+    statuses = tuple(statuses)
+    versions = tuple(versions)
+    if not (ids or kinds or applies_to or statuses or versions):
+        raise SpecError(
+            "empty-selector",
+            "pass at least one of --id/--kind/--applies-to/--status/--version "
+            "(assembly is never a silent whole-corpus dump)",
+        )
+    selection = _spec_describe_selection(ids, kinds, applies_to, statuses, versions)
+    matched = [
+        block
+        for block in blocks
+        if _spec_matches(block, ids, kinds, applies_to, statuses, versions)
+    ]
+    if not matched:
+        raise SpecError("no-match", f"{selection} matched no block")
+    by_id = {block["id"]: block for block in blocks}
+    inverse: dict = {}
+    for block in blocks:
+        for attribute in SPEC_INVERSE_CLOSURE_ATTRS:
+            for target in block["refs"].get(attribute, ()):
+                inverse.setdefault(target, []).append((block["id"], attribute))
+    chosen = {block["id"]: {"why": "matched", "via": None} for block in matched}
+    if closure:
+        queue = deque(block["id"] for block in matched)
+        while queue:
+            current = queue.popleft()
+            edges = [
+                (target, attribute)
+                for attribute in SPEC_FORWARD_CLOSURE_ATTRS
+                for target in by_id[current]["refs"].get(attribute, ())
+            ]
+            edges.extend(inverse.get(current, ()))
+            for target, attribute in edges:
+                if target in chosen:
+                    continue
+                chosen[target] = {"why": "dependency", "via": f"{current} {attribute}"}
+                queue.append(target)
+    ordered = sorted(chosen, key=lambda block_id: by_id[block_id]["order"])
+    records = [{"block": by_id[block_id], **chosen[block_id]} for block_id in ordered]
+    return selection, records
+
+
+def render_spec_assembly(records: list, *, selection: str,
+                         fmt: str = "markdown",
+                         schema_version: str = SPEC_SCHEMA_VERSION) -> str:
+    """Render a selected bundle. Deterministic: same inputs, byte-identical output."""
+    matched = sum(1 for record in records if record["why"] == "matched")
+    counts = {
+        "matched": matched,
+        "dependencies": len(records) - matched,
+        "total": len(records),
+    }
+    if fmt == "json":
+        payload = {
+            "schema_version": schema_version,
+            "selection": selection,
+            "counts": counts,
+            "blocks": [
+                {
+                    "id": record["block"]["id"],
+                    "kind": record["block"]["kind"],
+                    "status": record["block"]["status"],
+                    "version": record["block"]["version"],
+                    "applies_to": list(record["block"]["applies_to"]),
+                    "method": record["block"]["method"],
+                    "refs": {
+                        key: list(value)
+                        for key, value in record["block"]["refs"].items()
+                    },
+                    "source": record["block"]["source"],
+                    "selection": record["why"],
+                    "via": record["via"],
+                    "text": record["block"]["text"],
+                }
+                for record in records
+            ],
+        }
+        return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    if fmt != "markdown":
+        raise SpecError("unsupported-format", f"{fmt!r} (markdown or json)")
+    lines = [
+        f"# Auger spec assembly — {counts['total']} block(s)",
+        "",
+        f"selector: {selection}",
+        f"matched: {counts['matched']} · dependencies: {counts['dependencies']} "
+        f"· total: {counts['total']}",
+        f"schema: {schema_version}",
+    ]
+    for record in records:
+        block = record["block"]
+        lines.extend(
+            [
+                "",
+                f"## {block['id']} · {block['kind']} · {block['status']} "
+                f"· v{block['version']}",
+                f"- source: {block['source']}",
+            ]
+        )
+        if block["applies_to"]:
+            lines.append(f"- applies-to: {' '.join(block['applies_to'])}")
+        if block["method"]:
+            label = "verification" if block["kind"] in SPEC_REQUIRES_METHOD else "method"
+            lines.append(f"- {label}: {block['method']}")
+        for attribute in SPEC_EDGE_ATTRS:
+            targets = block["refs"].get(attribute)
+            if targets:
+                lines.append(f"- {attribute}: {' '.join(targets)}")
+        if record["why"] == "matched":
+            lines.append("- selection: matched")
+        else:
+            lines.append(f"- selection: dependency (via {record['via']})")
+        if block["text"]:
+            lines.extend(["", block["text"]])
+    return "\n".join(lines) + "\n"
+
+
+def _spec_write_atomic(path, text: str) -> None:
+    """Write `text` to `path` via a sibling temp file + rename, so no partial file is ever left."""
+    target = Path(path).expanduser()
+    directory = target.parent if str(target.parent) else Path(".")
+    handle_fd, temporary = tempfile.mkstemp(
+        prefix=f".{target.name}.", suffix=".tmp", dir=str(directory)
+    )
+    try:
+        with os.fdopen(handle_fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(temporary, target)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
+        raise
+
+
+def cmd_spec(a):
+    """`auger spec validate|list|assemble` — the XML spec authoring surface (AUG-118)."""
+    try:
+        return _spec_dispatch(a)
+    except SpecError as exc:
+        print(f"spec error ({exc.code}): {exc.detail}", file=sys.stderr)
+        raise SystemExit(2) from None
+
+
+def _spec_dispatch(a):
+    _root, documents, blocks = load_spec_corpus(a.root)
+    command = getattr(a, "spec_cmd", "validate")
+    if command == "validate":
+        references = sum(
+            len(targets) for block in blocks for targets in block["refs"].values()
+        )
+        print(
+            f"spec: {len(documents)} document(s), {len(blocks)} block(s), "
+            f"{references} reference(s) ok"
+        )
+        return 0
+    ids = tuple(getattr(a, "id", None) or ())
+    kinds = tuple(getattr(a, "kind", None) or ())
+    applies_to = tuple(getattr(a, "applies_to", None) or ())
+    statuses = tuple(getattr(a, "status", None) or ())
+    versions = tuple(getattr(a, "version", None) or ())
+    if command == "list":
+        for block in blocks:
+            if not _spec_matches(block, ids, kinds, applies_to, statuses, versions):
+                continue
+            scopes = " ".join(block["applies_to"]) or "-"
+            print(
+                f"{block['id']}\t{block['kind']}\t{block['status']}\t"
+                f"{block['version']}\t{block['source']}\t{scopes}"
+            )
+        return 0
+    selection, records = select_spec_blocks(
+        blocks,
+        ids=ids,
+        kinds=kinds,
+        applies_to=applies_to,
+        statuses=statuses,
+        versions=versions,
+        closure=not getattr(a, "no_deps", False),
+    )
+    text = render_spec_assembly(records, selection=selection, fmt=a.format)
+    out = getattr(a, "out", None)
+    if out:
+        _spec_write_atomic(out, text)
+        print(f"wrote {len(records)} block(s) to {out}")
+    else:
+        sys.stdout.write(text)
+    return 0
+
+
+def _add_spec_selectors(parser) -> None:
+    """The selector flags `spec list` and `spec assemble` share (AND across, OR within)."""
+    parser.add_argument(
+        "--id", action="append", metavar="BLOCK-ID", help="select this exact block id"
+    )
+    parser.add_argument(
+        "--kind", action="append", choices=SPEC_BLOCK_KINDS, help="select this block kind"
+    )
+    parser.add_argument(
+        "--applies-to",
+        action="append",
+        metavar="SCOPE",
+        help="select blocks that apply to this scope token (for example auger.export)",
+    )
+    parser.add_argument(
+        "--status",
+        action="append",
+        choices=SPEC_STATUSES,
+        help="select this lifecycle status",
+    )
+    parser.add_argument(
+        "--version",
+        action="append",
+        metavar="X.Y.Z",
+        help="select this block version attribute",
+    )
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="auger", description="spec drilling backed by DuckBrain"
@@ -8019,6 +8648,49 @@ def main(argv=None):
     r.add_argument("--costs", help="what choosing this option costs")
     r.add_argument("--breaks", help="what choosing this option breaks")
     r.set_defaults(fn=cmd_record_option)
+
+    s = sub.add_parser(
+        "spec",
+        help="validate and assemble XML specifications (AUG-118: IDs, typed metadata, "
+        "attribute selection, cross-file assembly)",
+    )
+    spec_sub = s.add_subparsers(dest="spec_cmd", required=True)
+
+    v = spec_sub.add_parser(
+        "validate",
+        help="validate a spec corpus: schema version, stable IDs, typed edges, methods",
+    )
+    v.add_argument("root", help="spec root directory; every *.xml below it is indexed")
+    v.set_defaults(fn=cmd_spec)
+
+    lst = spec_sub.add_parser(
+        "list", help="list blocks with their kind, status, version and source citation"
+    )
+    lst.add_argument("root")
+    _add_spec_selectors(lst)
+    lst.set_defaults(fn=cmd_spec)
+
+    asm = spec_sub.add_parser(
+        "assemble",
+        help="select blocks by ID/attributes and assemble them deterministically "
+        "(matched blocks plus their explicit dependency closure)",
+    )
+    asm.add_argument("root")
+    _add_spec_selectors(asm)
+    asm.add_argument(
+        "--no-deps",
+        action="store_true",
+        help="emit only the matched blocks (no depends-on/verifies closure)",
+    )
+    asm.add_argument(
+        "--format", choices=("markdown", "json"), default="markdown",
+        help="output format (default markdown)",
+    )
+    asm.add_argument(
+        "--out",
+        help="write the assembly here atomically; nothing is created when the run refuses",
+    )
+    asm.set_defaults(fn=cmd_spec)
 
     a = ap.parse_args(argv)
     return a.fn(a)

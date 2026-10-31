@@ -5,11 +5,11 @@ write. This is the contract — the verb names are public, and every argument li
 exists in the verb's `add_parser` definition in `auger.py`. If the code and this file
 disagree, the code wins and this file is a bug.
 
-The 17 top-level verbs — one `add_parser` registration each in `auger.py`, and the count here is
+The 18 top-level verbs — one `add_parser` registration each in `auger.py`, and the count here is
 the registry's own, not a hand-kept tally — in the order `auger --help` lists them:
 
 ```
-init  start  bundle  ask  answer  check  status  toggle  dump  export  propagate  feedback  recall  serve  api  verdict  record
+init  start  bundle  ask  answer  check  status  toggle  dump  export  propagate  feedback  recall  serve  api  verdict  record  spec
 ```
 
 Conventions every verb shares:
@@ -594,3 +594,33 @@ with an empty required field; an assumption without a falsifier; a `record optio
 neither `--costs` nor `--breaks`; a PATCH that changes nothing; anything in any other table —
 `record` never touches decisions, questions, edges, facets, or the `active` selection flags
 (a costs/breaks record is not a toggle).
+
+## spec
+
+Author, validate and assemble XML specifications (AUG-118). This verb is the one verb that
+reads NO DuckBrain state: it works on a directory of XML documents in the repository and
+writes nothing back to them. Subcommands:
+
+- `auger spec validate ROOT` — schema version, stable IDs, typed metadata, reference edges,
+  include graph and verification methods.
+- `auger spec list ROOT [--id ID] [--kind K] [--applies-to SCOPE] [--status S] [--version X.Y.Z]`
+- `auger spec assemble ROOT <the same selectors> [--no-deps] [--format markdown|json] [--out PATH]`
+
+Corpus: every `*.xml` under ROOT. Selection is AND across different flags and OR within one
+flag's repeated values (the `--option`/`--on` shape). Assembly emits the matched blocks plus
+their explicit dependency closure — forward `depends-on`, and INVERSE `verifies` (a block that
+declares it verifies a selected block is part of that block's closure) — in corpus order, each
+with a `source: <file>#<id>` citation. `refs`/`implements`/`supersedes` must resolve but never
+expand. `--no-deps` emits the matched set alone.
+
+**Writes:** nothing in DuckBrain and nothing in the corpus. `--out PATH` writes the assembled
+document through a sibling temp file plus `os.replace`, so a refusal never leaves a partial
+document — the file is created only after the whole corpus has validated. Success prints
+`wrote N block(s) to PATH`; without `--out` the document goes to stdout.
+
+**Never writes:** a row, a namespace, a table declaration, an embedded memory, or any XML file
+it read. A refusal (typed `spec error (<code>): <detail>`, exit 2) prints nothing on stdout and
+creates no `--out` file. An empty selector is refused — assembly is never a silent whole-corpus
+dump — and so is a selector that matches nothing. The design record, the schema
+(`specs/schema/auger-spec-1.0.xsd`) and the refusal-code table live in
+[docs/SPEC-003-xml-specs.md](SPEC-003-xml-specs.md).

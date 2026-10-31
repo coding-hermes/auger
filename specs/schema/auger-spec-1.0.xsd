@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  auger XML specification grammar — schema version 1.0 (AUG-118).
+
+  This file is the normative grammar for authored specs: `auger spec validate` accepts exactly the
+  documents this schema describes, and `auger spec assemble` selects from the same block model.
+  The schema version a document declares (`schema-version="1.0"` on <spec>) names THIS file; a
+  document declaring any other version is refused rather than guessed at.
+
+  Design record: docs/SPEC-003-xml-specs.md.
+  ch:trace row=AUG-118 spec=docs/SPEC-003-xml-specs.md#the-schema
+
+  The pattern/enumeration strings below are byte-identical to the constants in auger.py
+  (SPEC_ID_RE, SPEC_VERSION_RE, SPEC_APPLIES_RE, SPEC_BLOCK_KINDS, SPEC_STATUSES,
+  SPEC_VERIFICATION_METHODS, SPEC_SCHEMA_VERSIONS); tests/test_xml_specs.py compares them so the
+  prose grammar and the executable validator cannot drift apart.
+-->
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:auger="urn:auger:spec:1"
+           targetNamespace="urn:auger:spec:1"
+           elementFormDefault="qualified"
+           attributeFormDefault="unqualified"
+           version="1.0">
+
+  <!-- A stable block ID: upper-case alphanumerics with at least one dash, never renumbered. -->
+  <xs:simpleType name="stableId">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$"/>
+      <xs:maxLength value="80"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- The block's own revision, independent of the document version. -->
+  <xs:simpleType name="semanticVersion">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="^[0-9]+\.[0-9]+\.[0-9]+$"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- An applicability scope token, e.g. auger.export. -->
+  <xs:simpleType name="scopeToken">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="^[a-z0-9]+(?:[._-][a-z0-9]+)*$"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="blockKind">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="section"/>
+      <xs:enumeration value="requirement"/>
+      <xs:enumeration value="acceptance"/>
+      <xs:enumeration value="verification"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="lifecycleStatus">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="active"/>
+      <xs:enumeration value="deprecated"/>
+      <xs:enumeration value="superseded"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="verificationMethod">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="test"/>
+      <xs:enumeration value="demo"/>
+      <xs:enumeration value="analysis"/>
+      <xs:enumeration value="inspection"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="schemaVersion">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="1.0"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!-- Whitespace-separated list of stable IDs, resolved repository-wide. -->
+  <xs:simpleType name="idRefList">
+    <xs:list itemType="auger:stableId"/>
+  </xs:simpleType>
+
+  <!-- Whitespace-separated list of applicability scope tokens. -->
+  <xs:simpleType name="scopeList">
+    <xs:list itemType="auger:scopeToken"/>
+  </xs:simpleType>
+
+  <!--
+    One block. `kind` must equal the element name (the validator refuses a mismatch), so a
+    selector can filter on `kind` uniformly across mixed element names.
+    `verification` is required on <requirement> and <acceptance>; a <verification> block carries
+    the same closed set under `method`.
+  -->
+  <xs:complexType name="blockType" mixed="true">
+    <xs:choice minOccurs="0" maxOccurs="unbounded">
+      <xs:element ref="auger:block"/>
+      <xs:element ref="auger:include"/>
+    </xs:choice>
+    <xs:attribute name="id" type="auger:stableId" use="required"/>
+    <xs:attribute name="kind" type="auger:blockKind" use="required"/>
+    <xs:attribute name="status" type="auger:lifecycleStatus" use="required"/>
+    <xs:attribute name="version" type="auger:semanticVersion" use="required"/>
+    <xs:attribute name="applies-to" type="auger:scopeList" use="optional"/>
+    <xs:attribute name="verification" type="auger:verificationMethod" use="optional"/>
+    <xs:attribute name="method" type="auger:verificationMethod" use="optional"/>
+    <xs:attribute name="depends-on" type="auger:idRefList" use="optional"/>
+    <xs:attribute name="verifies" type="auger:idRefList" use="optional"/>
+    <xs:attribute name="refs" type="auger:idRefList" use="optional"/>
+    <xs:attribute name="implements" type="auger:idRefList" use="optional"/>
+    <xs:attribute name="supersedes" type="auger:idRefList" use="optional"/>
+  </xs:complexType>
+
+  <xs:element name="block" type="auger:blockType" abstract="true"/>
+
+  <xs:element name="section" type="auger:blockType" substitutionGroup="auger:block"/>
+  <xs:element name="requirement" type="auger:blockType" substitutionGroup="auger:block"/>
+  <xs:element name="acceptance" type="auger:blockType" substitutionGroup="auger:block"/>
+  <xs:element name="verification" type="auger:blockType" substitutionGroup="auger:block"/>
+
+  <!--
+    Include another authored document at this position. Local repository-relative paths only:
+    scheme-bearing, absolute and `..` sources are refused, and an include cycle is refused
+    before any fragment is assembled.
+  -->
+  <xs:element name="include">
+    <xs:complexType>
+      <xs:attribute name="src" type="xs:string" use="required"/>
+    </xs:complexType>
+  </xs:element>
+
+  <xs:element name="spec">
+    <xs:complexType>
+      <xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element ref="auger:block"/>
+        <xs:element ref="auger:include"/>
+      </xs:choice>
+      <xs:attribute name="id" type="auger:stableId" use="required"/>
+      <xs:attribute name="version" type="auger:semanticVersion" use="required"/>
+      <xs:attribute name="schema-version" type="auger:schemaVersion" use="required"/>
+    </xs:complexType>
+  </xs:element>
+
+</xs:schema>

@@ -137,7 +137,10 @@ run_pytest_arm(){
   local budget="${AUGER_GATE_PYTEST_BUDGET:-2400s}"
   local kill_after="${AUGER_GATE_PYTEST_KILL_AFTER:-30s}"
   local rc=0
-  setsid timeout --kill-after="$kill_after" "$budget" python3 -m pytest tests/test_auger.py tests/test_openapi_parity.py tests/test_api_service.py tests/test_upgrade_path.py "$@" || rc=$?
+  # tests/test_xml_specs.py (AUG-118): the XML spec corpus suite — hermetic (no DuckBrain, no JEV),
+  # so it runs in the hosted-CI mode too. Named here so the guard's test command (`bash tests/gate.sh`)
+  # cannot silently stop covering the XML surface.
+  setsid timeout --kill-after="$kill_after" "$budget" python3 -m pytest tests/test_auger.py tests/test_openapi_parity.py tests/test_api_service.py tests/test_upgrade_path.py tests/test_xml_specs.py "$@" || rc=$?
   if [ "$rc" -eq 124 ]; then
     echo "GATE TIMEOUT: the pytest arm exceeded ${budget} and was killed as a process group (setsid+timeout, AUG-081) — investigate hung tests; failing the gate" >&2
     exit 1
