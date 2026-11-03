@@ -5,6 +5,7 @@ ch:trace row=AUG-123 spec=docs/prd/xml-spec-graph.md#R15 test=tests/test_verific
 
 from __future__ import annotations
 
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -29,6 +30,22 @@ def _write_spec(root: Path, blocks: str) -> Path:
 
 def test_invalid_test_refs_fail_closed(tmp_path: Path) -> None:
     """Duplicate, dangling, stale, and untracked refs fail before bundle assembly."""
+    # The untracked case needs a file that EXISTS under the repository root but is
+    # not in git. A build artifact (auger.egg-info/PKG-INFO) only exists on a box
+    # with an editable install, so the check passed locally and could never pass on
+    # a clean checkout: make the probe file ourselves.
+    untracked = REPO_ROOT / f".untracked-test-ref-probe-{os.getpid()}.txt"
+    untracked.write_text("probe\n", encoding="utf-8")
+    try:
+        assert untracked.is_file()
+        _assert_invalid_refs_fail_closed(
+            tmp_path, untracked.relative_to(REPO_ROOT).as_posix()
+        )
+    finally:
+        untracked.unlink(missing_ok=True)
+
+
+def _assert_invalid_refs_fail_closed(tmp_path: Path, untracked_test_path: str) -> None:
     cases = [
         (
             '<requirement id="REQ-MIG-1" verifies="TEST-MIG-1"/>'
@@ -53,7 +70,7 @@ def test_invalid_test_refs_fail_closed(tmp_path: Path) -> None:
         ),
         (
             '<requirement id="REQ-MIG-1" verifies="TEST-MIG-1"/>'
-            '<test id="TEST-MIG-1" runner="pytest" path="auger.egg-info/PKG-INFO" selector="ref"/>',
+            f'<test id="TEST-MIG-1" runner="pytest" path="{untracked_test_path}" selector="ref"/>',
             "untracked-test-ref",
             "REQ-MIG-1",
             "TEST-MIG-1",
@@ -121,3 +138,23 @@ def test_migration_obligation_applies_named_file(tmp_path: Path) -> None:
     no_op_database.executescript("")
     with pytest.raises(AssertionError):
         assert_migration_result(no_op_database)
+
+
+def test_gate_runs_the_xml_proof_suites() -> None:
+    """These proofs are only proofs if the guard/CI actually runs them (AUG-123 AC-17).
+
+    They were absent from tests/gate.sh's pytest arm until 2026-11-03, so a red
+    test_usage_skill.py sat on main while CI reported success.
+    """
+    gate = (REPO_ROOT / "tests" / "gate.sh").read_text(encoding="utf-8")
+    arm = [line for line in gate.splitlines() if "python3 -m pytest" in line]
+    assert arm, "tests/gate.sh must have a pytest arm"
+    for required in (
+        "tests/test_verification_graph.py",
+        "tests/test_xml_specs.py",
+        "tests/test_usage_skill.py",
+    ):
+        assert required in arm[0], (
+            f"{required} must be in tests/gate.sh's pytest arm — the guard's test "
+            "command is the gate, so a suite outside it is never enforced"
+        )

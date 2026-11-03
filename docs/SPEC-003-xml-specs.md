@@ -5,9 +5,13 @@
 
 Feature request and full product rationale: `docs/prd/xml-spec-graph.md` (board rows
 `AUG-118`–`AUG-124`). This document is the **engineering design record for the first slice**: the
-XML source model, the selector/assembler, and the refusal contract. Later slices (task packets,
-one-pass context retrieval, typed test obligations, staged-diff checking) build on this model and
-are deliberately out of scope here.
+XML source model, the selector/assembler, and the refusal contract.
+
+Slice 2 (typed verification/test obligations, `AUG-123`) landed on top of this model and is
+documented separately in `docs/XML-SPEC-SCHEMA.md` — read that for `<test>` nodes, runner
+selectors and migration obligations. Task packets, one-pass context retrieval and the staged-diff
+checker are still **not built**: for requirement-by-requirement implementation status (and which
+test proves each one), use `docs/XML-SPEC-COVERAGE.md` rather than this design record.
 
 ## Rationale
 

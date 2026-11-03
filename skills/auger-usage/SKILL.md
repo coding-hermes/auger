@@ -271,12 +271,12 @@ python3 auger.py -n <ns> recall "any seed phrase"   # proves embeddings
   domains (35 of the 44, whose grid header reads `terminating_ring: null`) advance
   through a delete+insert rewrite because the substrate's PATCH refuses the stored
   null with 422. If even the rewrite fails, `answer` still exits 0 with the
-  decision stored but prints one `WARNING domain <num> row <id>: ...` line naming
-  the substrate's error, and the suffix persists as the drift signal: the evidence
-  count is real, but the stored seed-row status is stale and the failed write
-  needs investigation. Do not dismiss or distrust the parenthetical; use it
-  together with the leading `answered` state, the `decisions/questions` count, and
-  the WARNING line from the answer that produced it.
+  decision stored but surfaces one `WARNING domain <num> row <id>: ...` line naming
+  the substrate's error — read that as a surfaced warning and drift signal: the
+  evidence count is real, but the stored seed-row status is stale and the failed
+  advance write needs investigation. Do not dismiss or distrust the parenthetical;
+  use it together with the leading `answered` state, the `decisions/questions`
+  count, and the WARNING line from the answer that produced it.
 - **On a gridless namespace the coverage map is blind to your answers
   (AUG-112, filed 2026-10-27).** Without `init --seed-domains` the rows are
   absent, and `status` prints "answered 0" plus "44 absent" even when decisions
