@@ -140,6 +140,38 @@ def test_migration_obligation_applies_named_file(tmp_path: Path) -> None:
         assert_migration_result(no_op_database)
 
 
+def test_method_test_is_an_obligation_without_a_type_attribute(tmp_path: Path) -> None:
+    """`method="test"` marks a test obligation exactly like `type="test"` (AUG-128).
+
+    The obligation gate keyed on `type` alone, and the shipped migration fixture writes
+    `method="test"` — so the shape the docs and fixtures actually use had its path,
+    selector, migration, fixture and assertions checked by nothing. Measured before the
+    fix: pointing such a node at a file that does not exist returned "ok" and exit 0.
+    """
+    spec_root = _write_spec(
+        tmp_path,
+        '<requirement id="REQ-MIG-1" verifies="TEST-MIG-1"/>'
+        '<verification id="TEST-MIG-1" verifies="REQ-MIG-1" method="test"'
+        ' runner="pytest" selector="test_whatever"'
+        ' path="tests/does-not-exist.py"/>',
+    )
+    with pytest.raises(auger.SpecValidationError) as caught:
+        auger.validate_xml_specs(spec_root)
+    assert "stale-test-ref" in str(caught.value)
+    assert "TEST-MIG-1" in str(caught.value)
+
+
+def test_non_test_methods_are_not_forced_through_test_checks(tmp_path: Path) -> None:
+    """A manual/analysis obligation must not be rejected for lacking a runner or path."""
+    spec_root = _write_spec(
+        tmp_path,
+        '<requirement id="REQ-MAN-1" verifies="MAN-1"/>'
+        '<verification id="MAN-1" verifies="REQ-MAN-1" method="manual"/>',
+    )
+    nodes = auger.validate_xml_specs(spec_root)
+    assert "MAN-1" in nodes
+
+
 def test_gate_runs_the_xml_proof_suites() -> None:
     """These proofs are only proofs if the guard/CI actually runs them (AUG-123 AC-17).
 

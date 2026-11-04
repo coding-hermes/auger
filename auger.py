@@ -8444,7 +8444,17 @@ def validate_xml_specs(spec_root):
             )
         if node.get("type", "test") not in {"test", "manual", "analysis", "inspection"}:
             raise SpecValidationError(f"invalid-verification-type: {node_id}")
-        if node.tag == "test" or node.get("type") == "test":
+        # AUG-128: `method="test"` is the shape the schema and the shipped fixtures use
+        # (specs/schema/auger-spec-1.0.xsd allows both `verification` and `method` on a
+        # block). Keying the obligation gate on `type` alone left every documented test
+        # obligation unvalidated: a node pointing at a file that does not exist, with a
+        # selector that does not exist, validated "ok" and exited 0.
+        is_test_obligation = (
+            node.tag == "test"
+            or node.get("type") == "test"
+            or node.get("method") == "test"
+        )
+        if is_test_obligation:
             runner = node.get("runner", "")
             selector = node.get("selector", "")
             test_path = node.get("path", "")
