@@ -199,6 +199,12 @@ def leftovers(scope: list[str] | None = None) -> dict[str, list[str]]:
 #: of the old per-namespace 600s stall. Persistent residue remains a loud failure.
 TEARDOWN_CONFLICT_BACKOFFS = (1, 2, 4, 8, 16, 30)
 
+#: Waits between attempts to remove the DIRECTORY of a namespace whose DELETE already settled
+#: (AUG-131). A concurrent DuckBrain indexer can recreate `<ns>/.embeddings/...` after the
+#: delete, and the API's own rmtree then answers ENOTEMPTY. The window is sub-second, so the
+#: budget is short by design: sum(REMOVAL_BACKOFFS) ≈ 1.9s per namespace in the worst case.
+REMOVAL_BACKOFFS = (0.0, 0.1, 0.25, 0.5, 1.0)
+
 
 def teardown_namespace(ns: str) -> list[str]:
     """Remove a test namespace over BOTH paths. Returns the problems it could not fix.
@@ -253,9 +259,27 @@ def teardown_namespace(ns: str) -> list[str]:
 
     path = ns_path(ns)
     if deleted:
-        shutil.rmtree(path, ignore_errors=True)
+        # A SETTLED DELETE CAN STILL BE UNDONE BY A CONCURRENT INDEXER (AUG-131). DuckBrain
+        # writes embeddings into `<ns>/.embeddings/<model>/` on its own thread; if that write
+        # lands after the delete it recreates the directory, and rmtree racing it returns
+        # ENOTEMPTY from the API (observed 500 "Failed to remove namespace directory:
+        # ENOTEMPTY", twice in a row on 2026-11-03). The window is short but real, so removal
+        # gets a bounded retry budget: remove, re-check, re-issue the DELETE when the tree came
+        # back (its registry row may have come back with it), and only report what survives.
+        for wait in REMOVAL_BACKOFFS:
+            if wait:
+                time.sleep(wait)
+            shutil.rmtree(path, ignore_errors=True)
+            if not os.path.exists(path):
+                break
+            status, _body = auger.delete_namespace(ns)
+            if status == 404:
+                # the row is gone and only the tree came back: another rmtree is enough
+                continue
         if os.path.exists(path):
-            problems.append(f"directory still present: {path}")
+            problems.append(
+                f"directory still present after {len(REMOVAL_BACKOFFS)} removal attempts: {path}"
+            )
     else:
         # Registry mapping survived -> directory kept: a half-torn namespace whose row and
         # directory still AGREE is repairable (a later DELETE, or an operator's cleanup,
@@ -349,8 +373,11 @@ def _process_command_lines() -> list[tuple[int, str]]:
         if not entry.name.isdigit():
             continue
         try:
-            command = (entry / "cmdline").read_bytes().replace(b"\\x00", b" ").decode(
-                errors="replace"
+            command = (
+                (entry / "cmdline")
+                .read_bytes()
+                .replace(b"\\x00", b" ")
+                .decode(errors="replace")
             )
         except OSError:
             continue
@@ -414,7 +441,10 @@ def _foreign_substrate_lock_holder() -> int | None:
                             held = os.stat(held_fd)
                         except OSError:
                             continue
-                        if (held.st_dev, held.st_ino) == (identity.st_dev, identity.st_ino):
+                        if (held.st_dev, held.st_ino) == (
+                            identity.st_dev,
+                            identity.st_ino,
+                        ):
                             return int(entry.name)
                 except OSError:
                     continue
