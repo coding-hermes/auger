@@ -249,7 +249,11 @@ def test_selects_only_requested_blocks_and_their_dependencies() -> None:
     # The requirement's acceptance criterion and its depends-on target are the closure.
     assert "- selection: dependency (via AUG-REQ-030 verifies)" in out
     assert "- selection: dependency (via AUG-REQ-030 depends-on)" in out
-    sources = {line.split("- source: ", 1)[1] for line in out.splitlines() if "- source: " in line}
+    sources = {
+        line.split("- source: ", 1)[1]
+        for line in out.splitlines()
+        if "- source: " in line
+    }
     assert sources == {
         "assembly.xml#AUG-REQ-030",
         "assembly.xml#AUG-AC-030-1",
@@ -262,8 +266,14 @@ def test_selects_only_requested_blocks_and_their_dependencies() -> None:
 def test_selection_matches_the_golden() -> None:
     """AC-4: the attribute selection is pinned to a checked-in golden document."""
     code, out, err = run_spec(
-        "assemble", str(SPECS),
-        "--kind", "requirement", "--applies-to", "auger.export", "--status", "active",
+        "assemble",
+        str(SPECS),
+        "--kind",
+        "requirement",
+        "--applies-to",
+        "auger.export",
+        "--status",
+        "active",
     )
     assert code == 0, err
     golden = (EXPECTED / "assembly-active-auger-export.md").read_text(encoding="utf-8")
@@ -282,7 +292,9 @@ def test_selection_matches_the_golden() -> None:
 
 def test_no_deps_emits_only_the_matched_block() -> None:
     """The closure is explicit and switchable: --no-deps is the matched set alone."""
-    code, out, err = run_spec("assemble", str(SPECS), "--id", "AUG-REQ-014", "--no-deps")
+    code, out, err = run_spec(
+        "assemble", str(SPECS), "--id", "AUG-REQ-014", "--no-deps"
+    )
     assert code == 0, err
     assert assembled_ids(out) == ["AUG-REQ-014"]
     assert "matched: 1 · dependencies: 0 · total: 1" in out
@@ -291,16 +303,25 @@ def test_no_deps_emits_only_the_matched_block() -> None:
 def test_selection_is_byte_identical_across_runs() -> None:
     """AC-2: deterministic bytes and provenance order; the JSON view carries both counts."""
     args = (
-        "assemble", str(SPECS), "--kind", "requirement", "--applies-to", "auger.export",
-        "--status", "active", "--format", "json",
+        "assemble",
+        str(SPECS),
+        "--kind",
+        "requirement",
+        "--applies-to",
+        "auger.export",
+        "--status",
+        "active",
+        "--format",
+        "json",
     )
     first_code, first, first_err = run_spec(*args)
     second_code, second, second_err = run_spec(*args)
     assert (first_code, second_code) == (0, 0), (first_err, second_err)
     assert first == second
-    assert hashlib.sha256(first.encode()).hexdigest() == hashlib.sha256(
-        second.encode()
-    ).hexdigest()
+    assert (
+        hashlib.sha256(first.encode()).hexdigest()
+        == hashlib.sha256(second.encode()).hexdigest()
+    )
 
     payload = json.loads(first)
     assert payload["schema_version"] == auger.SPEC_SCHEMA_VERSION
@@ -370,15 +391,18 @@ REFUSALS = [
 
 
 @pytest.mark.parametrize("fixture,code_name", REFUSALS)
-def test_refusals_are_typed_and_emit_no_document(fixture: str, code_name: str,
-                                                 tmp_path: Path) -> None:
+def test_refusals_are_typed_and_emit_no_document(
+    fixture: str, code_name: str, tmp_path: Path
+) -> None:
     """AC-3: each integrity failure is a typed non-zero refusal with no partial document."""
     root = INVALID / fixture
     assert root.is_dir(), f"missing refusal fixture {root}"
 
     validate_code, validate_out, validate_err = run_spec("validate", str(root))
     assert validate_code == 2, (fixture, validate_out, validate_err)
-    assert validate_out == "", f"{fixture} emitted output before refusing: {validate_out!r}"
+    assert validate_out == "", (
+        f"{fixture} emitted output before refusing: {validate_out!r}"
+    )
     assert f"spec error ({code_name})" in validate_err, validate_err
 
     target = tmp_path / "assembled.md"
@@ -386,7 +410,9 @@ def test_refusals_are_typed_and_emit_no_document(fixture: str, code_name: str,
         "assemble", str(root), "--kind", "requirement", "--out", str(target)
     )
     assert assemble_code == 2, (fixture, assemble_out, assemble_err)
-    assert assemble_out == "", f"{fixture} emitted output before refusing: {assemble_out!r}"
+    assert assemble_out == "", (
+        f"{fixture} emitted output before refusing: {assemble_out!r}"
+    )
     assert f"spec error ({code_name})" in assemble_err, assemble_err
     assert not target.exists(), f"{fixture} left a partial document at {target}"
 
@@ -420,8 +446,9 @@ def test_unknown_id_is_a_typed_no_match(tmp_path: Path) -> None:
 def test_successful_out_is_written_atomically(tmp_path: Path) -> None:
     """The happy path writes the file the failure path must never create."""
     target = tmp_path / "assembled.md"
-    code, out, err = run_spec("assemble", str(SPECS), "--id", "AUG-REQ-030",
-                              "--out", str(target))
+    code, out, err = run_spec(
+        "assemble", str(SPECS), "--id", "AUG-REQ-030", "--out", str(target)
+    )
     assert code == 0, err
     assert out.strip() == f"wrote 3 block(s) to {target}"
     assert target.read_text(encoding="utf-8").startswith("# Auger spec assembly")
@@ -458,7 +485,9 @@ def test_spec_doc_records_the_decision() -> None:
         "the trace must name a repository-relative spec anchor"
     )
     assert "tests/test_xml_specs.py" in doc, "the spec must name its test evidence"
-    assert "tests/fixtures/xml/expected" in doc, "the spec must name its golden evidence"
+    assert "tests/fixtures/xml/expected" in doc, (
+        "the spec must name its golden evidence"
+    )
 
 
 def test_gate_runs_these_tests() -> None:
@@ -467,10 +496,7 @@ def test_gate_runs_these_tests() -> None:
     assert "tests/test_xml_specs.py" in gate, (
         "tests/gate.sh must run tests/test_xml_specs.py — the guard's test command is the gate"
     )
-    arm = [
-        line for line in gate.splitlines()
-        if "python3 -m pytest" in line
-    ]
+    arm = [line for line in gate.splitlines() if "python3 -m pytest" in line]
     assert arm and "tests/test_xml_specs.py" in arm[0], (
         "the file must be in the pytest arm's explicit file list"
     )
@@ -553,3 +579,53 @@ def test_serialized_runner_is_argument_vector_not_shell_command():
     ][0]["runner"]
     assert isinstance(argv, list)
     assert argv == [sys.executable, "-m", "pytest"]
+
+
+# --------------------------------- AC-17: the obligation verbs are reachable from the CLI
+# AUG-126: `spec validate` counts documents/blocks/references and passed a corpus whose
+# test reference pointed at tests/does-not-exist.py. The obligation validator resolved
+# paths, selectors, migrations and fixtures, but had no CLI verb — these four tests are
+# what keeps it reachable, because a capability that only exists in Python is a capability
+# the drill workflow cannot use.
+
+
+def test_spec_check_validates_obligations_not_just_counts() -> None:
+    code, out, err = run_spec("check", str(VERIFICATION_FIXTURES))
+    assert code == 0, err
+    payload = json.loads(out)
+    assert payload["status"] == "valid"
+    assert "REQ-MIG-1" in payload["nodes"]
+
+
+def test_spec_check_refuses_a_missing_test_path(tmp_path: Path) -> None:
+    text = (VERIFICATION_FIXTURES / "migration.xml").read_text(encoding="utf-8")
+    assert 'path="tests/test_xml_specs.py"' in text, "fixture drifted; update this test"
+    bad = tmp_path / "bad.xml"
+    bad.write_text(
+        text.replace(
+            'path="tests/test_xml_specs.py"', 'path="tests/does-not-exist.py"'
+        ),
+        encoding="utf-8",
+    )
+    code, _out, err = run_spec("check", str(tmp_path))
+    assert code == 2, "a missing test path must refuse, not report ok"
+    assert "stale-test-ref" in err
+    assert "TEST-MIG-1" in err
+
+
+def test_spec_bundle_emits_the_requirement_verification_set() -> None:
+    code, out, err = run_spec("bundle", str(VERIFICATION_FIXTURES), "REQ-MIG-1")
+    assert code == 0, err
+    payload = json.loads(out)
+    assert payload["id"] == "REQ-MIG-1"
+    ids = [v["id"] for v in payload["verifications"]]
+    assert "TEST-MIG-1" in ids
+    first = payload["verifications"][0]
+    assert first["path"] == "tests/test_xml_specs.py"
+    assert first["selector"]
+
+
+def test_spec_bundle_refuses_an_unknown_requirement() -> None:
+    code, _out, err = run_spec("bundle", str(VERIFICATION_FIXTURES), "REQ-NOPE")
+    assert code == 2
+    assert "unknown-requirement" in err

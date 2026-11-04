@@ -25,8 +25,16 @@ Migration obligations require the exact repository-relative migration path, supp
 Validation reports typed `SpecValidationError` identifiers including `duplicate-id`, `dangling-test-ref`, `dangling-requirement-ref`, `wrong-ref-type`, `invalid-test-ref`, `stale-test-ref`, `stale-migration-ref`, and `incomplete-migration-obligation`. Use:
 
 ```text
-auger spec validate <spec-root>
-auger spec assemble <spec-root> <requirement-id>
+auger spec check   <spec-root>                    # resolve every obligation: path, selector, migration, fixture
+auger spec bundle  <spec-root> <requirement-id>    # one requirement's verification bundle as JSON
+auger spec validate <spec-root>                    # block corpus: documents / blocks / references
+auger spec list    <spec-root>                     # blocks with kind, status, version, source
+auger spec assemble <spec-root> --id <block-id>    # block selection + explicit dependency closure
 ```
+
+`spec check` and `spec bundle` are the verbs that reach the obligation validator and the
+per-requirement assembler. They exist because those two functions were reachable only from
+Python: `spec validate` counts documents and references, so a corpus whose test path pointed
+at a file that does not exist still reported `ok` (AUG-126). Counts are not obligations.
 
 Assembly is deterministic JSON data and does not invoke tests. Consumers may pass the returned registered runner argv and tracked selector to the repository harness under their own policy; XML never executes code.

@@ -8300,6 +8300,27 @@ def cmd_spec(a):
 def _spec_dispatch(a):
     _root, documents, blocks = load_spec_corpus(a.root)
     command = getattr(a, "spec_cmd", "validate")
+    if command == "check":
+        # AUG-126: `spec validate` counts documents/blocks/references in the block
+        # corpus. The obligation validator (validate_xml_specs) — which resolves
+        # tracked test paths, selectors, migrations and fixtures — had no CLI verb at
+        # all, so the checks that matter could only be reached from Python. This is
+        # that verb.
+        try:
+            nodes = validate_xml_specs(a.root)
+        except SpecValidationError as exc:
+            raise SpecError("invalid-spec-graph", str(exc)) from exc
+        print(json.dumps({"status": "valid", "nodes": sorted(nodes)}, sort_keys=True))
+        return 0
+    if command == "bundle":
+        # AUG-126: same story for assemble_xml_requirement — reachable from Python,
+        # unbound on the CLI.
+        try:
+            bundle = assemble_xml_requirement(a.root, a.requirement)
+        except SpecValidationError as exc:
+            raise SpecError("invalid-spec-graph", str(exc)) from exc
+        print(json.dumps(bundle, sort_keys=True, separators=(",", ":")))
+        return 0
     if command == "validate":
         references = sum(
             len(targets) for block in blocks for targets in block["refs"].values()
@@ -8934,6 +8955,25 @@ def main(argv=None):
         help="write the assembly here atomically; nothing is created when the run refuses",
     )
     asm.set_defaults(fn=cmd_spec)
+
+    chk = spec_sub.add_parser(
+        "check",
+        help="validate test obligations: tracked paths, selectors, migrations, fixtures "
+        "(AUG-126: the obligation validator, previously unreachable from the CLI)",
+    )
+    chk.add_argument(
+        "root", help="spec root directory; every *.xml below it is validated"
+    )
+    chk.set_defaults(fn=cmd_spec)
+
+    bnd = spec_sub.add_parser(
+        "bundle",
+        help="emit one requirement's verification bundle as JSON "
+        "(AUG-126: previously unreachable from the CLI)",
+    )
+    bnd.add_argument("root")
+    bnd.add_argument("requirement", help="requirement id to assemble")
+    bnd.set_defaults(fn=cmd_spec)
 
     a = ap.parse_args(argv)
     return a.fn(a)
