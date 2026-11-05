@@ -8277,6 +8277,7 @@ def select_spec_blocks(
     statuses=(),
     versions=(),
     closure: bool = True,
+    empty_ok: bool = False,
 ) -> tuple:
     """Select by id/attributes and expand ONLY the explicit dependency closure.
 
@@ -8284,6 +8285,16 @@ def select_spec_blocks(
     a selected block is part of that block's explicit closure — its acceptance criterion or
     verification plan). Every other typed edge must resolve but never expands a bundle.
     Returns (selection_text, ordered records covering matched + dependency blocks).
+
+    `empty_ok` splits the two shapes a caller must be able to tell apart (AUG-149):
+
+      * no selector at all is always `empty-selector` — assembly is never a silent whole-corpus
+        dump, whatever `empty_ok` says;
+      * a selector that MATCHES NOTHING is `no-match` by default (strict, for Python callers who
+        want a refusal), and with `empty_ok=True` it returns `(selection, [])` so the CLI can
+        report an empty selection as a report instead of an error. The CLI prints a named notice
+        for that shape, because "your selector matched nothing" and "the tool had nothing to say"
+        must not look the same to a script.
     """
     ids = tuple(ids)
     kinds = tuple(kinds)
@@ -8303,7 +8314,10 @@ def select_spec_blocks(
         if _spec_matches(block, ids, kinds, applies_to, statuses, versions)
     ]
     if not matched:
-        raise SpecError("no-match", f"{selection} matched no block")
+        if not empty_ok:
+            raise SpecError("no-match", f"{selection} matched no block")
+        return selection, []
+
     by_id = {block["id"]: block for block in blocks}
     inverse: dict = {}
     for block in blocks:
@@ -8538,7 +8552,9 @@ def _spec_dispatch(a):
     applies_to = tuple(getattr(a, "applies_to", None) or ())
     statuses = tuple(getattr(a, "status", None) or ())
     versions = tuple(getattr(a, "version", None) or ())
+    selected = bool(ids or kinds or applies_to or statuses or versions)
     if command == "list":
+        rows = 0
         for block in blocks:
             if not _spec_matches(block, ids, kinds, applies_to, statuses, versions):
                 continue
@@ -8546,6 +8562,15 @@ def _spec_dispatch(a):
             print(
                 f"{block['id']}\t{block['kind']}\t{block['status']}\t"
                 f"{block['version']}\t{block['source']}\t{scopes}"
+            )
+            rows += 1
+        if selected and not rows:
+            # AUG-149: `list` with NO selector is the whole-corpus listing it documents; a
+            # SELECTOR that matches nothing is a different answer, and an empty stdout alone made
+            # it indistinguishable from a tool that had nothing to say. The notice goes to stderr
+            # so stdout stays parseable (`--format json` has the same contract).
+            _spec_no_match_notice(
+                _spec_describe_selection(ids, kinds, applies_to, statuses, versions)
             )
         return 0
     selection, records = select_spec_blocks(
@@ -8556,7 +8581,10 @@ def _spec_dispatch(a):
         statuses=statuses,
         versions=versions,
         closure=not getattr(a, "no_deps", False),
+        empty_ok=True,
     )
+    if not records:
+        _spec_no_match_notice(selection)
     text = render_spec_assembly(records, selection=selection, fmt=a.format)
     out = getattr(a, "out", None)
     if out:
@@ -8565,6 +8593,21 @@ def _spec_dispatch(a):
     else:
         sys.stdout.write(text)
     return 0
+
+
+def _spec_no_match_notice(selection: str) -> None:
+    """One line on stderr: a selector matched nothing, and that is a report, not a failure.
+
+    AUG-149: the empty-selector case was already refused, so the two shapes had different
+    contracts — refusing "no selector" while answering "selector matched nothing" with silence.
+    A caller scripting the CLI could not tell "your selector matched nothing" from "the tool had
+    nothing to say" without interpreting emptiness. stdout stays whatever the verb renders.
+    """
+    print(
+        f"spec note (no-match): {selection} matched no block "
+        "(empty selection, exit 0 — not a failure)",
+        file=sys.stderr,
+    )
 
 
 def _add_spec_repo_root(parser) -> None:
@@ -9390,7 +9433,16 @@ def main(argv=None):
     v.set_defaults(fn=cmd_spec)
 
     lst = spec_sub.add_parser(
-        "list", help="list blocks with their kind, status, version and source citation"
+        "list",
+        help="list blocks with their kind, status, version and source citation",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "exit codes:\n"
+            "  no selector           0, the whole corpus is listed (this verb's default)\n"
+            "  selector, no match    0, no rows on stdout, and a\n"
+            "                        'spec note (no-match): ...' line on stderr\n"
+            "  selector, matches     0\n"
+        ),
     )
     lst.add_argument("root")
     _add_spec_selectors(lst)
@@ -9400,6 +9452,15 @@ def main(argv=None):
         "assemble",
         help="select blocks by ID/attributes and assemble them deterministically "
         "(matched blocks plus their explicit dependency closure)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "exit codes:\n"
+            "  no selector           2, 'spec error (empty-selector)' — assembly is never a\n"
+            "                        silent whole-corpus dump\n"
+            "  selector, no match    0, an empty selection is emitted (valid document with\n"
+            "                        counts 0) plus a 'spec note (no-match): ...' line on stderr\n"
+            "  selector, matches     0\n"
+        ),
     )
     asm.add_argument("root")
     _add_spec_selectors(asm)

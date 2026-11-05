@@ -453,15 +453,22 @@ def test_empty_selector_refused(tmp_path: Path) -> None:
     assert not target.exists()
 
 
-def test_unknown_id_is_a_typed_no_match(tmp_path: Path) -> None:
+def test_unknown_id_is_a_reported_empty_selection_not_a_refusal(tmp_path: Path) -> None:
+    """AUG-149: a selector that matches nothing is a REPORT (exit 0), never silence.
+
+    Before this, `--id AUG-NOT-A-BLOCK` was a typed `no-match` refusal while `list` on the same
+    selector exited 0 with zero bytes and no diagnostic — two contracts for one shape.
+    """
     target = tmp_path / "assembled.md"
     code, out, err = run_spec(
         "assemble", str(SPECS), "--id", "AUG-NOT-A-BLOCK", "--out", str(target)
     )
-    assert code == 2, (out, err)
-    assert out == ""
-    assert "spec error (no-match)" in err
-    assert not target.exists()
+    assert code == 0, (out, err)
+    assert "spec note (no-match)" in err, err
+    assert "AUG-NOT-A-BLOCK" in err, err
+    assert out.strip() == f"wrote 0 block(s) to {target}", out
+    assert target.is_file(), "an empty selection still renders the document it wrote"
+    assert "# Auger spec assembly — 0 block(s)" in target.read_text(encoding="utf-8")
 
 
 def test_successful_out_is_written_atomically(tmp_path: Path) -> None:
@@ -900,6 +907,79 @@ def test_assemble_out_into_an_existing_directory_writes_exactly_one_file(
         "the atomic write left a temporary sibling behind"
     )
     assert json.loads(target.read_text(encoding="utf-8"))["counts"]["total"] == 3
+
+
+# ------------------------------------------ AUG-149: the three selection shapes, one contract each
+# The empty-selector case was already refused, but a selector that MATCHED NOTHING exited 0 with
+# zero bytes and no diagnostic on `list`, and refused `no-match` on `assemble` — two contracts for
+# one shape, and the silent one is indistinguishable from a tool with nothing to say. The three
+# shapes now have one stated contract per verb (in each verb's --help epilogue and docs/VERBS.md):
+# no selector, selector with no match, selector with matches.
+
+
+def test_list_selector_with_no_match_reports_it_on_stderr_and_exits_zero() -> None:
+    code, out, err = run_spec("list", str(SPECS), "--applies-to", "nope.none")
+    assert code == 0, (out, err)
+    assert out == "", "an empty selection prints no rows"
+    assert "spec note (no-match)" in err, f"the empty selection was silent: {err!r}"
+    assert "applies-to=nope.none" in err, err
+
+
+def test_list_without_a_selector_lists_the_whole_corpus() -> None:
+    """Shape 1 for `list`: no selector is the listing verb's documented default."""
+    code, out, err = run_spec("list", str(SPECS))
+    assert code == 0, err
+    assert out.strip(), "list with no selector must list the corpus"
+    assert "no-match" not in err, err
+
+
+def test_list_selector_with_matches_is_quiet() -> None:
+    code, out, err = run_spec("list", str(SPECS), "--kind", "requirement")
+    assert code == 0, err
+    assert out.strip()
+    assert err == "", err
+
+
+def test_assemble_selector_with_no_match_emits_a_valid_empty_document() -> None:
+    code, out, err = run_spec(
+        "assemble", str(SPECS), "--applies-to", "nope.none", "--format", "json"
+    )
+    assert code == 0, (out, err)
+    payload = json.loads(out)
+    assert payload["counts"] == {"matched": 0, "dependencies": 0, "total": 0}, payload
+    assert payload["blocks"] == [], payload
+    assert payload["selection"] == "applies-to=nope.none", payload
+    assert "spec note (no-match)" in err, err
+
+
+def test_assemble_without_a_selector_is_still_refused() -> None:
+    """Shape 1 for `assemble`: never a silent whole-corpus dump."""
+    code, out, err = run_spec("assemble", str(SPECS), "--format", "json")
+    assert code == 2, (out, err)
+    assert out == ""
+    assert "spec error (empty-selector)" in err, err
+    assert "no-match" not in err, err
+
+
+def test_assemble_selector_with_matches_exits_zero_and_is_quiet() -> None:
+    code, out, err = run_spec(
+        "assemble", str(SPECS), "--kind", "requirement", "--format", "json"
+    )
+    assert code == 0, err
+    payload = json.loads(out)
+    assert payload["counts"]["matched"] >= 1, payload
+    assert err == "", err
+
+
+def test_both_verbs_state_the_three_shape_exit_code_contract_in_help() -> None:
+    for verb in ("list", "assemble"):
+        code, out, err = run_spec(verb, "--help")
+        assert code == 0, (verb, err)
+        assert "exit codes:" in out, (verb, out)
+        assert "no selector" in out, (verb, out)
+        assert "no match" in out, (verb, out)
+
+
 # AUG-144 PASS line 1: the row asked for a fixture pair that is byte-identical except for the
 # xmlns declaration. The grammar (elementFormDefault="qualified") REQUIRES urn:auger:spec:1, so
 # the namespace-less twin cannot be the positive control it was written as — it is refused. The

@@ -646,6 +646,10 @@ typed refusals — never a traceback — and leaves no temporary or partial file
 **Never writes:** a row, a namespace, a table declaration, an embedded memory, or any XML file
 it read. A refusal (typed `spec error (<code>): <detail>`, exit 2) prints nothing on stdout and
 creates no `--out` file. An empty selector is refused — assembly is never a silent whole-corpus
-dump — and so is a selector that matches nothing. The design record, the schema
-(`specs/schema/auger-spec-1.0.xsd`) and the refusal-code table live in
+dump. A selector that matches nothing is NOT a refusal: it is a reported empty selection (exit 0,
+`spec note (no-match): <selection> matched no block` on stderr, stdout still whatever the verb
+renders — for `assemble --format json`, a valid document with `counts.total` 0). `spec list` with
+no selector lists the whole corpus (its default); `spec assemble` with no selector refuses
+`empty-selector`. Both verbs state these three exit-code shapes in their `--help` epilogue. The
+design record, the schema (`specs/schema/auger-spec-1.0.xsd`) and the refusal-code table live in
 [docs/SPEC-003-xml-specs.md](SPEC-003-xml-specs.md).
