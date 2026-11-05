@@ -166,7 +166,11 @@ run_pytest_arm(){
   # (AUG-132): the one-verdict contract for the XML surface. Both drive `auger spec ...` as a
   # subprocess over every fixture corpus, so they are named here for the same reason as the other
   # XML proofs: a file outside this list is never executed by CI or the guard.
-  setsid timeout --kill-after="$kill_after" "$budget" python3 -m pytest tests/test_auger.py tests/test_openapi_parity.py tests/test_api_service.py tests/test_upgrade_path.py tests/test_xml_specs.py tests/test_verification_graph.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_usage_skill.py tests/test_packaging.py tests/test_teardown_resilience.py "$@" || rc=$?
+  # tests/test_xsd_conformance.py (AUG-125/AUG-133): the published XSD is loaded with a real XSD 1.0
+  # processor (lxml) and every corpus is graded against it — the fixture corpus, the mutation check
+  # that a processor-rejected facet fails the suite, the attribute inventory derived from auger.py's
+  # AST, and the fail-closed proof for a host with no processor. Same rule: unlisted means unrun.
+  setsid timeout --kill-after="$kill_after" "$budget" python3 -m pytest tests/test_auger.py tests/test_openapi_parity.py tests/test_api_service.py tests/test_upgrade_path.py tests/test_xml_specs.py tests/test_verification_graph.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_xsd_conformance.py tests/test_usage_skill.py tests/test_packaging.py tests/test_teardown_resilience.py "$@" || rc=$?
   if [ "$rc" -eq 124 ]; then
     echo "GATE TIMEOUT: the pytest arm exceeded ${budget} and was killed as a process group (setsid+timeout, AUG-081) — investigate hung tests; failing the gate" >&2
     exit 1

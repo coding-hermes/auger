@@ -185,10 +185,29 @@ def test_schema_matches_the_validator() -> None:
     assert xsd_enum("verificationMethod") == list(auger.SPEC_VERIFICATION_METHODS)
     assert xsd_enum("schemaVersion") == list(auger.SPEC_SCHEMA_VERSIONS)
 
-    # Stable identity and version shapes are the same regular expressions, byte for byte.
-    assert xsd_pattern("stableId") == auger.SPEC_ID_RE.pattern
-    assert xsd_pattern("semanticVersion") == auger.SPEC_VERSION_RE.pattern
-    assert xsd_pattern("scopeToken") == auger.SPEC_APPLIES_RE.pattern
+    # Stable identity and version shapes are the same regular expressions, MODULO the anchors an
+    # XSD facet must not carry: an XSD pattern is implicitly anchored over the whole lexical value,
+    # and `^`/`$` are ORDINARY CHARACTERS in XSD 1.0 — keeping them in the facet would require a
+    # literal caret and reject every real ID.
+    #
+    # AUG-125: byte identity was the wrong invariant. It pinned the Python-dialect `(?:...)` group
+    # into the facet, and every XSD 1.0 processor rejects such a facet outright, so "the schema
+    # matches the code" held while the published schema was loadable by nothing. The language is
+    # now pinned where it belongs: tests/test_xsd_conformance.py validates the same accepted and
+    # rejected samples against the shipped schema through a real processor.
+    for type_name, pattern in (
+        ("stableId", auger.SPEC_ID_RE.pattern),
+        ("semanticVersion", auger.SPEC_VERSION_RE.pattern),
+        ("scopeToken", auger.SPEC_APPLIES_RE.pattern),
+    ):
+        facet = xsd_pattern(type_name)
+        assert facet == pattern.removeprefix("^").removesuffix("$"), (
+            f"{type_name}: the facet and the Python pattern disagree beyond the anchor idiom"
+        )
+        assert "(?" not in facet, (
+            f"{type_name} facet uses a Python-dialect group (lookahead/non-capturing), which an "
+            "XSD 1.0 processor rejects — the whole schema then fails to load"
+        )
 
     # Every attribute the editor-facing grammar advertises is one the block model reads.
     block_type = None

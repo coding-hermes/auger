@@ -47,6 +47,7 @@ EXPECTED = {
     "invalid/invalid-verification-method": "invalid-verification-method",
     "invalid/missing-verification-method": "invalid-verification-method",
     "invalid/reference-cycle": "reference-cycle",
+    "invalid/schema-invalid": "schema-invalid",
     "invalid/schema-version": "unsupported-schema-version",
     "invalid/stale-test-obligation": "invalid-spec-graph",
     "invalid/unresolved-reference": "unresolved-reference",

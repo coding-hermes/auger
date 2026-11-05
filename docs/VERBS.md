@@ -601,9 +601,12 @@ Author, validate and assemble XML specifications (AUG-118). This verb is the one
 reads NO DuckBrain state: it works on a directory of XML documents in the repository and
 writes nothing back to them. Subcommands:
 
-- `auger spec validate ROOT` — the whole verdict: root shape and namespace, schema version,
-  stable IDs, typed metadata, reference/include graph, verification methods, and every test
-  obligation a block points at (tracked path, selector, migration, fixture, assertions).
+- `auger spec validate ROOT` — the whole verdict: the published grammar is loadable (a real XSD 1.0
+  processor is required — `pip install -e '.[dev]'` or `auger[xsd]`; without it every `spec` verb
+  refuses with `xsd-processor-missing`), root shape and namespace, schema version, stable IDs, typed
+  metadata, reference/include graph, verification methods, every test obligation a block points at
+  (tracked path, selector, migration, fixture, assertions), and conformance of every document to
+  `specs/schema/auger-spec-1.0.xsd` (`schema-invalid`).
 - `auger spec check ROOT` — the same verdict from the same loaded corpus, printing the
   obligation node ids as JSON instead of the document/block/reference counts.
 - `auger spec list ROOT [--id ID] [--kind K] [--applies-to SCOPE] [--status S] [--version X.Y.Z]`

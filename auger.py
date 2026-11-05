@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import importlib
 import io
 import json
 import math
@@ -7713,7 +7714,10 @@ SPEC_SCHEMA_VERSION = (
 )
 SPEC_SCHEMA_VERSIONS = ("1.0",)
 SPEC_XML_NAMESPACE = "urn:auger:spec:1"
-SPEC_BLOCK_KINDS = ("section", "requirement", "acceptance", "verification")
+# `test` is a block kind, not an obligation the schema merely tolerates: the obligation validator
+# has always enforced the <test> surface (SPEC_BLOCK_TAGS), so before AUG-133 an authored corpus
+# could not write the shape the validator reads. One element set, both halves (AUG-133).
+SPEC_BLOCK_KINDS = ("section", "requirement", "acceptance", "verification", "test")
 SPEC_STATUSES = ("active", "deprecated", "superseded")
 SPEC_VERIFICATION_METHODS = ("test", "demo", "analysis", "inspection")
 # Typed ID edges. EVERY one must resolve; only the closure attributes are followed by assembly,
@@ -7726,11 +7730,30 @@ SPEC_INVERSE_CLOSURE_ATTRS = ("verifies",)
 # Blocks whose verification METHOD is mandatory metadata (`verification=`); a <verification> block
 # carries the same closed set under `method=`.
 SPEC_REQUIRES_METHOD = ("requirement", "acceptance")
-SPEC_ID_RE = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$")
+# These patterns are the AUTHORING patterns. They are deliberately dialect-neutral — plain
+# capturing groups, no `(?:`, no lookahead, no Python-only escapes — because the same strings ship
+# in specs/schema/auger-spec-1.0.xsd, and an XSD 1.0 processor rejects a Python-dialect facet
+# outright ("not a valid regular expression"). Before AUG-125 the `(?:` form made the published
+# schema unloadable by every XSD 1.0 processor while this code kept accepting the same language.
+# The facets carry the SAME strings minus the `^`/`$` anchors: an XSD pattern is implicitly
+# anchored over the whole lexical value, and `^`/`$` are ORDINARY CHARACTERS in XSD 1.0, so
+# keeping them there would require a literal caret. tests/test_xsd_conformance.py pins the
+# language of both engines against the same samples.
+SPEC_ID_RE = re.compile(r"^[A-Z][A-Z0-9]*(-[A-Z0-9]+)+$")
 SPEC_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
-SPEC_APPLIES_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
+SPEC_APPLIES_RE = re.compile(r"^[a-z0-9]+([._-][a-z0-9]+)*$")
 SPEC_ID_MAX_LEN = 80
 SPEC_FORBIDDEN_DECL_RE = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)", re.IGNORECASE)
+# The normative grammar, and the processor that loads it. `specs/schema/auger-spec-1.0.xsd` is the
+# published schema; a wheel install ships auger.py only, so an absent schema is refused with its own
+# code rather than silently skipping the conformance gate.
+SPEC_SCHEMA_PATH = (
+    Path(__file__).resolve().parent / "specs" / "schema" / "auger-spec-1.0.xsd"
+)
+# The XSD processor is a `dev`/`auger[xsd]` extra (owner decision D-1): auger stays stdlib-only at
+# RUNTIME (`dependencies = []`), so lxml is imported lazily and its absence is a typed refusal.
+# The seam is a module NAME so tests can point it at a module that does not exist.
+SPEC_XSD_PROCESSOR_MODULE = "lxml.etree"
 
 
 class SpecError(ValueError):
@@ -7802,6 +7825,103 @@ def _spec_read_document(path: Path, root: Path):
             "missing-document-metadata", f"{rel}: <spec> requires id and version"
         )
     return element
+
+
+def _spec_load_processor():
+    """The XSD processor module, or a typed refusal (AUG-133 / owner decision D-1).
+
+    auger is deliberately stdlib-only at RUNTIME (`pyproject.toml`: `dependencies = []`), so the
+    processor lives in the `dev` and `auger[xsd]` extras and is imported HERE, lazily. The trade is
+    only honest while its absence is loud: no processor means no verdict, never a quiet pass.
+    """
+    try:
+        return importlib.import_module(SPEC_XSD_PROCESSOR_MODULE)
+    except ImportError:
+        raise SpecError(
+            "xsd-processor-missing",
+            f"{SPEC_XSD_PROCESSOR_MODULE} is not installed, so the published grammar cannot be "
+            "loaded and no verdict is possible (install the `auger[xsd]` extra, or the `dev` "
+            "extra: `pip install -e '.[dev]'`)",
+        ) from None
+
+
+def _spec_load_schema(path=None):
+    """Load the shipped XSD with a real XSD 1.0 processor, or refuse with a typed error.
+
+    Three failures are distinguished, because they need different fixes: no processor
+    (`xsd-processor-missing`), no schema file (`xsd-schema-missing` — a wheel ships auger.py only),
+    and a schema the processor rejects (`xsd-schema-unloadable`, e.g. a Python-dialect pattern).
+    """
+    target = SPEC_SCHEMA_PATH if path is None else Path(path)
+    etree = _spec_load_processor()
+    if not Path(target).is_file():
+        raise SpecError(
+            "xsd-schema-missing",
+            f"{target} is not present (a built wheel ships auger.py only; run from a source "
+            "checkout)",
+        )
+    try:
+        return etree.XMLSchema(etree.parse(str(target)))
+    except (etree.XMLSchemaParseError, etree.XMLSyntaxError) as exc:
+        # libxml2's log entries already carry the file and line; only fall back to prefixing the
+        # path when the processor gave no log (a bare XMLSyntaxError, for instance).
+        detail = "; ".join(str(entry) for entry in getattr(exc, "error_log", [])[:3])
+        raise SpecError(
+            "xsd-schema-unloadable",
+            detail or f"{target}: {exc}",
+        ) from None
+
+
+def _spec_schema_violations(schema, raw: bytes, rel: str) -> list[str]:
+    """The schema's complaints about one document, as actionable one-line messages.
+
+    The parser is configured to match the loader's security posture — no entity expansion, no DTD
+    loading, no network — so a schema check can never become the path that resolves an entity the
+    loader refused. `schema.error_log` is per validation run, so it is snapshotted here.
+    """
+    etree = _spec_load_processor()
+    parser = etree.XMLParser(
+        resolve_entities=False, no_network=True, load_dtd=False, huge_tree=False
+    )
+    try:
+        document = etree.fromstring(raw, parser=parser)
+    except etree.XMLSyntaxError as exc:
+        return [f"{rel}: the XSD processor cannot parse this document: {exc}"]
+    try:
+        valid = schema.validate(document)
+    except etree.XMLSchemaValidateError as exc:
+        # An entity reference the parser refused to resolve (never resolved: no entity expansion,
+        # no DTD load) leaves a tree the processor cannot validate. That is a refusal, not a pass.
+        return [f"{rel}: the XSD processor cannot validate this document: {exc}"]
+    if valid:
+        return []
+    return [
+        f"{rel}:{entry.line}: {entry.message}" for entry in list(schema.error_log)[:5]
+    ] or [f"{rel}: does not conform to {SPEC_SCHEMA_PATH.name}"]
+
+
+def _spec_assert_schema_conformance(schema, paths, root: Path) -> None:
+    """Refuse any document the published grammar rejects, naming the file and the violation.
+
+    This runs AFTER the executable rules, deliberately: the code's checks are the more specific
+    diagnostic (a `kind-mismatch` names the attribute pair; the schema would only say "invalid"),
+    and the schema is the normative BACKSTOP for everything the code would otherwise let through —
+    an undeclared attribute, an unknown element, a value outside a facet. Both are refusals; the
+    ordering only decides which evidence the author sees first.
+    """
+    for path in paths:
+        rel = path.relative_to(root).as_posix()
+        try:
+            raw = path.read_bytes()
+        except OSError as exc:
+            raise SpecError("unreadable-document", f"{rel}: {exc}") from None
+        problems = _spec_schema_violations(schema, raw, rel)
+        if problems:
+            extra = f" (+{len(problems) - 1} more)" if len(problems) > 1 else ""
+            raise SpecError(
+                "schema-invalid",
+                f"{problems[0]}{extra} (specs/schema/{SPEC_SCHEMA_PATH.name})",
+            )
 
 
 def _spec_include_target(element, rel: str, root: Path) -> str:
@@ -8073,6 +8193,20 @@ def load_spec_corpus(spec_root) -> tuple:
 
     Returns (root, documents_by_relpath, blocks_in_corpus_order). Any integrity failure raises a
     typed SpecError BEFORE a caller can render, so a refusal never yields a partial document.
+
+    The verdict has THREE layers, in this order, and every CLI verb goes through all three:
+
+    1. the published grammar must be loadable — `specs/schema/auger-spec-1.0.xsd` through a real
+       XSD 1.0 processor, which is a `dev`/`auger[xsd]` extra (owner decision D-1). No processor,
+       no schema file, or a grammar the processor cannot load is a typed refusal, never a pass
+       (`xsd-processor-missing`, `xsd-schema-missing`, `xsd-schema-unloadable`);
+    2. the executable rules below (root, namespace, schema version, block grammar, typed edges);
+    3. conformance of every document to the schema (`schema-invalid`).
+
+    Layer 3 is the backstop, so it runs LAST: the code's rules give the more specific diagnostic,
+    and the schema catches everything the code would otherwise let through — which is what made
+    this gate missing before AUG-125/AUG-133, when the schema was loadable by nothing and loaded by
+    nothing while `spec validate` printed "ok" for documents the grammar rejects.
     """
     root = Path(spec_root).expanduser()
     if not root.is_dir():
@@ -8081,6 +8215,7 @@ def load_spec_corpus(spec_root) -> tuple:
     paths = sorted(path for path in root.rglob("*.xml") if path.is_file())
     if not paths:
         raise SpecError("empty-corpus", f"no *.xml documents under {root}")
+    schema = _spec_load_schema()
     documents = {
         path.relative_to(root).as_posix(): _spec_read_document(path, root)
         for path in paths
@@ -8098,6 +8233,7 @@ def load_spec_corpus(spec_root) -> tuple:
             "no-root-document", f"{root}: every document is included by another"
         )
     _spec_validate_blocks(blocks)
+    _spec_assert_schema_conformance(schema, paths, root)
     return root, documents, blocks
 
 
@@ -8613,11 +8749,17 @@ def assemble_xml_requirement(spec_root, requirement_id):
     """Return the requirement and its linked verification obligations as data only."""
     nodes = validate_xml_specs(spec_root)
     requirement = nodes.get(requirement_id)
-    if requirement is None or requirement.tag != "requirement":
+    # AUG-134 left two bare-tag reads here (`requirement.tag != "requirement"` and
+    # `findall("verification-ref")`), which only work for a document with NO namespace — and the
+    # XSD requires `urn:auger:spec:1` on every element, so a namespaced corpus (the only kind the
+    # grammar accepts) could reach neither branch. Compare local names instead.
+    if requirement is None or _spec_local(requirement.tag) != "requirement":
         raise SpecValidationError(f"unknown-requirement: {requirement_id}")
     refs = requirement.get("verifies", "").split()
     refs.extend(
-        child.get("ref", "") for child in requirement.findall("verification-ref")
+        child.get("ref", "")
+        for child in requirement
+        if _spec_local(child.tag) == "verification-ref"
     )
     obligations = []
     for ref in dict.fromkeys(refs):

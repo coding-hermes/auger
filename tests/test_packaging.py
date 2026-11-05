@@ -24,6 +24,14 @@ def _load_pyproject() -> dict:
         return tomllib.load(fh)
 
 
+def requirement_names(requirements: list[str]) -> set[str]:
+    """The bare distribution names in a requirement list ('lxml>=5' -> {'lxml'})."""
+    return {
+        requirement.lower().split(">=")[0].split("==")[0].split("[")[0].strip()
+        for requirement in requirements
+    }
+
+
 def test_pyproject_exists_and_parses():
     data = _load_pyproject()
     assert "project" in data
@@ -59,6 +67,29 @@ def test_dev_extra_carries_the_test_dependencies():
     names = {r.lower().split(">=")[0].split("==")[0].strip() for r in dev}
     assert "pytest" in names, "the dev extra must install the pytest runner"
     assert "pyyaml" in names, "tests/test_openapi_parity.py imports yaml"
+
+
+def test_xsd_processor_lives_only_in_the_extras():
+    """AUG-125/AUG-133 + owner decision D-1: the XSD processor is NOT a runtime dependency.
+
+    `specs/schema/auger-spec-1.0.xsd` is graded through lxml, and the loader fails CLOSED with
+    `xsd-processor-missing` when it is absent — so the honest place for it is an extra: the wheel
+    stays stdlib-only (`dependencies = []`, asserted above) and a host without the processor gets a
+    refusal instead of a silent pass. Pin both halves here, because "add lxml to dependencies" is a
+    one-line edit that would quietly break the stdlib-only contract.
+    """
+    project = _load_pyproject()["project"]
+    extras = project["optional-dependencies"]
+
+    assert "lxml" in requirement_names(extras.get("dev", [])), (
+        "the dev extra must install the XSD processor — CI and the guard run the schema tests"
+    )
+    assert "lxml" in requirement_names(extras.get("xsd", [])), (
+        "an `xsd` extra must exist for schema-aware validation without the test tooling"
+    )
+    assert "lxml" not in requirement_names(project.get("dependencies", [])), (
+        "lxml must not become a runtime dependency — auger.py is deliberately stdlib-only"
+    )
 
 
 def test_dynamic_version_attr_resolves_to_module_constant():

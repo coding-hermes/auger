@@ -1,19 +1,27 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  auger XML specification grammar — schema version 1.0 (AUG-118).
+  auger XML specification grammar — schema version 1.0 (AUG-118, AUG-125, AUG-133).
 
-  This file is the normative grammar for authored specs: `auger spec validate` accepts exactly the
-  documents this schema describes, and `auger spec assemble` selects from the same block model.
-  The schema version a document declares (`schema-version="1.0"` on <spec>) names THIS file; a
-  document declaring any other version is refused rather than guessed at.
+  This file is the normative grammar for authored specs, and it is LOADED: `auger spec
+  validate|check|list|assemble|bundle` all run the corpus loader, which loads this schema with a
+  real XSD 1.0 processor and refuses any document it rejects (`schema-invalid`). Before AUG-125 this
+  file was unloadable by every XSD 1.0 processor — two patterns were written in Python dialect
+  (`(?:...)`), which a processor rejects outright — and before AUG-133 nothing loaded it even if it
+  had been valid, so the "normative grammar" decided nothing.
 
-  Design record: docs/SPEC-003-xml-specs.md.
+  XSD 1.0 ONLY. No non-capturing groups `(?:`, no lookahead/lookbehind, no Python-only escapes:
+  the processor refuses the whole schema when it meets one, which would take the entire gate down
+  rather than one document. Patterns are also IMPLICITLY anchored over the lexical value, and `^`
+  /`$` are ordinary characters in XSD 1.0, so the facets omit the anchors the Python constants in
+  auger.py carry — the strings are otherwise identical, and tests/test_xsd_conformance.py pins the
+  two engines to the same language with accepted/rejected samples.
+
+  Design record: docs/SPEC-003-xml-specs.md. The XSD processor (lxml) is a `dev` / `auger[xsd]`
+  dependency, never a runtime one: `pyproject.toml` keeps `dependencies = []`, and a host without
+  the processor gets a typed refusal (`xsd-processor-missing`), not a silent pass.
+
   ch:trace row=AUG-118 spec=docs/SPEC-003-xml-specs.md#the-schema
-
-  The pattern/enumeration strings below are byte-identical to the constants in auger.py
-  (SPEC_ID_RE, SPEC_VERSION_RE, SPEC_APPLIES_RE, SPEC_BLOCK_KINDS, SPEC_STATUSES,
-  SPEC_VERIFICATION_METHODS, SPEC_SCHEMA_VERSIONS); tests/test_xml_specs.py compares them so the
-  prose grammar and the executable validator cannot drift apart.
+  ch:trace row=AUG-125,AUG-133 spec=docs/SPEC-003-xml-specs.md#the-schema test=tests/test_xsd_conformance.py doc=docs/XML-SPEC-SCHEMA.md
 -->
 <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
            xmlns:auger="urn:auger:spec:1"
@@ -25,7 +33,7 @@
   <!-- A stable block ID: upper-case alphanumerics with at least one dash, never renumbered. -->
   <xs:simpleType name="stableId">
     <xs:restriction base="xs:string">
-      <xs:pattern value="^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$"/>
+      <xs:pattern value="[A-Z][A-Z0-9]*(-[A-Z0-9]+)+"/>
       <xs:maxLength value="80"/>
     </xs:restriction>
   </xs:simpleType>
@@ -33,23 +41,29 @@
   <!-- The block's own revision, independent of the document version. -->
   <xs:simpleType name="semanticVersion">
     <xs:restriction base="xs:string">
-      <xs:pattern value="^[0-9]+\.[0-9]+\.[0-9]+$"/>
+      <xs:pattern value="[0-9]+\.[0-9]+\.[0-9]+"/>
     </xs:restriction>
   </xs:simpleType>
 
   <!-- An applicability scope token, e.g. auger.export. -->
   <xs:simpleType name="scopeToken">
     <xs:restriction base="xs:string">
-      <xs:pattern value="^[a-z0-9]+(?:[._-][a-z0-9]+)*$"/>
+      <xs:pattern value="[a-z0-9]+([._-][a-z0-9]+)*"/>
     </xs:restriction>
   </xs:simpleType>
 
+  <!--
+    The block kinds. `test` is here because the obligation validator enforces the <test> surface
+    (runner/selector/path and the tracked-file checks), and a grammar that cannot express a shape
+    the validator enforces is the defect AUG-133 names.
+  -->
   <xs:simpleType name="blockKind">
     <xs:restriction base="xs:string">
       <xs:enumeration value="section"/>
       <xs:enumeration value="requirement"/>
       <xs:enumeration value="acceptance"/>
       <xs:enumeration value="verification"/>
+      <xs:enumeration value="test"/>
     </xs:restriction>
   </xs:simpleType>
 
@@ -67,6 +81,21 @@
       <xs:enumeration value="demo"/>
       <xs:enumeration value="analysis"/>
       <xs:enumeration value="inspection"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!--
+    The obligation TYPE vocabulary. It is the authoring method set plus `manual`: the obligation
+    validator accepts `manual` where the authoring grammar names the same intent `demo`, and a
+    schema narrower than the code would refuse the shipped shape (AUG-134).
+  -->
+  <xs:simpleType name="obligationType">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="test"/>
+      <xs:enumeration value="demo"/>
+      <xs:enumeration value="analysis"/>
+      <xs:enumeration value="inspection"/>
+      <xs:enumeration value="manual"/>
     </xs:restriction>
   </xs:simpleType>
 
@@ -91,11 +120,18 @@
     selector can filter on `kind` uniformly across mixed element names.
     `verification` is required on <requirement> and <acceptance>; a <verification> block carries
     the same closed set under `method`.
+
+    Every attribute below is one auger.py READS on an authored block. An attribute the code reads
+    and this type does not declare makes the grammar incomplete (an editor flags every such
+    document; AUG-133), and an attribute the code does NOT read is refused here rather than
+    silently ignored — `tests/test_xsd_conformance.py` derives the read set from auger.py's AST and
+    asserts it is declared here, so the two cannot drift again.
   -->
   <xs:complexType name="blockType" mixed="true">
     <xs:choice minOccurs="0" maxOccurs="unbounded">
       <xs:element ref="auger:block"/>
       <xs:element ref="auger:include"/>
+      <xs:element ref="auger:verification-ref"/>
     </xs:choice>
     <xs:attribute name="id" type="auger:stableId" use="required"/>
     <xs:attribute name="kind" type="auger:blockKind" use="required"/>
@@ -104,11 +140,23 @@
     <xs:attribute name="applies-to" type="auger:scopeList" use="optional"/>
     <xs:attribute name="verification" type="auger:verificationMethod" use="optional"/>
     <xs:attribute name="method" type="auger:verificationMethod" use="optional"/>
+    <xs:attribute name="type" type="auger:obligationType" use="optional"/>
     <xs:attribute name="depends-on" type="auger:idRefList" use="optional"/>
     <xs:attribute name="verifies" type="auger:idRefList" use="optional"/>
     <xs:attribute name="refs" type="auger:idRefList" use="optional"/>
     <xs:attribute name="implements" type="auger:idRefList" use="optional"/>
     <xs:attribute name="supersedes" type="auger:idRefList" use="optional"/>
+    <!-- Typed test obligation (AUG-123): a runner identifier from auger's own registry, a
+         repository-relative tracked path, the test selector, and optional migration evidence.
+         These are strings here on purpose: the executable validator resolves and checks them
+         (registry membership, tracked file, AST selector, migration/fixture existence), which a
+         facet cannot do. The grammar's job is to make the SHAPE expressible. -->
+    <xs:attribute name="runner" type="xs:string" use="optional"/>
+    <xs:attribute name="selector" type="xs:string" use="optional"/>
+    <xs:attribute name="path" type="xs:string" use="optional"/>
+    <xs:attribute name="migration" type="xs:string" use="optional"/>
+    <xs:attribute name="fixture" type="xs:string" use="optional"/>
+    <xs:attribute name="assertions" type="xs:string" use="optional"/>
   </xs:complexType>
 
   <xs:element name="block" type="auger:blockType" abstract="true"/>
@@ -117,6 +165,14 @@
   <xs:element name="requirement" type="auger:blockType" substitutionGroup="auger:block"/>
   <xs:element name="acceptance" type="auger:blockType" substitutionGroup="auger:block"/>
   <xs:element name="verification" type="auger:blockType" substitutionGroup="auger:block"/>
+  <xs:element name="test" type="auger:blockType" substitutionGroup="auger:block"/>
+
+  <!-- An explicit verification edge as a child of a requirement, beside `verifies=`. -->
+  <xs:element name="verification-ref">
+    <xs:complexType>
+      <xs:attribute name="ref" type="auger:stableId" use="required"/>
+    </xs:complexType>
+  </xs:element>
 
   <!--
     Include another authored document at this position. Local repository-relative paths only:

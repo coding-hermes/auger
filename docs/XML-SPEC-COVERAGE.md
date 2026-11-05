@@ -74,15 +74,21 @@ Summary: **5 proven, 4 partial, 11 designed only.**
 
 ## Known documentation gaps
 
-1. **The XSD does not cover the AUG-123 surface.** `specs/schema/auger-spec-1.0.xsd` declares
-   `section`, `requirement`, `acceptance`, `verification` — but no `test` element, and none of the
-   attributes the validator requires on one (`runner`, `selector`, `path`, `migration`, `fixture`,
-   `assertions`, `type`). `auger.py` validates `<test>` nodes via `SPEC_BLOCK_TAGS`, a separate set
-   from the authored `SPEC_BLOCK_KINDS`, so the parity test
-   (`test_schema_matches_the_validator`) passes while the normative grammar is incomplete. An
-   editor validating against the shipped XSD will flag every AUG-123 test obligation as invalid. Worse, the XSD
-   is never loaded: `grep -rn 'xsd\|XMLSchema\|lxml' auger.py` returns comments only, so the normative grammar
-   decides nothing (AUG-133).
+1. **CLOSED by AUG-125 + AUG-133 (was: the XSD is decorative and cannot express the AUG-123
+   surface).** Measured before the fix at `cf5bfe2`: `specs/schema/auger-spec-1.0.xsd` declared
+   `section`, `requirement`, `acceptance`, `verification` and no `test`, and none of the attributes
+   the validator requires on an obligation (`runner`, `selector`, `path`, `migration`, `fixture`,
+   `assertions`, `type`); two `xs:pattern` facets were written in Python dialect (`(?:...)`), which
+   an XSD 1.0 processor rejects outright — so the file was loadable by NO processor; and
+   `grep -rn 'xsd\|XMLSchema\|lxml' auger.py` returned comments only, so even a valid schema decided
+   nothing (a document with an undeclared attribute validated `ok`, exit 0). After: the corpus
+   loader loads the schema with lxml and refuses what it rejects (`schema-invalid`), the schema
+   declares `<test>` as a block kind plus every obligation attribute, the facets are XSD 1.0 regex
+   over the same language as the Python constants, and the processor lives in the `dev`/`auger[xsd]`
+   extras with a fail-closed `xsd-processor-missing` refusal (owner decision D-1).
+   `tests/test_xsd_conformance.py` pins all of it, including the mutation check that a
+   processor-rejected facet fails the suite. Evidence: `specs/schema/auger-spec-1.0.xsd`,
+   `tests/fixtures/xml/invalid/schema-invalid/`.
 2. **`SPEC-003` is a slice record, not a status record.** Its header still says typed test
    obligations are "deliberately out of scope here", although AUG-123 landed; the coverage table in
    this file is the correcting surface.
@@ -116,7 +122,8 @@ python3 auger.py spec list tests/fixtures/xml/specs
 grep -n 'python3 -m pytest' tests/gate.sh   # all four spec files must appear in the arm
 grep -c boardctl auger.py                   # 0 == no Auger-side board code; R9/R14 absent, R16 partial on the GitReins half
 find specs -name '*.xml'                    # 0 == no authored corpus (gap: R1 proven only on fixtures)
-grep -rn 'xsd\|XMLSchema\|lxml' auger.py    # comments only == the XSD is decorative
+.venv/bin/python -m pytest tests/test_xsd_conformance.py -q   # 12 passed: XSD loads, fixtures graded, fail-closed
+python3 auger.py spec validate tests/fixtures/xml/invalid/schema-invalid   # rc 2: schema-invalid (undeclared attribute)
 ```
 
 Machine-readable status is the boolean of each row above, not a narrative claim. Do not mark a

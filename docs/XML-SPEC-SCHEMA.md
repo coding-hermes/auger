@@ -1,6 +1,27 @@
-# XML spec graph schema (AUG-118 / AUG-123)
+# XML spec graph schema (AUG-118 / AUG-123 / AUG-125 / AUG-133)
 
-Auger XML specs are rooted at `<spec id="..." version="...">`. Every graph node has a stable, repository-unique `id`. This implementation recognizes `<requirement>`, `<verification>`, and `<test>` nodes. A requirement's whitespace-separated `verifies` attribute names one or more verification IDs; `<verification-ref ref="..."/>` is an equivalent explicit edge. A verification may also name its requirement with `verifies="REQ-ID"`. References must resolve to the expected node type.
+Auger XML specs are rooted at `<spec id="...">` in the `urn:auger:spec:1` namespace, carry `version` and `schema-version`, and every graph node has a stable, repository-unique `id`. This implementation recognizes `<requirement>`, `<verification>`, and `<test>` nodes — all three are block kinds in the published grammar, and `<test>` is the shape that carries a machine-checkable obligation. A requirement's whitespace-separated `verifies` attribute names one or more verification IDs; `<verification-ref ref="..."/>` is an equivalent explicit edge. A verification may also name its requirement with `verifies="REQ-ID"`. References must resolve to the expected node type.
+
+## The grammar is loaded, and the processor is an extra
+
+`specs/schema/auger-spec-1.0.xsd` is loaded by a real XSD 1.0 processor on every `auger spec` verb,
+and a document it rejects is refused (`spec error (schema-invalid)`). Two properties make that a
+gate rather than decoration:
+
+* **XSD 1.0 only.** No `(?:`, no lookahead, no Python escapes in a facet — one of those makes the
+  whole schema unloadable, so the CLI refuses with `xsd-schema-unloadable` instead of grading a
+  corpus against a grammar it could not load.
+* **No processor, no verdict.** `lxml` is deliberately NOT a runtime dependency: `pyproject.toml`
+  keeps `dependencies = []` and ships it in the `dev` extra and in an optional `auger[xsd]` extra
+  (owner decision D-1). `auger.py` imports it lazily; a host without it gets
+  `spec error (xsd-processor-missing)` and exit 2. Install it with
+  `pip install -e '.[dev]'` (contributors) or `pip install 'auger[xsd]'` (schema-aware use).
+
+The code's rules run first (their diagnostics name the offending attribute pair, path or ID) and the
+schema is the backstop for everything the code does not model — an undeclared attribute, an unknown
+element, a value outside a facet. Every attribute the code reads on a block is declared on the
+schema's block type, and `tests/test_xsd_conformance.py` derives that inventory from `auger.py`'s AST
+so the two cannot drift again.
 
 Example migration obligation — the shape `spec validate` and `spec check` both read (one loader reads
 the root and the blocks for both). The paths below are illustrative: a corpus is only valid if they

@@ -44,6 +44,29 @@ and `tests/test_xml_specs.py::test_schema_matches_the_validator` compares the tw
 grammar and the validator cannot drift: the closed sets, the ID/version/scope patterns and the
 attribute inventory are asserted equal.
 
+**The published schema is LOADED, not just published (AUG-125, AUG-133).** `load_spec_corpus` —
+which every `auger spec` verb goes through — loads this file with a real XSD 1.0 processor and
+refuses any document it rejects (`spec error (schema-invalid)`). Before that change the schema
+decided nothing twice over: two `xs:pattern` facets were written in Python dialect (`(?:...)`) and
+a processor rejects such a facet outright, so the file could not be loaded by *any* XSD 1.0
+processor; and even a loadable file was never loaded, so a document with an attribute no block
+kind declares validated `ok` with exit 0.
+
+Three consequences worth knowing before editing either half:
+
+* **XSD 1.0 regex only.** No non-capturing groups, no lookahead, no Python escapes. One such facet
+  makes the WHOLE schema unloadable, which fails every verb rather than one document —
+  `tests/test_xsd_conformance.py::test_a_processor_rejected_pattern_dialect_is_refused` mutates a
+  facet back to the Python dialect and asserts the refusal.
+* **Facets carry no `^`/`$`.** An XSD pattern is implicitly anchored over the lexical value and
+  `^`/`$` are ordinary characters in XSD 1.0, so the facet is the Python pattern minus the anchors.
+  The invariant is language, not bytes: the same accepted/rejected samples are validated through
+  both engines (`test_pattern_facets_express_the_same_language_as_the_code`).
+* **The processor is an extra (owner decision D-1).** `pyproject.toml` keeps
+  `dependencies = []` — the wheel stays stdlib-only — and `lxml` lives in the `dev` extra and in an
+  optional `auger[xsd]` extra. Nothing at runtime imports it unconditionally; a host without it
+  gets a typed `xsd-processor-missing` refusal and NO verdict, never a quiet pass.
+
 A document is a `<spec>` root; its children are blocks and `<include>` instructions.
 
 ```xml
@@ -132,6 +155,8 @@ sibling temp file plus `os.replace`, so even an I/O failure cannot leave a trunc
 | Code | Refused when |
 |---|---|
 | `missing-spec-root`, `empty-corpus`, `no-root-document` | the root is not a directory / has no `*.xml` / every document is included by another |
+| `xsd-processor-missing`, `xsd-schema-missing`, `xsd-schema-unloadable` | no XSD processor is installed (the `dev`/`auger[xsd]` extra), the schema file is absent from the checkout, or the processor rejects the schema itself (Python-dialect facet) — no verdict is produced |
+| `schema-invalid` | a document the published grammar rejects: undeclared attribute, unknown element, value outside a facet |
 | `invalid-xml`, `invalid-root`, `unreadable-document` | unparsable XML, wrong root element, unreadable file |
 | `unsupported-schema-version` | `schema-version` is absent or not in `SPEC_SCHEMA_VERSIONS` |
 | `unsupported-namespace` | a non-empty namespace other than `urn:auger:spec:1` |
@@ -153,14 +178,26 @@ never produce a partial bundle.
 
 ## Alternatives considered
 
-1. **XSD validation via `lxml` versus a stdlib strict validator (chosen: both, in their places).**
-   `pyproject.toml` documents auger as deliberately stdlib-only; adding `lxml` would make the
-   runtime dependency surface depend on a C toolchain for a read-only feature. The XSD ships as
-   the **normative, editor-facing grammar** (IDE completion, schema-aware validation in an
-   editor), and `auger.py` carries an executable validator that enforces the same rules with no
-   dependency. The parity test compares the schema's enumerations and patterns with the code's, so
-   "same rules" is asserted rather than promised. Rejected: Relax NG (worse editor support,
-   still needs a third-party library).
+1. **XSD validation via `lxml` versus a stdlib strict validator (chosen: BOTH — the XSD as the
+   loaded normative grammar, the stdlib validator as the executable half, and the processor in an
+   extra).** This alternative was first recorded as "the XSD is editor-facing only, `auger.py`
+   enforces the same rules with no dependency". That was measured false on 2026-11-05 (AUG-125,
+   AUG-133): the schema could not be loaded by any XSD 1.0 processor (Python-dialect facets), it was
+   never loaded by the validator, and its attribute surface could not even express the `<test>`
+   obligations the validator enforces — so "the same rules" was a promise, and the two halves had
+   already drifted. The four rules the resolution rests on:
+   * the schema is loaded by a real XSD 1.0 processor and refuses non-conforming documents
+     (`schema-invalid`), so it decides something;
+   * the code's rules run FIRST — their diagnostics are more specific than "invalid" — and the schema
+     is the backstop for everything the code does not model;
+   * `lxml` stays out of `dependencies` (the wheel is stdlib-only, `dependencies = []`) and lives in
+     the `dev` extra plus an optional `auger[xsd]` extra; nothing imports it unconditionally;
+   * the absence of a processor is a typed refusal (`xsd-processor-missing`) — the dependency is
+     optional, the VERDICT is not, and a host that cannot check the grammar must say so.
+   `pyproject.toml` records the same decision next to the extras. Rejected: keeping the XSD
+   decorative (it was already two documents behind the code); rejecting Relax NG (worse editor
+   support, still a third-party library); vendoring a regex engine (a second implementation of the
+   language nobody would test against the first).
 2. **General XInclude / XPath versus a closed `include` element and fixed selector flags
    (chosen: closed).** XInclude invites arbitrary URI resolution and entity expansion, which the
    PRD forbids for security reasons; XPath is a query language whose expressive power the selector
@@ -190,6 +227,7 @@ never produce a partial bundle.
 | AC-3 refusals (unresolved ref, duplicate ID, cycle, unsupported schema version, invalid verification metadata), no partial document | `test_refusals_are_typed_and_emit_no_document` (8 fixtures; each asserts exit 2, empty stdout, the typed code, and that `--out` was not created), plus `test_empty_selector_refused`, `test_unknown_id_is_a_typed_no_match`, `test_successful_out_is_written_atomically` |
 | AC-4 Markdown export unchanged; selection emits only requested blocks + explicit dependencies | `test_markdown_export_is_unchanged` against `tests/fixtures/xml/expected/markdown-export-golden.md` (generated from base `86764e7` and re-verified identical against it), `test_selection_matches_the_golden` against `tests/fixtures/xml/expected/assembly-active-auger-export.md` |
 | AC-5 the record and its wiring | `test_spec_doc_records_the_decision`, `test_gate_runs_these_tests` (asserts `tests/gate.sh` names this file) |
+| AUG-125/AUG-133 the grammar is loadable AND enforced | `tests/test_xsd_conformance.py`: `test_the_shipped_xsd_loads_in_a_real_xsd10_processor` (lxml loads it), `test_every_shipped_fixture_is_schema_valid_or_refused` (every fixture accepted ⇒ schema-valid, and at least one refused BY the schema), `test_a_processor_rejected_pattern_dialect_is_refused` (mutation: `(?:` facet ⇒ `xsd-schema-unloadable`, rc 2), `test_pattern_facets_express_the_same_language_as_the_code` (same accepted/rejected samples through both engines), `test_a_code_acceptable_schema_invalid_document_is_refused` (`severity="high"` ⇒ `schema-invalid`), `test_every_attribute_the_code_reads_is_declared` (AST-derived inventory), `test_a_corpus_with_a_test_block_validates` (`<test>` end to end), `test_a_missing_xsd_processor_is_a_typed_refusal_not_a_pass` (fail closed) |
 
 `tests/gate.sh` names `tests/test_xml_specs.py` in its pytest arm, and the commit guard's test
 command is `bash tests/gate.sh`, so the guard and CI run these tests. The suite is hermetic: no
