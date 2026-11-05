@@ -601,8 +601,11 @@ Author, validate and assemble XML specifications (AUG-118). This verb is the one
 reads NO DuckBrain state: it works on a directory of XML documents in the repository and
 writes nothing back to them. Subcommands:
 
-- `auger spec validate ROOT` — schema version, stable IDs, typed metadata, reference edges,
-  include graph and verification methods.
+- `auger spec validate ROOT` — the whole verdict: root shape and namespace, schema version,
+  stable IDs, typed metadata, reference/include graph, verification methods, and every test
+  obligation a block points at (tracked path, selector, migration, fixture, assertions).
+- `auger spec check ROOT` — the same verdict from the same loaded corpus, printing the
+  obligation node ids as JSON instead of the document/block/reference counts.
 - `auger spec list ROOT [--id ID] [--kind K] [--applies-to SCOPE] [--status S] [--version X.Y.Z]`
 - `auger spec assemble ROOT <the same selectors> [--no-deps] [--format markdown|json] [--out PATH]`
 

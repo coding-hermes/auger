@@ -8298,19 +8298,33 @@ def cmd_spec(a):
 
 
 def _spec_dispatch(a):
-    _root, documents, blocks = load_spec_corpus(a.root)
+    root, documents, blocks = load_spec_corpus(a.root)
     command = getattr(a, "spec_cmd", "validate")
-    if command == "check":
-        # AUG-126: `spec validate` counts documents/blocks/references in the block
-        # corpus. The obligation validator (validate_xml_specs) — which resolves
-        # tracked test paths, selectors, migrations and fixtures — had no CLI verb at
-        # all, so the checks that matter could only be reached from Python. This is
-        # that verb.
+    if command in ("validate", "check"):
+        # AUG-132/AUG-134: `validate` is not a counting verb. BOTH verbs run the one
+        # verdict — the corpus loader above (root shape, namespace, schema version,
+        # block grammar, typed edges) plus the obligation pass over the SAME documents,
+        # loaded once and handed over. Before this, `check` was the only verb that
+        # resolved a test path and `validate` the only verb that accepted a namespaced
+        # root, so one corpus could be valid and invalid at once depending on which verb
+        # a caller happened to type (and a corpus naming tests/does-not-exist.py
+        # validated "ok" with exit 0).
         try:
-            nodes = validate_xml_specs(a.root)
+            nodes = validate_xml_specs(a.root, loaded=(root, documents))
         except SpecValidationError as exc:
             raise SpecError("invalid-spec-graph", str(exc)) from exc
-        print(json.dumps({"status": "valid", "nodes": sorted(nodes)}, sort_keys=True))
+        if command == "check":
+            print(
+                json.dumps({"status": "valid", "nodes": sorted(nodes)}, sort_keys=True)
+            )
+            return 0
+        references = sum(
+            len(targets) for block in blocks for targets in block["refs"].values()
+        )
+        print(
+            f"spec: {len(documents)} document(s), {len(blocks)} block(s), "
+            f"{references} reference(s) ok"
+        )
         return 0
     if command == "bundle":
         # AUG-126: same story for assemble_xml_requirement — reachable from Python,
@@ -8320,15 +8334,6 @@ def _spec_dispatch(a):
         except SpecValidationError as exc:
             raise SpecError("invalid-spec-graph", str(exc)) from exc
         print(json.dumps(bundle, sort_keys=True, separators=(",", ":")))
-        return 0
-    if command == "validate":
-        references = sum(
-            len(targets) for block in blocks for targets in block["refs"].values()
-        )
-        print(
-            f"spec: {len(documents)} document(s), {len(blocks)} block(s), "
-            f"{references} reference(s) ok"
-        )
         return 0
     ids = tuple(getattr(a, "id", None) or ())
     kinds = tuple(getattr(a, "kind", None) or ())
@@ -8407,137 +8412,200 @@ SPEC_BLOCK_TAGS = {"requirement", "verification", "test"}
 
 
 def _xml_spec_documents(spec_root):
-    from pathlib import Path
-    from xml.etree import ElementTree as ET
+    """Read every document under a spec root through the ONE root/shape loader.
 
-    root = Path(spec_root).resolve()
+    AUG-134: this function used to parse each document itself and compare the bare
+    `document.tag` to "spec", while `load_spec_corpus` matched the Clark-notation
+    `{urn:auger:spec:1}spec`. On the same directory `spec validate` therefore accepted a
+    corpus that `spec check` refused as `invalid-root` — one corpus, two verdicts. Two
+    parsers of one corpus always drift, so there is now one: `_spec_read_document` owns
+    the root element, the namespace, the schema version and the DOCTYPE/ENTITY refusal,
+    and its typed SpecError is re-raised here under this validator's error type so both
+    verbs print the same diagnostic and exit with the same code.
+    """
+    root = Path(spec_root).expanduser()
     if not root.is_dir():
-        raise SpecValidationError(f"missing-spec-root: {root}")
-    documents = []
-    for path in sorted(root.rglob("*.xml")):
+        raise SpecValidationError(f"missing-spec-root: {spec_root} is not a directory")
+    root = root.resolve()
+    paths = sorted(path for path in root.rglob("*.xml") if path.is_file())
+    if not paths:
+        raise SpecValidationError(f"empty-corpus: no *.xml documents under {root}")
+    documents = {}
+    for path in paths:
+        rel = path.relative_to(root).as_posix()
         try:
-            document = ET.parse(path).getroot()
-        except (ET.ParseError, OSError) as exc:
-            raise SpecValidationError(f"invalid-xml: {path}: {exc}") from exc
-        if document.tag != "spec":
-            raise SpecValidationError(f"invalid-root: {path}: expected <spec>")
-        documents.append((path, document))
+            documents[rel] = _spec_read_document(path, root)
+        except SpecError as exc:
+            raise SpecValidationError(f"{exc.code}: {exc.detail}") from None
     return root, documents
 
 
-def validate_xml_specs(spec_root):
-    """Validate graph IDs, typed links and tracked test references under a spec root."""
-    import ast
-    from pathlib import Path
+def validate_xml_specs(spec_root, *, loaded=None):
+    """Validate graph IDs, typed links and tracked test references under a spec root.
 
-    root, documents = _xml_spec_documents(spec_root)
+    `loaded` is the `(root, documents)` pair already produced for this run, with
+    `documents` keyed by repository-relative path — the same shape `load_spec_corpus`
+    returns, so the CLI can hand either loader's output over. The CLI loads a corpus
+    ONCE and passes the same documents to the block checks and to this obligation pass,
+    so the two verbs cannot see two different corpora (AUG-134) and a corpus cannot
+    change under the validator mid-verdict. Call it without `loaded` and the documents
+    are read here through that same loader.
+    """
+    import ast
+
+    if loaded is None:
+        root, documents = _xml_spec_documents(spec_root)
+    else:
+        root, documents = loaded
     repository_root = Path(__file__).resolve().parent
     nodes = {}
-    for _, document in documents:
+    sources = {}
+    for rel, document in documents.items():
         for node in document.iter():
-            if node.tag not in SPEC_BLOCK_TAGS:
+            tag = _spec_local(node.tag)
+            if tag not in SPEC_BLOCK_TAGS:
                 continue
             node_id = node.get("id")
             if not node_id:
-                raise SpecValidationError(f"missing-id: <{node.tag}>")
+                raise SpecValidationError(f"missing-id: {rel}: <{tag}>")
             if node_id in nodes:
-                raise SpecValidationError(f"duplicate-id: {node_id}")
+                raise SpecValidationError(f"duplicate-id: {rel}: {node_id}")
             nodes[node_id] = node
+            sources[node_id] = rel
     for node_id, node in nodes.items():
-        if node.tag == "requirement":
-            refs = node.get("verifies", "").split()
+        tag = _spec_local(node.tag)
+        rel = sources[node_id]
+        if tag == "requirement":
+            refs = (node.get("verifies") or "").split()
             refs.extend(
-                child.get("ref", "") for child in node.findall("verification-ref")
+                (child.get("ref") or "")
+                for child in node
+                if _spec_local(child.tag) == "verification-ref"
             )
-            if not refs:
-                raise SpecValidationError(f"missing-verification-ref: {node_id}")
+            refs = [ref for ref in refs if ref]
+            # AUG-134: a requirement is verifiable either by naming verification refs
+            # (the typed test/verification graph) or by declaring a verification METHOD
+            # (`verification=`), which the authoring grammar already requires on every
+            # requirement block. Keying this rule on refs alone refused every corpus
+            # written in the authoring grammar — the shipped fixture corpus included — so
+            # `check` and `validate` could never be one verdict.
+            if not refs and not (node.get("verification") or "").strip():
+                raise SpecValidationError(
+                    f"missing-verification-ref: {rel}: {node_id} "
+                    "(no verifies= ref and no verification= method)"
+                )
             for ref in refs:
                 if ref not in nodes:
-                    raise SpecValidationError(f"dangling-test-ref: {node_id} -> {ref}")
-                if nodes[ref].tag not in {"verification", "test"}:
-                    raise SpecValidationError(f"wrong-ref-type: {node_id} -> {ref}")
-        if node.tag not in {"verification", "test"}:
+                    raise SpecValidationError(
+                        f"dangling-test-ref: {rel}: {node_id} -> {ref}"
+                    )
+                if _spec_local(nodes[ref].tag) not in {"verification", "test"}:
+                    raise SpecValidationError(
+                        f"wrong-ref-type: {rel}: {node_id} -> {ref}"
+                    )
+        if tag not in {"verification", "test"}:
             continue
         target = node.get("verifies")
-        if target and (target not in nodes or nodes[target].tag != "requirement"):
+        if target and (
+            target not in nodes or _spec_local(nodes[target].tag) != "requirement"
+        ):
             raise SpecValidationError(
-                f"dangling-requirement-ref: {node_id} -> {target}"
+                f"dangling-requirement-ref: {rel}: {node_id} -> {target}"
             )
-        if node.get("type", "test") not in {"test", "manual", "analysis", "inspection"}:
-            raise SpecValidationError(f"invalid-verification-type: {node_id}")
-        # AUG-128: `method="test"` is the shape the schema and the shipped fixtures use
-        # (specs/schema/auger-spec-1.0.xsd allows both `verification` and `method` on a
-        # block). Keying the obligation gate on `type` alone left every documented test
-        # obligation unvalidated: a node pointing at a file that does not exist, with a
-        # selector that does not exist, validated "ok" and exited 0.
-        is_test_obligation = (
-            node.tag == "test"
-            or node.get("type") == "test"
-            or node.get("method") == "test"
-        )
-        if is_test_obligation:
-            runner = node.get("runner", "")
-            selector = node.get("selector", "")
-            test_path = node.get("path", "")
-            if runner not in SPEC_RUNNERS or not selector or not test_path:
-                raise SpecValidationError(f"invalid-test-ref: {node_id}")
-            resolved = (repository_root / test_path).resolve()
-            if not resolved.is_relative_to(repository_root) or not resolved.is_file():
-                raise SpecValidationError(f"stale-test-ref: {node_id}: {test_path}")
-            relative_test_path = resolved.relative_to(repository_root).as_posix()
-            tracked = subprocess.run(
-                [
-                    "git",
-                    "-C",
-                    str(repository_root),
-                    "ls-files",
-                    "--error-unmatch",
-                    "--",
-                    relative_test_path,
-                ],
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if tracked.returncode != 0 or tracked.stdout.strip() != relative_test_path:
-                raise SpecValidationError(f"untracked-test-ref: {node_id}: {test_path}")
-            try:
-                tree = ast.parse(
-                    resolved.read_text(encoding="utf-8"), filename=str(resolved)
+        for attribute in ("type", "method"):
+            declared = (node.get(attribute) or "").strip()
+            # The obligation validator has always accepted `manual` where the authoring
+            # grammar names the same intent `demo` (SPEC_VERIFICATION_METHODS). Both mean
+            # "not automated", so the union is accepted instead of refusing a shipped
+            # shape over a vocabulary split (AUG-134); the loader above still enforces
+            # the authored enum for any corpus that reaches the CLI.
+            if declared and declared not in SPEC_VERIFICATION_METHODS + ("manual",):
+                raise SpecValidationError(
+                    f"invalid-verification-type: {rel}: {node_id} "
+                    f"{attribute}={declared}"
                 )
-            except (SyntaxError, OSError) as exc:
-                raise SpecValidationError(f"stale-test-ref: {node_id}: {exc}") from exc
-            if not any(
-                isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and item.name == selector
-                for item in ast.walk(tree)
+        # AUG-132: a machine-checkable test claim is a node that points AT a test — a
+        # `<test>` block, or any block carrying a runner/selector/path. A block that
+        # only declares type/method="test" states a METHOD, not a location: the
+        # authoring grammar uses exactly that shape for verification plans, and treating
+        # it as a broken pointer would refuse the shipped fixture corpus.
+        pointer = any(
+            (node.get(attribute) or "").strip()
+            for attribute in ("runner", "selector", "path")
+        )
+        if tag != "test" and not pointer:
+            continue
+        runner = (node.get("runner") or "").strip()
+        selector = (node.get("selector") or "").strip()
+        test_path = (node.get("path") or "").strip()
+        if runner not in SPEC_RUNNERS or not selector or not test_path:
+            raise SpecValidationError(
+                f"invalid-test-ref: {rel}: {node_id} "
+                "(needs runner=<registered runner>, selector= and path=)"
+            )
+        resolved = (repository_root / test_path).resolve()
+        if not resolved.is_relative_to(repository_root) or not resolved.is_file():
+            raise SpecValidationError(
+                f"stale-test-ref: {rel}: {node_id}: {test_path} (resolved {resolved})"
+            )
+        relative_test_path = resolved.relative_to(repository_root).as_posix()
+        tracked = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repository_root),
+                "ls-files",
+                "--error-unmatch",
+                "--",
+                relative_test_path,
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if tracked.returncode != 0 or tracked.stdout.strip() != relative_test_path:
+            raise SpecValidationError(
+                f"untracked-test-ref: {rel}: {node_id}: {test_path}"
+            )
+        try:
+            tree = ast.parse(
+                resolved.read_text(encoding="utf-8"), filename=str(resolved)
+            )
+        except (SyntaxError, OSError) as exc:
+            raise SpecValidationError(
+                f"stale-test-ref: {rel}: {node_id}: {test_path} ({exc})"
+            ) from exc
+        if not any(
+            isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and item.name == selector
+            for item in ast.walk(tree)
+        ):
+            raise SpecValidationError(
+                f"stale-test-ref: {rel}: {node_id}: selector {selector}"
+            )
+        migration = node.get("migration")
+        if migration:
+            migration_path = (repository_root / migration).resolve()
+            if (
+                not migration_path.is_relative_to(repository_root)
+                or not migration_path.is_file()
             ):
                 raise SpecValidationError(
-                    f"stale-test-ref: {node_id}: selector {selector}"
+                    f"stale-migration-ref: {rel}: {node_id}: {migration}"
                 )
-            migration = node.get("migration")
-            if migration:
-                migration_path = (repository_root / migration).resolve()
-                if (
-                    not migration_path.is_relative_to(repository_root)
-                    or not migration_path.is_file()
-                ):
-                    raise SpecValidationError(
-                        f"stale-migration-ref: {node_id}: {migration}"
-                    )
-                fixture = node.get("fixture", "")
-                fixture_path = (repository_root / fixture).resolve()
-                if (
-                    not fixture_path.is_relative_to(repository_root)
-                    or not fixture_path.is_file()
-                ):
-                    raise SpecValidationError(
-                        f"stale-fixture-ref: {node_id}: {fixture}"
-                    )
-                if not node.get("assertions", "").strip():
-                    raise SpecValidationError(
-                        f"incomplete-migration-obligation: {node_id}"
-                    )
+            fixture = node.get("fixture", "")
+            fixture_path = (repository_root / fixture).resolve()
+            if (
+                not fixture_path.is_relative_to(repository_root)
+                or not fixture_path.is_file()
+            ):
+                raise SpecValidationError(
+                    f"stale-fixture-ref: {rel}: {node_id}: {fixture}"
+                )
+            if not node.get("assertions", "").strip():
+                raise SpecValidationError(
+                    f"incomplete-migration-obligation: {rel}: {node_id}"
+                )
     return nodes
 
 

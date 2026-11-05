@@ -24,7 +24,15 @@ VERIFICATION_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "xml" / "verification
 def _write_spec(root: Path, blocks: str) -> Path:
     spec_root = root / "specs"
     spec_root.mkdir(parents=True)
-    (spec_root / "graph.xml").write_text(f"<spec>{blocks}</spec>", encoding="utf-8")
+    # AUG-134: one root/shape loader now reads this corpus for every verb, so the root
+    # element must be the shape the loader accepts (namespace, schema version, document
+    # id/version). Before, this validator parsed the document itself and compared the bare
+    # tag, which is how `spec check` and `spec validate` came to disagree on one corpus.
+    (spec_root / "graph.xml").write_text(
+        '<spec xmlns="urn:auger:spec:1" id="AUGER-TEST-GRAPH" version="1.0.0" '
+        f'schema-version="1.0">{blocks}</spec>',
+        encoding="utf-8",
+    )
     return spec_root
 
 

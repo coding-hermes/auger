@@ -541,7 +541,14 @@ def test_rejects_duplicate_dangling_stale_and_unregistered_test_refs(
 ):
     root = tmp_path / "specs"
     root.mkdir()
-    (root / "bad.xml").write_text(f'<spec id="bad">{xml}</spec>', encoding="utf-8")
+    # The root/shape grammar is one loader for every verb now (AUG-134), so this probe
+    # corpus carries the same `<spec>` metadata a real corpus does; otherwise the run
+    # refuses on the root before reaching the obligation rule each case is proving.
+    (root / "bad.xml").write_text(
+        '<spec xmlns="urn:auger:spec:1" id="AUGER-TEST-OBLIGATIONS" version="1.0.0" '
+        f'schema-version="1.0">{xml}</spec>',
+        encoding="utf-8",
+    )
     with pytest.raises(auger.SpecValidationError, match=error):
         auger.validate_xml_specs(root)
 
@@ -582,11 +589,15 @@ def test_serialized_runner_is_argument_vector_not_shell_command():
 
 
 # --------------------------------- AC-17: the obligation verbs are reachable from the CLI
-# AUG-126: `spec validate` counts documents/blocks/references and passed a corpus whose
-# test reference pointed at tests/does-not-exist.py. The obligation validator resolved
-# paths, selectors, migrations and fixtures, but had no CLI verb — these four tests are
-# what keeps it reachable, because a capability that only exists in Python is a capability
-# the drill workflow cannot use.
+# AUG-126: the obligation validator resolved paths, selectors, migrations and fixtures but had
+# no CLI verb, so it could only be reached from Python — these four tests keep it reachable,
+# because a capability that exists only in Python is one the drill workflow cannot use.
+# AUG-132/AUG-134 closed the other half: `spec validate` used to COUNT documents/blocks/
+# references and reported "ok" for a corpus whose test reference pointed at
+# tests/does-not-exist.py, while `spec check` refused the namespaced fixture corpus as
+# `invalid-root`. Both verbs now run one verdict from one loader — pinned by
+# tests/test_spec_validate_obligations.py and tests/test_spec_validators_agree.py — and these
+# four keep the verbs themselves reachable.
 
 
 def test_spec_check_validates_obligations_not_just_counts() -> None:
