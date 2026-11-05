@@ -516,7 +516,7 @@ def test_a_corpus_with_a_test_block_validates(tmp_path: Path) -> None:
     assert not auger._spec_schema_violations(
         auger._spec_load_schema(), document.read_bytes(), document.name
     ), "the shipped schema does not describe the <test> shape the validator enforces"
-    code, out, err = run_spec("validate", str(tmp_path))
+    code, out, err = run_spec("validate", str(tmp_path), "--repo-root", str(REPO_ROOT))
     assert code == 0, f"the CLI refuses a corpus written in the <test> shape: {err}"
     assert "2 block(s)" in out, out
 

@@ -1,4 +1,4 @@
-# XML spec graph schema (AUG-118 / AUG-123 / AUG-125 / AUG-133)
+# XML spec graph schema (AUG-118 / AUG-123 / AUG-125 / AUG-127 / AUG-133)
 
 Auger XML specs are rooted at `<spec id="...">` in the `urn:auger:spec:1` namespace, carry `version` and `schema-version`, and every graph node has a stable, repository-unique `id`. This implementation recognizes `<requirement>`, `<verification>`, and `<test>` nodes — all three are block kinds in the published grammar, and `<test>` is the shape that carries a machine-checkable obligation. A requirement's whitespace-separated `verifies` attribute names one or more verification IDs; `<verification-ref ref="..."/>` is an equivalent explicit edge. A verification may also name its requirement with `verifies="REQ-ID"`. References must resolve to the expected node type.
 
@@ -44,18 +44,44 @@ the same shape with paths that resolve.
 
 For automated tests, `runner` is an identifier in Auger's repository harness registry, not a command. The current registered identifier is `pytest`, serialized to an argv vector (`<current Python> -m pytest`). `path` and `selector` are tracked repository-relative test path and Python test function name. Validation confirms both exist and remain inside the repository. No shell string or arbitrary command is accepted or executed.
 
+## The repository root
+
+`path`, `migration` and `fixture` are **repository-relative**, and the repository is the one
+that CONSUMES the spec — not Auger's own checkout. It is chosen explicitly, in this order:
+
+1. `--repo-root <DIR>` on `auger spec validate`, `auger spec check` and `auger spec bundle`
+   (from Python: the `repository_root=` keyword of `validate_xml_specs` /
+   `assemble_xml_requirement`). It must BE a git work tree's top level: a subdirectory or a
+   non-repository is refused, because "repository-relative" has to mean one thing.
+2. Otherwise `git rev-parse --show-toplevel` resolved FROM THE SPEC ROOT — what a corpus
+   committed inside the repository it describes gets for free.
+3. Otherwise the run is refused (`unresolvable-repo-root`). There is no fallback to Auger's
+   own directory; a corpus with no root is not graded.
+
+Use `--repo-root` when the corpus does not live inside the repository it describes (a contract
+drafted in a reports tree that names tests in a source repository, or the same corpus checked
+from several repositories).
+
+Before AUG-127 the root was the directory of the INSTALLED MODULE, so every obligation was
+resolved, `git ls-files`-checked and AST-verified inside Auger's own tree. A consumer repository
+holding a real, git-tracked `tests/test_marker.py` and a spec naming it was refused
+`stale-test-ref ... (resolved <auger>/tests/test_marker.py)` — a file that exists nowhere in
+Auger's tree and has nothing to do with the consumer.
+
+ch:trace row=AUG-127 spec=docs/XML-SPEC-SCHEMA.md#the-repository-root test=tests/test_spec_repository_root.py doc=docs/XML-SPEC-SCHEMA.md
+
 ch:trace row=AUG-123 spec=docs/prd/xml-spec-graph.md#R15 test=tests/test_verification_graph.py doc=docs/XML-SPEC-SCHEMA.md
 
 Migration obligations require the exact repository-relative migration path, supported prior-schema fixture, tracked test path/selector, and explicit assertions. The selected requirement bundle carries those values verbatim. The test obligation itself must load and apply the named migration; a test that merely runs a package suite is insufficient. The XML validator checks that migration and fixture paths exist, while the regression test proves application behavior, including failure against a no-op migration.
 
-Validation reports typed `SpecValidationError` identifiers including `duplicate-id`, `dangling-test-ref`, `dangling-requirement-ref`, `wrong-ref-type`, `invalid-test-ref`, `stale-test-ref`, `stale-migration-ref`, and `incomplete-migration-obligation`. Use:
+Validation reports typed `SpecValidationError` identifiers including `duplicate-id`, `dangling-test-ref`, `dangling-requirement-ref`, `wrong-ref-type`, `invalid-test-ref`, `stale-test-ref`, `escaping-test-ref` (a path that leaves the repository root), `untracked-test-ref` (a file that exists but is not in git), `stale-migration-ref`, `stale-fixture-ref`, `incomplete-migration-obligation`, and `unresolvable-repo-root` (no repository to resolve in). Use:
 
 ```text
-auger spec validate <spec-root>                    # the whole verdict: block corpus + every obligation
-auger spec check    <spec-root>                    # the same verdict, obligation node ids as JSON
-auger spec bundle   <spec-root> <requirement-id>   # one requirement's verification bundle as JSON
-auger spec list     <spec-root>                     # blocks with kind, status, version, source
-auger spec assemble <spec-root> --id <block-id>    # block selection + explicit dependency closure
+auger spec validate <spec-root> [--repo-root DIR]        # the whole verdict: block corpus + every obligation
+auger spec check    <spec-root> [--repo-root DIR]        # the same verdict, obligation node ids as JSON
+auger spec bundle   <spec-root> <requirement-id> [--repo-root DIR]   # one requirement's verification bundle as JSON
+auger spec list     <spec-root>                          # blocks with kind, status, version, source
+auger spec assemble <spec-root> --id <block-id>          # block selection + explicit dependency closure
 ```
 
 `spec validate` and `spec check` are one verdict from one loader. The corpus root, the

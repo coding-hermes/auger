@@ -569,7 +569,7 @@ def test_rejects_duplicate_dangling_stale_and_unregistered_test_refs(
         encoding="utf-8",
     )
     with pytest.raises(auger.SpecValidationError, match=error):
-        auger.validate_xml_specs(root)
+        auger.validate_xml_specs(root, repository_root=REPO_ROOT)
 
 
 def test_migration_obligation_applies_named_file_and_detects_noop():
@@ -637,7 +637,7 @@ def test_spec_check_refuses_a_missing_test_path(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    code, _out, err = run_spec("check", str(tmp_path))
+    code, _out, err = run_spec("check", str(tmp_path), "--repo-root", str(REPO_ROOT))
     assert code == 2, "a missing test path must refuse, not report ok"
     assert "stale-test-ref" in err
     assert "TEST-MIG-1" in err

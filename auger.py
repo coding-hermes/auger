@@ -8436,6 +8436,11 @@ def cmd_spec(a):
 def _spec_dispatch(a):
     root, documents, blocks = load_spec_corpus(a.root)
     command = getattr(a, "spec_cmd", "validate")
+    # AUG-127: the repository the obligations resolve in is EXPLICIT, never auger's own
+    # directory. `--repo-root` names it; without the flag the validator resolves
+    # `git rev-parse --show-toplevel` from the spec root and refuses
+    # (`unresolvable-repo-root`) rather than falling back to `Path(__file__).parent`.
+    repository_root = getattr(a, "repo_root", None)
     if command in ("validate", "check"):
         # AUG-132/AUG-134: `validate` is not a counting verb. BOTH verbs run the one
         # verdict — the corpus loader above (root shape, namespace, schema version,
@@ -8446,7 +8451,9 @@ def _spec_dispatch(a):
         # a caller happened to type (and a corpus naming tests/does-not-exist.py
         # validated "ok" with exit 0).
         try:
-            nodes = validate_xml_specs(a.root, loaded=(root, documents))
+            nodes = validate_xml_specs(
+                a.root, loaded=(root, documents), repository_root=repository_root
+            )
         except SpecValidationError as exc:
             raise SpecError("invalid-spec-graph", str(exc)) from exc
         if command == "check":
@@ -8466,7 +8473,9 @@ def _spec_dispatch(a):
         # AUG-126: same story for assemble_xml_requirement — reachable from Python,
         # unbound on the CLI.
         try:
-            bundle = assemble_xml_requirement(a.root, a.requirement)
+            bundle = assemble_xml_requirement(
+                a.root, a.requirement, repository_root=repository_root
+            )
         except SpecValidationError as exc:
             raise SpecError("invalid-spec-graph", str(exc)) from exc
         print(json.dumps(bundle, sort_keys=True, separators=(",", ":")))
@@ -8503,6 +8512,24 @@ def _spec_dispatch(a):
     else:
         sys.stdout.write(text)
     return 0
+
+
+def _add_spec_repo_root(parser) -> None:
+    """The `--repo-root` flag every verb that resolves an obligation shares (AUG-127).
+
+    Only the verbs that actually resolve paths carry it: `list` and `assemble` select
+    blocks and never touch a test path, and a flag they ignored would be a declared
+    surface that does nothing.
+    """
+    parser.add_argument(
+        "--repo-root",
+        metavar="DIR",
+        help=(
+            "repository the corpus' test/migration/fixture paths are relative to; must be "
+            "a git work tree's top level. Default: `git rev-parse --show-toplevel` from "
+            "the spec root (refused when that resolves to nothing)"
+        ),
+    )
 
 
 def _add_spec_selectors(parser) -> None:
@@ -8576,7 +8603,81 @@ def _xml_spec_documents(spec_root):
     return root, documents
 
 
-def validate_xml_specs(spec_root, *, loaded=None):
+def _git_toplevel(directory):
+    """`git rev-parse --show-toplevel` for `directory`, or None when it is no work tree.
+
+    Run with `-C`, never from the caller's cwd: the answer must be a function of the
+    directory handed in, not of wherever the process happens to be standing.
+    """
+    probe = subprocess.run(
+        ["git", "-C", str(directory), "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if probe.returncode != 0:
+        return None
+    shown = probe.stdout.strip()
+    if not shown:
+        return None
+    path = Path(shown)
+    return path.resolve() if path.is_dir() else None
+
+
+def _spec_repository_root(spec_root, explicit=None):
+    """The repository a corpus' `path`/`migration`/`fixture` values are relative to.
+
+    AUG-127: this used to be `Path(__file__).resolve().parent` — the directory of the
+    INSTALLED MODULE. So every obligation was resolved, `git ls-files`-checked and
+    AST-verified inside auger's own checkout: a consumer repository naming its own
+    committed test (`tests/test_marker.py`, present and tracked) was refused
+    `stale-test-ref ... (resolved <auger>/tests/test_marker.py)`, and a corpus whose
+    obligation happened to match a file in auger's tree passed for the wrong reason. A
+    repository can never satisfy a root it does not control.
+
+    The root is chosen EXPLICITLY, in this order, and there is no fallback to auger:
+
+      * `explicit` — the CLI's `--repo-root` (or `repository_root=` from Python). It must
+        BE a work tree's top level, so "repository-relative" has exactly one meaning;
+      * otherwise `git rev-parse --show-toplevel` resolved FROM THE SPEC ROOT, which is
+        what a corpus committed inside the repository it describes gets for free.
+
+    Neither resolving is NO VERDICT (`unresolvable-repo-root`), never a guess — quietly
+    guessing is how the pre-fix code graded every corpus against the wrong tree.
+    """
+    if explicit is not None:
+        candidate = Path(explicit).expanduser()
+        if not candidate.is_dir():
+            raise SpecValidationError(
+                f"unresolvable-repo-root: {explicit} is not a directory; --repo-root must "
+                "name the repository the corpus' test, migration and fixture paths are "
+                "relative to"
+            )
+        resolved = candidate.resolve()
+        top = _git_toplevel(resolved)
+        if top is None:
+            raise SpecValidationError(
+                f"unresolvable-repo-root: {resolved} is not a git work tree; --repo-root "
+                "must name a repository root, because a test path is only proved tracked "
+                "by `git ls-files` inside one"
+            )
+        if top != resolved:
+            raise SpecValidationError(
+                f"unresolvable-repo-root: --repo-root {resolved} is not a repository root "
+                f"(the work tree's top level is {top})"
+            )
+        return resolved
+    top = _git_toplevel(Path(spec_root))
+    if top is None:
+        raise SpecValidationError(
+            f"unresolvable-repo-root: {spec_root} is not inside a git work tree and no "
+            "--repo-root was given; pass --repo-root <repository> so test, migration and "
+            "fixture paths can be resolved and proved tracked there"
+        )
+    return top
+
+
+def validate_xml_specs(spec_root, *, loaded=None, repository_root=None):
     """Validate graph IDs, typed links and tracked test references under a spec root.
 
     `loaded` is the `(root, documents)` pair already produced for this run, with
@@ -8586,6 +8687,10 @@ def validate_xml_specs(spec_root, *, loaded=None):
     so the two verbs cannot see two different corpora (AUG-134) and a corpus cannot
     change under the validator mid-verdict. Call it without `loaded` and the documents
     are read here through that same loader.
+
+    `repository_root` is the repository the obligations resolve in (AUG-127). Omitted, it
+    is `git rev-parse --show-toplevel` from the SPEC ROOT — never auger's own directory;
+    see `_spec_repository_root`.
     """
     import ast
 
@@ -8593,7 +8698,7 @@ def validate_xml_specs(spec_root, *, loaded=None):
         root, documents = _xml_spec_documents(spec_root)
     else:
         root, documents = loaded
-    repository_root = Path(__file__).resolve().parent
+    repository_root = _spec_repository_root(root, repository_root)
     nodes = {}
     sources = {}
     for rel, document in documents.items():
@@ -8680,7 +8785,15 @@ def validate_xml_specs(spec_root, *, loaded=None):
                 "(needs runner=<registered runner>, selector= and path=)"
             )
         resolved = (repository_root / test_path).resolve()
-        if not resolved.is_relative_to(repository_root) or not resolved.is_file():
+        # Escaping the root and pointing at a missing file are SEPARATE refusals: "this
+        # path leaves the repository" is not a stale test, and a caller scripting on the
+        # code has to be able to tell them apart. Both fail closed (AUG-127).
+        if not resolved.is_relative_to(repository_root):
+            raise SpecValidationError(
+                f"escaping-test-ref: {rel}: {node_id}: {test_path} "
+                f"(resolved {resolved}, outside {repository_root})"
+            )
+        if not resolved.is_file():
             raise SpecValidationError(
                 f"stale-test-ref: {rel}: {node_id}: {test_path} (resolved {resolved})"
             )
@@ -8716,8 +8829,11 @@ def validate_xml_specs(spec_root, *, loaded=None):
             and item.name == selector
             for item in ast.walk(tree)
         ):
+            # Name the file that was parsed, not just the selector: with the root now coming
+            # from the caller (AUG-127) "which file did you look in?" is the first question a
+            # consumer asks, and the answer is not derivable from the path alone.
             raise SpecValidationError(
-                f"stale-test-ref: {rel}: {node_id}: selector {selector}"
+                f"stale-test-ref: {rel}: {node_id}: selector {selector} in {resolved}"
             )
         migration = node.get("migration")
         if migration:
@@ -8745,9 +8861,9 @@ def validate_xml_specs(spec_root, *, loaded=None):
     return nodes
 
 
-def assemble_xml_requirement(spec_root, requirement_id):
+def assemble_xml_requirement(spec_root, requirement_id, *, repository_root=None):
     """Return the requirement and its linked verification obligations as data only."""
-    nodes = validate_xml_specs(spec_root)
+    nodes = validate_xml_specs(spec_root, repository_root=repository_root)
     requirement = nodes.get(requirement_id)
     # AUG-134 left two bare-tag reads here (`requirement.tag != "requirement"` and
     # `findall("verification-ref")`), which only work for a document with NO namespace — and the
@@ -9133,6 +9249,7 @@ def main(argv=None):
         help="validate a spec corpus: schema version, stable IDs, typed edges, methods",
     )
     v.add_argument("root", help="spec root directory; every *.xml below it is indexed")
+    _add_spec_repo_root(v)
     v.set_defaults(fn=cmd_spec)
 
     lst = spec_sub.add_parser(
@@ -9174,6 +9291,7 @@ def main(argv=None):
     chk.add_argument(
         "root", help="spec root directory; every *.xml below it is validated"
     )
+    _add_spec_repo_root(chk)
     chk.set_defaults(fn=cmd_spec)
 
     bnd = spec_sub.add_parser(
@@ -9183,6 +9301,7 @@ def main(argv=None):
     )
     bnd.add_argument("root")
     bnd.add_argument("requirement", help="requirement id to assemble")
+    _add_spec_repo_root(bnd)
     bnd.set_defaults(fn=cmd_spec)
 
     a = ap.parse_args(argv)

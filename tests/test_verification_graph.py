@@ -20,6 +20,13 @@ import auger  # noqa: E402  (needs REPO_ROOT on sys.path first)
 
 VERIFICATION_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "xml" / "verification"
 
+#: AUG-127: a corpus' obligations resolve in the CONSUMING repository, which is explicit
+#: (`repository_root=` / `--repo-root`) or `git rev-parse --show-toplevel` from the spec
+#: root. These probes author their corpora in `tmp_path` (deliberately outside any work
+#: tree) but name paths relative to THIS repository, so they must say so: the pre-fix
+#: code used auger's own module directory implicitly and no caller could state a root.
+REPO = REPO_ROOT
+
 
 def _write_spec(root: Path, blocks: str) -> Path:
     spec_root = root / "specs"
@@ -88,13 +95,15 @@ def _assert_invalid_refs_fail_closed(tmp_path: Path, untracked_test_path: str) -
     for blocks, error, requirement_id, test_id in cases:
         spec_root = _write_spec(tmp_path / error, blocks)
         with pytest.raises(auger.SpecValidationError) as caught:
-            auger.validate_xml_specs(spec_root)
+            auger.validate_xml_specs(spec_root, repository_root=REPO)
         assert error in str(caught.value)
         if error not in {"duplicate-id", "stale-test-ref", "untracked-test-ref"}:
             assert requirement_id in str(caught.value)
         assert test_id in str(caught.value)
         with pytest.raises(auger.SpecValidationError) as assembled:
-            auger.assemble_xml_requirement(spec_root, requirement_id)
+            auger.assemble_xml_requirement(
+                spec_root, requirement_id, repository_root=REPO
+            )
         assert test_id in str(assembled.value)
 
 
@@ -114,7 +123,7 @@ def test_xml_cannot_execute_arbitrary_shell(tmp_path: Path) -> None:
         'selector="test_xml_cannot_execute_arbitrary_shell"/>',
     )
     with pytest.raises(auger.SpecValidationError, match="invalid-test-ref"):
-        auger.validate_xml_specs(shell_root)
+        auger.validate_xml_specs(shell_root, repository_root=REPO)
 
 
 def test_migration_obligation_applies_named_file(tmp_path: Path) -> None:
@@ -164,7 +173,7 @@ def test_method_test_is_an_obligation_without_a_type_attribute(tmp_path: Path) -
         ' path="tests/does-not-exist.py"/>',
     )
     with pytest.raises(auger.SpecValidationError) as caught:
-        auger.validate_xml_specs(spec_root)
+        auger.validate_xml_specs(spec_root, repository_root=REPO)
     assert "stale-test-ref" in str(caught.value)
     assert "TEST-MIG-1" in str(caught.value)
 
@@ -176,7 +185,7 @@ def test_non_test_methods_are_not_forced_through_test_checks(tmp_path: Path) -> 
         '<requirement id="REQ-MAN-1" verifies="MAN-1"/>'
         '<verification id="MAN-1" verifies="REQ-MAN-1" method="manual"/>',
     )
-    nodes = auger.validate_xml_specs(spec_root)
+    nodes = auger.validate_xml_specs(spec_root, repository_root=REPO)
     assert "MAN-1" in nodes
 
 
