@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Test obligations: where `path`/`selector` resolve, and what `runner` means (AUG-123/AUG-126/
+  AUG-127/AUG-132).
+
+  Authored corpus (AUG-136). Every block below describes code that auger.py actually runs, and
+  every verification block names a tracked test in this repository.
+-->
+<spec xmlns="urn:auger:spec:1" id="AUGER-SPEC-OBLIGATIONS" version="1.0.0"
+      schema-version="1.0">
+
+  <requirement id="SPEC-OBL-CONSUMER" kind="requirement" status="active" version="1.0.0"
+               applies-to="auger.spec.obligation" verification="test"
+               verifies="SPEC-OBL-CONSUMER-V1 SPEC-OBL-CONSUMER-V2">
+    A test obligation's `path` and `selector` are repository-relative and resolve inside the
+    repository that CONSUMES the corpus: a consumer repository's own git-tracked test file is
+    accepted by `spec validate` and `spec check`, and `spec bundle` returns that `path` and
+    `selector` verbatim with the registered runner's argv vector. `--repo-root DIR` names the
+    consuming repository when the corpus lives outside it. With no resolvable root the run
+    refuses (`unresolvable-repo-root`) rather than grading the obligation against Auger's own
+    checkout.
+  </requirement>
+
+  <verification id="SPEC-OBL-CONSUMER-V1" kind="verification" status="active" version="1.0.0"
+                applies-to="auger.spec.obligation" method="test"
+
+                runner="pytest" path="tests/test_spec_repository_root.py"
+                selector="test_a_consumer_repository_validates_and_bundles_its_own_test">
+    Builds a fresh consumer repository with its own tracked `tests/test_marker.py`, validates and
+    checks the corpus that names it, and asserts the bundle carries
+    `path="tests/test_marker.py"` and `selector="test_marker"` with no Auger path in the resolved
+    fields.
+  </verification>
+
+  <verification id="SPEC-OBL-CONSUMER-V2" kind="verification" status="active" version="1.0.0"
+                applies-to="auger.spec.obligation" method="test"
+
+                runner="pytest" path="tests/test_spec_repository_root.py"
+                selector="test_no_root_and_no_flag_refuses_instead_of_using_augers_tree">
+    Points a corpus outside any work tree at `tests/test_xml_specs.py`, which exists and is
+    tracked in Auger's own checkout, and asserts the run refuses with
+    `unresolvable-repo-root` and names `--repo-root` as the fix.
+  </verification>
+
+  <requirement id="SPEC-OBL-RUNNER" kind="requirement" status="active" version="1.0.0"
+               applies-to="auger.spec.obligation" verification="test"
+               verifies="SPEC-OBL-RUNNER-V1">
+    A `&lt;verification&gt;` or `&lt;test&gt;` block that points at a test carries `runner`, `path`
+    and `selector` together. `runner` is an identifier in Auger's registry — today only `pytest` —
+    serialized to the argv vector `&lt;current Python&gt; -m pytest`; anything else, including a shell
+    string such as `bash -c`, is refused (`invalid-test-ref`), so XML never executes a command.
+  </requirement>
+
+  <verification id="SPEC-OBL-RUNNER-V1" kind="verification" status="active" version="1.0.0"
+                applies-to="auger.spec.obligation" method="test"
+
+                runner="pytest" path="tests/test_verification_graph.py"
+                selector="test_xml_cannot_execute_arbitrary_shell">
+    Asserts a resolved obligation's runner is the argv list
+    `[sys.executable, "-m", "pytest"]`, then writes a `&lt;test runner="bash -c"&gt;` obligation and
+    asserts validation refuses it with `invalid-test-ref`.
+  </verification>
+
+</spec>
