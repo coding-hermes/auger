@@ -1166,3 +1166,123 @@ def test_corpus_wide_verbs_still_refuse_a_malformed_document(tmp_path: Path) -> 
         code, out, err = run_spec("list", str(corpus), "--id", "W-REQ-1")
         assert code == 2, (name, out, err)
         assert f"spec error ({expected})" in err, (name, err)
+
+
+# ------------------------------------------------------ AUG-147: the corpus is FLAT
+def flat_corpus(tmp_path: Path, *, include: str | None) -> Path:
+    """A corpus where `aa-user.xml` optionally includes `zz-shared.xml`, plus an orphan.
+
+    `zz-shared.xml` sorts AFTER the includer on purpose: with an include the fragment's blocks
+    are spliced at the include SITE (early), without one they are collected at the fragment's own
+    position (late) — so this corpus can tell "membership is flat" apart from "order is spliced".
+    """
+    document = (
+        '<spec xmlns="urn:auger:spec:1" id="PROBE-USER" version="1.0.0" schema-version="1.0">\n'
+        + (f'  <include src="{include}"/>\n' if include else "")
+        + requirement_block("INC-U-1")
+        + "</spec>\n"
+    )
+    return write_corpus(
+        tmp_path / "corpus",
+        {
+            "aa-user.xml": document,
+            "zz-shared.xml": spec_document(
+                "PROBE-SHARED", requirement_block("INC-SH-1")
+            ),
+            "orphan.xml": spec_document(
+                "PROBE-ORPHAN", requirement_block("INC-ORPH-1")
+            ),
+        },
+    )
+
+
+def test_include_does_not_gate_membership(tmp_path: Path) -> None:
+    """AUG-147 (B), pin 1: deleting an <include> changes NO membership — the corpus is flat.
+
+    A document is in the corpus because it is a `*.xml` under ROOT, not because an include edge
+    reaches it. What `<include>` DOES own is the splice POSITION (asserted below), which is why
+    the two directions differ in order but never in the id set. If a later change makes include
+    edges govern participation, this test reds and the doc sentence must move with it.
+    """
+    with_include = flat_corpus(tmp_path / "with", include="zz-shared.xml")
+    without_include = flat_corpus(tmp_path / "without", include=None)
+
+    code, with_out, err = run_spec("list", str(with_include), "--kind", "requirement")
+    assert code == 0, err
+    code, without_out, err = run_spec(
+        "list", str(without_include), "--kind", "requirement"
+    )
+    assert code == 0, err
+
+    def ids(text: str) -> list[str]:
+        return [line.split("\t", 1)[0] for line in text.splitlines()]
+
+    assert (
+        set(ids(with_out))
+        == set(ids(without_out))
+        == {
+            "INC-ORPH-1",
+            "INC-SH-1",
+            "INC-U-1",
+        }
+    )
+    # ... and the include is NOT decorative either: it moves the fragment's blocks to the site.
+    assert ids(with_out) == ["INC-SH-1", "INC-U-1", "INC-ORPH-1"], with_out
+    # Without it the fragment is collected at its own position (aa-user, orphan, zz-shared).
+    assert ids(without_out) == ["INC-U-1", "INC-ORPH-1", "INC-SH-1"], without_out
+
+
+def test_an_unincluded_document_is_still_selectable(tmp_path: Path) -> None:
+    """AUG-147 (B), pin 2: a file nothing includes contributes selectable blocks.
+
+    `orphan.xml` is reachable from no include edge, and `--id INC-ORPH-1` selects and assembles
+    it. The same test pins the assertion half that the flat model KEEPS: an include that names a
+    missing file is still a typed refusal, so `<include>` is a real edge, just not a gate.
+    """
+    corpus = flat_corpus(tmp_path / "corpus", include="zz-shared.xml")
+
+    code, out, err = run_spec("list", str(corpus), "--id", "INC-ORPH-1")
+    assert code == 0, err
+    assert [line.split("\t", 1)[0] for line in out.splitlines()] == ["INC-ORPH-1"], out
+
+    code, out, err = run_spec("assemble", str(corpus), "--id", "INC-ORPH-1")
+    assert code == 0, err
+    assert assembled_ids(out) == ["INC-ORPH-1"], out
+
+    write_corpus(
+        corpus,
+        {"aa-user.xml": spec_document("PROBE-USER", requirement_block("INC-U-1"))},
+    )
+    (corpus / "aa-user.xml").write_text(
+        '<spec xmlns="urn:auger:spec:1" id="PROBE-USER" version="1.0.0" schema-version="1.0">'
+        '<include src="does-not-exist.xml"/>'
+        + requirement_block("INC-U-1")
+        + "</spec>\n",
+        encoding="utf-8",
+    )
+    code, out, err = run_spec("validate", str(corpus))
+    assert code == 2, (out, err)
+    assert "spec error (unresolved-include)" in err, err
+
+
+def test_the_flat_corpus_rule_is_documented() -> None:
+    """AUG-147 (B): the behaviour is documented where a reader looks — docs AND `--help`.
+
+    The flat pool is a decision, not an accident: without a sentence naming it, the next reader
+    re-files "include is decorative" as a defect. The two sources are asserted separately because
+    they are read by different people (the doc by the author, the epilogue by whoever typed
+    `auger spec --help`).
+    """
+    verbs = (REPO_ROOT / "docs" / "VERBS.md").read_text(encoding="utf-8")
+    spec_section = verbs.split("\n## spec\n", 1)[1]
+    assert "flat corpus" in spec_section.lower(), (
+        "docs/VERBS.md lost the flat-corpus sentence"
+    )
+    assert "assertion-only" in spec_section.lower(), "the include edge is not described"
+
+    help_text = io.StringIO()
+    with contextlib.redirect_stdout(help_text), pytest.raises(SystemExit):
+        auger.main(["spec", "--help"])
+    rendered = help_text.getvalue()
+    assert "flat corpus" in rendered.lower(), rendered
+    assert "assertion-only" in rendered.lower(), rendered

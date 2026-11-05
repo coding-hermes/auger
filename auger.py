@@ -9540,6 +9540,21 @@ def main(argv=None):
         "spec",
         help="validate and assemble XML specifications (AUG-118: IDs, typed metadata, "
         "attribute selection, cross-file assembly)",
+        # AUG-147: the corpus model is a DECISION, so it is stated where the author reads it.
+        # Without this sentence, "an <include> does not change what is selectable" gets re-filed
+        # as a defect every time a new reader meets it.
+        description=(
+            "Author, validate, select and assemble an XML spec corpus.\n\n"
+            "The corpus is a FLAT corpus: every *.xml under ROOT contributes blocks and is\n"
+            "selectable, whether or not another document includes it. <include src> is an\n"
+            "assertion-only edge — it splices that fragment's blocks at the include site (so it\n"
+            "decides their ORDER) and it must resolve inside ROOT without a cycle, but it never\n"
+            "adds or removes a document from the corpus.\n\n"
+            "`validate`, `check` and `bundle` are corpus-wide verdicts; `list` and `assemble`\n"
+            "are selection-scoped and skip (counted, on stderr) a document that is not\n"
+            "well-formed XML."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     spec_sub = s.add_subparsers(dest="spec_cmd", required=True)
 

@@ -634,6 +634,21 @@ declares it verifies a selected block is part of that block's closure) — in co
 with a `source: <file>#<id>` citation. `refs`/`implements`/`supersedes` must resolve but never
 expand. `--no-deps` emits the matched set alone.
 
+**The corpus is a FLAT CORPUS, and `<include>` is an assertion-only edge (AUG-147).** Membership
+is decided by the file system: every `*.xml` under ROOT contributes blocks and is selectable,
+whether or not any other document includes it, and deleting an `<include>` changes no id that a
+selector can reach. What `<include src>` owns is (a) the SPLICE POSITION — the fragment's blocks are
+expanded at the include site, so they take that document's place in corpus order rather than the
+fragment file's own sorted position — and (b) an ASSERTION: the target must exist, must not carry
+a scheme, an absolute path or `..`, must resolve inside ROOT, must not form a cycle, and a
+fragment may be spliced at exactly ONE site (`unresolved-include`, `remote-reference-rejected`,
+`include-outside-root`, `include-cycle`, `duplicate-include`). Use a shared block by ID reference
+(`depends-on`/`verifies`) when it must appear in more than one document. There is deliberately no
+"root document" declaration: a document that no other file includes is not a root, it is simply a
+document, so an un-included file cannot be told apart from a root and include edges therefore
+cannot gate participation without a new declaration surface. Ordering, not membership, is the
+include's job.
+
 **Corpus-wide vs selection-scoped (AUG-146).** `validate`, `check` and `bundle` are
 CORPUS-WIDE verdicts: every document must parse and conform, and one malformed file refuses the
 whole run, naming it (`invalid-xml`, exit 2). `list` and `assemble` are SELECTION-scoped: a
