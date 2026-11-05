@@ -627,7 +627,9 @@ writes nothing back to them. Subcommands:
   `unsupported-protocol-version` when the requested protocol is not the one this checker speaks.
   `--diff-file PATH` replays a diff and `--max-diff-bytes N` bounds the read. It writes nothing. The
   full contract, the finding codes and the ch:trace rules are docs/XML-SPEC-SCHEMA.md § The
-  staged-diff checker.
+  staged-diff checker. `auger spec check [ROOT]` carries the same flags and routes into the same
+  implementation when `--diff-stdin`/`--diff-file` is present (identical payload); without a diff it
+  remains the obligation verdict.
 - `auger spec list ROOT [--id ID] [--kind K] [--applies-to SCOPE] [--status S] [--version X.Y.Z]`
 - `auger spec assemble ROOT <the same selectors> [--no-deps] [--format markdown|json] [--out PATH]`
 

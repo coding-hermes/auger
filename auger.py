@@ -9342,7 +9342,7 @@ def _spec_align_dispatch(a):
             )
         diff_text = raw.decode("utf-8", "replace")
 
-    spec_root = getattr(a, "spec_root", None)
+    spec_root = getattr(a, "spec_root", None) or getattr(a, "root", None)
     if not spec_root:
         repository = getattr(a, "repo_root", None)
         if not repository:
@@ -9409,6 +9409,14 @@ def _spec_corpus_counts(documents: dict, unreadable: list, records: list) -> dic
 
 def _spec_dispatch(a):
     command = getattr(a, "spec_cmd", "validate")
+    if command == "check" and (
+        getattr(a, "diff_stdin", False) or getattr(a, "diff_file", None)
+    ):
+        # AUG-135: `spec check` is the verb the board row's own text names, so it carries the
+        # checker too — SAME implementation (`_spec_align_dispatch`), same one-line payload, same
+        # exit codes. Two command strings, one verdict; the boards cannot disagree about what the
+        # checker is because both of them run this code.
+        return _spec_align_dispatch(a)
     # AUG-146: `list` and `assemble` select, they do not adjudicate the corpus — a neighbouring
     # file that is still being written is skipped and counted instead of taking every query
     # offline. `validate`/`check`/`bundle` are corpus-wide verdicts and never get the tolerance.
@@ -9559,6 +9567,46 @@ def _add_spec_repo_root(parser) -> None:
             "a git work tree's top level. Default: `git rev-parse --show-toplevel` from "
             "the spec root (refused when that resolves to nothing)"
         ),
+    )
+
+
+def _add_spec_checker_flags(parser) -> None:
+    """The staged-diff checker flags, shared by `spec align` and `spec check --diff-stdin`.
+
+    One definition, because the two command strings an operator (or a board row) may name must
+    accept the SAME arguments: AUG-135's row text simulates the caller as
+    `... --diff-stdin check` while the documentation names `auger spec align`. Both verbs route
+    into `_spec_align_dispatch`, so the payload cannot differ either.
+    """
+    parser.add_argument(
+        "--spec-root",
+        metavar="DIR",
+        help="spec corpus root; default: the positional ROOT, else <repo-root>/specs",
+    )
+    parser.add_argument(
+        "--protocol-version",
+        default=SPEC_CHECK_PROTOCOL,
+        help="the checker protocol the caller speaks (this checker speaks "
+        f"{', '.join(SPEC_CHECK_PROTOCOLS)}; default {SPEC_CHECK_PROTOCOL})",
+    )
+    parser.add_argument(
+        "--diff-stdin",
+        action="store_true",
+        help="read the staged unified diff from stdin — the shape GitReins sends; turns this "
+        "verb into the staged-diff checker",
+    )
+    parser.add_argument(
+        "--diff-file",
+        metavar="PATH",
+        help="read the diff from a file instead of stdin (tests and replays)",
+    )
+    parser.add_argument(
+        "--max-diff-bytes",
+        type=int,
+        default=SPEC_CHECK_MAX_DIFF_BYTES,
+        metavar="N",
+        help=f"refuse a diff larger than N bytes instead of buffering without limit "
+        f"(default {SPEC_CHECK_MAX_DIFF_BYTES})",
     )
 
 
@@ -10443,9 +10491,13 @@ def main(argv=None):
         "(AUG-126: the obligation validator, previously unreachable from the CLI)",
     )
     chk.add_argument(
-        "root", help="spec root directory; every *.xml below it is validated"
+        "root",
+        nargs="?",
+        help="spec root directory; every *.xml below it is validated. Optional when "
+        "--spec-root is given or the verb runs as the staged-diff checker (--diff-stdin)",
     )
     _add_spec_repo_root(chk)
+    _add_spec_checker_flags(chk)
     chk.set_defaults(fn=cmd_spec)
 
     bnd = spec_sub.add_parser(
@@ -10481,41 +10533,8 @@ def main(argv=None):
             "the cap, no diff source, an unresolvable repository root, an invalid corpus)\n"
         ),
     )
-    aln.add_argument(
-        "--repo-root",
-        metavar="DIR",
-        help="repository the diff, test pointers and commit ids resolve against; must be a git "
-        "work tree's top level. Default: the work tree containing --spec-root",
-    )
-    aln.add_argument(
-        "--spec-root",
-        metavar="DIR",
-        help="spec corpus root; default <repo-root>/specs",
-    )
-    aln.add_argument(
-        "--protocol-version",
-        default=SPEC_CHECK_PROTOCOL,
-        help=f"the checker protocol the caller speaks (this checker speaks "
-        f"{', '.join(SPEC_CHECK_PROTOCOLS)}; default {SPEC_CHECK_PROTOCOL})",
-    )
-    aln.add_argument(
-        "--diff-stdin",
-        action="store_true",
-        help="read the staged unified diff from stdin — the shape GitReins sends",
-    )
-    aln.add_argument(
-        "--diff-file",
-        metavar="PATH",
-        help="read the diff from a file instead of stdin (tests and replays)",
-    )
-    aln.add_argument(
-        "--max-diff-bytes",
-        type=int,
-        default=SPEC_CHECK_MAX_DIFF_BYTES,
-        metavar="N",
-        help=f"refuse a diff larger than N bytes instead of buffering without limit "
-        f"(default {SPEC_CHECK_MAX_DIFF_BYTES})",
-    )
+    _add_spec_repo_root(aln)
+    _add_spec_checker_flags(aln)
     aln.set_defaults(fn=cmd_spec_align)
 
     a = ap.parse_args(argv)

@@ -113,6 +113,14 @@ auger spec align
 followed by the caller's four flags. The same verb takes `--diff-file PATH` (tests and replays) and
 `--max-diff-bytes N` (default 8388608); feeding it neither a stdin nor a file is a typed refusal.
 
+**Two command strings, one verdict.** `auger spec check [ROOT]` carries the same four flags, and
+with `--diff-stdin` (or `--diff-file`) it routes into the SAME implementation and prints the SAME
+one-line payload — with a positional ROOT, with `--spec-root`, or with both. Without a diff it stays
+the obligation verdict it always was. The two strings exist because both are already in circulation:
+the documentation names `auger spec align`, and the AUG-135 row text simulates the caller as
+`... --diff-stdin check`. They agree by construction, and a test asserts the payloads are
+byte-identical, so no board can be "complete" under one spelling and not the other.
+
 **Handshake.** The payload carries `"protocol"` (the version the caller asked for, echoed) and
 `"version"` — the CHECKER PROTOCOL version, currently `1.0.0`, never the product's `AUGER_VERSION`
 (0.3), because GitReins compares `version` against `min_checker_version` (default `1.0.0`) and would

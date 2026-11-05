@@ -263,6 +263,70 @@ def test_the_cli_accepts_the_four_checker_flags_and_emits_one_json_line(
     }, sorted(payload)
 
 
+def test_both_documented_checker_commands_agree(tmp_path: Path) -> None:
+    """AUG-135 AC4: two command strings are in circulation and they must not diverge.
+
+    The commit/docs name `auger spec align`; the AUG-135 row text simulates the caller as
+    `... --diff-stdin check`. Both verbs must reach the SAME implementation and emit byte-identical
+    payloads, otherwise the two boards really could disagree about what "complete" means.
+    """
+    repo = build_repo(tmp_path)
+    stage_append(repo, "tests/test_marker.py", "\n" + marker())
+    diff = staged_diff(repo)
+    repo_root = str(repo.resolve())
+    spec_root = str((repo / "specs").resolve())
+
+    commands = {
+        "align": [
+            "align",
+            "--repo-root",
+            repo_root,
+            "--spec-root",
+            spec_root,
+            "--protocol-version",
+            "1",
+            "--diff-stdin",
+        ],
+        "check with a positional ROOT": [
+            "check",
+            str(repo / "specs"),
+            "--repo-root",
+            repo_root,
+            "--protocol-version",
+            "1",
+            "--diff-stdin",
+        ],
+        "check with --spec-root only (the shape GitReins appends flags to)": [
+            "check",
+            "--repo-root",
+            repo_root,
+            "--spec-root",
+            spec_root,
+            "--protocol-version",
+            "1",
+            "--diff-stdin",
+        ],
+    }
+    outputs = {}
+    for label, verb_args in commands.items():
+        done = subprocess.run(
+            [sys.executable, str(AUGER), "spec", *verb_args],
+            input=diff,
+            capture_output=True,
+            text=True,
+            cwd=str(repo),
+            env=SCRATCH_GIT_ENV,
+            check=False,
+            timeout=120,
+        )
+        assert done.returncode == 0, (label, done.returncode, done.stderr)
+        outputs[label] = done.stdout
+    first = payload_of(outputs["align"])
+    for label, out in outputs.items():
+        assert out == outputs["align"], f"{label} disagrees with `spec align`:\n{out}"
+    assert first["status"] == "pass", first
+
+
 # ------------------------------------------------------------------- AUG-120 AC-5: five fixtures
 def test_an_aligned_change_passes_with_resolved_spec_ids(tmp_path: Path) -> None:
     """AC-5 aligned change, PRD AC-8: status pass with resolved spec ids and provenance."""
@@ -569,6 +633,7 @@ def test_the_checker_contract_is_documented() -> None:
         '"findings"',
         "unscoped",
         "auger spec align",
+        "auger spec check",
     ):
         assert token in schema, f"the checker contract does not name {token}"
     verbs = VERBS_DOC.read_text(encoding="utf-8")
