@@ -634,6 +634,19 @@ declares it verifies a selected block is part of that block's closure) — in co
 with a `source: <file>#<id>` citation. `refs`/`implements`/`supersedes` must resolve but never
 expand. `--no-deps` emits the matched set alone.
 
+**Corpus-wide vs selection-scoped (AUG-146).** `validate`, `check` and `bundle` are
+CORPUS-WIDE verdicts: every document must parse and conform, and one malformed file refuses the
+whole run, naming it (`invalid-xml`, exit 2). `list` and `assemble` are SELECTION-scoped: a
+document that is not well-formed as XML is skipped and COUNTS — the count and the file go to
+stderr, and `assemble --format json` carries `corpus.documents_discovered` /
+`documents_parsed` / `documents_unreadable` / `documents_selected`, so "a selection reads no
+unselected document body" (PRD AC-14) is measurable rather than asserted. The tolerance is exactly
+one code wide and never corpus-wide: a wrong namespace, a wrong root element, an unsupported
+schema version, an include cycle or a DOCTYPE/ENTITY declaration is refused on EVERY verb, and a
+reference into a skipped document refuses too, because an edge into a file that could not be read
+cannot be proved. `list`/`assemble` still parse every readable document today (no index-only
+pass); `documents_parsed` is what shows that gap.
+
 **Writes:** nothing in DuckBrain and nothing in the corpus. `--out PATH` writes the assembled
 document through a sibling temp file plus `os.replace`, so a refusal never leaves a partial
 document — the file is created only after the whole corpus has validated. Success prints

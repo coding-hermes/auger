@@ -153,6 +153,47 @@ def assembled_ids(text: str) -> list[str]:
     ]
 
 
+# ------------------------------------------------- authored corpora for loader rows
+# AUG-146/147/148 are about DISCOVERY, not about the checked-in fixture corpus, so these tests
+# author their own throwaway corpora. They are still hermetic: tmp_path, no network, no clock.
+def spec_document(document_id: str, *blocks: str) -> str:
+    """One minimal, schema-valid authored document carrying `blocks` in order."""
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        f'<spec xmlns="urn:auger:spec:1" id="{document_id}" version="1.0.0" '
+        f'schema-version="1.0">\n' + "".join(blocks) + "</spec>\n"
+    )
+
+
+def requirement_block(
+    block_id: str, *, applies_to: str = "auger.spec", attributes: str = ""
+) -> str:
+    """One `active` requirement block with the metadata the validator requires."""
+    return (
+        f'  <requirement id="{block_id}" kind="requirement" status="active" '
+        f'version="1.0.0" applies-to="{applies_to}" verification="test"{attributes}>\n'
+        f"    {block_id} prose.\n"
+        "  </requirement>\n"
+    )
+
+
+def write_corpus(root: Path, documents: dict[str, str]) -> Path:
+    """Write {relative name: XML text} under `root` and return it."""
+    for name, text in documents.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    return root
+
+
+#: A file that is HALF-WRITTEN and cannot be parsed, and that no selector in these tests names.
+MALFORMED = (
+    '<?xml version="1.0" encoding="UTF-8"?>\n'
+    '<spec xmlns="urn:auger:spec:1" id="PROBE-BROKEN" version="1.0.0" schema-version="1.0">\n'
+    '  <requirement id="W-REQ-9" kind="requirement"\n'
+)
+
+
 # ---------------------------------------------------------------- AC-1: the schema
 def xsd_type(name: str):
     root = ET.parse(SCHEMA).getroot()
@@ -700,7 +741,7 @@ BUNDLE_BOTH_DIRECTIONS = """<?xml version="1.0" encoding="UTF-8"?>
 """
 
 
-def write_corpus(directory: Path, name: str, document: str) -> Path:
+def write_document_corpus(directory: Path, name: str, document: str) -> Path:
     """One-document corpus at `directory/name`; returns the corpus root."""
     directory.mkdir(parents=True, exist_ok=True)
     (directory / name).write_text(document, encoding="utf-8")
@@ -727,7 +768,7 @@ def test_bundle_follows_the_inverse_verifies_edge_in_the_shipped_corpus() -> Non
 
 def test_bundle_collects_forward_and_inverse_edges_once_each(tmp_path: Path) -> None:
     """An edge declared twice is one obligation; a block naming the requirement is included."""
-    root = write_corpus(tmp_path / "corpus", "mixed.xml", BUNDLE_MIXED)
+    root = write_document_corpus(tmp_path / "corpus", "mixed.xml", BUNDLE_MIXED)
     code, out, err = run_spec(
         "bundle", str(root), "BM-REQ-1", "--repo-root", str(REPO_ROOT)
     )
@@ -802,7 +843,7 @@ def test_bundle_refuses_a_requirement_declaring_both_edge_directions(
     tmp_path: Path,
 ) -> None:
     """Both directions is a cycle, not a silently deduplicated pair."""
-    root = write_corpus(tmp_path / "corpus", "cycle.xml", BUNDLE_BOTH_DIRECTIONS)
+    root = write_document_corpus(tmp_path / "corpus", "cycle.xml", BUNDLE_BOTH_DIRECTIONS)
     code, out, err = run_spec(
         "bundle", str(root), "BC-REQ-1", "--repo-root", str(REPO_ROOT)
     )
@@ -999,7 +1040,7 @@ BUNDLE_NAMESPACED = """<?xml version="1.0" encoding="UTF-8"?>
 def test_bundle_resolves_the_namespaced_shape_and_the_grammar_requires_the_namespace(
     tmp_path: Path,
 ) -> None:
-    namespaced = write_corpus(tmp_path / "ns", "doc.xml", BUNDLE_NAMESPACED)
+    namespaced = write_document_corpus(tmp_path / "ns", "doc.xml", BUNDLE_NAMESPACED)
     plain_root = tmp_path / "plain"
     plain_root.mkdir()
     twin = BUNDLE_NAMESPACED.replace(' xmlns="urn:auger:spec:1"', "", 1)
@@ -1022,3 +1063,106 @@ def test_bundle_resolves_the_namespaced_shape_and_the_grammar_requires_the_names
     assert twin_code == 2, (twin_out, twin_err)
     assert twin_out == "", twin_out
     assert "spec error (schema-invalid)" in twin_err, twin_err
+# ------------------------------------------------- AUG-146: selection vs the whole corpus
+def test_selection_skips_a_malformed_unrelated_document(tmp_path: Path) -> None:
+    """AUG-146/AC-14: one half-written file must not take every query offline.
+
+    Direction 1 of 2 — the SELECTION-scoped verbs (`list`, `assemble`) still answer for the
+    documents they could read, and SAY what they skipped. The `corpus` counter is what makes the
+    claim measurable: `documents_parsed` (2) < `documents_discovered` (3) and
+    `documents_unreadable` is 1, so a future change that quietly stops parsing or quietly starts
+    requiring every body reds this test instead of a docstring going stale.
+    """
+    corpus = write_corpus(
+        tmp_path / "corpus",
+        {
+            "a.xml": spec_document("PROBE-A", requirement_block("W-REQ-1")),
+            "b.xml": spec_document("PROBE-B", requirement_block("W-REQ-2")),
+            "zz-broken.xml": MALFORMED,
+        },
+    )
+
+    code, out, err = run_spec("list", str(corpus), "--id", "W-REQ-1")
+    assert code == 0, (out, err)
+    assert [line.split("\t", 1)[0] for line in out.splitlines()] == ["W-REQ-1"], out
+    assert "skipped 1 unreadable document(s)" in err, err
+    assert "zz-broken.xml" in err, err
+
+    code, out, err = run_spec(
+        "assemble", str(corpus), "--id", "W-REQ-1", "--format", "json"
+    )
+    assert code == 0, (out, err)
+    payload = json.loads(out)
+    assert [block["id"] for block in payload["blocks"]] == ["W-REQ-1"]
+    assert payload["corpus"] == {
+        "documents_discovered": 3,
+        "documents_parsed": 2,
+        "documents_unreadable": 1,
+        "documents_selected": 1,
+    }, payload["corpus"]
+
+    # The API keeps the strict default: tolerance is something a SELECTION verb opts into, not a
+    # property of the loader that a caller inherits without asking.
+    with pytest.raises(auger.SpecError) as caught:
+        auger.load_spec_corpus(corpus)
+    assert caught.value.code == "invalid-xml"
+
+
+def test_corpus_wide_verbs_still_refuse_a_malformed_document(tmp_path: Path) -> None:
+    """AUG-146 direction 2 of 2: skipping on a selection never makes the defect SILENT.
+
+    `validate`, `check` and `bundle` are corpus-wide verdicts: each names the malformed file,
+    exits 2 and prints nothing on stdout. And the tolerance is one code wide — a document with an
+    unsupported schema version or a DOCTYPE is refused by the SELECTION verbs too, because those
+    are policy violations rather than works in progress.
+    """
+    corpus = write_corpus(
+        tmp_path / "corpus",
+        {
+            "a.xml": spec_document("PROBE-A", requirement_block("W-REQ-1")),
+            "zz-broken.xml": MALFORMED,
+        },
+    )
+    # The PAIR is the requirement: the selection answers, and the corpus-wide verdict still
+    # refuses. Either half alone is satisfiable by a wrong loader (refuse everything, or hide
+    # everything), so both are asserted here on one corpus.
+    code, out, err = run_spec("list", str(corpus), "--id", "W-REQ-1")
+    assert code == 0, (out, err)
+    assert "zz-broken.xml" in err, err
+    for verb in ("validate", "check"):
+        code, out, err = run_spec(verb, str(corpus))
+        assert code == 2, (verb, out, err)
+        assert out == "", f"{verb} emitted stdout before refusing: {out!r}"
+        assert "spec error (invalid-xml)" in err, err
+        assert "zz-broken.xml" in err, err
+
+    # Selection verbs tolerate ONE code (`invalid-xml`), not "anything wrong with one file".
+    for name, text, expected in (
+        (
+            "zz-schema-version.xml",
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<spec xmlns="urn:auger:spec:1" id="PROBE-V" version="1.0.0" '
+            'schema-version="9.9"><requirement id="W-REQ-8" kind="requirement" '
+            'status="active" version="1.0.0" verification="test">x</requirement></spec>\n',
+            "unsupported-schema-version",
+        ),
+        (
+            "zz-doctype.xml",
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<!DOCTYPE spec [<!ENTITY x "y">]>\n'
+            '<spec xmlns="urn:auger:spec:1" id="PROBE-D" version="1.0.0" schema-version="1.0">'
+            '<requirement id="W-REQ-7" kind="requirement" status="active" version="1.0.0" '
+            'verification="test">&x;</requirement></spec>\n',
+            "external-entity-forbidden",
+        ),
+    ):
+        corpus = write_corpus(
+            tmp_path / name.removesuffix(".xml"),
+            {
+                "a.xml": spec_document("PROBE-A", requirement_block("W-REQ-1")),
+                name: text,
+            },
+        )
+        code, out, err = run_spec("list", str(corpus), "--id", "W-REQ-1")
+        assert code == 2, (name, out, err)
+        assert f"spec error ({expected})" in err, (name, err)

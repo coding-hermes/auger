@@ -7748,6 +7748,14 @@ SPEC_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 SPEC_APPLIES_RE = re.compile(r"^[a-z0-9]+([._-][a-z0-9]+)*$")
 SPEC_ID_MAX_LEN = 80
 SPEC_FORBIDDEN_DECL_RE = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)", re.IGNORECASE)
+# AUG-146: the ONE document-level failure a selection-scoped verb tolerates. A half-written file
+# is a fact about THAT file, never evidence about any other document, and refusing
+# `spec list --id X` because a neighbouring work-in-progress file is not well-formed makes
+# incremental authoring impossible (PRD AC-14: a selection reads no unselected document BODY).
+# Every other read-time refusal — wrong namespace, wrong root element, unsupported schema version,
+# a DOCTYPE/ENTITY declaration — stays loud on EVERY verb: those are policy violations, not works
+# in progress, and a corpus that states a rule auger refuses is not a corpus to select from.
+SPEC_TOLERATED_UNREADABLE = ("invalid-xml",)
 # The normative grammar, and the processor that loads it. `specs/schema/auger-spec-1.0.xsd` is the
 # published schema; a wheel install ships auger.py only, so an absent schema is refused with its own
 # code rather than silently skipping the conformance gate.
@@ -7829,6 +7837,36 @@ def _spec_read_document(path: Path, root: Path):
             "missing-document-metadata", f"{rel}: <spec> requires id and version"
         )
     return element
+
+
+def _spec_read_documents(
+    paths, root: Path, *, tolerate_unreadable: bool, skipped: list
+) -> dict:
+    """Parse every discovered document, optionally SKIPPING the not-well-formed ones (AUG-146).
+
+    The tolerance is deliberately one code wide (`SPEC_TOLERATED_UNREADABLE`) and per DOCUMENT,
+    never per corpus: a skipped file is recorded in `skipped` (file, code, detail) so the caller
+    can both print the count and put it in the JSON counter, and the same corpus handed to a
+    corpus-wide verb still refuses, naming that file. Skipping is not forgiving-by-default: the
+    strict path (`tolerate_unreadable=False`) re-raises the very same typed error it always did.
+    """
+    documents: dict = {}
+    for path in paths:
+        try:
+            documents[path.relative_to(root).as_posix()] = _spec_read_document(
+                path, root
+            )
+        except SpecError as exc:
+            if not (tolerate_unreadable and exc.code in SPEC_TOLERATED_UNREADABLE):
+                raise
+            skipped.append(
+                {
+                    "file": path.relative_to(root).as_posix(),
+                    "code": exc.code,
+                    "detail": exc.detail,
+                }
+            )
+    return documents
 
 
 def _spec_load_processor():
@@ -8192,11 +8230,24 @@ def _spec_validate_blocks(blocks: list) -> dict:
     return by_id
 
 
-def load_spec_corpus(spec_root) -> tuple:
+def load_spec_corpus(
+    spec_root, *, tolerate_unreadable: bool = False, skipped: list | None = None
+) -> tuple:
     """Parse and validate every XML document under a spec root.
 
     Returns (root, documents_by_relpath, blocks_in_corpus_order). Any integrity failure raises a
     typed SpecError BEFORE a caller can render, so a refusal never yields a partial document.
+
+    `tolerate_unreadable` is the AUG-146 seam, and it belongs to the SELECTION-scoped verbs
+    (`list`, `assemble`) only: a document that is not well-formed as XML is then skipped, counted
+    in `skipped` (a list the caller passes in), and the remaining corpus is still indexed — one
+    work-in-progress file no longer takes every query offline (PRD AC-14). Everything else stays
+    corpus-wide and loud: the schema is still loaded, every PARSED document is still checked
+    against it (`schema-invalid`), include cycles and dangling includes still refuse, and the
+    reference graph still has to resolve whole — a reference into a skipped document cannot be
+    proved, so it refuses rather than passing silently. Corpus-wide verbs (`validate`, `check`,
+    `bundle`) never pass this flag, so the malformed file is named and the exit code is 2.
+
 
     The verdict has THREE layers, in this order, and every CLI verb goes through all three:
 
@@ -8220,10 +8271,15 @@ def load_spec_corpus(spec_root) -> tuple:
     if not paths:
         raise SpecError("empty-corpus", f"no *.xml documents under {root}")
     schema = _spec_load_schema()
-    documents = {
-        path.relative_to(root).as_posix(): _spec_read_document(path, root)
-        for path in paths
-    }
+    unreadable = [] if skipped is None else skipped
+    documents = _spec_read_documents(
+        paths, root, tolerate_unreadable=tolerate_unreadable, skipped=unreadable
+    )
+    if not documents:
+        # Every document was skipped: a selection over an empty index would answer "no-match" for
+        # a reason the author cannot see, so name the real one instead.
+        first = unreadable[0]
+        raise SpecError(first["code"], first["detail"])
     include_map = _spec_include_map(documents, root)
     included = {target for targets in include_map.values() for target in targets}
     blocks: list = []
@@ -8237,7 +8293,13 @@ def load_spec_corpus(spec_root) -> tuple:
             "no-root-document", f"{root}: every document is included by another"
         )
     _spec_validate_blocks(blocks)
-    _spec_assert_schema_conformance(schema, paths, root)
+    # Layer 3 covers every document that was READ: a skipped (not-well-formed) file has no tree to
+    # check, and a corpus-wide verb never gets here with one, because it refuses at read time.
+    _spec_assert_schema_conformance(
+        schema,
+        [path for path in paths if path.relative_to(root).as_posix() in documents],
+        root,
+    )
     return root, documents, blocks
 
 
@@ -8351,8 +8413,16 @@ def render_spec_assembly(
     selection: str,
     fmt: str = "markdown",
     schema_version: str = SPEC_SCHEMA_VERSION,
+    corpus: dict | None = None,
 ) -> str:
-    """Render a selected bundle. Deterministic: same inputs, byte-identical output."""
+    """Render a selected bundle. Deterministic: same inputs, byte-identical output.
+
+    `corpus` (AUG-146) is the measurement of the selection, not a decoration: the JSON view
+    carries `documents_discovered` / `documents_parsed` / `documents_unreadable` /
+    `documents_selected`, so AC-14 ("a selection reads no unselected document body") is a number
+    a test can read instead of a claim a docstring makes. It is JSON-only: the Markdown document
+    is a byte-pinned golden and its shape belongs to the assembly contract, not to loader health.
+    """
     matched = sum(1 for record in records if record["why"] == "matched")
     counts = {
         "matched": matched,
@@ -8384,6 +8454,8 @@ def render_spec_assembly(
                 for record in records
             ],
         }
+        if corpus is not None:
+            payload["corpus"] = dict(corpus)
         return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     if fmt != "markdown":
         raise SpecError("unsupported-format", f"{fmt!r} (markdown or json)")
@@ -8486,9 +8558,51 @@ def cmd_spec(a):
         raise SystemExit(2) from None
 
 
+def _spec_report_unreadable(unreadable: list) -> None:
+    """Tell the author, on stderr, exactly what a selection-scoped verb had to skip (AUG-146).
+
+    stderr, not stdout: the selection is the answer and stdout stays parseable (a JSON assembly is
+    still `json.loads`-able). The count is the point — a corpus that silently lost a document is
+    the defect, and a corpus-wide `spec validate` still refuses the very same file.
+    """
+    if not unreadable:
+        return
+    print(
+        f"spec: skipped {len(unreadable)} unreadable document(s) — this verb is "
+        "selection-scoped; `auger spec validate` refuses the corpus",
+        file=sys.stderr,
+    )
+    for entry in unreadable:
+        print(f"spec:   {entry['detail']} [{entry['code']}]", file=sys.stderr)
+
+
+def _spec_corpus_counts(documents: dict, unreadable: list, records: list) -> dict:
+    """The selection measured against the corpus it was read from (AUG-146, AC-14).
+
+    `documents_selected` counts documents that actually CONTRIBUTED an emitted block, so the gap
+    between it and `documents_parsed` is visible in the product instead of inferred by a reader.
+    """
+    return {
+        "documents_discovered": len(documents) + len(unreadable),
+        "documents_parsed": len(documents),
+        "documents_unreadable": len(unreadable),
+        "documents_selected": len(
+            {record["block"]["source_file"] for record in records}
+        ),
+    }
+
+
 def _spec_dispatch(a):
-    root, documents, blocks = load_spec_corpus(a.root)
     command = getattr(a, "spec_cmd", "validate")
+    # AUG-146: `list` and `assemble` select, they do not adjudicate the corpus — a neighbouring
+    # file that is still being written is skipped and counted instead of taking every query
+    # offline. `validate`/`check`/`bundle` are corpus-wide verdicts and never get the tolerance.
+    selection_scoped = command in ("list", "assemble")
+    unreadable: list = []
+    root, documents, blocks = load_spec_corpus(
+        a.root, tolerate_unreadable=selection_scoped, skipped=unreadable
+    )
+    _spec_report_unreadable(unreadable)
     # AUG-127: the repository the obligations resolve in is EXPLICIT, never auger's own
     # directory. `--repo-root` names it; without the flag the validator resolves
     # `git rev-parse --show-toplevel` from the spec root and refuses
@@ -8585,7 +8699,12 @@ def _spec_dispatch(a):
     )
     if not records:
         _spec_no_match_notice(selection)
-    text = render_spec_assembly(records, selection=selection, fmt=a.format)
+    text = render_spec_assembly(
+        records,
+        selection=selection,
+        fmt=a.format,
+        corpus=_spec_corpus_counts(documents, unreadable, records),
+    )
     out = getattr(a, "out", None)
     if out:
         _spec_write_atomic(out, text)
