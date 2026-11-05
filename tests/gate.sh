@@ -103,11 +103,28 @@ else
 fi
 
 SKIPPED=""
+# AUG-130: a skip is not always acceptable. `SKIPPED` records every arm that did
+# not run; `REQUIRED_SKIPPED` records the ones whose absence means the change was
+# never tested at all (no interpreter with pytest, no linter, no parity inputs).
+# Before this split the gate printed "arms SKIPPED: pytest" and still ended in
+# "GATE PASS", so a host whose python3 simply could not import pytest graded the
+# whole 415-test suite as passing — twice, measured on this host. A gate that
+# reports PASS for work it did not do is worse than no gate: it is a false
+# record. Required skips now fail the run unless AUGER_ALLOW_SKIPPED_ARMS=1
+# explicitly accepts a DEGRADED pass that names them.
+REQUIRED_SKIPPED=""
 SUBSTANTIVE_GREEN=0
 LIVE_ARMS_RAN=0
 LIVE_ARMS_SKIPPED=0
 LIVE_SKIPPED=""
 skip_arm(){ SKIPPED="${SKIPPED}${SKIPPED:+, }$1"; echo "  SKIPPED [$1]: $2"; }
+# An arm whose absence voids the coverage claim. Deliberately NOT used for the
+# doc-only fast path or for the live arms the hosted-CI mode is built to skip:
+# those are declared, accepted modes, not missing coverage.
+skip_required_arm(){
+  REQUIRED_SKIPPED="${REQUIRED_SKIPPED}${REQUIRED_SKIPPED:+, }$1"
+  skip_arm "$1" "$2"
+}
 run_live_arm(){ LIVE_ARMS_RAN=$((LIVE_ARMS_RAN + 1)); }
 skip_live_arm(){
   LIVE_ARMS_SKIPPED=$((LIVE_ARMS_SKIPPED + 1))
@@ -160,14 +177,14 @@ echo "== lint =="
 if command -v ruff >/dev/null 2>&1; then
   ruff check auger.py || exit 1
 else
-  skip_arm "lint" "ruff not on PATH — lint arm SKIPPED (not passed)"
+  skip_required_arm "lint" "ruff not on PATH — lint arm NOT run, NOT passed (install the pinned ruff: pip install ruff==0.15.22)"
 fi
 
 echo "== pytest =="
 if [ "$DOC_ONLY" = "1" ]; then
   skip_arm "pytest" "doc-only fast path — pytest skipped (no code changed)"
 elif ! python3 -c 'import pytest' 2>/dev/null; then
-  skip_arm "pytest" "pytest not importable by python3 (pip install pytest) — suite arm NOT run, NOT passed"
+  skip_required_arm "pytest" "pytest not importable by python3 (pip install pytest) — suite arm NOT run, NOT passed"
 elif [ "$GATE_MODE" = "hosted-ci-skip" ]; then
   skip_live_arm "pytest-live" "cases needing the live DuckBrain/JEV APIs SKIP — reasons in the summary"
   run_pytest_arm -q -ra || exit 1
@@ -182,7 +199,15 @@ echo "== wrapper regression (AUG-081) =="
 # source check that BOTH pytest arms carry it, so a future edit that
 # unwraps either arm fails the gate even on a hosted CI runner where the
 # real suite cannot run.
-if bash tests/test_gate_mode.sh; then
+if [ "${AUGER_GATE_INNER:-0}" = "1" ]; then
+  # Test seam (AUG-130): tests/test_gate_mode.sh drives THIS gate as a
+  # subprocess to prove the skipped-arm policy. That inner run must not spawn
+  # the wrapper regression, which would spawn this gate again — a fork bomb,
+  # not a verdict. The OUTER gate always runs the arm, so the coverage claim is
+  # unchanged; this seam only exists for the inner invocation, and it is named
+  # in the skip list so a run using it says so.
+  skip_arm "wrapper-regression" "AUGER_GATE_INNER=1 — inner gate invocation from tests/test_gate_mode.sh; the outer gate runs this arm"
+elif bash tests/test_gate_mode.sh; then
   :
 else
   rc=$?
@@ -233,10 +258,10 @@ if [ -f scripts/gen_openapi.py ] && [ -f docs/openapi.yaml ]; then
     fi
     rm -f "$GENOUT"
   else
-    skip_arm "openapi-parity" "mktemp failed — arm NOT run, NOT passed"
+    skip_required_arm "openapi-parity" "mktemp failed — arm NOT run, NOT passed"
   fi
 else
-  skip_arm "openapi-parity" "scripts/gen_openapi.py or docs/openapi.yaml missing from the checkout — arm NOT run, NOT passed"
+  skip_required_arm "openapi-parity" "scripts/gen_openapi.py or docs/openapi.yaml missing from the checkout — arm NOT run, NOT passed"
 fi
 rm -f /tmp/aug066-gate-gen.err
 
@@ -264,7 +289,7 @@ if [ -f README.md ] && [ -f docs/VERBS.md ] && [ -f auger.py ]; then
     bash tests/docs_check.sh || exit 1
   fi
 else
-  skip_arm "docs-check" "README.md/docs/VERBS.md/auger.py missing from the checkout — arm NOT run, NOT passed"
+  skip_required_arm "docs-check" "README.md/docs/VERBS.md/auger.py missing from the checkout — arm NOT run, NOT passed"
 fi
 
 if [ "$DOCSCHK_RC" -ne 0 ] && [ "${SUBSTANTIVE_GREEN:-0}" = "1" ] && grep -qE 'Traceback|TypeError: argument of type .NoneType. is not iterable|MemoryError|OSError: \[Errno' "$DOCSCHK_LOG"; then
@@ -284,7 +309,24 @@ if [ -n "$LIVE_SKIPPED" ]; then
   echo "  live arms SKIPPED (not passed): $LIVE_SKIPPED"
 fi
 
-echo "GATE PASS"
+# AUG-130: the verdict now depends on WHICH arms were skipped, not just on the
+# ones that ran. A required arm that did not run means the change was never
+# tested, and the gate must not print PASS for that.
+if [ -n "$REQUIRED_SKIPPED" ]; then
+  if [ "${AUGER_ALLOW_SKIPPED_ARMS:-0}" = "1" ]; then
+    echo "GATE PASS (DEGRADED)"
+    echo "  required arms NOT run: $REQUIRED_SKIPPED"
+    echo "  AUGER_ALLOW_SKIPPED_ARMS=1 accepted this run. This is NOT proof the suite ran:"
+    echo "  re-run on a host with the tool(s) installed before trusting the verdict (AUG-130)."
+  else
+    echo "GATE FAIL: required arms did not run: $REQUIRED_SKIPPED" >&2
+    echo "  A host that cannot run these arms has not tested this change — install the tool and re-run," >&2
+    echo "  or set AUGER_ALLOW_SKIPPED_ARMS=1 to accept a DEGRADED pass that names every skipped arm (AUG-130)." >&2
+    exit 1
+  fi
+else
+  echo "GATE PASS"
+fi
 if [ -n "$SKIPPED" ]; then
   echo "arms SKIPPED (not passed): $SKIPPED"
   if [ "$GATE_MODE" = "hosted-ci-skip" ]; then

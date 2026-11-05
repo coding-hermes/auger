@@ -427,6 +427,13 @@ edges below are the ones still live at this writing. Current known gaps are trac
 - **A green CI run proves the offline suite, not the live loop.** The arms that need a reachable
   DuckBrain and JEV keys are skipped by name under `AUGER_CI=1`, with a visible marker instead of
   a pass (.github/workflows/ci.yml, tests/gate.sh).
+- **A skipped arm is not a passed arm — and it is no longer a PASS either.** `tests/gate.sh` used to
+  print `arms SKIPPED (not passed): pytest` and then `GATE PASS` unconditionally, so a host whose
+  `python3` could not import pytest graded the whole suite as passing without running it (AUG-130,
+  reproduced twice on this host). A *required* arm that did not run — pytest, lint, openapi-parity,
+  docs-check — now fails the gate by default; `AUGER_ALLOW_SKIPPED_ARMS=1` accepts a
+  `GATE PASS (DEGRADED)` that names every arm it did not run. The doc-only fast path and the
+  hosted-CI live arms are untouched: those are declared modes, not missing coverage.
 - **A second substrate on a shared host is not isolated by data-dir env alone.** With
   `DUCKBRAIN_DATA_DIR` + `DUCKBRAIN_NAMESPACES_PATH` pointed at a scratch dir, the instance still
   lists a co-located production DuckBrain's namespaces (review-lane finding AUG-090) — the

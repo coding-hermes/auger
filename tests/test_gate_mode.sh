@@ -376,3 +376,89 @@ call_count="$(printf '%s\n' "$gate_src" | grep -cE '(^|[[:space:]])run_pytest_ar
 }
 
 printf 'AUG-081 wrapper regression: PASS\n'
+
+# ---------------------------------------------------------------------
+# Case AUG-130: a gate whose REQUIRED arm did not run must not print
+# GATE PASS. The trigger under test is the one that actually happened on
+# this host: the system `python3` cannot import pytest, so the whole
+# 415-test suite is skipped while the gate still exits 0. Simulated with a
+# PATH shim that answers the gate's `import pytest` probe with "no" and
+# delegates every other call to the real interpreter (so the parity and
+# docs arms still do real work).
+# ---------------------------------------------------------------------
+skiparms_dir="$(mktemp -d "${TMPDIR:-/tmp}/aug130-nopytest-XXXXXX")"
+trap 'rm -rf "$preflight_home" "$skiparms_dir"' EXIT
+# Resolve the delegate with THIS test's own shim dir stripped from PATH. The gate can
+# legitimately be run under a caller's no-pytest shim (that is how the AUG-130 evidence
+# transcript is produced); a bare `command -v python3` would then name that shim, the
+# inner run would inherit it as AUG130_REAL_PYTHON, and the two shims would exec each
+# other forever instead of reaching a verdict (measured: a 3m33s CPU-bound hang).
+real_python="$(PATH="${PATH#"$skiparms_dir:"}" command -v python3)"
+if [ "$real_python" = "$skiparms_dir/python3" ]; then
+  printf 'resolved interpreter IS the shim under test — refusing a recursive run\n' >&2
+  exit 1
+fi
+cat >"$skiparms_dir/python3" <<'SHIM'
+#!/usr/bin/env bash
+# A python3 that cannot import pytest — everything else is the real thing.
+if [ "${1:-}" = "-c" ] && [ "${2:-}" = "import pytest" ]; then
+  exit 1
+fi
+exec "$AUG130_REAL_PYTHON" "$@"
+SHIM
+chmod +x "$skiparms_dir/python3"
+if "$skiparms_dir/python3" -c 'import pytest' 2>/dev/null; then
+  printf 'the no-pytest shim still answers the probe — the control below would be vacuous\n' >&2
+  exit 1
+fi
+
+run_inner_gate(){
+  local output status
+  set +e
+  # `-u AUGER_ALLOW_SKIPPED_ARMS` matters: if the OUTER gate was itself run
+  # with the opt-in escape, case 1 below would inherit it, its "strict" inner
+  # run would exit 0, and the assertion that the default run FAILS would fire
+  # — the documented escape would break the gate. Callers that want the opt-in
+  # pass it explicitly in "$@", after the unset.
+  output="$(env -u AUGER_ALLOW_SKIPPED_ARMS AUGER_CI=1 GITHUB_ACTIONS=true AUGER_GATE_INNER=1 \
+            AUG130_REAL_PYTHON="$real_python" \
+            PATH="$skiparms_dir:$PATH" "$@" \
+            timeout 900 bash "$GATE" 2>&1)"
+  status=$?
+  set -e
+  printf '%s\n' "$output"
+  return "$status"
+}
+
+# 1) Default: the required-skip must FAIL the gate and name the arm.
+set +e
+strict_out="$(run_inner_gate)"
+strict_status=$?
+set -e
+[[ "$strict_status" -ne 0 ]] || {
+  printf 'AUG-130: gate exited 0 with its pytest arm NOT run:\n%s\n' "$strict_out" >&2
+  exit 1
+}
+assert_contains "$strict_out" "GATE FAIL: required arms did not run"
+assert_contains "$strict_out" "pytest"
+[[ "$strict_out" != *"GATE PASS"* ]] || {
+  printf 'AUG-130: gate printed GATE PASS while a required arm was skipped:\n%s\n' "$strict_out" >&2
+  exit 1
+}
+
+# 2) Explicit opt-in: a DEGRADED pass is allowed, but it must SAY so and
+#    name every arm that did not run. Silence is what AUG-130 removed.
+set +e
+degraded_out="$(run_inner_gate AUGER_ALLOW_SKIPPED_ARMS=1)"
+degraded_status=$?
+set -e
+[[ "$degraded_status" -eq 0 ]] || {
+  printf 'AUG-130: AUGER_ALLOW_SKIPPED_ARMS=1 did not permit the degraded run (status %s):\n%s\n' \
+    "$degraded_status" "$degraded_out" >&2
+  exit 1
+}
+assert_contains "$degraded_out" "GATE PASS (DEGRADED)"
+assert_contains "$degraded_out" "required arms NOT run: pytest"
+assert_contains "$degraded_out" "NOT proof the suite ran"
+
+printf 'AUG-130 skipped-arm policy: PASS\n'
