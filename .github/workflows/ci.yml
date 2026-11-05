@@ -62,7 +62,14 @@ jobs:
           # pyyaml: tests/test_openapi_parity.py + scripts/gen_openapi.py need it
           # to parse the muster contract (AUG-066). Test-side dependency — the
           # engine itself stays stdlib-only.
-          python3 -m pip install "ruff==0.15.22" pytest pyyaml
+          # lxml: tests/test_xsd_conformance.py imports an XSD 1.0 processor at module
+          # scope, so without it the gate's pytest arm cannot even COLLECT that file
+          # and the job fails with "1 error during collection" (AUG-125/AUG-133).
+          # This is the same package the `dev` and `xsd` extras carry; the engine's
+          # `dependencies` stay empty by design (owner decision D-1) — an installed
+          # auger without the processor refuses with a typed xsd-processor-missing
+          # error, which is the point: no processor means no verdict, never a pass.
+          python3 -m pip install "ruff==0.15.22" pytest pyyaml "lxml>=5"
         # AUG-130: this step is now LOAD-BEARING, not convenience. tests/gate.sh
         # fails by default when a required arm (pytest, lint, openapi-parity,
         # docs-check) does not run, so a runner that loses ruff or pytest turns
