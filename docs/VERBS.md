@@ -618,6 +618,16 @@ writes nothing back to them. Subcommands:
   an empty array) means the requirement genuinely has none, and the same fact is printed on stderr
   as `spec note (no-obligations): …` so an empty bundle is never mistaken for a failed lookup. An
   id that is not a requirement refuses `unknown-requirement` (exit 2), not `invalid-spec-graph`.
+- `auger spec align --repo-root DIR --spec-root DIR --protocol-version N --diff-stdin`
+  — the staged-diff checker GitReins invokes (AUG-120/AUG-135). Reads the exact staged patch, reports
+  which spec blocks scope it, whether the change carries a `ch:trace` marker whose values resolve in
+  THIS repository, and whether the sections it cites are still active, as ONE JSON line
+  (`protocol`, `version`, `status` = `pass|warn|fail`, `scope` = `scoped|unscoped|empty`,
+  `referenced`, `findings`). Exit 0 pass/warn, 1 fail, 2 a typed refusal —
+  `unsupported-protocol-version` when the requested protocol is not the one this checker speaks.
+  `--diff-file PATH` replays a diff and `--max-diff-bytes N` bounds the read. It writes nothing. The
+  full contract, the finding codes and the ch:trace rules are docs/XML-SPEC-SCHEMA.md § The
+  staged-diff checker.
 - `auger spec list ROOT [--id ID] [--kind K] [--applies-to SCOPE] [--status S] [--version X.Y.Z]`
 - `auger spec assemble ROOT <the same selectors> [--no-deps] [--format markdown|json] [--out PATH]`
 

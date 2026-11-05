@@ -1,4 +1,4 @@
-# XML spec graph schema (AUG-118 / AUG-123 / AUG-125 / AUG-127 / AUG-133)
+# XML spec graph schema (AUG-118 / AUG-120 / AUG-123 / AUG-125 / AUG-127 / AUG-133 / AUG-135)
 
 Auger XML specs are rooted at `<spec id="...">` in the `urn:auger:spec:1` namespace, carry `version` and `schema-version`, and every graph node has a stable, repository-unique `id`. This implementation recognizes `<requirement>`, `<verification>`, and `<test>` nodes — all three are block kinds in the published grammar, and `<test>` is the shape that carries a machine-checkable obligation. A requirement's whitespace-separated `verifies` attribute names one or more verification IDs; `<verification-ref ref="..."/>` is an equivalent explicit edge. A verification may also name its requirement with `verifies="REQ-ID"`. References must resolve to the expected node type.
 
@@ -97,3 +97,88 @@ grammar's `verification=`/`method=` shape), not a test location; an obligation i
 actually points at a test with `runner`/`selector`/`path`.
 
 Assembly is deterministic JSON data and does not invoke tests. Consumers may pass the returned registered runner argv and tracked selector to the repository harness under their own policy; XML never executes code.
+
+## The staged-diff checker (AUG-120 / AUG-135)
+
+`auger spec align` is the checker GitReins already invokes. GitReins' half is built and shipped
+(`engine.spec_alignment.run_checker`): it appends `--repo-root <workdir> --spec-root <root>
+--protocol-version <n> --diff-stdin`, feeds the exact staged patch
+(`git diff --cached --binary --no-ext-diff --no-renames`), and reads the LAST JSON LINE of stdout.
+The command an operator configures is therefore:
+
+```text
+auger spec align
+```
+
+followed by the caller's four flags. The same verb takes `--diff-file PATH` (tests and replays) and
+`--max-diff-bytes N` (default 8388608); feeding it neither a stdin nor a file is a typed refusal.
+
+**Handshake.** The payload carries `"protocol"` (the version the caller asked for, echoed) and
+`"version"` — the CHECKER PROTOCOL version, currently `1.0.0`, never the product's `AUGER_VERSION`
+(0.3), because GitReins compares `version` against `min_checker_version` (default `1.0.0`) and would
+refuse the product version. This checker speaks protocol `1`; a request for any other version is
+`spec error (unsupported-protocol-version)` on stderr with exit 2 and NO payload — a caller must
+never read a verdict out of a contract we did not agree to speak.
+
+**Payload** — one line, sorted keys, no indentation:
+
+```text
+{"checker":"auger","counts":{"fail":0,"info":0,"warn":0},
+ "diff":{"added_lines":4,"binary_files":[],"changed_files":["tests/test_marker.py"],"files":1,"removed_lines":0},
+ "findings":[],"protocol":"1","repo_root":"/abs/repo",
+ "referenced":{"blocks":[{"id":"ALT-TEST-1","kind":"test","source":"contract.xml#ALT-TEST-1","status":"active","why":"cited by the staged change"}],"paths":["tests/test_marker.py"],"unresolved":[]},
+ "scope":"scoped","spec_root":"/abs/repo/specs","status":"pass","version":"1.0.0"}
+```
+
+* `status` is `pass` (nothing to report), `warn` (advisory findings only) or `fail` (at least one
+  `fail` severity finding). GitReins accepts `pass|warn|fail` (and `block` as a legacy alias).
+* `scope` is `scoped` (a corpus block scopes a changed path, or the change cites a block),
+  `unscoped` (`no block relates to the change — a NAMED state, never an automatic pass`: it carries
+  a `warn` finding and makes `status` at least `warn`) or `empty` (nothing staged).
+* `referenced.blocks` are the spec IDs/blocks the change touches, each with its `source`
+  (`<file>#<id>`) — the evidence location. `referenced.unresolved` names `spec=` values that did
+  not land anywhere.
+* `findings[]` is `{code, severity, why, evidence}` with `evidence` a `file:line` or a
+  `file#block-id` citation.
+
+**Findings** (each one is a rule; `fail` blocks under a blocking policy):
+
+| code | severity | meaning |
+| --- | --- | --- |
+| `unscoped-change` | warn | no corpus block scopes the change; reported as unscoped |
+| `empty-diff` | info | nothing staged |
+| `trace-missing` | fail | a scoped change with no `ch:trace` marker |
+| `trace-malformed` | fail | `ch:trace` whose keys are all unrecognized (no doctrine field) |
+| `trace-missing-row` | fail | the marker has no `row=` (mandatory) |
+| `trace-missing-field` | fail | a contract field was omitted instead of stated as `none:<reason>` |
+| `trace-absent-value` | fail | a field is empty, or `none` without a reason |
+| `trace-unknown-field` | warn | a field outside the eleven-field doctrine |
+| `trace-evidence-is-row` | fail | `evidence=` names a row/block instead of an artifact |
+| `trace-spec-unresolved` | fail | `spec=` is neither a block id nor a path#anchor that lands |
+| `trace-test-unresolved` | fail | `test=` names no file, or no selector the file defines |
+| `trace-verdict-unbound` | fail | a real `verdict=` with no `commit=` |
+| `trace-commit-unknown` | fail | `commit=` is not a commit in THIS repository |
+| `trace-row-unknown` | warn | `tasks.jsonl` exists and does not carry that row |
+| `spec-annotation-unresolved` | fail | an inline `spec=<ID>` the corpus does not define |
+| `spec-section-superseded` | fail | the change cites a block whose status is not `active` |
+| `spec-section-mismatch` | warn | the marker cites a block that does not scope the changed file |
+
+**The trace contract.** The marker is the eleven-field closeout claim (`row`, `spec`, `wave`,
+`test`, `doc`, `prompt`, `evidence`, `witness`, `verdict`, `commit`, `memory`). `row=` is mandatory;
+the six at-minimum fields (`row`, `spec`, `test`, `evidence`, `verdict`, `commit`) must be PRESENT,
+carrying a value or an explicit `none:<reason>`; `evidence=` must be an artifact or witness, never
+another row; a real `verdict=` must be bound to a `commit=` that resolves in this repository. One
+marker in a staged diff is a commit-level claim, so it covers every file in that diff.
+
+**Two boundaries this checker states rather than hides.** Contradiction is checked STRUCTURALLY —
+an annotation that contradicts the corpus (unresolvable, superseded, mismatched section), never "the
+comment says X and the prose says not-X", which is not mechanically decidable. And scoping is what
+the corpus DECLARES: a changed path no block cites (`path=`/`migration=`/`fixture=`) and no marker
+names is `unscoped`, which is a report about the corpus' reach, not a statement that the change is
+unspecified.
+
+**Exit codes.** `0` pass or warn, `1` fail, `2` a typed refusal (`spec error (<code>)` on stderr,
+nothing on stdout): `unsupported-protocol-version`, `diff-too-large`, `missing-diff-source`,
+`ambiguous-diff-source`, `unreadable-diff-file`, `unresolvable-repo-root`, plus every corpus refusal
+the loader already raises. The run is bounded — one capped stdin read, no subprocess chain, no
+thread — so a refusal cannot leave a process behind for a hook decision to outlive.

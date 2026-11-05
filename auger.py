@@ -8607,6 +8607,763 @@ def _spec_write_atomic(path, text: str) -> None:
         raise
 
 
+# ----------------------------- staged-diff spec alignment and ch:trace check ---------------------
+# AUG-120 / AUG-135: the checker GitReins already invokes.
+#
+# GitReins' half of this seam is BUILT and shipped (engine.spec_alignment.run_checker): it appends
+# `--repo-root <workdir> --spec-root <root> --protocol-version <n> --diff-stdin`, feeds the exact
+# staged patch, and reads the LAST JSON LINE of stdout, which must carry `protocol`, `version` and
+# `status` in `pass|warn|fail|block`. Measured consequences, each encoded below:
+#
+#   * the payload is ONE line. The adapter `json.loads`es each stdout line separately and keeps the
+#     last dict it can parse, so a pretty-printed object parses as nothing;
+#   * `version` is the CHECKER PROTOCOL version, never AUGER_VERSION: GitReins compares it against
+#     `min_checker_version` (default 1.0.0) and this product's own version is 0.3, which the
+#     handshake refuses ("checker version 0.3 is below minimum 1.0.0");
+#   * a protocol version this checker does not speak is a TYPED refusal on stderr with exit 2 and no
+#     payload at all — a caller must never be able to read a verdict out of a contract we did not
+#     agree to speak;
+#   * the run is bounded: one capped stdin read, no subprocess chain, no thread, so a refusal cannot
+#     leave a process behind that outlives the hook's decision.
+#
+# The judgement is STRUCTURAL and citeable, never semantic. It reports which corpus blocks scope a
+# changed path, whether the change carries a ch:trace marker, whether every value that marker needed
+# is present with an explicit `none:<reason>` when absent, whether its pointers resolve in THIS
+# repository, and whether it cites a section the corpus retired. "This comment says X, the prose says
+# not-X" is not mechanically decidable and this checker does not claim it.
+SPEC_CHECK_PROTOCOL = "1"
+SPEC_CHECK_PROTOCOLS = ("1",)
+SPEC_CHECK_VERSION = "1.0.0"
+SPEC_CHECK_MAX_DIFF_BYTES = 8 * 1024 * 1024
+# The eleven-field closeout marker (PRD R10, docs/prd/xml-spec-graph.md), and the six fields the
+# doctrine names at minimum: `row` is mandatory and can never be absent; the other five must be
+# PRESENT, carrying a value or an explicit `none:<reason>`.
+SPEC_TRACE_FIELDS = (
+    "row",
+    "spec",
+    "wave",
+    "test",
+    "doc",
+    "prompt",
+    "evidence",
+    "witness",
+    "verdict",
+    "commit",
+    "memory",
+)
+SPEC_TRACE_MANDATORY = ("row",)
+SPEC_TRACE_CONTRACT = ("row", "spec", "test", "evidence", "verdict", "commit")
+SPEC_TRACE_MARKER_RE = re.compile(r"ch:trace\b(.*)$")
+# `spec=<ID>` written anywhere else — a comment, a docstring, a doc line. The id shape is the
+# corpus' own, so this catches an annotation that names a block the corpus does not have.
+SPEC_TRACE_ANNOTATION_RE = re.compile(r"\bspec=([A-Z][A-Z0-9]*(-[A-Z0-9]+)+)\b")
+# Explicit absence must carry its reason (`none:pending-judge`), never a bare `none`.
+SPEC_TRACE_NONE_RE = re.compile(r"^none:\S")
+SPEC_TRACE_KEY_RE = re.compile(r"[a-z][a-z0-9_-]*")
+
+
+def _spec_check_path(raw: str) -> str:
+    """A diff header path as a repository-relative path (`b/x` -> `x`, `/dev/null` -> '')."""
+    value = (raw or "").strip()
+    if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
+        try:
+            value = value[1:-1].encode("utf-8").decode("unicode_escape")
+        except UnicodeDecodeError:
+            value = value[1:-1]
+    if value == "/dev/null":
+        return ""
+    return value[2:] if value.startswith(("a/", "b/")) else value
+
+
+def _spec_check_diff(diff_text: str) -> dict:
+    """Parse a unified diff into per-file added/removed lines WITH their new-file line numbers.
+
+    Line numbers are the evidence a caller can act on, so they come from the hunk header instead of
+    being counted from the top of the file. A file appears as soon as its `diff --git` header does,
+    so a binary change (which has no `+++` line) is still a changed file rather than invisible.
+    """
+    files: dict = {}
+    order: list = []
+    current = ""
+    new_line = 0
+    in_hunk = False
+    for raw in diff_text.splitlines():
+        if raw.startswith("diff --git "):
+            rest = raw[len("diff --git ") :]
+            split = rest.find(" b/")
+            head = _spec_check_path(rest[split + 1 :] if split != -1 else rest)
+            current = head
+            if current and current not in files:
+                files[current] = {"added": [], "removed": [], "binary": False}
+                order.append(current)
+            in_hunk = False
+            continue
+        if raw.startswith("--- "):
+            in_hunk = False
+            continue
+        if raw.startswith("+++ "):
+            named = _spec_check_path(raw[4:])
+            if named:
+                current = named
+            continue
+        if raw.startswith("@@"):
+            header = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", raw)
+            new_line = int(header.group(1)) if header else 0
+            in_hunk = True
+            continue
+        if raw.startswith("Binary files ") or raw.startswith("GIT binary patch"):
+            if current in files:
+                files[current]["binary"] = True
+            continue
+        if not current or not in_hunk or current not in files:
+            continue
+        if raw.startswith("+"):
+            files[current]["added"].append((new_line, raw[1:]))
+            new_line += 1
+        elif raw.startswith("-"):
+            files[current]["removed"].append((new_line, raw[1:]))
+        elif not raw.startswith("\\"):
+            new_line += 1
+    return {"files": files, "order": order}
+
+
+def _spec_check_citations(documents: dict) -> dict:
+    """Block id -> the repository paths its own attributes cite (path=/migration=/fixture=).
+
+    Read from the parsed trees rather than from `_spec_block`'s record so the published block record
+    (and the assembled JSON built from it) keeps exactly the shape it had.
+    """
+    citations: dict = {}
+    for rel in sorted(documents):
+        for element in documents[rel].iter():
+            block_id = (element.get("id") or "").strip()
+            if not block_id:
+                continue
+            for attribute in ("path", "migration", "fixture"):
+                value = (element.get(attribute) or "").strip()
+                if value:
+                    citations.setdefault(block_id, set()).add(value)
+    return citations
+
+
+def _spec_check_covers(cited: str, changed: str) -> bool:
+    """Does one citation cover a changed path (same file, or a directory prefix)?"""
+    if cited == changed:
+        return True
+    return cited.endswith("/") and changed.startswith(cited)
+
+
+def _spec_check_markers(diff: dict) -> list:
+    """Every `ch:trace` marker among the ADDED lines, with its file and new-file line number."""
+    markers: list = []
+    for path in diff["order"]:
+        for line_no, text in diff["files"][path]["added"]:
+            match = SPEC_TRACE_MARKER_RE.search(text)
+            if not match:
+                continue
+            fields: dict = {}
+            unknown: list = []
+            for token in match.group(1).split():
+                if "=" not in token:
+                    # Prose after the marker is not part of it: the marker is the leading run of
+                    # key=value tokens, exactly as a reader (and a grep) sees it.
+                    break
+                key, _, value = token.partition("=")
+                key = key.strip()
+                if not SPEC_TRACE_KEY_RE.fullmatch(key):
+                    break
+                if key in SPEC_TRACE_FIELDS:
+                    fields[key] = value.strip()
+                else:
+                    unknown.append((key, value.strip()))
+            if not fields and not unknown:
+                # The line MENTIONS the marker without claiming one ("the ch:trace marker must
+                # carry row="). It is prose, not a malformed marker: calling it malformed turned
+                # every explanatory comment into a contract violation.
+                continue
+            markers.append(
+                {
+                    "file": path,
+                    "line": line_no,
+                    "fields": fields,
+                    "unknown": unknown,
+                    "malformed": ""
+                    if fields
+                    else "the marker carries no ch:trace field, only unrecognized keys",
+                }
+            )
+    return markers
+
+
+def _spec_check_annotations(diff: dict) -> list:
+    """`spec=<ID>` citations written outside a ch:trace marker (a comment, a doc line)."""
+    found: list = []
+    for path in diff["order"]:
+        for line_no, text in diff["files"][path]["added"]:
+            if SPEC_TRACE_MARKER_RE.search(text):
+                continue  # the marker's own spec= is validated as a marker field
+            for match in SPEC_TRACE_ANNOTATION_RE.finditer(text):
+                found.append({"file": path, "line": line_no, "id": match.group(1)})
+    return found
+
+
+def _spec_check_slug(value: str) -> str:
+    """A heading reduced to the shape an anchor uses: lowercase words joined by dashes."""
+    return re.sub(r"[^a-z0-9]+", "-", value.strip().lower()).strip("-")
+
+
+def _spec_check_anchor_matches(text: str, anchor: str) -> bool:
+    """Does an anchor land in this document? A heading slug, or the token in the body."""
+    wanted = _spec_check_slug(anchor)
+    if not wanted:
+        return False
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if (
+            stripped.startswith("#")
+            and _spec_check_slug(stripped.lstrip("#")) == wanted
+        ):
+            return True
+    return re.search(rf"\b{re.escape(anchor)}\b", text) is not None
+
+
+def _spec_check_resolve_spec(value, blocks_by_id: dict, repo_root: Path) -> tuple:
+    """Resolve one `spec=` value: (block id or None, refusal reason or '').
+
+    Three shapes are accepted, and each has to LAND somewhere: a block id in this corpus, a
+    repository path that exists, or a `path#anchor` whose anchor resolves inside that document.
+    """
+    if value in blocks_by_id:
+        return value, ""
+    if "#" in value:
+        relative, _, anchor = value.partition("#")
+        target = (repo_root / relative).resolve()
+        if not target.is_relative_to(repo_root):
+            return None, f"{value}: resolves outside the repository root"
+        if not target.is_file():
+            return None, f"{value}: {relative} does not exist in this repository"
+        try:
+            text = target.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            return (
+                None,
+                f"{value}: {relative} could not be read ({exc.strerror or exc})",
+            )
+        if not _spec_check_anchor_matches(text, anchor):
+            return None, f"{value}: {relative} carries no heading or token {anchor!r}"
+        return None, ""
+    if "/" in value or "." in value:
+        target = (repo_root / value).resolve()
+        if target.is_relative_to(repo_root) and target.is_file():
+            return None, ""
+        return None, f"{value}: no such path in this repository"
+    return (
+        None,
+        f"{value}: neither a block id in this corpus nor a path in this repository",
+    )
+
+
+def _spec_check_resolve_test(value, repo_root: Path) -> tuple:
+    """Resolve one `test=` value (`path` or `path::selector`): (ok, refusal reason)."""
+    import ast
+
+    relative, _, selector = value.partition("::")
+    if not relative:
+        return False, f"{value}: names no path"
+    target = (repo_root / relative).resolve()
+    if not target.is_relative_to(repo_root):
+        return False, f"{value}: {relative} resolves outside the repository root"
+    if not target.is_file():
+        return False, f"{value}: {relative} does not exist in this repository"
+    if not selector:
+        return True, ""
+    try:
+        tree = ast.parse(target.read_text(encoding="utf-8"), filename=str(target))
+    except (SyntaxError, OSError) as exc:
+        return False, f"{value}: {relative} could not be parsed ({exc})"
+    wanted = selector.split("::")[-1]
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name == wanted:
+                return True, ""
+    return False, f"{value}: {relative} defines no {wanted!r}"
+
+
+def _spec_check_commit_resolves(value: str, repo_root: Path) -> bool:
+    """Is this commit an object in THIS repository (a verdict must not name a foreign commit)?"""
+    probe = subprocess.run(
+        ["git", "-C", str(repo_root), "cat-file", "-e", f"{value}^{{commit}}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return probe.returncode == 0
+
+
+def _spec_check_board_rows(repo_root: Path) -> set:
+    """Row ids from the repository's own JSONL board, or an empty set when it has none."""
+    board = repo_root / "tasks.jsonl"
+    rows: set = set()
+    try:
+        if not board.is_file() or board.stat().st_size > SPEC_CHECK_MAX_DIFF_BYTES:
+            return rows
+        text = board.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return rows
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(row, dict) and isinstance(row.get("id"), str):
+            rows.add(row["id"])
+    return rows
+
+
+def _spec_check_repo_root(spec_root, explicit) -> Path:
+    """The repository the diff, test pointers and commit ids are resolved against."""
+    try:
+        return _spec_repository_root(spec_root, explicit)
+    except SpecValidationError as exc:
+        detail = str(exc)
+        prefix = "unresolvable-repo-root: "
+        raise SpecError(
+            "unresolvable-repo-root",
+            detail[len(prefix) :] if detail.startswith(prefix) else detail,
+        ) from exc
+
+
+def _spec_finding(code: str, severity: str, why: str, evidence: str) -> dict:
+    """One machine-readable finding: rule, severity, a concrete reason and a source location."""
+    return {"code": code, "severity": severity, "why": why, "evidence": evidence}
+
+
+def align_staged_change(
+    spec_root,
+    *,
+    diff_text: str,
+    repository_root=None,
+    protocol_version=None,
+    max_diff_bytes=None,
+) -> dict:
+    """Grade one staged diff against the spec corpus and the ch:trace doctrine (AUG-120).
+
+    Reads only: no file, spec or board is written, and the result is a deterministic document. The
+    caller (the `spec align` verb) owns the protocol handshake; this function re-checks it so a
+    Python caller cannot skip it either.
+    """
+    requested = (
+        SPEC_CHECK_PROTOCOL if protocol_version is None else str(protocol_version)
+    )
+    if requested not in SPEC_CHECK_PROTOCOLS:
+        raise SpecError(
+            "unsupported-protocol-version",
+            f"requested {requested!r}; this checker speaks {', '.join(SPEC_CHECK_PROTOCOLS)} "
+            f"(checker version {SPEC_CHECK_VERSION})",
+        )
+    limit = SPEC_CHECK_MAX_DIFF_BYTES if max_diff_bytes is None else int(max_diff_bytes)
+    raw = diff_text.encode("utf-8", "replace")
+    if len(raw) > limit:
+        raise SpecError(
+            "diff-too-large",
+            f"the staged diff is {len(raw)} bytes, over the {limit}-byte cap "
+            "(--max-diff-bytes); the check is bounded and refuses rather than buffering without "
+            "limit",
+        )
+
+    root, documents, blocks = load_spec_corpus(spec_root)
+    repo_root = _spec_check_repo_root(root, repository_root)
+
+    diff = _spec_check_diff(diff_text)
+    changed = list(diff["order"])
+    added = sum(len(diff["files"][path]["added"]) for path in changed)
+    removed = sum(len(diff["files"][path]["removed"]) for path in changed)
+    binary = sorted(path for path in changed if diff["files"][path]["binary"])
+
+    blocks_by_id = {block["id"]: block for block in blocks}
+    citations = _spec_check_citations(documents)
+
+    related: dict = {}
+    for block_id, cited_paths in citations.items():
+        for changed_path in changed:
+            if any(_spec_check_covers(cited, changed_path) for cited in cited_paths):
+                matched = sorted(
+                    cited
+                    for cited in cited_paths
+                    if _spec_check_covers(cited, changed_path)
+                )[0]
+                related[block_id] = matched
+                break
+    # A corpus document that IS the change scopes the blocks it defines.
+    for block in blocks:
+        if block["source_file"] in changed:
+            related.setdefault(block["id"], block["source_file"])
+
+    markers = _spec_check_markers(diff)
+    annotations = _spec_check_annotations(diff)
+    board_rows = _spec_check_board_rows(repo_root) if markers else set()
+
+    findings: list = []
+
+    def add(code: str, severity: str, why: str, evidence: str) -> None:
+        """Append a finding once. Two rules naming the same location and reason are one finding."""
+        finding = _spec_finding(code, severity, why, evidence)
+        if finding not in findings:
+            findings.append(finding)
+
+    scoped = bool(markers or annotations or related)
+
+    if not changed:
+        add(
+            "empty-diff",
+            "info",
+            "the staged diff changes no file, so there is nothing to align",
+            "diff:none",
+        )
+
+    declared: dict = {}
+    unresolved: list = []
+
+    for marker in markers:
+        where = f"{marker['file']}:{marker['line']}"
+        fields = marker["fields"]
+        if marker["malformed"]:
+            add("trace-malformed", "fail", marker["malformed"], where)
+            continue
+        for name in SPEC_TRACE_MANDATORY:
+            if name not in fields:
+                add(
+                    "trace-missing-row" if name == "row" else "trace-missing-field",
+                    "fail",
+                    f"the ch:trace marker has no {name}= field; {name}= is mandatory on every "
+                    "marker (docs/prd/xml-spec-graph.md, the eleven-field closeout contract)",
+                    where,
+                )
+        for name in SPEC_TRACE_CONTRACT:
+            if name not in fields:
+                if name not in SPEC_TRACE_MANDATORY:
+                    add(
+                        "trace-missing-field",
+                        "fail",
+                        f"the marker has no {name}= field: absent links must be EXPLICIT "
+                        "(none:<reason>), never omitted (docs/prd/xml-spec-graph.md R10)",
+                        where,
+                    )
+                continue
+            v = fields[name].strip()
+            if not v:
+                add(
+                    "trace-absent-value",
+                    "fail",
+                    f"{name}= is present but empty; an absent link must carry an explicit "
+                    f"{name}=none:<reason>",
+                    where,
+                )
+            elif v == "none":
+                add(
+                    "trace-absent-value",
+                    "fail",
+                    f"{name}=none states an absence without a reason; write {name}=none:<reason>",
+                    where,
+                )
+        for key, value in marker["unknown"]:
+            add(
+                "trace-unknown-field",
+                "warn",
+                f"{key}={value} is not one of the eleven ch:trace fields "
+                f"({', '.join(SPEC_TRACE_FIELDS)}); a marker field outside the doctrine is "
+                "resolved by nothing",
+                where,
+            )
+        for value in (fields.get("evidence") or "").split(","):
+            value = value.strip()
+            if not value or SPEC_TRACE_NONE_RE.match(value):
+                continue
+            if "/" not in value and "." not in value and SPEC_ID_RE.match(value):
+                add(
+                    "trace-evidence-is-row",
+                    "fail",
+                    f"evidence={value} is an identifier, not an artifact: evidence must be a "
+                    "path, command transcript or witness, never another row or block "
+                    "(docs/prd/xml-spec-graph.md R10)",
+                    where,
+                )
+        for value in (fields.get("spec") or "").split(","):
+            value = value.strip()
+            if not value or SPEC_TRACE_NONE_RE.match(value):
+                continue
+            block_id, reason = _spec_check_resolve_spec(value, blocks_by_id, repo_root)
+            if reason:
+                add(
+                    "trace-spec-unresolved",
+                    "fail",
+                    f"spec={value} does not resolve: {reason}",
+                    where,
+                )
+                unresolved.append(value)
+            elif block_id:
+                declared[block_id] = where
+        for value in (fields.get("test") or "").split(","):
+            value = value.strip()
+            if not value or SPEC_TRACE_NONE_RE.match(value):
+                continue
+            ok, reason = _spec_check_resolve_test(value, repo_root)
+            if not ok:
+                add(
+                    "trace-test-unresolved",
+                    "fail",
+                    f"test={value} does not resolve: {reason}",
+                    where,
+                )
+        verdict = (fields.get("verdict") or "").strip()
+        commit = (fields.get("commit") or "").strip()
+        judged = bool(verdict) and not SPEC_TRACE_NONE_RE.match(verdict)
+        bound = bool(commit) and not SPEC_TRACE_NONE_RE.match(commit)
+        if judged and not bound:
+            add(
+                "trace-verdict-unbound",
+                "fail",
+                f"verdict={verdict} judges a commit, but commit={commit or 'absent'} names none: "
+                "a verdict must be bound to the commit it was reached on",
+                where,
+            )
+        if bound:
+            if not re.fullmatch(r"[0-9a-fA-F]{7,40}", commit):
+                add(
+                    "trace-commit-unknown",
+                    "fail",
+                    f"commit={commit} is not an abbreviated or full object name",
+                    where,
+                )
+            elif not _spec_check_commit_resolves(commit, repo_root):
+                add(
+                    "trace-commit-unknown",
+                    "fail",
+                    f"commit={commit} is not a commit in this repository: a verdict bound to a "
+                    "foreign commit proves nothing about this tree",
+                    where,
+                )
+        for value in (fields.get("row") or "").split(","):
+            value = value.strip()
+            if value and board_rows and value not in board_rows:
+                add(
+                    "trace-row-unknown",
+                    "warn",
+                    f"row={value} is not a row in this repository's tasks.jsonl; a trace that "
+                    "names no board row cannot be closed by one",
+                    where,
+                )
+
+    for annotation in annotations:
+        block_id = annotation["id"]
+        where = f"{annotation['file']}:{annotation['line']}"
+        if block_id not in blocks_by_id:
+            add(
+                "spec-annotation-unresolved",
+                "fail",
+                f"the change cites spec={block_id}, which this corpus does not define",
+                where,
+            )
+            unresolved.append(block_id)
+        else:
+            declared[block_id] = where
+
+    for block_id, where in declared.items():
+        block = blocks_by_id[block_id]
+        if block["status"] != "active":
+            add(
+                "spec-section-superseded",
+                "fail",
+                f"the change cites {block_id}, whose corpus status is {block['status']} "
+                f"({block['source']}); an annotation that contradicts the section's lifecycle "
+                "does not describe the current contract",
+                f"{block['source']} (cited at {where})",
+            )
+
+    if related and declared and not (set(declared) & set(related)):
+        first_changed = sorted(changed)[0]
+        cited = ", ".join(sorted(declared))
+        scoping = ", ".join(sorted(related))
+        add(
+            "spec-section-mismatch",
+            "warn",
+            f"the change cites {cited}, but {first_changed} is scoped by {scoping}: the marker "
+            "names a section that does not govern this file",
+            f"{first_changed}:1",
+        )
+
+    if changed and not scoped:
+        add(
+            "unscoped-change",
+            "warn",
+            "no corpus block scopes the changed path(s) and the change cites no spec block "
+            f"({', '.join(sorted(changed))}); the result is UNSCOPED, not a pass — the check "
+            "cannot say this change matches any specification",
+            f"{sorted(changed)[0]}:1",
+        )
+
+    if scoped and not markers:
+        scoping = ", ".join(sorted(related)) or "the change's own annotations"
+        for changed_path in sorted(changed):
+            add(
+                "trace-missing",
+                "fail",
+                f"no ch:trace marker in the staged change, yet {scoping} scopes "
+                f"{changed_path}: a scoped change must carry its trace",
+                f"{changed_path}:1",
+            )
+
+    referenced_blocks = []
+    for block_id in sorted(set(declared) | set(related)):
+        block = blocks_by_id[block_id]
+        if block_id in declared:
+            why = "cited by the staged change"
+        else:
+            why = f"cites {related[block_id]}"
+        referenced_blocks.append(
+            {
+                "id": block_id,
+                "kind": block["kind"],
+                "status": block["status"],
+                "source": block["source"],
+                "why": why,
+            }
+        )
+
+    findings.sort(
+        key=lambda finding: (finding["code"], finding["evidence"], finding["why"])
+    )
+    counts = {
+        "fail": sum(1 for finding in findings if finding["severity"] == "fail"),
+        "warn": sum(1 for finding in findings if finding["severity"] == "warn"),
+        "info": sum(1 for finding in findings if finding["severity"] == "info"),
+    }
+    if counts["fail"]:
+        status = "fail"
+    elif counts["warn"]:
+        status = "warn"
+    else:
+        status = "pass"
+    scope = "empty" if not changed else ("scoped" if scoped else "unscoped")
+    return {
+        "protocol": requested,
+        "version": SPEC_CHECK_VERSION,
+        "checker": "auger",
+        "status": status,
+        "scope": scope,
+        "repo_root": str(repo_root),
+        "spec_root": str(root),
+        "diff": {
+            "changed_files": sorted(changed),
+            "files": len(changed),
+            "added_lines": added,
+            "removed_lines": removed,
+            "binary_files": binary,
+        },
+        "referenced": {
+            "blocks": referenced_blocks,
+            "unresolved": sorted(set(unresolved)),
+            "paths": sorted(changed),
+        },
+        "findings": findings,
+        "counts": counts,
+    }
+
+
+def cmd_spec_align(a):
+    """`auger spec align` — the staged-diff checker GitReins invokes (AUG-120 / AUG-135).
+
+    One typed refusal shape, the same one every other `spec` verb uses: `spec error (<code>)` on
+    stderr and exit 2, nothing on stdout.
+    """
+    try:
+        return _spec_align_dispatch(a)
+    except SpecError as exc:
+        print(f"spec error ({exc.code}): {exc.detail}", file=sys.stderr)
+        raise SystemExit(2) from None
+
+
+def _spec_align_dispatch(a):
+    """Read the diff, align it, print ONE JSON line. Exit 0 pass/warn, 1 fail, 2 a typed refusal.
+
+    The refusal happens BEFORE stdin is read when the handshake cannot be honoured, so a version we
+    do not speak costs nothing and prints no verdict a caller could mistake for a result.
+    """
+    requested = str(
+        getattr(a, "protocol_version", SPEC_CHECK_PROTOCOL) or SPEC_CHECK_PROTOCOL
+    )
+    if requested not in SPEC_CHECK_PROTOCOLS:
+        raise SpecError(
+            "unsupported-protocol-version",
+            f"requested {requested!r}; this checker speaks {', '.join(SPEC_CHECK_PROTOCOLS)} "
+            f"(checker version {SPEC_CHECK_VERSION})",
+        )
+    diff_file = getattr(a, "diff_file", None)
+    from_stdin = bool(getattr(a, "diff_stdin", False))
+    if diff_file and from_stdin:
+        raise SpecError(
+            "ambiguous-diff-source",
+            "pass exactly one of --diff-stdin and --diff-file",
+        )
+    if not diff_file and not from_stdin:
+        raise SpecError(
+            "missing-diff-source",
+            "pass --diff-stdin (the GitReins shape) or --diff-file PATH",
+        )
+    limit = getattr(a, "max_diff_bytes", None) or SPEC_CHECK_MAX_DIFF_BYTES
+    if diff_file:
+        try:
+            raw = Path(diff_file).read_bytes()
+        except OSError as exc:
+            raise SpecError(
+                "unreadable-diff-file", f"{diff_file}: {exc.strerror or exc}"
+            ) from exc
+        if len(raw) > limit:
+            raise SpecError(
+                "diff-too-large",
+                f"{diff_file} is {len(raw)} bytes, over the {limit}-byte cap (--max-diff-bytes)",
+            )
+        diff_text = raw.decode("utf-8", "replace")
+    else:
+        buffered = getattr(sys.stdin, "buffer", None)
+        raw = (
+            buffered.read(limit + 1)
+            if buffered is not None
+            else sys.stdin.read().encode()
+        )
+        if len(raw) > limit:
+            raise SpecError(
+                "diff-too-large",
+                f"stdin exceeds the {limit}-byte cap (--max-diff-bytes); the check is bounded "
+                "and refuses rather than buffering without limit",
+            )
+        diff_text = raw.decode("utf-8", "replace")
+
+    spec_root = getattr(a, "spec_root", None)
+    if not spec_root:
+        repository = getattr(a, "repo_root", None)
+        if not repository:
+            raise SpecError(
+                "missing-spec-root",
+                "pass --spec-root DIR (or --repo-root DIR to default it to <repo>/specs)",
+            )
+        spec_root = str(Path(repository) / "specs")
+    payload = align_staged_change(
+        spec_root,
+        diff_text=diff_text,
+        repository_root=getattr(a, "repo_root", None),
+        protocol_version=requested,
+        max_diff_bytes=limit,
+    )
+    print(
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    )
+    return 1 if payload["status"] == "fail" else 0
+
+
 def cmd_spec(a):
     """`auger spec validate|list|assemble` — the XML spec authoring surface (AUG-118)."""
     try:
@@ -9700,6 +10457,66 @@ def main(argv=None):
     bnd.add_argument("requirement", help="requirement id to assemble")
     _add_spec_repo_root(bnd)
     bnd.set_defaults(fn=cmd_spec)
+
+    aln = spec_sub.add_parser(
+        "align",
+        help="the staged-diff checker GitReins invokes: grade a patch against the corpus and "
+        "the ch:trace doctrine, and emit one machine-readable JSON line (AUG-120/AUG-135)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Read a staged unified diff and report which spec blocks scope it, whether it carries "
+            "a ch:trace marker whose values resolve, and whether the sections it cites are still "
+            "active. Reads only: nothing under the repository is written.\n\n"
+            "The caller shape is GitReins' (engine.spec_alignment): --repo-root, --spec-root, "
+            "--protocol-version and --diff-stdin. The payload is ONE JSON line carrying protocol, "
+            "version, status (pass|warn|fail), scope (scoped|unscoped|empty), referenced "
+            "ids/blocks and findings; a protocol version this checker does not speak is refused "
+            "with a typed error on stderr and no payload at all."
+        ),
+        epilog=(
+            "exit codes:\n"
+            "  0  pass, or warn (advisory: the caller applies its own policy)\n"
+            "  1  fail — at least one finding has severity fail\n"
+            "  2  a typed refusal (spec error (<code>): unsupported protocol version, a diff over "
+            "the cap, no diff source, an unresolvable repository root, an invalid corpus)\n"
+        ),
+    )
+    aln.add_argument(
+        "--repo-root",
+        metavar="DIR",
+        help="repository the diff, test pointers and commit ids resolve against; must be a git "
+        "work tree's top level. Default: the work tree containing --spec-root",
+    )
+    aln.add_argument(
+        "--spec-root",
+        metavar="DIR",
+        help="spec corpus root; default <repo-root>/specs",
+    )
+    aln.add_argument(
+        "--protocol-version",
+        default=SPEC_CHECK_PROTOCOL,
+        help=f"the checker protocol the caller speaks (this checker speaks "
+        f"{', '.join(SPEC_CHECK_PROTOCOLS)}; default {SPEC_CHECK_PROTOCOL})",
+    )
+    aln.add_argument(
+        "--diff-stdin",
+        action="store_true",
+        help="read the staged unified diff from stdin — the shape GitReins sends",
+    )
+    aln.add_argument(
+        "--diff-file",
+        metavar="PATH",
+        help="read the diff from a file instead of stdin (tests and replays)",
+    )
+    aln.add_argument(
+        "--max-diff-bytes",
+        type=int,
+        default=SPEC_CHECK_MAX_DIFF_BYTES,
+        metavar="N",
+        help=f"refuse a diff larger than N bytes instead of buffering without limit "
+        f"(default {SPEC_CHECK_MAX_DIFF_BYTES})",
+    )
+    aln.set_defaults(fn=cmd_spec_align)
 
     a = ap.parse_args(argv)
     return a.fn(a)
