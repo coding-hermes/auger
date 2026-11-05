@@ -32,8 +32,10 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import io
+import os
 import sqlite3
 import json
+import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -800,6 +802,104 @@ def test_bundle_refuses_a_requirement_declaring_both_edge_directions(
     assert code == 2, (out, err)
     assert out == ""
     assert "spec error (reference-cycle)" in err, err
+
+
+# ------------------------------------------- AUG-145: `--out` never crashes, and never half-writes
+# `--out` into a missing parent raised FileNotFoundError out of `tempfile.mkstemp` (auger.py's
+# `_spec_write_atomic`) and exited 1 with a raw traceback — the one path in the whole `spec`
+# surface that answered a caller with an unclassifiable Python stack instead of `spec error
+# (<code>)` and rc 2. These drive a REAL subprocess on purpose: in-process the exception would
+# surface as a test error, and the defect IS the traceback the process prints.
+
+
+def run_spec_process(*argv: str) -> tuple[int, str, str]:
+    """Drive `auger spec ...` as its own process; returns (exit_code, stdout, stderr)."""
+    process = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "auger.py"), "spec", *argv],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "PYTHONPATH": str(REPO_ROOT)},
+    )
+    return process.returncode, process.stdout, process.stderr
+
+
+def test_assemble_out_refuses_a_missing_parent_directory_without_a_traceback(
+    tmp_path: Path,
+) -> None:
+    """A refusal, not a crash: typed code on stderr, rc 2, empty stdout, nothing created."""
+    target = tmp_path / "missing" / "sub" / "asm.json"
+    code, out, err = run_spec_process(
+        "assemble",
+        str(SPECS),
+        "--id",
+        "AUG-REQ-030",
+        "--format",
+        "json",
+        "--out",
+        str(target),
+    )
+    assert "Traceback" not in err, f"--out crashed instead of refusing:\n{err}"
+    assert code == 2, (code, out, err)
+    assert out == "", out
+    assert "spec error (missing-out-directory)" in err, err
+    assert not target.exists(), "a refusal wrote the document"
+    assert not (tmp_path / "missing").exists(), (
+        "a refusal created the missing parent tree"
+    )
+
+
+def test_assemble_out_refusal_leaves_the_directory_byte_identical(
+    tmp_path: Path,
+) -> None:
+    """`--out` naming a DIRECTORY is refused with no temporary file left behind."""
+    target = tmp_path / "asm.json"
+    target.mkdir()
+    before = sorted(path.name for path in tmp_path.iterdir())
+    code, out, err = run_spec_process(
+        "assemble",
+        str(SPECS),
+        "--id",
+        "AUG-REQ-030",
+        "--format",
+        "json",
+        "--out",
+        str(target),
+    )
+    assert "Traceback" not in err, f"--out crashed instead of refusing:\n{err}"
+    assert code == 2, (code, out, err)
+    assert out == "", out
+    assert "spec error (invalid-out-path)" in err, err
+    assert sorted(path.name for path in tmp_path.iterdir()) == before, (
+        "a refusal left a partial or temporary file behind"
+    )
+
+
+def test_assemble_out_into_an_existing_directory_writes_exactly_one_file(
+    tmp_path: Path,
+) -> None:
+    """The success path is unchanged: one atomic file, one file on disk, rc 0."""
+    directory = tmp_path / "nested"
+    directory.mkdir()
+    target = directory / "asm.json"
+    code, out, err = run_spec_process(
+        "assemble",
+        str(SPECS),
+        "--id",
+        "AUG-REQ-030",
+        "--format",
+        "json",
+        "--out",
+        str(target),
+    )
+    assert code == 0, (code, out, err)
+    assert "Traceback" not in err, err
+    assert out.strip() == f"wrote 3 block(s) to {target}", out
+    assert sorted(path.name for path in directory.iterdir()) == ["asm.json"], (
+        "the atomic write left a temporary sibling behind"
+    )
+    assert json.loads(target.read_text(encoding="utf-8"))["counts"]["total"] == 3
 # AUG-144 PASS line 1: the row asked for a fixture pair that is byte-identical except for the
 # xmlns declaration. The grammar (elementFormDefault="qualified") REQUIRES urn:auger:spec:1, so
 # the namespace-less twin cannot be the positive control it was written as — it is refused. The

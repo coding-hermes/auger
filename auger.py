@@ -8412,16 +8412,51 @@ def render_spec_assembly(
 
 
 def _spec_write_atomic(path, text: str) -> None:
-    """Write `text` to `path` via a sibling temp file + rename, so no partial file is ever left."""
+    """Write `text` to `path` via a sibling temp file + rename, so no partial file is ever left.
+
+    AUG-145: every failure here is a TYPED `SpecError`, because `--out` was the one path in the
+    `spec` surface that answered a caller with a raw Python stack and exit 1 — `FileNotFoundError`
+    from `tempfile.mkstemp` for a missing parent directory, `IsADirectoryError` from `os.replace`
+    for a target that is a directory — instead of the `spec error (<code>)` / rc 2 contract every
+    other refusal keeps.
+
+    The parent directory is NOT created. `spec` creates nothing when a run refuses, and silently
+    materialising a directory tree is a write the caller never asked for; a missing parent is
+    refused by name (`missing-out-directory`) so the caller can decide. Nothing is left behind on
+    any path: the temp file is unlinked before the refusal is raised.
+    """
     target = Path(path).expanduser()
     directory = target.parent if str(target.parent) else Path(".")
-    handle_fd, temporary = tempfile.mkstemp(
-        prefix=f".{target.name}.", suffix=".tmp", dir=str(directory)
-    )
+    if target.is_dir():
+        raise SpecError(
+            "invalid-out-path",
+            f"{target} is a directory; --out names a file (nothing was written)",
+        )
+    if not directory.is_dir():
+        raise SpecError(
+            "missing-out-directory",
+            f"{directory} is not a directory; create it first or pass --out into an "
+            "existing one (nothing was written)",
+        )
+    try:
+        handle_fd, temporary = tempfile.mkstemp(
+            prefix=f".{target.name}.", suffix=".tmp", dir=str(directory)
+        )
+    except OSError as exc:
+        raise SpecError(
+            "unwritable-out",
+            f"{directory}: {exc.strerror or exc} (nothing was written)",
+        ) from exc
     try:
         with os.fdopen(handle_fd, "w", encoding="utf-8") as handle:
             handle.write(text)
         os.replace(temporary, target)
+    except OSError as exc:
+        with contextlib.suppress(OSError):
+            os.unlink(temporary)
+        raise SpecError(
+            "unwritable-out", f"{target}: {exc.strerror or exc} (nothing was written)"
+        ) from exc
     except BaseException:
         with contextlib.suppress(OSError):
             os.unlink(temporary)
@@ -9381,7 +9416,8 @@ def main(argv=None):
     )
     asm.add_argument(
         "--out",
-        help="write the assembly here atomically; nothing is created when the run refuses",
+        help="write the assembly here atomically; the parent directory must already exist "
+        "(nothing is created when the run refuses)",
     )
     asm.set_defaults(fn=cmd_spec)
 

@@ -637,7 +637,11 @@ expand. `--no-deps` emits the matched set alone.
 **Writes:** nothing in DuckBrain and nothing in the corpus. `--out PATH` writes the assembled
 document through a sibling temp file plus `os.replace`, so a refusal never leaves a partial
 document — the file is created only after the whole corpus has validated. Success prints
-`wrote N block(s) to PATH`; without `--out` the document goes to stdout.
+`wrote N block(s) to PATH`; without `--out` the document goes to stdout. The parent directory
+must already exist: `--out` never creates it, and a missing parent refuses
+`missing-out-directory` (exit 2) while a `PATH` that is a directory refuses `invalid-out-path`;
+an unwritable directory or file refuses `unwritable-out`. Every `--out` failure is one of those
+typed refusals — never a traceback — and leaves no temporary or partial file behind.
 
 **Never writes:** a row, a namespace, a table declaration, an embedded memory, or any XML file
 it read. A refusal (typed `spec error (<code>): <detail>`, exit 2) prints nothing on stdout and
