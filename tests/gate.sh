@@ -278,6 +278,19 @@ else
 fi
 rm -f /tmp/aug066-gate-gen.err
 
+echo "== spec corpus (AUG-136) =="
+# The authored corpus under specs/ is the repository's own use of the machinery it ships. Validating
+# it here is what stops the corpus rotting into decoration the day a verb, id or test it names moves.
+# A corpus-wide refusal is load-bearing: it names the document, block and resolved path.
+# An empty corpus is NOT a pass — that is the pre-AUG-136 state this arm exists to prevent returning.
+if [ -f specs/schema/auger-spec-1.0.xsd ] && [ -n "$(find specs -name '*.xml' -print -quit 2>/dev/null)" ]; then
+  python3 auger.py spec validate specs || exit 1
+  python3 auger.py spec check specs >/dev/null || exit 1
+else
+  echo "spec corpus MISSING: specs/ holds no authored *.xml — this arm would pass vacuously" >&2
+  exit 1
+fi
+
 echo "== docs check =="
 # README-003: execute the README's claims instead of reading them — the loop verb list
 # vs real subparsers, the init tally vs COLS, and every env/path the README names vs a
