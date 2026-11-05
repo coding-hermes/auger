@@ -649,6 +649,17 @@ document, so an un-included file cannot be told apart from a root and include ed
 cannot gate participation without a new declaration surface. Ordering, not membership, is the
 include's job.
 
+**Discovery stays inside the root (AUG-148).** A document enters the corpus because it is a
+`*.xml` file under ROOT whose RESOLVED path is still under ROOT. A symlink that resolves outside
+the root is refused (`symlink-outside-root`) by the corpus-wide verbs and skipped-and-counted by
+the selection-scoped ones — the same rule `<include src>` already enforced
+(`remote-reference-rejected`, `include-outside-root`), now enforced at the one point where a
+document enters the corpus instead of on one mechanism only. A symlink that resolves INSIDE the
+root is an ordinary document. The diagnostic carries paths, never a byte of the target's content;
+a dangling `*.xml` symlink is `unreadable-document`, not a silent disappearance. Note that a
+`*.xml` symlink to another `*.xml` in the corpus is discovered twice and refused as a
+`duplicate-id` — reuse a block by ID reference instead of aliasing the file.
+
 **Corpus-wide vs selection-scoped (AUG-146).** `validate`, `check` and `bundle` are
 CORPUS-WIDE verdicts: every document must parse and conform, and one malformed file refuses the
 whole run, naming it (`invalid-xml`, exit 2). `list` and `assemble` are SELECTION-scoped: a

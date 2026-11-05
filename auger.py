@@ -7839,6 +7839,59 @@ def _spec_read_document(path: Path, root: Path):
     return element
 
 
+def _spec_discover_documents(root: Path) -> tuple:
+    """Every readable `*.xml` file under the corpus root, plus the ones REFUSED (AUG-148).
+
+    One discovery rule for both loaders (`load_spec_corpus` and `_xml_spec_documents`): before
+    AUG-148 each of them rglob'd independently, and the out-of-root rule was enforced on the
+    `<include src>` mechanism only — so `<include src="/etc/hostname"/>` was refused
+    (`remote-reference-rejected`) while `linked.xml -> /etc/hostname` sitting in the corpus was
+    read and parsed. The rule now lives at the ONE point where a document enters the corpus.
+
+    A path whose RESOLVED target is outside the root is refused, whether it is a symlinked file or
+    a file reached through a symlinked directory (both `resolve()` out). A symlink that resolves
+    INSIDE the root is an ordinary document. The refusal carries paths only — never a byte of the
+    target's content — and its code is `symlink-outside-root`; a dangling `*.xml` symlink is
+    `unreadable-document` rather than a silent disappearance.
+
+    Returns (paths, refusals) with refusals shaped like the loader's `skipped` entries: the strict
+    callers turn the first one into a typed refusal, the selection-scoped ones count it.
+    """
+    paths: list = []
+    refusals: list = []
+    for path in sorted(root.rglob("*.xml")):
+        rel = path.relative_to(root).as_posix()
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError:
+            refusals.append(
+                {
+                    "file": rel,
+                    "code": "unreadable-document",
+                    "detail": f"{rel}: the symlink target does not exist",
+                }
+            )
+            continue
+        if not resolved.is_file():
+            continue
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            refusals.append(
+                {
+                    "file": rel,
+                    "code": "symlink-outside-root",
+                    "detail": (
+                        f"{rel}: the symlink resolves to {resolved}, outside the corpus "
+                        f"root {root} (only local documents inside the root are read)"
+                    ),
+                }
+            )
+            continue
+        paths.append(path)
+    return paths, refusals
+
+
 def _spec_read_documents(
     paths, root: Path, *, tolerate_unreadable: bool, skipped: list
 ) -> dict:
@@ -8267,11 +8320,16 @@ def load_spec_corpus(
     if not root.is_dir():
         raise SpecError("missing-spec-root", f"{spec_root} is not a directory")
     root = root.resolve()
-    paths = sorted(path for path in root.rglob("*.xml") if path.is_file())
+    paths, refusals = _spec_discover_documents(root)
     if not paths:
+        if refusals:
+            raise SpecError(refusals[0]["code"], refusals[0]["detail"])
         raise SpecError("empty-corpus", f"no *.xml documents under {root}")
+    if refusals and not tolerate_unreadable:
+        raise SpecError(refusals[0]["code"], refusals[0]["detail"])
     schema = _spec_load_schema()
     unreadable = [] if skipped is None else skipped
+    unreadable.extend(refusals)
     documents = _spec_read_documents(
         paths, root, tolerate_unreadable=tolerate_unreadable, skipped=unreadable
     )
@@ -8813,9 +8871,15 @@ def _xml_spec_documents(spec_root):
     if not root.is_dir():
         raise SpecValidationError(f"missing-spec-root: {spec_root} is not a directory")
     root = root.resolve()
-    paths = sorted(path for path in root.rglob("*.xml") if path.is_file())
+    paths, refusals = _spec_discover_documents(root)
     if not paths:
+        if refusals:
+            raise SpecValidationError(f"{refusals[0]['code']}: {refusals[0]['detail']}")
         raise SpecValidationError(f"empty-corpus: no *.xml documents under {root}")
+    if refusals:
+        # AUG-148: this loader is the corpus-wide one too, so an out-of-root symlink is a typed
+        # refusal here, never a silent omission.
+        raise SpecValidationError(f"{refusals[0]['code']}: {refusals[0]['detail']}")
     documents = {}
     for path in paths:
         rel = path.relative_to(root).as_posix()

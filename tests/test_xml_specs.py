@@ -1286,3 +1286,88 @@ def test_the_flat_corpus_rule_is_documented() -> None:
     rendered = help_text.getvalue()
     assert "flat corpus" in rendered.lower(), rendered
     assert "assertion-only" in rendered.lower(), rendered
+
+
+# ------------------------------------------- AUG-148: symlinks stay inside the root
+def test_an_out_of_root_symlink_is_refused_not_read(tmp_path: Path) -> None:
+    """AUG-148: the out-of-root rule applies to FILENAMES, not only to `<include src>`.
+
+    Before this row `<include src="/etc/hostname"/>` was refused (`remote-reference-rejected`)
+    while `linked.xml -> /etc/hostname` inside the corpus was read and parsed — the same rule
+    enforced on one mechanism and bypassable on the other. Now discovery refuses the path, and the
+    diagnostic carries the two PATHS only: the sentinel body of the target never appears.
+    """
+    sentinel = "SENTINEL-CONTENT-DO-NOT-LEAK"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.xml").write_text(
+        '<spec xmlns="urn:auger:spec:1" id="PROBE-SECRET" version="1.0.0" schema-version="1.0">'
+        f'<requirement id="SL-SECRET-1" kind="requirement" status="active" version="1.0.0" '
+        f'verification="test">{sentinel}</requirement></spec>\n',
+        encoding="utf-8",
+    )
+    corpus = write_corpus(
+        tmp_path / "corpus",
+        {"real.xml": spec_document("PROBE-REAL", requirement_block("SL-REAL-1"))},
+    )
+    (corpus / "linked.xml").symlink_to(outside / "secret.xml")
+
+    # Strict, both loaders: `validate` reads through load_spec_corpus, `check` through
+    # _xml_spec_documents — each used to rglob independently, so each is asserted.
+    for verb in ("validate", "check"):
+        code, out, err = run_spec(verb, str(corpus))
+        assert code == 2, (verb, out, err)
+        assert out == "", f"{verb} emitted stdout: {out!r}"
+        assert "spec error (symlink-outside-root)" in err, err
+        assert "linked.xml" in err, err
+        assert sentinel not in err, f"{verb} leaked the target's content: {err!r}"
+
+    with pytest.raises(auger.SpecError) as caught:
+        auger.load_spec_corpus(corpus)
+    assert caught.value.code == "symlink-outside-root"
+    assert sentinel not in caught.value.detail
+
+    # Selection-scoped: skipped and COUNTED, so the rest of the corpus still answers.
+    code, out, err = run_spec("list", str(corpus), "--id", "SL-REAL-1")
+    assert code == 0, (out, err)
+    assert [line.split("\t", 1)[0] for line in out.splitlines()] == ["SL-REAL-1"], out
+    assert "skipped 1 unreadable document(s)" in err, err
+    assert "symlink-outside-root" in err, err
+    assert sentinel not in err
+    assert sentinel not in out
+
+    # The document is not merely unparsed, it is not IN the corpus: its id cannot be selected.
+    code, out, err = run_spec("assemble", str(corpus), "--id", "SL-SECRET-1")
+    assert code == 2, (out, err)
+    assert "spec error (no-match)" in err, err
+    assert sentinel not in out and sentinel not in err
+
+
+def test_an_in_root_symlink_is_an_ordinary_document(tmp_path: Path) -> None:
+    """AUG-148: the fix must not refuse every symlink — one that resolves inside the root works.
+
+    The fragment is stored under a non-`*.xml` name (`fragments/shared.inc`) so the link is the
+    ONLY way to reach it: a `*.xml` target would be discovered twice and correctly refused as a
+    `duplicate-id`, which would test the duplicate rule instead of the symlink rule.
+    """
+    corpus = write_corpus(
+        tmp_path / "corpus",
+        {
+            "real.xml": spec_document("PROBE-REAL", requirement_block("SL-REAL-1")),
+            "fragments/shared.inc": spec_document(
+                "PROBE-FRAG", requirement_block("SL-FRAG-1")
+            ),
+        },
+    )
+    (corpus / "frag.xml").symlink_to(corpus / "fragments" / "shared.inc")
+
+    root, documents, blocks = auger.load_spec_corpus(corpus)
+    assert sorted(documents) == ["frag.xml", "real.xml"], sorted(documents)
+    assert [block["id"] for block in blocks] == ["SL-FRAG-1", "SL-REAL-1"]
+
+    code, out, err = run_spec("list", str(corpus), "--kind", "requirement")
+    assert code == 0, (out, err)
+    assert [line.split("\t", 1)[0] for line in out.splitlines()] == [
+        "SL-FRAG-1",
+        "SL-REAL-1",
+    ], out
