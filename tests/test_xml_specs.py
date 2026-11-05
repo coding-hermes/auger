@@ -1336,10 +1336,14 @@ def test_an_out_of_root_symlink_is_refused_not_read(tmp_path: Path) -> None:
     assert sentinel not in err
     assert sentinel not in out
 
-    # The document is not merely unparsed, it is not IN the corpus: its id cannot be selected.
+    # The document is not merely unparsed, it is not IN the corpus: its id selects NOTHING.
+    # AUG-149 changed the exit code for an empty selection from 2 to 0-with-a-note, so the
+    # absence is asserted directly (matched: 0) rather than through the old refusal code.
     code, out, err = run_spec("assemble", str(corpus), "--id", "SL-SECRET-1")
-    assert code == 2, (out, err)
-    assert "spec error (no-match)" in err, err
+    assert code == 0, (out, err)
+    assert "matched: 0" in out, out
+    assert "spec note (no-match): id=SL-SECRET-1" in err, err
+    assert "spec note (no-match)" in err, err   # AUG-149: an empty selection is a note, not an error
     assert sentinel not in out and sentinel not in err
 
 
