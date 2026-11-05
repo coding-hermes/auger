@@ -659,3 +659,186 @@ def test_spec_bundle_refuses_an_unknown_requirement() -> None:
     code, _out, err = run_spec("bundle", str(VERIFICATION_FIXTURES), "REQ-NOPE")
     assert code == 2
     assert "unknown-requirement" in err
+
+
+# ------------------------------------------------- AUG-144: bundle follows BOTH edge directions
+# `spec bundle` collected only the refs a requirement names FORWARD (`verifies=` and
+# `<verification-ref>` children), so every obligation that names the requirement — the shape the
+# shipped corpus uses and the one `spec check`/`assemble` walk — was invisible and the verb
+# answered {"verifications": []} for a requirement that HAS obligations. An empty list is now a
+# REPORT (`status: no-obligations`, named on stderr), never a blank where obligations exist.
+
+BUNDLE_MIXED = """<?xml version="1.0" encoding="UTF-8"?>
+<spec xmlns="urn:auger:spec:1" id="AUGER-BUNDLE-MIX" version="1.0.0" schema-version="1.0">
+  <requirement id="BM-REQ-1" kind="requirement" status="active" version="1.0.0"
+               verification="test" verifies="BM-VER-2">
+    <verification-ref ref="BM-VER-2"/>
+  </requirement>
+  <verification id="BM-VER-2" kind="verification" status="active" version="1.0.0"
+                method="test"/>
+  <verification id="BM-VER-1" kind="verification" status="active" version="1.0.0"
+                method="analysis" verifies="BM-REQ-1"/>
+</spec>
+"""
+
+BUNDLE_BOTH_DIRECTIONS = """<?xml version="1.0" encoding="UTF-8"?>
+<spec xmlns="urn:auger:spec:1" id="AUGER-BUNDLE-CYCLE" version="1.0.0" schema-version="1.0">
+  <requirement id="BC-REQ-1" kind="requirement" status="active" version="1.0.0"
+               verification="test" verifies="BC-VER-1"/>
+  <verification id="BC-VER-1" kind="verification" status="active" version="1.0.0"
+                method="test" verifies="BC-REQ-1"/>
+</spec>
+"""
+
+
+def write_corpus(directory: Path, name: str, document: str) -> Path:
+    """One-document corpus at `directory/name`; returns the corpus root."""
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / name).write_text(document, encoding="utf-8")
+    return directory
+
+
+def test_bundle_follows_the_inverse_verifies_edge_in_the_shipped_corpus() -> None:
+    """AUG-144 PASS: AUG-VER-014-1 names AUG-REQ-014, so it IS that requirement's obligation."""
+    code, out, err = run_spec("bundle", str(SPECS), "AUG-REQ-014")
+    assert code == 0, err
+    payload = json.loads(out)
+    assert payload["id"] == "AUG-REQ-014"
+    assert "verifications" in payload, payload
+    ids = [obligation["id"] for obligation in payload["verifications"]]
+    assert "AUG-VER-014-1" in ids, (
+        f"bundle dropped the inverse verifies edge; got {ids!r}"
+    )
+    # Source order (acceptance block precedes the verification block in export.xml), and every
+    # block that names the requirement is present — not just the ones the requirement names.
+    assert ids == ["AUG-AC-014-1", "AUG-VER-014-1"], ids
+    assert payload["status"] == "ok", payload
+    assert payload["count"] == len(ids), payload
+
+
+def test_bundle_collects_forward_and_inverse_edges_once_each(tmp_path: Path) -> None:
+    """An edge declared twice is one obligation; a block naming the requirement is included."""
+    root = write_corpus(tmp_path / "corpus", "mixed.xml", BUNDLE_MIXED)
+    code, out, err = run_spec(
+        "bundle", str(root), "BM-REQ-1", "--repo-root", str(REPO_ROOT)
+    )
+    assert code == 0, err
+    payload = json.loads(out)
+    ids = [obligation["id"] for obligation in payload["verifications"]]
+    assert ids == ["BM-VER-2", "BM-VER-1"], ids
+    assert len(ids) == len(set(ids)), f"an edge was collected twice: {ids!r}"
+
+
+def test_bundle_says_no_obligations_instead_of_an_anonymous_empty_list() -> None:
+    """An empty bundle is a report with a name, not a blank that could be a broken lookup."""
+    code, out, err = run_spec("bundle", str(SPECS), "AUG-REQ-020")
+    assert code == 0, err
+    payload = json.loads(out)
+    assert payload["id"] == "AUG-REQ-020"
+    assert payload["verifications"] == []
+    assert payload["status"] == "no-obligations", payload
+    assert payload["count"] == 0, payload
+    assert "no-obligations" in err and "AUG-REQ-020" in err, err
+
+
+def test_bundle_unknown_requirement_is_its_own_typed_code() -> None:
+    """A missing requirement keeps a distinct refusal that no real bundle can produce."""
+    code, out, err = run_spec("bundle", str(SPECS), "AUG-NOT-A-REQUIREMENT")
+    assert code == 2, (out, err)
+    assert out == ""
+    assert "spec error (unknown-requirement)" in err, err
+    assert "invalid-spec-graph" not in err, (
+        f"a missing requirement must not borrow the graph-integrity code: {err!r}"
+    )
+
+
+def test_check_list_and_bundle_agree_on_every_node() -> None:
+    """Every node `check` lists is resolvable by `list --id`; every requirement also by `bundle`.
+
+    `bundle` is requirement-shaped by definition, so a verification id is refused BY NAME rather
+    than answered with an empty obligation list — the agreement asserted here is that no verb
+    calls a node that `check` lists "unknown", and that no requirement is answered with silence.
+    """
+    code, out, err = run_spec("check", str(SPECS), "--repo-root", str(REPO_ROOT))
+    assert code == 0, err
+    nodes = json.loads(out)["nodes"]
+    assert nodes, (
+        "the shipped corpus must list nodes for this agreement to mean anything"
+    )
+    requirements = 0
+    for node_id in nodes:
+        code, out, err = run_spec("list", str(SPECS), "--id", node_id)
+        assert code == 0, err
+        rows = [line.split("\t") for line in out.splitlines() if line]
+        assert len(rows) == 1 and rows[0][0] == node_id, (node_id, out)
+        kind = rows[0][1]
+        bcode, bout, berr = run_spec(
+            "bundle", str(SPECS), node_id, "--repo-root", str(REPO_ROOT)
+        )
+        if kind == "requirement":
+            requirements += 1
+            assert bcode == 0, (node_id, berr)
+            payload = json.loads(bout)
+            assert payload["id"] == node_id
+            assert payload["count"] == len(payload["verifications"])
+        else:
+            assert bcode == 2, (node_id, kind, bout)
+            assert "spec error (unknown-requirement)" in berr, (node_id, berr)
+    assert requirements, (
+        "the shipped corpus must contain requirements for this to prove anything"
+    )
+
+
+def test_bundle_refuses_a_requirement_declaring_both_edge_directions(
+    tmp_path: Path,
+) -> None:
+    """Both directions is a cycle, not a silently deduplicated pair."""
+    root = write_corpus(tmp_path / "corpus", "cycle.xml", BUNDLE_BOTH_DIRECTIONS)
+    code, out, err = run_spec(
+        "bundle", str(root), "BC-REQ-1", "--repo-root", str(REPO_ROOT)
+    )
+    assert code == 2, (out, err)
+    assert out == ""
+    assert "spec error (reference-cycle)" in err, err
+# AUG-144 PASS line 1: the row asked for a fixture pair that is byte-identical except for the
+# xmlns declaration. The grammar (elementFormDefault="qualified") REQUIRES urn:auger:spec:1, so
+# the namespace-less twin cannot be the positive control it was written as — it is refused. The
+# pair below still proves the distinction, in the only direction the grammar allows: the
+# namespaced document resolves, and the identical document minus that one declaration is refused
+# as schema-invalid. (AUG-125 namespaced the last un-namespaced fixture for this reason.)
+BUNDLE_NAMESPACED = """<?xml version="1.0" encoding="UTF-8"?>
+<spec xmlns="urn:auger:spec:1" id="AUGER-NS-PROBE" version="1.0.0" schema-version="1.0">
+  <requirement id="NS-REQ-1" kind="requirement" status="active" version="1.0.0"
+               verification="test"/>
+  <verification id="NS-VER-1" kind="verification" status="active" version="1.0.0"
+                method="test" verifies="NS-REQ-1"/>
+</spec>
+"""
+
+
+def test_bundle_resolves_the_namespaced_shape_and_the_grammar_requires_the_namespace(
+    tmp_path: Path,
+) -> None:
+    namespaced = write_corpus(tmp_path / "ns", "doc.xml", BUNDLE_NAMESPACED)
+    plain_root = tmp_path / "plain"
+    plain_root.mkdir()
+    twin = BUNDLE_NAMESPACED.replace(' xmlns="urn:auger:spec:1"', "", 1)
+    assert twin != BUNDLE_NAMESPACED, (
+        "the twin must differ from the control by exactly the xmlns"
+    )
+    (plain_root / "doc.xml").write_text(twin, encoding="utf-8")
+
+    code, out, err = run_spec(
+        "bundle", str(namespaced), "NS-REQ-1", "--repo-root", str(REPO_ROOT)
+    )
+    assert code == 0, err
+    payload = json.loads(out)
+    assert payload["id"] == "NS-REQ-1"
+    assert [block["id"] for block in payload["verifications"]] == ["NS-VER-1"], payload
+
+    twin_code, twin_out, twin_err = run_spec(
+        "bundle", str(plain_root), "NS-REQ-1", "--repo-root", str(REPO_ROOT)
+    )
+    assert twin_code == 2, (twin_out, twin_err)
+    assert twin_out == "", twin_out
+    assert "spec error (schema-invalid)" in twin_err, twin_err

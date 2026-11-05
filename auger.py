@@ -7727,6 +7727,10 @@ SPEC_FORWARD_CLOSURE_ATTRS = ("depends-on",)
 # A block that VERIFIES a selected block belongs to that block's explicit dependency closure: a
 # requirement without its acceptance criteria and verification plan is not the selected contract.
 SPEC_INVERSE_CLOSURE_ATTRS = ("verifies",)
+# The block kinds that can BE an obligation of a requirement (AUG-144): a `<verification>` plan,
+# a `<test>` that points at a runner/selector/path, or an `<acceptance>` criterion. All three name
+# their requirement through `verifies=`, which is the inverse edge `bundle` used to ignore.
+SPEC_OBLIGATION_KINDS = ("acceptance", "verification", "test")
 # Blocks whose verification METHOD is mandatory metadata (`verification=`); a <verification> block
 # carries the same closed set under `method=`.
 SPEC_REQUIRES_METHOD = ("requirement", "acceptance")
@@ -8476,8 +8480,22 @@ def _spec_dispatch(a):
             bundle = assemble_xml_requirement(
                 a.root, a.requirement, repository_root=repository_root
             )
+        except SpecUnknownRequirement as exc:
+            # AUG-144: a requirement this corpus does not have is its own code. Printing it as
+            # `invalid-spec-graph` dressed a caller's typo up as a broken corpus, and made the
+            # one diagnostic that must be unambiguous indistinguishable at a glance.
+            raise SpecError("unknown-requirement", str(exc)) from exc
         except SpecValidationError as exc:
             raise SpecError("invalid-spec-graph", str(exc)) from exc
+        if not bundle["verifications"]:
+            # AUG-144: `{"verifications": []}` is a real answer for a requirement with no
+            # obligations, so the JSON stays (backward compatible) and the human/diagnostic path
+            # names WHY it is empty. An empty array alone cannot be told from a broken lookup.
+            print(
+                f"spec note (no-obligations): {bundle['id']} names no obligation and no block "
+                "names it — an empty bundle is a report, not a failed lookup",
+                file=sys.stderr,
+            )
         print(json.dumps(bundle, sort_keys=True, separators=(",", ":")))
         return 0
     ids = tuple(getattr(a, "id", None) or ())
@@ -8568,6 +8586,14 @@ def _add_spec_selectors(parser) -> None:
 
 class SpecValidationError(ValueError):
     """A typed XML specification graph integrity failure."""
+
+
+class SpecUnknownRequirement(SpecValidationError):
+    """A `bundle` request named an id that is not a requirement block (AUG-144).
+
+    Its own type because it is its own CODE: "you asked for a requirement this corpus does not
+    have" is a caller's typo, not a broken graph, and the CLI must not dress one up as the other.
+    """
 
 
 SPEC_RUNNERS = {"pytest": (sys.executable, "-m", "pytest")}
@@ -8861,25 +8887,96 @@ def validate_xml_specs(spec_root, *, loaded=None, repository_root=None):
     return nodes
 
 
+def _spec_source_index(documents: dict) -> tuple:
+    """Every authored block element by id, with its position in source order.
+
+    Position is (document path, document order) over the SAME documents one loader produced, so
+    two bundles of one corpus order their obligations identically. Blocks are indexed by id only
+    once: a fragment spliced into a document is still authored in exactly one file.
+    """
+    elements: dict = {}
+    order: dict = {}
+    for rel in sorted(documents):
+        for element in documents[rel].iter():
+            if _spec_local(element.tag) not in SPEC_BLOCK_KINDS:
+                continue
+            block_id = (element.get("id") or "").strip()
+            if not block_id or block_id in elements:
+                continue
+            elements[block_id] = element
+            order[block_id] = len(order)
+    return elements, order
+
+
+def _spec_obligation_ids(
+    elements: dict, order: dict, requirement_id: str, requirement
+) -> list:
+    """Every block that is an obligation OF `requirement_id`, once each, in source order.
+
+    AUG-144: BOTH directions of the `verifies` edge are real. A requirement may NAME its
+    obligations (`verifies=` attribute, `<verification-ref>` children) and an obligation may
+    NAME the requirement — the shape every document in the shipped corpus uses, the shape
+    `spec check` lists, and the shape `assemble` expands as inverse closure. `bundle` read only
+    the forward direction, so a requirement whose obligations name IT answered
+    `{"verifications": []}`: an empty array that is indistinguishable from "this requirement has
+    no obligations", which is the same class of lie as a green check with nothing behind it.
+
+    The inverse scan runs over the authored BLOCKS, not over the obligation validator's node map:
+    that map indexes requirement/verification/test only, so scanning it silently dropped the
+    `<acceptance>` criteria that verify a requirement — the very blocks `assemble` includes in
+    the same inverse closure.
+
+    Both directions declared for one pair is a `reference-cycle` and is refused by the corpus
+    loader before this runs, so the union here never hides a cycle — it only dedupes the same
+    edge spelled twice (attribute and `<verification-ref>`).
+    """
+    declared = requirement.get("verifies", "").split()
+    declared.extend(
+        child.get("ref", "")
+        for child in requirement
+        if _spec_local(child.tag) == "verification-ref"
+    )
+    inverse = [
+        block_id
+        for block_id, element in elements.items()
+        if _spec_local(element.tag) in SPEC_OBLIGATION_KINDS
+        and requirement_id in (element.get("verifies") or "").split()
+    ]
+    collected: dict = {}
+    for ref in (*declared, *inverse):
+        ref = (ref or "").strip()
+        if ref and ref in elements and ref not in collected:
+            collected[ref] = order.get(ref, len(order))
+    return sorted(collected, key=lambda block_id: (collected[block_id], block_id))
+
+
 def assemble_xml_requirement(spec_root, requirement_id, *, repository_root=None):
-    """Return the requirement and its linked verification obligations as data only."""
-    nodes = validate_xml_specs(spec_root, repository_root=repository_root)
+    """Return the requirement and its linked verification obligations as data only.
+
+    Obligations are collected from BOTH directions of the `verifies` edge (AUG-144) — forward
+    refs the requirement declares, and blocks that declare they verify the requirement — deduped
+    by id and ordered by source position. The payload always carries `id` and `verifications`
+    (backward compatible) plus `status`/`count`, so an empty bundle is a NAMED report
+    (`no-obligations`) rather than a blank array a caller has to interpret. An id that is not a
+    requirement raises `SpecUnknownRequirement`, the distinct code the CLI prints.
+    """
+    root, documents = _xml_spec_documents(spec_root)
+    nodes = validate_xml_specs(
+        root, loaded=(root, documents), repository_root=repository_root
+    )
     requirement = nodes.get(requirement_id)
     # AUG-134 left two bare-tag reads here (`requirement.tag != "requirement"` and
     # `findall("verification-ref")`), which only work for a document with NO namespace — and the
     # XSD requires `urn:auger:spec:1` on every element, so a namespaced corpus (the only kind the
     # grammar accepts) could reach neither branch. Compare local names instead.
     if requirement is None or _spec_local(requirement.tag) != "requirement":
-        raise SpecValidationError(f"unknown-requirement: {requirement_id}")
-    refs = requirement.get("verifies", "").split()
-    refs.extend(
-        child.get("ref", "")
-        for child in requirement
-        if _spec_local(child.tag) == "verification-ref"
-    )
+        raise SpecUnknownRequirement(
+            f"{requirement_id} is not a requirement block in this corpus"
+        )
+    elements, order = _spec_source_index(documents)
     obligations = []
-    for ref in dict.fromkeys(refs):
-        node = nodes[ref]
+    for ref in _spec_obligation_ids(elements, order, requirement_id, requirement):
+        node = elements[ref]
         runner = node.get("runner")
         obligations.append(
             {
@@ -8893,7 +8990,12 @@ def assemble_xml_requirement(spec_root, requirement_id, *, repository_root=None)
                 "assertions": node.get("assertions"),
             }
         )
-    return {"id": requirement_id, "verifications": obligations}
+    return {
+        "id": requirement_id,
+        "status": "ok" if obligations else "no-obligations",
+        "count": len(obligations),
+        "verifications": obligations,
+    }
 
 
 def cmd_spec_validate(args):

@@ -611,6 +611,13 @@ writes nothing back to them. Subcommands:
   obligation node ids as JSON instead of the document/block/reference counts.
 - `auger spec bundle ROOT REQUIREMENT-ID [--repo-root DIR]` — one requirement's verification
   bundle as JSON (registered runner argv vector, path, selector, migration, fixture, assertions).
+  Obligations are collected from BOTH directions of the `verifies` edge — the refs the requirement
+  names (`verifies=`, `<verification-ref>`) and the blocks that name the requirement
+  (`<verification>`, `<test>`, `<acceptance>`) — deduped by id and emitted in source order. The
+  payload keeps `id` and `verifications` and adds `status`/`count`: `status: no-obligations` (with
+  an empty array) means the requirement genuinely has none, and the same fact is printed on stderr
+  as `spec note (no-obligations): …` so an empty bundle is never mistaken for a failed lookup. An
+  id that is not a requirement refuses `unknown-requirement` (exit 2), not `invalid-spec-graph`.
 - `auger spec list ROOT [--id ID] [--kind K] [--applies-to SCOPE] [--status S] [--version X.Y.Z]`
 - `auger spec assemble ROOT <the same selectors> [--no-deps] [--format markdown|json] [--out PATH]`
 
