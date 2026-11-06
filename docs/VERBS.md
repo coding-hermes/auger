@@ -632,6 +632,14 @@ writes nothing back to them. Subcommands:
   remains the obligation verdict.
 - `auger spec list ROOT [--id ID] [--kind K] [--applies-to SCOPE] [--status S] [--version X.Y.Z]`
 - `auger spec assemble ROOT <the same selectors> [--no-deps] [--format markdown|json] [--out PATH]`
+- `auger spec render ROOT --out DIR` — write every generated view of the corpus (AUG-139):
+  `SPEC-CORPUS-VIEW.md` and `SPEC-CORPUS-VIEW.html`, both rendered from the ONE loaded corpus
+  (`auger.render_spec_view_document`), so the two views cannot disagree about what the XML says. The
+  XML is the source and a view is derived; `DIR` must already exist and must be OUTSIDE `ROOT`
+  (`render-into-corpus`), because a view written back into the source tree is exactly the second,
+  editable copy PRD R1 forbids. Two runs over one corpus are byte-identical, the corpus is never
+  written, and a source edit moves the edited block's section in BOTH views while every untouched
+  block stays byte-identical (`tests/test_spec_render.py`).
 
 `--repo-root DIR` is the repository a corpus' `path`/`migration`/`fixture` values are relative
 to (AUG-127), and it must be a git work tree's top level. It defaults to

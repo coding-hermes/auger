@@ -47,6 +47,7 @@ import argparse
 import contextlib
 import copy
 import hashlib
+import html
 import importlib
 import io
 import json
@@ -8987,6 +8988,313 @@ def _spec_write_atomic(path, text: str) -> None:
         raise
 
 
+# --------------------------------------------------------- generated spec views (AUG-139 / AC-5)
+# PRD R1: "Formal spec content and typed relationships shall be authored in versioned XML;
+# Markdown/HTML outputs are generated views, never independently authoritative copies."
+#
+# Two views ship and BOTH are rendered here, from the corpus the ONE loader returns
+# (`load_spec_corpus`): a second renderer would be a second opinion about what the corpus says, and
+# the two would drift exactly the way two corpus readers did before AUG-134.
+#
+#   `auger spec render <root> --out <dir>`   every shipped view, written outside the corpus root
+#   `python3 scripts/gen_spec_view.py`       the same functions, plus `--check` (committed view
+#                                            still equal to a fresh render) for the gate
+#
+# PRD AC-5 ("a source block changes and views are regenerated → both views reflect the change") is
+# pinned by `tests/test_spec_render.py`: byte parity, sha256 equality across two runs, a source-only
+# mutation that must move the mutated block's section in BOTH views, and untouched blocks that must
+# stay byte-identical.
+SPEC_VIEW_FORMATS = ("markdown", "html")
+SPEC_VIEW_FILENAMES = {
+    "markdown": "SPEC-CORPUS-VIEW.md",
+    "html": "SPEC-CORPUS-VIEW.html",
+}
+SPEC_VIEW_TITLE = "Authored spec corpus — generated view"
+SPEC_VIEW_COMMAND = "auger spec render specs --out docs"
+SPEC_VIEW_SCRIPT_COMMAND = "python3 scripts/gen_spec_view.py"
+# The header is part of the rendered bytes, so it carries no timestamp and no absolute path: a view
+# another host must be able to regenerate byte for byte cannot depend on when or where it ran.
+SPEC_VIEW_MARKDOWN_HEADER = """<!--
+  GENERATED FILE — do not edit by hand. `specs/*.xml` is the source; this view is rendered from it
+  by `auger spec render specs --out docs` (or `python3 scripts/gen_spec_view.py`) and pinned word
+  for word by `tests/test_spec_render.py` and `tests/test_spec_corpus_view.py`.
+  Change the XML, then regenerate: `auger spec render specs --out docs`
+-->
+
+# Authored spec corpus — generated view
+
+`specs/` is the authored source (AUG-136). This view is rendered from it through auger's own corpus
+loader (`auger.load_spec_corpus` — the loader every other `spec` verb uses too), so what follows is
+what the CLI reads, including the prose of every block and every typed edge.
+`SPEC-CORPUS-VIEW.html` is the same corpus rendered as the second view; neither view is
+authoritative — the XML is. The narrative about the corpus lives in [SPEC-CORPUS.md](SPEC-CORPUS.md);
+these files hold no hand-written claim."""
+# Static styling: no fonts, no external URLs, no nothing that could differ between two hosts.
+SPEC_VIEW_HTML_STYLE = (
+    "body{font-family:system-ui,sans-serif;margin:2rem auto;max-width:60rem;line-height:1.5;"
+    "padding:0 1rem;color:#1b1b1b}h1{font-size:1.6rem}h2{font-size:1.2rem;margin-top:2rem;"
+    "border-bottom:1px solid #ddd;padding-bottom:.25rem}h3{font-size:1rem;margin-bottom:.5rem}"
+    "code{background:#f4f4f4;padding:.05rem .25rem;border-radius:3px}"
+    "section.block{border-left:3px solid #ddd;padding-left:1rem;margin:1.5rem 0}"
+    "table{border-collapse:collapse}td,th{border:1px solid #ddd;padding:.25rem .5rem;"
+    "text-align:left;font-size:.9rem}"
+)
+
+
+def _spec_view_anchor(value: str) -> str:
+    """A stable HTML id fragment for a corpus-relative path (no randomness, no ordinals)."""
+    return re.sub(r"[^A-Za-z0-9]+", "-", value).strip("-").lower()
+
+
+def _spec_view_counts(documents: dict, blocks: list) -> tuple:
+    """(references, blocks grouped by source document) — measured on every render, never kept."""
+    references = sum(
+        len(targets) for block in blocks for targets in block["refs"].values()
+    )
+    by_document: dict = {rel: [] for rel in sorted(documents)}
+    for block in blocks:
+        by_document.setdefault(block["source_file"], []).append(block)
+    return references, by_document
+
+
+def _render_spec_view_markdown(documents: dict, blocks: list) -> str:
+    """The Markdown view of a loaded corpus. Deterministic: same corpus, same bytes."""
+    references, by_document = _spec_view_counts(documents, blocks)
+    lines = [SPEC_VIEW_MARKDOWN_HEADER.rstrip("\n"), "", "## Measured size", ""]
+    lines.append(f"- documents: {len(documents)}")
+    lines.append(f"- blocks: {len(blocks)}")
+    lines.append(f"- references: {references}")
+    lines.append(f"- schema version: {SPEC_SCHEMA_VERSION}")
+    lines.append("- paths: relative to the corpus root")
+
+    for rel in sorted(by_document):
+        document = documents.get(rel)
+        if document is None:
+            # a fragment's blocks are assembled at their <include> site
+            continue
+        lines.extend(["", f"## `{rel}`", ""])
+        lines.append(
+            f"document id: `{document.get('id')}` · version {document.get('version')}"
+        )
+        for block in sorted(by_document[rel], key=lambda item: item["order"]):
+            lines.extend(
+                [
+                    "",
+                    f"### {block['id']} · {block['kind']} · {block['status']} · v{block['version']}",
+                    "",
+                    f"- source: `{block['source']}`",
+                ]
+            )
+            if block["applies_to"]:
+                lines.append(f"- applies-to: `{' '.join(block['applies_to'])}`")
+            if block["method"]:
+                label = (
+                    "verification"
+                    if block["kind"] in SPEC_REQUIRES_METHOD
+                    else "method"
+                )
+                lines.append(f"- {label}: `{block['method']}`")
+            if block.get("rollback"):
+                # AUG-143: a consumer reads the declaration here instead of guessing whether the
+                # change can be undone. Rendered from the loader's own block record, so the view
+                # cannot claim a declaration the validator did not read.
+                lines.append(f"- rollback: `{block['rollback']}`")
+            for attribute in SPEC_EDGE_ATTRS:
+                targets = block["refs"].get(attribute)
+                if targets:
+                    lines.append(
+                        f"- {attribute}: "
+                        + " ".join(f"`{target}`" for target in targets)
+                    )
+            if block["text"]:
+                lines.extend(["", block["text"]])
+
+    lines.extend(["", "## Reference index", ""])
+    if references:
+        lines.extend(["| from | edge | to |", "| --- | --- | --- |"])
+        for block in blocks:
+            for attribute in SPEC_EDGE_ATTRS:
+                for target in block["refs"].get(attribute, ()):
+                    lines.append(f"| `{block['id']}` | `{attribute}` | `{target}` |")
+    else:
+        lines.append("No typed edges are declared by this corpus.")
+    return "\n".join(lines) + "\n"
+
+
+def _render_spec_view_html(documents: dict, blocks: list) -> str:
+    """The HTML view of the SAME loaded corpus: a view, never a re-authoring of the source.
+
+    Every block is its own `<section class="block" id="block-ID">`, so a source-only mutation can be
+    measured on that block's slice instead of on the whole file (a whole-file diff proves something
+    moved, never which block). Prose is escaped: a block body that names `<requirement>` is prose in
+    the corpus and text in the document, and the view must stay well-formed.
+    """
+    references, by_document = _spec_view_counts(documents, blocks)
+    lines = [
+        "<!DOCTYPE html>",
+        "<!-- GENERATED FILE — do not edit by hand. `specs/*.xml` is the source; this view is",
+        f"     rendered from it by `{SPEC_VIEW_COMMAND}` (or `{SPEC_VIEW_SCRIPT_COMMAND}`) and",
+        "     pinned byte for byte by `tests/test_spec_render.py`. Regenerate it after changing the",
+        "     XML; the XML is the only authority. -->",
+        '<html lang="en">',
+        "<head>",
+        '<meta charset="utf-8">',
+        f"<title>{html.escape(SPEC_VIEW_TITLE)}</title>",
+        f"<style>{SPEC_VIEW_HTML_STYLE}</style>",
+        "</head>",
+        "<body>",
+        f"<h1>{html.escape(SPEC_VIEW_TITLE)}</h1>",
+        "<p>`specs/` is the authored source (AUG-136). This document is rendered from it through",
+        "auger's own corpus loader, so it carries exactly what the CLI reads: every document, every",
+        "block, its prose and every typed edge. It is a VIEW — the XML is the only authority.</p>",
+        '<h2 id="measured-size">Measured size</h2>',
+        "<ul>",
+        f"<li>documents: {len(documents)}</li>",
+        f"<li>blocks: {len(blocks)}</li>",
+        f"<li>references: {references}</li>",
+        f"<li>schema version: {html.escape(SPEC_SCHEMA_VERSION)}</li>",
+        "<li>paths: relative to the corpus root</li>",
+        "</ul>",
+    ]
+    for rel in sorted(by_document):
+        document = documents.get(rel)
+        if document is None:
+            continue  # a fragment's blocks are assembled at their <include> site
+        lines.append(
+            f'<h2 id="document-{_spec_view_anchor(rel)}"><code>{html.escape(rel)}</code></h2>'
+        )
+        lines.append(
+            f"<p>document id: <code>{html.escape(str(document.get('id')))}</code> "
+            f"· version {html.escape(str(document.get('version')))}</p>"
+        )
+        for block in sorted(by_document[rel], key=lambda item: item["order"]):
+            lines.append(f'<section class="block" id="block-{block["id"]}">')
+            lines.append(
+                f"<h3>{block['id']} · {block['kind']} · {block['status']} · "
+                f"v{block['version']}</h3>"
+            )
+            lines.append("<ul>")
+            lines.append(
+                f"<li>source: <code>{html.escape(block['source'])}</code></li>"
+            )
+            if block["applies_to"]:
+                lines.append(
+                    f"<li>applies-to: <code>{html.escape(' '.join(block['applies_to']))}"
+                    "</code></li>"
+                )
+            if block["method"]:
+                label = (
+                    "verification"
+                    if block["kind"] in SPEC_REQUIRES_METHOD
+                    else "method"
+                )
+                lines.append(
+                    f"<li>{label}: <code>{html.escape(block['method'])}</code></li>"
+                )
+            if block.get("rollback"):
+                lines.append(
+                    f"<li>rollback: <code>{html.escape(block['rollback'])}</code></li>"
+                )
+            for attribute in SPEC_EDGE_ATTRS:
+                targets = block["refs"].get(attribute)
+                if targets:
+                    rendered = " ".join(
+                        f"<code>{html.escape(target)}</code>" for target in targets
+                    )
+                    lines.append(f"<li>{attribute}: {rendered}</li>")
+            lines.append("</ul>")
+            if block["text"]:
+                lines.append(f"<p>{html.escape(block['text'])}</p>")
+            lines.append("</section>")
+    lines.append('<h2 id="reference-index">Reference index</h2>')
+    if references:
+        lines.append("<table>")
+        lines.append("<tr><th>from</th><th>edge</th><th>to</th></tr>")
+        for block in blocks:
+            for attribute in SPEC_EDGE_ATTRS:
+                for target in block["refs"].get(attribute, ()):
+                    lines.append(
+                        f"<tr><td><code>{block['id']}</code></td>"
+                        f"<td><code>{attribute}</code></td>"
+                        f"<td><code>{target}</code></td></tr>"
+                    )
+        lines.append("</table>")
+    else:
+        lines.append("<p>No typed edges are declared by this corpus.</p>")
+    lines.extend(["</body>", "</html>"])
+    return "\n".join(lines) + "\n"
+
+
+def render_spec_view_document(
+    documents: dict, blocks: list, *, fmt: str = "markdown"
+) -> str:
+    """One view of an ALREADY loaded corpus (`load_spec_corpus` owns the reading, not this)."""
+    if fmt == "markdown":
+        return _render_spec_view_markdown(documents, blocks)
+    if fmt == "html":
+        return _render_spec_view_html(documents, blocks)
+    raise SpecError(
+        "unsupported-format", f"{fmt!r} (one of: {', '.join(SPEC_VIEW_FORMATS)})"
+    )
+
+
+def render_spec_view_corpus(documents: dict, blocks: list) -> dict:
+    """Every shipped view, keyed by file name — one corpus read, rendered every way it ships."""
+    return {
+        SPEC_VIEW_FILENAMES[fmt]: render_spec_view_document(documents, blocks, fmt=fmt)
+        for fmt in SPEC_VIEW_FORMATS
+    }
+
+
+def render_spec_views(spec_root) -> dict:
+    """Every shipped view of `spec_root`, as {file name: text}. Byte-stable for one corpus."""
+    _root, documents, blocks = load_spec_corpus(spec_root)
+    return render_spec_view_corpus(documents, blocks)
+
+
+def _spec_render(a) -> int:
+    """`auger spec render ROOT --out DIR`: write every generated view of ROOT into DIR.
+
+    Read-only on the corpus by construction: the only writes are the view files, and a view written
+    back into the source tree would be a second, editable copy of the thing the XML owns — so an
+    `--out` that IS the corpus root or sits inside it is refused (`render-into-corpus`) rather than
+    quietly creating it. `--out` names an existing directory; nothing is created when the run
+    refuses (the same contract `assemble --out` keeps, AUG-145).
+    """
+    root = Path(a.root).expanduser()
+    if not root.is_dir():
+        raise SpecError("missing-spec-root", f"{a.root} is not a directory")
+    root = root.resolve()
+    out = Path(a.out).expanduser()
+    if not out.is_dir():
+        raise SpecError(
+            "missing-out-directory",
+            f"{out} is not a directory; create it first or pass --out into an existing one "
+            "(nothing was written)",
+        )
+    out = out.resolve()
+    if out == root or root in out.parents:
+        raise SpecError(
+            "render-into-corpus",
+            f"{out} is inside the corpus root {root}; a generated view must live outside the "
+            "source tree (the XML is the source, and a view written back into it would be a "
+            "second editable copy)",
+        )
+    _root, documents, blocks = load_spec_corpus(root)
+    views = render_spec_view_corpus(documents, blocks)
+    written = []
+    for fmt in SPEC_VIEW_FORMATS:
+        name = SPEC_VIEW_FILENAMES[fmt]
+        text = views[name]
+        _spec_write_atomic(out / name, text)
+        written.append(f"{name} ({len(text.encode('utf-8'))} bytes)")
+    print(
+        f"rendered {len(SPEC_VIEW_FORMATS)} view(s) from {len(documents)} document(s), "
+        f"{len(blocks)} block(s): " + ", ".join(written)
+    )
+    return 0
+
+
 # ----------------------------- task scope contract + one-query context (AUG-121 / AUG-122) -------
 # A task is a SMALL SPEC for one exact request (owner clarification 2026-10-30, PRD R14). The two
 # verbs here are the two halves of that claim:
@@ -12159,6 +12467,10 @@ def _spec_corpus_counts(documents: dict, unreadable: list, records: list) -> dic
 
 def _spec_dispatch(a):
     command = getattr(a, "spec_cmd", "validate")
+    # AUG-139: `render` writes every generated view of the corpus and nothing else. It is not a
+    # variant of `assemble`: assembly answers a SELECTION question, a view is the whole corpus.
+    if command == "render":
+        return _spec_render(a)
     # AUG-121/AUG-122: the task-scope contract and the one-query context have their own entry
     # points. They are NOT variants of `assemble`: a task packet is a statement of what was
     # approved (no closure), and a context answer carries exclusions with reasons plus measured
@@ -13481,6 +13793,37 @@ def main(argv=None):
     _add_spec_repo_root(bnd)
     _add_spec_decision_namespace(bnd)
     bnd.set_defaults(fn=cmd_spec)
+
+    rnd = spec_sub.add_parser(
+        "render",
+        help="regenerate every Markdown/HTML view of the corpus from the XML source (AUG-139)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Render the corpus as the views this product ships — `SPEC-CORPUS-VIEW.md` and\n"
+            "`SPEC-CORPUS-VIEW.html` — into DIR. The XML is the source and the views are derived:\n"
+            "the run reads the corpus through the same loader every other `spec` verb uses and\n"
+            "writes nothing but those two files.\n\n"
+            "DIR must already exist and must be OUTSIDE the corpus root: a view written back into\n"
+            "the source tree would be a second, editable copy of what the XML owns\n"
+            "(`render-into-corpus`). Two runs over one corpus are byte-identical."
+        ),
+        epilog=(
+            "exit codes:\n"
+            "  0  every view written\n"
+            "  2  a typed refusal (missing/unwritable --out, --out inside the corpus root, an\n"
+            "     invalid corpus); nothing was written\n"
+        ),
+    )
+    rnd.add_argument(
+        "root", help="spec root directory — the SOURCE; every *.xml below it is read"
+    )
+    rnd.add_argument(
+        "--out",
+        required=True,
+        metavar="DIR",
+        help="existing directory the views are written into; must be outside the corpus root",
+    )
+    rnd.set_defaults(fn=cmd_spec)
 
     aln = spec_sub.add_parser(
         "align",

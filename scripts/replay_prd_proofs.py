@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import html
 import json
 import os
 import shutil
@@ -67,7 +68,7 @@ BUNDLE_SCOPE = "auger.spec.select"
 #: that stopped excluding unrelated blocks lands far above it.
 SIZE_FRACTION_FLOOR = 0.60
 #: The generated views the shared-block proof must update. Enumerated so "every view" is a fact.
-GENERATED_VIEWS = ("docs/SPEC-CORPUS-VIEW.md",)
+GENERATED_VIEWS = ("docs/SPEC-CORPUS-VIEW.md", "docs/SPEC-CORPUS-VIEW.html")
 
 PROOF_BULLET_PREFIX = "- "
 
@@ -257,52 +258,66 @@ def _edit_one_block(corpus: Path) -> tuple:
 
 # --------------------------------------------------------------------------- the replays
 def replay_p2(ctx: dict) -> dict:
-    """P2 — one XML source edit updates every generated view; no duplicate source text remains."""
+    """P2 — one XML source edit updates EVERY generated view; no duplicate source text remains."""
     corpus = _staged_view_corpus(ctx["workdir"], ctx["specs_root"])
     corpus_bytes = _corpus_bytes(corpus)
     started = time.perf_counter()
-    before = gen_spec_view.build_view(corpus)
+    before = {
+        fmt: gen_spec_view.build_view(corpus, fmt) for fmt in auger.SPEC_VIEW_FORMATS
+    }
     old, new = _edit_one_block(corpus)
-    after = gen_spec_view.build_view(corpus)
+    after = {
+        fmt: gen_spec_view.build_view(corpus, fmt) for fmt in auger.SPEC_VIEW_FORMATS
+    }
     latency_ms = (time.perf_counter() - started) * 1000
 
-    assert after != before, "the generated view did not change when the corpus did"
-    assert new in after, "the edited prose is absent from the regenerated view"
-    assert old not in after, "the pre-edit prose survived in the regenerated view"
-    assert after.count(new) == 1, (
-        f"the edited sentence appears {after.count(new)} times in the view — a shared block must "
-        "be rendered once"
-    )
+    # BOTH views, not just the primary one: AUG-139 shipped a second view, and "every generated
+    # spec view" is the claim this proof makes. A view that failed to move here would be an
+    # independently editable copy — exactly what PRD R1 forbids.
+    for fmt, text in after.items():
+        assert text != before[fmt], f"the {fmt} view did not change when the corpus did"
+        assert new in text, f"the edited prose is absent from the {fmt} view"
+        assert old not in text, f"the pre-edit prose survived in the {fmt} view"
+        assert text.count(new) == 1, (
+            f"the edited sentence appears {text.count(new)} times in the {fmt} view — a shared "
+            "block must be rendered once"
+        )
     _root, _documents, blocks = auger.load_spec_corpus(corpus)
     for block in blocks:
         if block["text"]:
-            assert after.count(block["text"]) == 1, (
-                f"block {block['id']}'s prose appears {after.count(block['text'])} times in the "
-                "view — source text is being maintained twice"
+            assert after["markdown"].count(block["text"]) == 1, (
+                f"block {block['id']}'s prose appears "
+                f"{after['markdown'].count(block['text'])} times in the Markdown view — source "
+                "text is being maintained twice"
             )
-    committed = REPO_ROOT / GENERATED_VIEWS[0]
-    assert committed.is_file(), f"{GENERATED_VIEWS[0]} is not committed"
-    assert committed.read_text(encoding="utf-8") == gen_spec_view.build_view(
-        ctx["specs_root"]
-    ), (
-        f"{GENERATED_VIEWS[0]} is not what the generator emits for specs/ — regenerate it: "
-        f"{gen_spec_view.REGENERATE}"
-    )
-    for other in GENERATED_VIEWS[1:]:
-        assert (REPO_ROOT / other).is_file(), f"{other} is named as a view but missing"
+            escaped = html.escape(block["text"])
+            assert after["html"].count(escaped) == 1, (
+                f"block {block['id']}'s prose appears {after['html'].count(escaped)} times in the "
+                "HTML view — source text is being maintained twice"
+            )
+    for name in GENERATED_VIEWS:
+        committed = REPO_ROOT / name
+        assert committed.is_file(), f"{name} is not committed"
+        fmt = "html" if name.endswith(".html") else "markdown"
+        assert committed.read_text(encoding="utf-8") == gen_spec_view.build_view(
+            ctx["specs_root"], fmt
+        ), (
+            f"{name} is not what the generator emits for specs/ — regenerate it: "
+            f"{gen_spec_view.REGENERATE}"
+        )
     return {
         "command": (
             f"python3 {Path(gen_spec_view.__file__).name} (build_view before/after one prose edit "
             "in a copy of specs/)"
         ),
         "corpus_bytes": corpus_bytes,
-        "bundle_bytes": len(after.encode("utf-8")),
+        "bundle_bytes": len(after["markdown"].encode("utf-8")),
         "bytes_meaning": "corpus = the copied *.xml documents; bundle = the regenerated view",
         "latency_ms": round(latency_ms, 1),
         "detail": (
             f"{len(GENERATED_VIEWS)} generated view(s) verified byte-identical to the generator's "
-            f"output for specs/; one block edit propagated to the view and every block's prose "
-            f"appears exactly once ({len(blocks)} blocks)"
+            "output for specs/; one block edit propagated to every view and every block's prose "
+            f"appears exactly once per view ({len(blocks)} blocks)"
         ),
     }
 

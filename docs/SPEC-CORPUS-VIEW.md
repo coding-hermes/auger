@@ -1,16 +1,18 @@
 <!--
   GENERATED FILE — do not edit by hand. `specs/*.xml` is the source; this view is rendered from it
-  by `scripts/gen_spec_view.py` and pinned byte for byte by `tests/test_spec_corpus_view.py`.
-  Change the XML, then regenerate: `python3 scripts/gen_spec_view.py`
+  by `auger spec render specs --out docs` (or `python3 scripts/gen_spec_view.py`) and pinned word
+  for word by `tests/test_spec_render.py` and `tests/test_spec_corpus_view.py`.
+  Change the XML, then regenerate: `auger spec render specs --out docs`
 -->
 
 # Authored spec corpus — generated view
 
-`specs/` is the authored source (AUG-136). This view is rendered from it by
-`scripts/gen_spec_view.py` through auger's own corpus loader (`auger.load_spec_corpus` — the same
-loader `auger spec validate|check|list|assemble|bundle` use), so what follows is what the CLI reads,
-including the prose of every block and every typed edge. The narrative about the corpus lives in
-[SPEC-CORPUS.md](SPEC-CORPUS.md); this file holds no hand-written claim.
+`specs/` is the authored source (AUG-136). This view is rendered from it through auger's own corpus
+loader (`auger.load_spec_corpus` — the loader every other `spec` verb uses too), so what follows is
+what the CLI reads, including the prose of every block and every typed edge.
+`SPEC-CORPUS-VIEW.html` is the same corpus rendered as the second view; neither view is
+authoritative — the XML is. The narrative about the corpus lives in [SPEC-CORPUS.md](SPEC-CORPUS.md);
+these files hold no hand-written claim.
 
 ## Measured size
 

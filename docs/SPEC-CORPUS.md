@@ -44,22 +44,30 @@ python auger.py spec assemble specs --applies-to auger.spec.select --format json
 repository it describes. This corpus lives inside the repository it describes, so
 `git rev-parse --show-toplevel` from `specs/` is the root and no flag is needed.
 
-## The generated view
+## The generated views
 
-The XML is the source and Markdown is a view of it: [`SPEC-CORPUS-VIEW.md`](SPEC-CORPUS-VIEW.md) is
-rendered from `specs/` by `scripts/gen_spec_view.py` through auger's own loader
-(`auger.load_spec_corpus`) — every document, every block with its prose and attributes, the measured
-counts, and a reference index of every typed edge. It is a committed, generated artifact:
+The XML is the source and the readable documents are views of it. Two views ship, rendered from the
+SAME loaded corpus: [`SPEC-CORPUS-VIEW.md`](SPEC-CORPUS-VIEW.md) and
+[`SPEC-CORPUS-VIEW.html`](SPEC-CORPUS-VIEW.html) — every document, every block with its prose and
+attributes, the measured counts, and a reference index of every typed edge. Both are committed,
+generated artifacts:
 
 ```bash
-python3 scripts/gen_spec_view.py           # rewrite docs/SPEC-CORPUS-VIEW.md
-python3 scripts/gen_spec_view.py --check   # rc 1 when the committed view has drifted from specs/
+auger spec render specs --out docs         # rewrite both views (the CLI form, AUG-139)
+python3 scripts/gen_spec_view.py           # the same renderer from a bare checkout
+python3 scripts/gen_spec_view.py --check   # rc 1 when a committed view has drifted from specs/
 ```
 
-`tests/test_spec_corpus_view.py` regenerates the view and asserts BYTE equality with the committed
-file, so the view cannot drift from its source; the same test proves the view is derived (an edit to
-the corpus changes it) rather than a hand-kept copy. Edit the XML, then regenerate — a hand edit of
-`SPEC-CORPUS-VIEW.md` fails that test.
+`auger spec render` reads the corpus through `auger.load_spec_corpus` — the loader every other
+`spec` verb uses — and writes `SPEC-CORPUS-VIEW.md` and `SPEC-CORPUS-VIEW.html` into `--out`, which
+must be an existing directory OUTSIDE the corpus root (`render-into-corpus`): a view written back
+into the source tree would be the second, editable copy this corpus exists to prevent.
+
+`tests/test_spec_corpus_view.py` and `tests/test_spec_render.py` regenerate the views and assert
+BYTE equality with the committed files, so a view cannot drift from its source; the same tests prove
+the views are derived — an edit to ONE block's body moves that block's section in BOTH views and
+leaves every untouched block byte-identical. Edit the XML, then regenerate; a hand edit of either
+view fails those tests.
 
 ## What the corpus deliberately does not claim
 
