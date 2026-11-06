@@ -75,6 +75,8 @@ NAMED_OBLIGATION_ATTRS = (
     "method",
     # AUG-138: the typed edge that resolves in a DuckBrain namespace, not in the corpus.
     "decision-ref",
+    # AUG-143: the rollback declaration a verification block can carry.
+    "rollback",
 )
 
 #: Functions that read authored attributes. The scan is scoped to them so ordinary dict `.get()`

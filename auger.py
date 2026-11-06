@@ -7735,6 +7735,16 @@ SPEC_BLOCK_KINDS = (
 )
 SPEC_STATUSES = ("active", "deprecated", "superseded")
 SPEC_VERIFICATION_METHODS = ("test", "demo", "analysis", "inspection")
+# AUG-143: what a verification block DECLARES about undoing the change. Closed, because a free-text
+# value would read to a consumer as a fourth state nobody defined, and because each value carries a
+# different obligation:
+#
+#   unsupported   the change is not rolled back — stated so nobody assumes otherwise
+#   tracked-test  rollback IS exercised, and the proof is the block's own obligation pointer
+#                 (runner + path + selector), which the obligation pass resolves: the path exists,
+#                 is tracked in git, and defines the selector. A claim with no such pointer is
+#                 refused (`rollback-undeclared-proof`).
+SPEC_ROLLBACK_VALUES = ("unsupported", "tracked-test")
 # Typed ID edges. EVERY one must resolve; only the closure attributes are followed by assembly,
 # so `refs`/`implements`/`supersedes` stay navigable and never silently expand a bundle.
 #
@@ -8302,6 +8312,20 @@ def _spec_block(element, rel: str, order: int) -> dict:
             "path": (element.get("path") or "").strip(),
             "selector": (element.get("selector") or "").strip(),
         }
+    # AUG-143: the rollback declaration. Validated against the closed set HERE, in the authoring
+    # loader, because this is where every other block attribute's closed vocabulary is checked
+    # (`invalid-verification-method`, `invalid-status`) — and because both verbs share this loader,
+    # so one bad value earns one diagnostic. The PROOF requirement is the obligation pass's job: it
+    # is the pass that can resolve a tracked test.
+    rollback = ""
+    if kind in ("verification", "test"):
+        rollback = (element.get("rollback") or "").strip()
+        if rollback and rollback not in SPEC_ROLLBACK_VALUES:
+            raise SpecError(
+                "invalid-rollback-declaration",
+                f"{rel}: {block_id} rollback={rollback!r} "
+                f"(one of: {', '.join(SPEC_ROLLBACK_VALUES)})",
+            )
     plan_digest = ""
     scope_version = ""
     plan_id = ""
@@ -8366,6 +8390,7 @@ def _spec_block(element, rel: str, order: int) -> dict:
         "version": version,
         "applies_to": applies_to,
         "method": method,
+        "rollback": rollback,
         "refs": refs,
         "obligation": obligation,
         "plan_digest": plan_digest,
@@ -12204,8 +12229,19 @@ def _spec_dispatch(a):
         except SpecValidationError as exc:
             raise SpecError("invalid-spec-graph", str(exc)) from exc
         if command == "check":
+            # AUG-143: a consumer must READ the rollback declaration, not guess whether support
+            # exists. The map is always present (empty when nothing declares one) so a script can
+            # tell "this corpus declares none" from a shape change.
+            rollback = {
+                node_id: (nodes[node_id].get("rollback") or "").strip()
+                for node_id in sorted(nodes)
+                if (nodes[node_id].get("rollback") or "").strip()
+            }
             print(
-                json.dumps({"status": "valid", "nodes": sorted(nodes)}, sort_keys=True)
+                json.dumps(
+                    {"status": "valid", "nodes": sorted(nodes), "rollback": rollback},
+                    sort_keys=True,
+                )
             )
             return 0
         references = sum(
@@ -12767,6 +12803,20 @@ def validate_xml_specs(
                     f"invalid-verification-type: {rel}: {node_id} "
                     f"{attribute}={declared}"
                 )
+        # AUG-143: a rollback declaration is a CLAIM about undoing this change, and support
+        # without a proof is the decoration this row exists to refuse. The proof is the block's own
+        # obligation pointer, so the value is only accepted when there is something to resolve —
+        # and the pointer then goes through the tracked-path/selector checks below like any other
+        # citation.
+        if (node.get("rollback") or "").strip() == "tracked-test" and not any(
+            (node.get(attribute) or "").strip()
+            for attribute in ("runner", "selector", "path")
+        ):
+            raise SpecValidationError(
+                f'rollback-undeclared-proof: {rel}: {node_id} rollback="tracked-test" carries no '
+                "runner/path/selector — a rollback claim needs a tracked test reference, or the "
+                'block must declare rollback="unsupported" (and say why it cannot be undone)'
+            )
         # AUG-132: a machine-checkable test claim is a node that points AT a test — a
         # `<test>` block, or any block carrying a runner/selector/path. A block that
         # only declares type/method="test" states a METHOD, not a location: the

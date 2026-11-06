@@ -107,6 +107,24 @@
   </xs:simpleType>
 
   <!--
+    The rollback declaration a verification block can carry (AUG-143), closed in both halves:
+
+      unsupported   the change is NOT rolled back — stated, so a reader does not assume either way
+      tracked-test  rollback IS exercised, and the block's own obligation pointer names the test
+
+    A free-text value is deliberately not expressible here: the PRD requires rollback support to be
+    tested when declared, and "best-effort" would read to a consumer as a third state nobody
+    defined. The executable side refuses a claim with no resolvable test
+    (`rollback-undeclared-proof`), which a facet cannot check.
+  -->
+  <xs:simpleType name="rollbackDeclaration">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="unsupported"/>
+      <xs:enumeration value="tracked-test"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <!--
     The digest an approval is bound to (AUG-121): sha256, lower-case hex. A task whose
     `plan-digest` does not match the packet it currently describes is a STALE approval and is
     refused by `spec task-export`; this facet only states the shape. XSD 1.0 has no
@@ -184,6 +202,10 @@
     <xs:attribute name="migration" type="xs:string" use="optional"/>
     <xs:attribute name="fixture" type="xs:string" use="optional"/>
     <xs:attribute name="assertions" type="xs:string" use="optional"/>
+    <!-- AUG-143: what undoing this block's change costs. `tracked-test` is only honest when the
+         block also carries runner/path/selector — the executable validator refuses the claim
+         otherwise (`rollback-undeclared-proof`), and `spec check` reports the declaration. -->
+    <xs:attribute name="rollback" type="auger:rollbackDeclaration" use="optional"/>
   </xs:complexType>
 
   <xs:element name="block" type="auger:blockType" abstract="true"/>

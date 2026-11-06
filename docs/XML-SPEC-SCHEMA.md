@@ -208,6 +208,45 @@ tree byte-identical (`tests/test_spec_decision_ref.py`).
 
 ch:trace row=AUG-138 spec=docs/XML-SPEC-SCHEMA.md#decision-records-the-ledger-edge test=tests/test_spec_decision_ref.py doc=docs/XML-SPEC-SCHEMA.md
 
+## Rollback declarations (AUG-143)
+
+A verification or test block declares what undoing its change costs. Without it the corpus says
+nothing and a consumer assumes — the PRD requires support to be *tested* when declared, and requires
+the absence of support to be *explicit*:
+
+```xml
+<verification id="REQ-MIG-1-ROLLBACK" kind="verification" status="active" version="1.0.0"
+              method="test" rollback="tracked-test"
+              runner="pytest" path="tests/test_migrations.py"
+              selector="test_marker_migration_rolls_back">
+  The down migration is applied from the post-migration schema and asserted.
+</verification>
+
+<verification id="REQ-READ-ONLY-1" kind="verification" status="active" version="1.0.0"
+              method="inspection" rollback="unsupported">
+  A read-only validation pass: there is no write to roll back.
+</verification>
+```
+
+| value | meaning | refused when |
+| --- | --- | --- |
+| `unsupported` | the change is not rolled back — stated, not assumed | never (this is the honest "nothing to undo") |
+| `tracked-test` | rollback IS exercised, and the proof is this block's own `runner`/`path`/`selector` | the block carries no such pointer (`rollback-undeclared-proof`) |
+
+* The value set is closed in BOTH halves — `SPEC_ROLLBACK_VALUES` in the code and the
+  `rollbackDeclaration` enumeration in the loaded grammar — so a free-text value ("best-effort")
+  is refused with the code's typed `invalid-rollback-declaration`, naming the document, the block
+  and the offending value (the code's rules run before the schema, AUG-125 ordering).
+* A `tracked-test` claim goes through the SAME resolution every other test citation gets: the path
+  must exist, be tracked in `git`, and define the selector in `--repo-root`. Declaring support is
+  therefore exactly as strong as naming the test that proves it.
+* **The declaration is readable, not inferable.** `spec check` reports it as a `rollback` map
+  (`{"<block-id>": "unsupported" | "tracked-test"}`; always present, empty when the corpus declares
+  none), and the generated `docs/SPEC-CORPUS-VIEW.md` renders one `- rollback:` line per declaring
+  block.
+
+ch:trace row=AUG-143 spec=docs/XML-SPEC-SCHEMA.md#rollback-declarations test=tests/test_spec_rollback.py doc=docs/XML-SPEC-SCHEMA.md
+
 ## Task scope and the one-query context (AUG-121 / AUG-122)
 
 A **task is a block**, not a prose row: `<task>` is a `blockKind` like `requirement`, so it carries

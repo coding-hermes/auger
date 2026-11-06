@@ -62,6 +62,12 @@ EXPECTED = {
     # AUG-138: a `decision-ref` with no namespace to resolve in is NO VERDICT — the reference is
     # refused before any request is made, so both verbs agree without a substrate.
     "invalid/decision-ref-no-namespace": "missing-decision-namespace",
+    # AUG-143: the rollback declaration is a closed vocabulary, and a claim of support needs a
+    # proof — both refuse before any repository resolution is interesting.
+    "invalid/invalid-rollback": "invalid-rollback-declaration",
+    "invalid/rollback-without-proof": "invalid-spec-graph",
+    # AUG-143: both legal declarations on blocks that earn them (this corpus is valid).
+    "rollback": None,
     "invalid/reference-cycle": "reference-cycle",
     "invalid/schema-invalid": "schema-invalid",
     "invalid/schema-version": "unsupported-schema-version",

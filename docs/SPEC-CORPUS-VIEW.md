@@ -105,8 +105,9 @@ A test obligation's `path` and `selector` are repository-relative and resolve in
 - source: `verification.xml#SPEC-OBL-CONSUMER-V1`
 - applies-to: `auger.spec.obligation`
 - method: `test`
+- rollback: `tracked-test`
 
-Builds a fresh consumer repository with its own tracked `tests/test_marker.py`, validates and checks the corpus that names it, and asserts the bundle carries `path="tests/test_marker.py"` and `selector="test_marker"` with no Auger path in the resolved fields.
+Builds a fresh consumer repository with its own tracked `tests/test_marker.py`, validates and checks the corpus that names it, and asserts the bundle carries `path="tests/test_marker.py"` and `selector="test_marker"` with no Auger path in the resolved fields. Rolling this behaviour back is exercised by the same tracked test (`rollback="tracked-test"`, AUG-143).
 
 ### SPEC-OBL-CONSUMER-V2 · verification · active · v1.0.0
 
@@ -130,8 +131,9 @@ A `<verification>` or `<test>` block that points at a test carries `runner`, `pa
 - source: `verification.xml#SPEC-OBL-RUNNER-V1`
 - applies-to: `auger.spec.obligation`
 - method: `test`
+- rollback: `unsupported`
 
-Asserts a resolved obligation's runner is the argv list `[sys.executable, "-m", "pytest"]`, then writes a `<test runner="bash -c">` obligation and asserts validation refuses it with `invalid-test-ref`.
+Asserts a resolved obligation's runner is the argv list `[sys.executable, "-m", "pytest"]`, then writes a `<test runner="bash -c">` obligation and asserts validation refuses it with `invalid-test-ref`. Nothing is written to a repository on this path, so there is no rollback to exercise — declared, not left to a reader's guess (`rollback="unsupported"`, AUG-143).
 
 ## Reference index
 

@@ -101,6 +101,11 @@ def build_view(specs_root: Path = SPECS_ROOT) -> str:
                     else "method"
                 )
                 lines.append(f"- {label}: `{block['method']}`")
+            if block.get("rollback"):
+                # AUG-143: a consumer reads the declaration here instead of guessing whether the
+                # change can be undone. Rendered from the loader's own block record, so the view
+                # cannot claim a declaration the validator did not read.
+                lines.append(f"- rollback: `{block['rollback']}`")
             for attribute in auger.SPEC_EDGE_ATTRS:
                 targets = block["refs"].get(attribute)
                 if targets:
