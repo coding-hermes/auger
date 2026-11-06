@@ -50,8 +50,15 @@ including the prose of every block and every typed edge. The narrative about the
 
 
 def build_view(specs_root: Path = SPECS_ROOT) -> str:
-    """Render `specs_root` as the Markdown view. Deterministic: same corpus, same bytes."""
-    root, documents, blocks = auger.load_spec_corpus(specs_root)
+    """Render `specs_root` as the Markdown view. Deterministic: same corpus, same bytes.
+
+    Every path in the view is relative to `specs_root`, and the render names nothing about WHERE
+    the corpus lives (no directory basename, no checkout-relative path). AUG-137 P2 compares the
+    committed view against a render of whatever root it is given (`--specs-root`), so a
+    byte-identical copy in a scratch directory must render byte-identically — a root-name line
+    would make P2 FAIL on unmutated input and make the reproducibility claim false.
+    """
+    _root, documents, blocks = auger.load_spec_corpus(specs_root)
     references = sum(
         len(targets) for block in blocks for targets in block["refs"].values()
     )
@@ -64,7 +71,7 @@ def build_view(specs_root: Path = SPECS_ROOT) -> str:
     lines.append(f"- blocks: {len(blocks)}")
     lines.append(f"- references: {references}")
     lines.append(f"- schema version: {auger.SPEC_SCHEMA_VERSION}")
-    lines.append(f"- corpus root: `{root.name}/`")
+    lines.append("- paths: relative to the corpus root")
 
     for rel in sorted(by_document):
         document = documents.get(rel)

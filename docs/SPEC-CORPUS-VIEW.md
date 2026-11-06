@@ -18,7 +18,7 @@ including the prose of every block and every typed edge. The narrative about the
 - blocks: 12
 - references: 7
 - schema version: 1.0
-- corpus root: `specs/`
+- paths: relative to the corpus root
 
 ## `spec-graph.xml`
 
