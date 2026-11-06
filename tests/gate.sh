@@ -175,7 +175,7 @@ run_pytest_arm(){
   # tmp dir (AC1 consumer corpus, AC2 tracked-then-deleted, AC3 --repo-root, AC4 untracked and
   # escaping paths). Hermetic (~2s, no DuckBrain). Its own `test_gate_arm_runs_this_file` fails if
   # this list drops any of the XML proof files, so the arm cannot quietly narrow again.
-  setsid timeout --kill-after="$kill_after" "$budget" python3 -m pytest tests/test_auger.py tests/test_openapi_parity.py tests/test_api_service.py tests/test_upgrade_path.py tests/test_xml_specs.py tests/test_verification_graph.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_xsd_conformance.py tests/test_spec_repository_root.py tests/test_spec_alignment_check.py tests/test_spec_corpus_view.py tests/test_usage_skill.py tests/test_packaging.py tests/test_packaging_wheel.py tests/test_teardown_resilience.py "$@" || rc=$?
+  setsid timeout --kill-after="$kill_after" "$budget" python3 -m pytest tests/test_auger.py tests/test_openapi_parity.py tests/test_api_service.py tests/test_upgrade_path.py tests/test_xml_specs.py tests/test_verification_graph.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_xsd_conformance.py tests/test_spec_repository_root.py tests/test_spec_alignment_check.py tests/test_spec_corpus_view.py tests/test_prd_proofs.py tests/test_usage_skill.py tests/test_packaging.py tests/test_packaging_wheel.py tests/test_teardown_resilience.py "$@" || rc=$?
   if [ "$rc" -eq 124 ]; then
     echo "GATE TIMEOUT: the pytest arm exceeded ${budget} and was killed as a process group (setsid+timeout, AUG-081) — investigate hung tests; failing the gate" >&2
     exit 1
@@ -289,6 +289,19 @@ if [ -f specs/schema/auger-spec-1.0.xsd ] && [ -n "$(find specs -name '*.xml' -p
 else
   echo "spec corpus MISSING: specs/ holds no authored *.xml — this arm would pass vacuously" >&2
   exit 1
+fi
+
+echo "== prd proofs (AUG-137) =="
+# The PRD's own "Success criteria — replayable proofs" section, replayed on every gate. The runner
+# reconciles the bullets against the reviewed allowlist docs/prd/xml-spec-graph-proofs.json, replays
+# every REQUIRED proof, and reports a proof it cannot exercise as NOT RUN (never as a pass) — a
+# required proof that failed OR did not run fails the gate. `--check` additionally requires the
+# committed artifact to agree with this run, so a regression cannot rest quietly in an artifact
+# recorded last week. Needs the checkout + lxml only: no DuckBrain, no JEV.
+if [ -f scripts/replay_prd_proofs.py ] && [ -f docs/prd/xml-spec-graph-proofs.json ]; then
+  python3 scripts/replay_prd_proofs.py --check || exit 1
+else
+  skip_required_arm "prd-proofs" "scripts/replay_prd_proofs.py or docs/prd/xml-spec-graph-proofs.json missing from the checkout — arm NOT run, NOT passed"
 fi
 
 echo "== docs check =="

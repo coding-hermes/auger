@@ -124,6 +124,8 @@ grep -c boardctl auger.py                   # 0 == no Auger-side board code; R9/
 find specs -name '*.xml'                    # 0 == no authored corpus (gap: R1 proven only on fixtures)
 .venv/bin/python -m pytest tests/test_xsd_conformance.py -q   # 12 passed: XSD loads, fixtures graded, fail-closed
 python3 auger.py spec validate tests/fixtures/xml/invalid/schema-invalid   # rc 2: schema-invalid (undeclared attribute)
+python3 scripts/replay_prd_proofs.py --check   # the PRD's 8 replayable proofs: 3 required replay and pass, 5 are deferred to their owning rows (recorded not-run, never pass)
+python3 scripts/replay_prd_proofs.py --print-prd-proofs   # the parsed bullets + sha256, for maintaining docs/prd/xml-spec-graph-proofs.json
 ```
 
 Machine-readable status is the boolean of each row above, not a narrative claim. Do not mark a
