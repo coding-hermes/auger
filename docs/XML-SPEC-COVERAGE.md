@@ -33,7 +33,7 @@ post-fix verdicts. Re-verify with the commands at the bottom.
 | R5 | Targeted retrieval: select by ID/attribute, emit only selection + closure | proven | `spec assemble`; `test_selects_only_requested_blocks_and_their_dependencies`, `test_no_deps_emits_only_the_matched_block` |
 | R6 | Deterministic, byte-identical, read-only rendering | proven | `test_selection_is_byte_identical_across_runs`, `test_selection_matches_the_golden` |
 | R7 | Safe parsing: no external entities, no network, fail before partial output | proven | `external-entity-forbidden` fixture; no network surface by construction (repo-relative `src` only — `remote-reference-rejected`, `include-outside-root`) |
-| R8 | DuckBrain stays authoritative for decisions; XML references records | designed only | no record-reference attribute in the schema or validator |
+| R8 | DuckBrain stays authoritative for decisions; XML references records | proven | AUG-138: a block carries `decision-ref` (declared in the shipped XSD, in `SPEC_EDGE_ATTRS`), resolved in the namespace named by `--decision-namespace`; an absent record refuses (`unresolved-decision-ref`), a superseded one is reported with its successor (`superseded-decision-ref`), and an unreachable ledger is a named substrate failure (`decision-ledger-unavailable`) rather than a pass. Proof: `tests/test_spec_decision_ref.py` (13 arms, incl. two live arms against a disposable namespace) |
 | R9 | Approval-bound board write via boardctl | designed only | `grep -c boardctl auger.py` → 0 |
 | R10 | `ch:trace` graph checker | designed only | no checker code in `auger.py` |
 | R11 | Read-only staged-diff checker with machine-readable findings | designed only | no checker code in `auger.py` |
@@ -43,7 +43,12 @@ post-fix verdicts. Re-verify with the commands at the bottom.
 | R15 | Structured verification/test obligations, incl. migration apply-test | **partial** | implemented by AUG-123 — see AC-17; since AUG-132 `spec validate` itself refuses a corpus whose declared test path does not resolve, is untracked, or lacks its selector (`tests/test_spec_validate_obligations.py`); the *rollback* clause is declared unsupported (no rollback attribute in the schema) |
 | R16 | Boardctl-sourced GitReins judgment on the real tree | **partial** | GitReins intake is built: `engine/auger_packet.py` (`TaskPacketAdapter`), `engine/judge.py:106-223` (fails closed to Tier 1 on `PacketValidationError`), `tests/test_auger_task_packet.py`. No Auger packet producer: `grep -c boardctl auger.py` → 0, no `ch:trace` handoff check, so GitReins can consume a packet Auger cannot emit (AUG-124) |
 
-Summary: **7 proven, 3 partial, 5 designed only, 1 not applicable yet (R13 depends on R11/R12).**
+Summary: **8 proven, 3 partial, 4 designed only, 1 not applicable yet (R13 depends on R11/R12).**
+
+Note (AUG-138): the rows still marked "designed only" above were not re-measured by this row beyond
+R8. Spot checks at this head disagree with three of them — `grep -c boardctl auger.py` returns 84,
+not 0 (R9), and `auger spec align` is the staged-diff checker R10/R11 say does not exist. They are
+left as-is rather than re-labelled without the proof each one demands.
 
 ## Acceptance criteria
 

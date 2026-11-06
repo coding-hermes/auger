@@ -7745,6 +7745,18 @@ SPEC_VERIFICATION_METHODS = ("test", "demo", "analysis", "inspection")
 # because their meanings differ and a caller has to be able to tell them apart; sharing `refs`
 # would erase the distinction the packet exists to carry.
 SPEC_TASK_EDGE_ATTRS = ("in-scope", "out-of-scope", "acceptance", "acknowledges")
+# AUG-138: the ONE typed edge that resolves OUTSIDE the corpus — a decision RECORD in a DuckBrain
+# namespace. It lives in SPEC_EDGE_ATTRS because it is a typed edge in the authoring vocabulary
+# (an author writes it on a block, the grammar declares it, a reader can navigate it), and the
+# corpus-resolving passes skip it BY NAME: a record id is not a block id, so following it in the
+# reference graph would either raise `unresolved-reference` for a record that exists or, worse,
+# silently accept a record id that happens to collide with a block id. Its resolution is
+# `_spec_validate_decision_refs`, it never expands an assembly closure, and it is OPT-IN by the
+# attribute's presence so a corpus without it makes no substrate call at all.
+SPEC_LEDGER_EDGE_ATTRS = ("decision-ref",)
+# The declared table a decision record lives in, inside the namespace the caller names (AUG-138).
+# A NAME here, not a query: the resolver builds every filter through `tbl`.
+SPEC_DECISION_TABLE = "decision"
 SPEC_EDGE_ATTRS = (
     "depends-on",
     "verifies",
@@ -7752,6 +7764,7 @@ SPEC_EDGE_ATTRS = (
     "implements",
     "supersedes",
     *SPEC_TASK_EDGE_ATTRS,
+    *SPEC_LEDGER_EDGE_ATTRS,
 )
 SPEC_FORWARD_CLOSURE_ATTRS = ("depends-on",)
 # A block that VERIFIES a selected block belongs to that block's explicit dependency closure: a
@@ -8423,6 +8436,7 @@ def _spec_refuse_reference_cycles(by_id: dict) -> None:
         block_id: sorted(
             target
             for attribute in SPEC_EDGE_ATTRS
+            if attribute not in SPEC_LEDGER_EDGE_ATTRS
             for target in block["refs"].get(attribute, ())
         )
         for block_id, block in by_id.items()
@@ -8474,6 +8488,12 @@ def _spec_validate_blocks(blocks: list) -> dict:
         by_id[block["id"]] = block
     for block in blocks:
         for attribute, targets in block["refs"].items():
+            if attribute in SPEC_LEDGER_EDGE_ATTRS:
+                # AUG-138: a decision record lives in DuckBrain, not in this corpus, so the corpus
+                # graph cannot resolve it — `_spec_validate_decision_refs` does, against the
+                # namespace the caller names. Resolving it here would report a REAL record as
+                # `unresolved-reference` (or accept a record id that collides with a block id).
+                continue
             for target in targets:
                 found = by_id.get(target)
                 if found is None:
@@ -12162,6 +12182,9 @@ def _spec_dispatch(a):
     # `git rev-parse --show-toplevel` from the spec root and refuses
     # (`unresolvable-repo-root`) rather than falling back to `Path(__file__).parent`.
     repository_root = getattr(a, "repo_root", None)
+    # AUG-138: the namespace a `decision-ref` resolves in. Never inferred — a record id is
+    # namespace-scoped, and a guessed namespace would prove the wrong record.
+    decision_namespace = getattr(a, "decision_namespace", None)
     if command in ("validate", "check"):
         # AUG-132/AUG-134: `validate` is not a counting verb. BOTH verbs run the one
         # verdict — the corpus loader above (root shape, namespace, schema version,
@@ -12173,7 +12196,10 @@ def _spec_dispatch(a):
         # validated "ok" with exit 0).
         try:
             nodes = validate_xml_specs(
-                a.root, loaded=(root, documents), repository_root=repository_root
+                a.root,
+                loaded=(root, documents),
+                repository_root=repository_root,
+                decision_namespace=decision_namespace,
             )
         except SpecValidationError as exc:
             raise SpecError("invalid-spec-graph", str(exc)) from exc
@@ -12195,7 +12221,10 @@ def _spec_dispatch(a):
         # unbound on the CLI.
         try:
             bundle = assemble_xml_requirement(
-                a.root, a.requirement, repository_root=repository_root
+                a.root,
+                a.requirement,
+                repository_root=repository_root,
+                decision_namespace=decision_namespace,
             )
         except SpecUnknownRequirement as exc:
             # AUG-144: a requirement this corpus does not have is its own code. Printing it as
@@ -12297,6 +12326,25 @@ def _add_spec_repo_root(parser) -> None:
             "repository the corpus' test/migration/fixture paths are relative to; must be "
             "a git work tree's top level. Default: `git rev-parse --show-toplevel` from "
             "the spec root (refused when that resolves to nothing)"
+        ),
+    )
+
+
+def _add_spec_decision_namespace(parser) -> None:
+    """The `--decision-namespace` flag every verb that resolves a ledger edge shares (AUG-138).
+
+    Same doctrine as `--repo-root`: the namespace a `decision-ref` resolves in is named by the
+    caller, never inferred. Only the verbs that run the obligation pass carry it — `list` and
+    `assemble` select blocks and never resolve a record id, and a flag they ignored would be a
+    declared surface that does nothing.
+    """
+    parser.add_argument(
+        "--decision-namespace",
+        metavar="NS",
+        help=(
+            "DuckBrain namespace a block's `decision-ref` records resolve in (required only "
+            "when the corpus declares one; a record id is namespace-scoped, so it is never "
+            "guessed)"
         ),
     )
 
@@ -12500,7 +12548,134 @@ def _spec_repository_root(spec_root, explicit=None):
     return top
 
 
-def validate_xml_specs(spec_root, *, loaded=None, repository_root=None):
+def _decision_record(namespace: str, record_id: str) -> dict:
+    """One decision RECORD from the ledger namespace, or a typed substrate refusal (AUG-138).
+
+    READ ONLY: the request is a GET of the namespace's `decision` table filtered to one id, and
+    nothing on this path writes. Three answers are distinguished, because they need three
+    different fixes and a caller must never have to guess which one they got:
+
+      * the substrate cannot answer at all (`decision-ledger-unavailable`) — unreachable transport,
+        a missing token, an auth refusal, or a namespace whose tables were never declared. A
+        lookup that could not run is NOT "the record does not exist";
+      * the record is not there (the caller's `unresolved-decision-ref`) — the namespace answered
+        and holds no such row;
+      * the record is there and carries its status, which is what makes a superseded premise
+        visible instead of silently accepted.
+
+    `select_or_empty` is deliberately NOT used: it folds a 404 (no such namespace) into "no rows",
+    which is exactly the collapse this function exists to prevent.
+    """
+    path = tbl(
+        namespace,
+        SPEC_DECISION_TABLE,
+        f"id=eq.{record_id}&select=id,status&limit=1",
+    )
+    try:
+        status, body, _headers = db(path)
+    except SystemExit as exc:
+        # `db` needs a token; a host with none cannot prove anything, so it gets no verdict.
+        raise SpecError(
+            "decision-ledger-unavailable",
+            f"no DuckBrain token, so decision record {record_id!r} cannot be checked "
+            f"(set DUCKBRAIN_API_KEY or ~/.duckbrain/foreman-status.token): {exc}",
+        ) from None
+    if status == 0:
+        detail = body.get("error") if isinstance(body, dict) else body
+        raise SpecError(
+            "decision-ledger-unavailable",
+            f"{DB_URL}{path}: transport failed ({detail}) — a decision-ref cannot be proved "
+            "against an unreachable ledger, so there is no verdict",
+        )
+    if status == 404:
+        raise SpecError(
+            "decision-ledger-unavailable",
+            f"{DB_URL}: namespace {namespace!r} (or its {SPEC_DECISION_TABLE} table) does not "
+            f"exist — run `auger -n {namespace} init` first, or name a namespace that holds the "
+            "decision record",
+        )
+    if status != 200:
+        detail = body.get("error") if isinstance(body, dict) else body
+        raise SpecError(
+            "decision-ledger-unavailable",
+            f"{DB_URL}{path} answered {status}: {str(detail)[:200]}",
+        )
+    if not isinstance(body, list):
+        raise SpecError(
+            "decision-ledger-unavailable",
+            f"{DB_URL}{path} answered {type(body).__name__}, not a row list — an unreadable "
+            "answer is not an absent record",
+        )
+    return body[0] if body else {}
+
+
+def _spec_validate_decision_refs(nodes: dict, sources: dict, namespace) -> dict:
+    """Resolve every `decision-ref` in the corpus against the named DuckBrain namespace (AUG-138).
+
+    OPT-IN by the attribute's presence: a corpus that declares no `decision-ref` returns `{}`
+    before any namespace is required and before any request is made, so every existing corpus and
+    every hermetic test stays substrate-free.
+
+    A reference with nowhere to resolve is refused (`missing-decision-namespace`) rather than
+    guessed or skipped — a record id is namespace-scoped (a sibling's D-014 is a different
+    decision), so an inferred namespace would prove the wrong record.
+
+    Refusals are typed in the `SpecValidationError` DETAIL, the way every other obligation refusal
+    is (`stale-test-ref: <doc>: <block>: <path>`), so both verbs print one diagnostic for one
+    corpus; the substrate failures are their own `SpecError` codes because "the ledger is down" is
+    not a defect in the corpus.
+    """
+    cited: dict = {}
+    for node_id in sorted(nodes):
+        targets = tuple((nodes[node_id].get("decision-ref") or "").split())
+        if targets:
+            cited[node_id] = targets
+    if not cited:
+        return {}
+    if not (namespace or "").strip():
+        node_id, targets = next(iter(cited.items()))
+        raise SpecError(
+            "missing-decision-namespace",
+            f"{sources.get(node_id, '?')}: {node_id} decision-ref={' '.join(targets)} "
+            "resolves in a DuckBrain namespace and none was named — pass "
+            "--decision-namespace <ns> (a record id is namespace-scoped, so the namespace is "
+            "never guessed)",
+        )
+    resolved: dict = {}
+    for node_id, targets in cited.items():
+        rel = sources.get(node_id, "?")
+        for record_id in targets:
+            row = _decision_record(namespace, record_id)
+            if not row:
+                raise SpecValidationError(
+                    f"unresolved-decision-ref: {rel}: {node_id}: {record_id} "
+                    f"(no decision record {record_id} in namespace {namespace!r})"
+                )
+            if row.get("status") == SUPERSEDED_STATUS:
+                successor = ""
+                try:
+                    _superseded, successor = supersession_for(namespace, record_id)
+                except (SystemExit, Exception):  # noqa: BLE001 - decoration, never the verdict
+                    successor = ""
+                if successor:
+                    detail = f"superseded by {successor} in namespace {namespace!r}"
+                else:
+                    detail = (
+                        f"superseded in namespace {namespace!r} and no supersedes edge names its "
+                        "successor"
+                    )
+                raise SpecValidationError(
+                    f"superseded-decision-ref: {rel}: {node_id}: {record_id} is {detail} — a "
+                    "requirement resting on a retired decision must cite the decision that "
+                    "replaced it"
+                )
+            resolved.setdefault(node_id, []).append(record_id)
+    return resolved
+
+
+def validate_xml_specs(
+    spec_root, *, loaded=None, repository_root=None, decision_namespace=None
+):
     """Validate graph IDs, typed links and tracked test references under a spec root.
 
     `loaded` is the `(root, documents)` pair already produced for this run, with
@@ -12514,6 +12689,10 @@ def validate_xml_specs(spec_root, *, loaded=None, repository_root=None):
     `repository_root` is the repository the obligations resolve in (AUG-127). Omitted, it
     is `git rev-parse --show-toplevel` from the SPEC ROOT — never auger's own directory;
     see `_spec_repository_root`.
+
+    `decision_namespace` is the DuckBrain namespace `decision-ref` values resolve in (AUG-138).
+    It is consulted ONLY when some block actually declares one, so a corpus without a ledger edge
+    needs no substrate and makes no request.
     """
     import ast
 
@@ -12681,6 +12860,10 @@ def validate_xml_specs(spec_root, *, loaded=None, repository_root=None):
                 raise SpecValidationError(
                     f"incomplete-migration-obligation: {rel}: {node_id}"
                 )
+    # AUG-138: the ledger edge last, so every corpus-internal refusal keeps the diagnostic it
+    # always had (a stale test path wins over a ledger lookup) and a corpus that declares no
+    # `decision-ref` returns here without touching the substrate.
+    _spec_validate_decision_refs(nodes, sources, decision_namespace)
     return nodes
 
 
@@ -12747,7 +12930,9 @@ def _spec_obligation_ids(
     return sorted(collected, key=lambda block_id: (collected[block_id], block_id))
 
 
-def assemble_xml_requirement(spec_root, requirement_id, *, repository_root=None):
+def assemble_xml_requirement(
+    spec_root, requirement_id, *, repository_root=None, decision_namespace=None
+):
     """Return the requirement and its linked verification obligations as data only.
 
     Obligations are collected from BOTH directions of the `verifies` edge (AUG-144) — forward
@@ -12759,7 +12944,10 @@ def assemble_xml_requirement(spec_root, requirement_id, *, repository_root=None)
     """
     root, documents = _xml_spec_documents(spec_root)
     nodes = validate_xml_specs(
-        root, loaded=(root, documents), repository_root=repository_root
+        root,
+        loaded=(root, documents),
+        repository_root=repository_root,
+        decision_namespace=decision_namespace,
     )
     requirement = nodes.get(requirement_id)
     # AUG-134 left two bare-tag reads here (`requirement.tag != "requirement"` and
@@ -13164,6 +13352,7 @@ def main(argv=None):
     )
     v.add_argument("root", help="spec root directory; every *.xml below it is indexed")
     _add_spec_repo_root(v)
+    _add_spec_decision_namespace(v)
     v.set_defaults(fn=cmd_spec)
 
     lst = spec_sub.add_parser(
@@ -13228,6 +13417,7 @@ def main(argv=None):
         "--spec-root is given or the verb runs as the staged-diff checker (--diff-stdin)",
     )
     _add_spec_repo_root(chk)
+    _add_spec_decision_namespace(chk)
     _add_spec_checker_flags(chk)
     chk.set_defaults(fn=cmd_spec)
 
@@ -13239,6 +13429,7 @@ def main(argv=None):
     bnd.add_argument("root")
     bnd.add_argument("requirement", help="requirement id to assemble")
     _add_spec_repo_root(bnd)
+    _add_spec_decision_namespace(bnd)
     bnd.set_defaults(fn=cmd_spec)
 
     aln = spec_sub.add_parser(

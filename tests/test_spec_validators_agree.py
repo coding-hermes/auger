@@ -59,6 +59,9 @@ EXPECTED = {
     "invalid/obligation-attr-pair/type-only": "invalid-spec-graph",
     "invalid/obligation-attr-pair/method-only": "invalid-spec-graph",
     "invalid/obligation-attr-pair/neither": "invalid-spec-graph",
+    # AUG-138: a `decision-ref` with no namespace to resolve in is NO VERDICT — the reference is
+    # refused before any request is made, so both verbs agree without a substrate.
+    "invalid/decision-ref-no-namespace": "missing-decision-namespace",
     "invalid/reference-cycle": "reference-cycle",
     "invalid/schema-invalid": "schema-invalid",
     "invalid/schema-version": "unsupported-schema-version",

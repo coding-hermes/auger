@@ -164,6 +164,50 @@ Consequences, each pinned by `tests/test_spec_obligation_gate.py`:
 
 Assembly is deterministic JSON data and does not invoke tests. Consumers may pass the returned registered runner argv and tracked selector to the repository harness under their own policy; XML never executes code.
 
+## Decision records: the ledger edge (AUG-138)
+
+A block can state that it RESTS on a recorded decision, and the reference is checked. DuckBrain
+stays authoritative for decisions; the corpus carries only the typed edge.
+
+```xml
+<requirement id="REQ-CACHE-1" kind="requirement" status="active" version="1.0.0"
+             verification="test"
+             decision-ref="D-014">
+  Sessions are cached in the substrate, per decision D-014.
+</requirement>
+```
+
+* `decision-ref` holds whitespace-separated decision RECORD ids (`D-014`, `DER-2` — the same
+  stable-id shape a block id has, enforced by the grammar's `idRefList` facet).
+* The ids resolve in a DuckBrain **namespace the caller names**: `--decision-namespace <ns>` on
+  `spec validate`, `spec check` and `spec bundle` (from Python: the `decision_namespace=` keyword
+  of `validate_xml_specs` / `assemble_xml_requirement`). A record id is namespace-scoped — a
+  sibling project's `D-014` is a different decision — so the namespace is never guessed:
+  `missing-decision-namespace` refuses instead.
+* The lookup is **opt-in by the attribute**. A corpus that declares no `decision-ref` requires no
+  namespace, makes no request against the substrate, and behaves exactly as it did before.
+* This edge resolves OUTSIDE the corpus. It is a typed edge in the authoring vocabulary
+  (`SPEC_EDGE_ATTRS`) but the corpus-resolving passes skip it by name, so a real record is never
+  reported as `unresolved-reference`, and it never expands an assembly closure.
+
+Refusals, each naming the document and the block id (and the record, or the successor):
+
+| code | meaning |
+| --- | --- |
+| `missing-decision-namespace` | a `decision-ref` is declared and no `--decision-namespace` was given |
+| `unresolved-decision-ref` | the namespace answered and holds no record with that id |
+| `superseded-decision-ref` | the record exists with `status="superseded"` — reported with its successor when the namespace holds the supersedes edge (`auger answer --supersedes`) |
+| `decision-ledger-unavailable` | the substrate could not answer: unreachable transport, no token, an auth refusal, or a namespace whose tables were never declared (`auger -n <ns> init`) |
+
+"A lookup that could not run" and "the record does not exist" are deliberately different codes: the
+first is an operational failure with no verdict, the second is a finding about the corpus.
+
+**The read path never writes.** Every request is a `GET` of the namespace's `decision` table
+filtered to one id; `validate`, `check` and `bundle` issue no mutating request and leave the corpus
+tree byte-identical (`tests/test_spec_decision_ref.py`).
+
+ch:trace row=AUG-138 spec=docs/XML-SPEC-SCHEMA.md#decision-records-the-ledger-edge test=tests/test_spec_decision_ref.py doc=docs/XML-SPEC-SCHEMA.md
+
 ## Task scope and the one-query context (AUG-121 / AUG-122)
 
 A **task is a block**, not a prose row: `<task>` is a `blockKind` like `requirement`, so it carries

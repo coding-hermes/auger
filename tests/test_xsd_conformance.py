@@ -73,6 +73,8 @@ NAMED_OBLIGATION_ATTRS = (
     "assertions",
     "type",
     "method",
+    # AUG-138: the typed edge that resolves in a DuckBrain namespace, not in the corpus.
+    "decision-ref",
 )
 
 #: Functions that read authored attributes. The scan is scoped to them so ordinary dict `.get()`
@@ -86,6 +88,7 @@ SPEC_ATTRIBUTE_READERS = (
     "_spec_dispatch",
     "_xml_spec_documents",
     "validate_xml_specs",
+    "_spec_validate_decision_refs",
     "assemble_xml_requirement",
 )
 
