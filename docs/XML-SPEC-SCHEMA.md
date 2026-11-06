@@ -1,4 +1,4 @@
-# XML spec graph schema (AUG-118 / AUG-120 / AUG-123 / AUG-125 / AUG-127 / AUG-133 / AUG-135)
+# XML spec graph schema (AUG-118 / AUG-120 / AUG-123 / AUG-125 / AUG-127 / AUG-129 / AUG-133 / AUG-135)
 
 Auger XML specs are rooted at `<spec id="...">` in the `urn:auger:spec:1` namespace, carry `version` and `schema-version`, and every graph node has a stable, repository-unique `id`. This implementation recognizes `<requirement>`, `<verification>`, and `<test>` nodes — all three are block kinds in the published grammar, and `<test>` is the shape that carries a machine-checkable obligation. A requirement's whitespace-separated `verifies` attribute names one or more verification IDs; `<verification-ref ref="..."/>` is an equivalent explicit edge. A verification may also name its requirement with `verifies="REQ-ID"`. References must resolve to the expected node type.
 
@@ -22,6 +22,45 @@ schema is the backstop for everything the code does not model — an undeclared 
 element, a value outside a facet. Every attribute the code reads on a block is declared on the
 schema's block type, and `tests/test_xsd_conformance.py` derives that inventory from `auger.py`'s AST
 so the two cannot drift again.
+
+## Installed layout — where the grammar lives after `pip install` (AUG-129)
+
+`auger.py` is a single module (`py-modules = ["auger"]`), so a wheel has no package directory to hang
+`package-data` on and the grammar travels as a `[tool.setuptools.data-files]` entry instead.
+setuptools installs data files under the interpreter's `data` scheme, which puts the same file in a
+different place depending on how auger was installed:
+
+| layout | path |
+| --- | --- |
+| source checkout | `specs/schema/auger-spec-1.0.xsd`, beside `auger.py` |
+| inside the wheel | `auger-<version>.data/data/share/auger/specs/schema/auger-spec-1.0.xsd` |
+| installed (venv or system prefix) | `<prefix>/share/auger/specs/schema/auger-spec-1.0.xsd` |
+| installed with `pip install --user` | `<user base>/share/auger/specs/schema/auger-spec-1.0.xsd` |
+
+`auger.py` resolves those candidates in that order (`spec_schema_candidates()` /
+`spec_schema_path()`), and refuses with `spec error (xsd-schema-missing)` naming **every** candidate
+when none of them holds a file. Shipping the grammar therefore did not soften the fail-closed rule
+above: an install whose data files went missing still gets no verdict, never a green one.
+
+A minimal example corpus ships beside the grammar (`<prefix>/share/auger/specs/examples/minimal.xml`,
+authored in this repository at `examples/xml/minimal.xml`), so a fresh install has something real to
+validate without a git checkout:
+
+```bash
+python3 -m venv /tmp/auger-fresh && /tmp/auger-fresh/bin/pip install 'auger[xsd]'
+EXAMPLES="$(/tmp/auger-fresh/bin/python -c 'import pathlib,sysconfig;print(pathlib.Path(sysconfig.get_path("data"))/"share/auger/specs/examples")')"
+/tmp/auger-fresh/bin/auger spec validate "$EXAMPLES" --repo-root "$(git rev-parse --show-toplevel)"
+# spec: 1 document(s), 2 block(s), 1 reference(s) ok
+```
+
+`--repo-root` is explicit by design (AUG-127): the repository that `path`/`migration`/`fixture`
+values are relative to is never guessed, so the command names one. The example declares no such
+obligations at all, and the `auger[xsd]` extra carries the processor for the reason given above.
+`tests/test_packaging_wheel.py` is the guard on this section: it builds the wheel from the declared
+`data-files`, asserts the schema and example members byte for byte, and replays the command above
+inside a throwaway venv installed offline from that wheel.
+
+ch:trace row=AUG-129 spec=docs/XML-SPEC-SCHEMA.md#installed-layout test=tests/test_packaging_wheel.py doc=docs/XML-SPEC-SCHEMA.md
 
 Example migration obligation — the shape `spec validate` and `spec check` both read (one loader reads
 the root and the blocks for both). The paths below are illustrative: a corpus is only valid if they

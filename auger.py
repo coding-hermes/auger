@@ -54,6 +54,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import time
 import urllib.error
@@ -7757,11 +7758,26 @@ SPEC_FORBIDDEN_DECL_RE = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)", re.IGNORECASE)
 # in progress, and a corpus that states a rule auger refuses is not a corpus to select from.
 SPEC_TOLERATED_UNREADABLE = ("invalid-xml",)
 # The normative grammar, and the processor that loads it. `specs/schema/auger-spec-1.0.xsd` is the
-# published schema; a wheel install ships auger.py only, so an absent schema is refused with its own
-# code rather than silently skipping the conformance gate.
-SPEC_SCHEMA_PATH = (
-    Path(__file__).resolve().parent / "specs" / "schema" / "auger-spec-1.0.xsd"
-)
+# published schema. TWO layouts can hold it (AUG-129):
+#
+#   * a SOURCE CHECKOUT — `specs/schema/...` beside auger.py, which is where contributors and the
+#     gate always ran it from;
+#   * an INSTALLED auger — the wheel has no package directory (`py-modules = ["auger"]`), so the
+#     identical file travels as a `data_files` entry and setuptools installs it under the
+#     interpreter's `data` scheme: `<prefix>/share/auger/specs/schema/auger-spec-1.0.xsd`
+#     (inside the wheel: `auger-<version>.data/data/share/auger/specs/schema/`).
+#
+# `spec_schema_candidates()` lists both, in that order, and `_spec_load_schema` refuses with
+# `xsd-schema-missing` when NONE of them holds a schema: shipping the file must never turn a
+# missing grammar into a verdict.
+SPEC_SCHEMA_NAME = "auger-spec-1.0.xsd"
+SPEC_SCHEMA_RELPATH = Path("specs") / "schema" / SPEC_SCHEMA_NAME
+# Installed data lives off the `data` scheme, not off the module directory (AUG-129).
+SPEC_SCHEMA_INSTALL_RELPATH = Path("share") / "auger" / SPEC_SCHEMA_RELPATH
+SPEC_SCHEMA_PATH = Path(__file__).resolve().parent / SPEC_SCHEMA_RELPATH
+# The example corpus the wheel ships beside the grammar, so a fresh install has something real to
+# validate without a git checkout (AUG-129 AC2).
+SPEC_EXAMPLES_INSTALL_RELPATH = Path("share") / "auger" / "specs" / "examples"
 # The XSD processor is a `dev`/`auger[xsd]` extra (owner decision D-1): auger stays stdlib-only at
 # RUNTIME (`dependencies = []`), so lxml is imported lazily and its absence is a typed refusal.
 # The seam is a module NAME so tests can point it at a module that does not exist.
@@ -7940,21 +7956,81 @@ def _spec_load_processor():
         ) from None
 
 
+def _spec_data_roots() -> tuple:
+    """The `data`-scheme install roots this interpreter can be served from (AUG-129).
+
+    A wheel's `data_files` land under the install scheme, so the root depends on HOW auger was
+    installed, not on where `auger.py` sits: a venv's `data` root is the venv prefix, a system
+    install's is the prefix, and a `pip install --user` puts the same files under the user scheme.
+    Both are candidates; a platform whose sysconfig lacks one simply contributes nothing (the
+    module-adjacent checkout path in `SPEC_SCHEMA_PATH` is always tried first).
+    """
+    roots: list = []
+    schemes = [None]
+    try:
+        schemes.append(sysconfig.get_preferred_scheme("user"))
+    except (AttributeError, KeyError):  # pragma: no cover - older/odd sysconfig
+        pass
+    for scheme in schemes:
+        try:
+            root = (
+                sysconfig.get_path("data", scheme)
+                if scheme
+                else sysconfig.get_path("data")
+            )
+        except (KeyError, TypeError):  # pragma: no cover - scheme not on this platform
+            continue
+        if root:
+            roots.append(Path(root))
+    return tuple(roots)
+
+
+def spec_schema_candidates() -> tuple:
+    """Every documented location the published grammar can live in, in resolution order.
+
+    Read `SPEC_SCHEMA_PATH` at CALL time (AUG-129) so a caller — or a test — that points that
+    module attribute at a fixture wins the way it always did: tests/test_xsd_conformance.py
+    relies on it to grade a mutated grammar.
+    """
+    candidates = [Path(SPEC_SCHEMA_PATH)]
+    candidates.extend(root / SPEC_SCHEMA_INSTALL_RELPATH for root in _spec_data_roots())
+    ordered: list = []
+    for candidate in candidates:
+        if candidate not in ordered:
+            ordered.append(candidate)
+    return tuple(ordered)
+
+
+def spec_schema_path(path=None) -> Path:
+    """The grammar the next verdict loads, or a typed `xsd-schema-missing` refusal.
+
+    An explicit `path` is honoured exactly (a caller that names a file gets that file, or the
+    refusal), and asked-for-nowhere falls back to the candidate list. Naming EVERY candidate in
+    the refusal is the point: "no schema" has to be actionable on a host where the installed data
+    went somewhere the user can check.
+    """
+    candidates = (Path(path),) if path is not None else spec_schema_candidates()
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise SpecError(
+        "xsd-schema-missing",
+        f"no published grammar at any of: {', '.join(str(c) for c in candidates)} "
+        "(a source checkout carries it at specs/schema/, an installed auger at "
+        "share/auger/specs/schema/ — reinstall the wheel, or install the `auger[xsd]` extra and "
+        "run from a checkout)",
+    )
+
+
 def _spec_load_schema(path=None):
     """Load the shipped XSD with a real XSD 1.0 processor, or refuse with a typed error.
 
     Three failures are distinguished, because they need different fixes: no processor
-    (`xsd-processor-missing`), no schema file (`xsd-schema-missing` — a wheel ships auger.py only),
-    and a schema the processor rejects (`xsd-schema-unloadable`, e.g. a Python-dialect pattern).
+    (`xsd-processor-missing`), no schema file anywhere (`xsd-schema-missing`), and a schema the
+    processor rejects (`xsd-schema-unloadable`, e.g. a Python-dialect pattern).
     """
-    target = SPEC_SCHEMA_PATH if path is None else Path(path)
     etree = _spec_load_processor()
-    if not Path(target).is_file():
-        raise SpecError(
-            "xsd-schema-missing",
-            f"{target} is not present (a built wheel ships auger.py only; run from a source "
-            "checkout)",
-        )
+    target = spec_schema_path(path)
     try:
         return etree.XMLSchema(etree.parse(str(target)))
     except (etree.XMLSchemaParseError, etree.XMLSyntaxError) as exc:
@@ -7992,7 +8068,7 @@ def _spec_schema_violations(schema, raw: bytes, rel: str) -> list[str]:
         return []
     return [
         f"{rel}:{entry.line}: {entry.message}" for entry in list(schema.error_log)[:5]
-    ] or [f"{rel}: does not conform to {SPEC_SCHEMA_PATH.name}"]
+    ] or [f"{rel}: does not conform to {SPEC_SCHEMA_NAME}"]
 
 
 def _spec_assert_schema_conformance(schema, paths, root: Path) -> None:
@@ -8015,7 +8091,7 @@ def _spec_assert_schema_conformance(schema, paths, root: Path) -> None:
             extra = f" (+{len(problems) - 1} more)" if len(problems) > 1 else ""
             raise SpecError(
                 "schema-invalid",
-                f"{problems[0]}{extra} (specs/schema/{SPEC_SCHEMA_PATH.name})",
+                f"{problems[0]}{extra} ({SPEC_SCHEMA_NAME})",
             )
 
 
