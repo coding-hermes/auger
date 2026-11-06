@@ -44,15 +44,30 @@ python auger.py spec assemble specs --applies-to auger.spec.select --format json
 repository it describes. This corpus lives inside the repository it describes, so
 `git rev-parse --show-toplevel` from `specs/` is the root and no flag is needed.
 
+## The generated view
+
+The XML is the source and Markdown is a view of it: [`SPEC-CORPUS-VIEW.md`](SPEC-CORPUS-VIEW.md) is
+rendered from `specs/` by `scripts/gen_spec_view.py` through auger's own loader
+(`auger.load_spec_corpus`) — every document, every block with its prose and attributes, the measured
+counts, and a reference index of every typed edge. It is a committed, generated artifact:
+
+```bash
+python3 scripts/gen_spec_view.py           # rewrite docs/SPEC-CORPUS-VIEW.md
+python3 scripts/gen_spec_view.py --check   # rc 1 when the committed view has drifted from specs/
+```
+
+`tests/test_spec_corpus_view.py` regenerates the view and asserts BYTE equality with the committed
+file, so the view cannot drift from its source; the same test proves the view is derived (an edit to
+the corpus changes it) rather than a hand-kept copy. Edit the XML, then regenerate — a hand edit of
+`SPEC-CORPUS-VIEW.md` fails that test.
+
 ## What the corpus deliberately does not claim
 
 * No block describes `init`, `start`, `ask`, `answer`, `check`, `status`, `toggle`, `dump` or
   `recall`. They are real verbs, but no requirement block here would be verified by a test
   obligation that this corpus can name honestly, so the corpus stays on the surface it can prove.
-* There is no generated Markdown view of this corpus committed yet; `spec assemble` is the
-  renderer that would produce one. The XML is the source, Markdown remains a view.
-* `auger spec validate specs` is not yet an arm in `tests/gate.sh`; run it explicitly (as above)
-  until CI owns it.
+* The generated view reports only what the loader reads. It does not judge the corpus: `spec
+  validate` / `spec check` remain the verdict, and the view is a rendering of the same data.
 
 ## Authoring rules this corpus follows
 
