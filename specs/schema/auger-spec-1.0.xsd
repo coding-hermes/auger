@@ -64,6 +64,7 @@
       <xs:enumeration value="acceptance"/>
       <xs:enumeration value="verification"/>
       <xs:enumeration value="test"/>
+      <xs:enumeration value="task"/>
     </xs:restriction>
   </xs:simpleType>
 
@@ -105,6 +106,18 @@
     </xs:restriction>
   </xs:simpleType>
 
+  <!--
+    The digest an approval is bound to (AUG-121): sha256, lower-case hex. A task whose
+    `plan-digest` does not match the packet it currently describes is a STALE approval and is
+    refused by `spec task-export`; this facet only states the shape. XSD 1.0 has no
+    case-insensitivity flag, so the facet pins lower-case and the code checks the same value.
+  -->
+  <xs:simpleType name="planDigest">
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[0-9a-f]{64}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
   <!-- Whitespace-separated list of stable IDs, resolved repository-wide. -->
   <xs:simpleType name="idRefList">
     <xs:list itemType="auger:stableId"/>
@@ -132,6 +145,13 @@
       <xs:element ref="auger:block"/>
       <xs:element ref="auger:include"/>
       <xs:element ref="auger:verification-ref"/>
+      <!-- A task's exclusion reasons (AUG-121). It lives in this choice because an XSD 1.0
+           extension of a MIXED type cannot introduce a new element particle (the processor
+           refuses the whole schema: "the content type of both, the type and its base type, must
+           either be 'mixed' or 'element-only'"). The code therefore refuses an <exclusion> outside
+           a <task> (`unexpected-exclusion`), so the grammar's tolerance cannot become a silently
+           ignored element. -->
+      <xs:element ref="auger:exclusion"/>
     </xs:choice>
     <xs:attribute name="id" type="auger:stableId" use="required"/>
     <xs:attribute name="kind" type="auger:blockKind" use="required"/>
@@ -166,6 +186,50 @@
   <xs:element name="acceptance" type="auger:blockType" substitutionGroup="auger:block"/>
   <xs:element name="verification" type="auger:blockType" substitutionGroup="auger:block"/>
   <xs:element name="test" type="auger:blockType" substitutionGroup="auger:block"/>
+
+  <!--
+    A TASK block (AUG-121). A task is a small spec for one exact request, so it keeps every block
+    attribute and ADDS its scope:
+
+      in-scope        the blocks this task implements (required, by the validator: a task with no
+                      scope cannot be dispatched against a contract)
+      out-of-scope    the blocks it explicitly does NOT touch
+      acceptance      the <acceptance> criteria it is judged on
+      acknowledges    the deliberate inclusion of a non-active block
+      scope-version   pins the whole scope to one contract version
+      plan-digest     the sha256 of the canonical packet this task's approval was granted for
+
+    The reasons for the exclusions live on <exclusion> CHILD elements, not in a parallel attribute
+    list: a reason is inseparable from the ref it explains, and a whitespace-separated attribute
+    cannot hold prose without an escaping convention nobody would remember. `taskType` extends
+    `blockType`, so the task-only attributes cannot appear on any other block kind.
+  -->
+  <xs:complexType name="taskType">
+    <xs:complexContent>
+      <xs:extension base="auger:blockType">
+        <xs:attribute name="in-scope" type="auger:idRefList" use="optional"/>
+        <xs:attribute name="out-of-scope" type="auger:idRefList" use="optional"/>
+        <xs:attribute name="acceptance" type="auger:idRefList" use="optional"/>
+        <xs:attribute name="acknowledges" type="auger:idRefList" use="optional"/>
+        <xs:attribute name="scope-version" type="auger:semanticVersion" use="optional"/>
+        <xs:attribute name="plan-digest" type="auger:planDigest" use="optional"/>
+      </xs:extension>
+    </xs:complexContent>
+  </xs:complexType>
+
+  <xs:element name="task" type="auger:taskType" substitutionGroup="auger:block"/>
+
+  <!--
+    Why one out-of-scope block is excluded. `reason` is prose; the code refuses an empty one
+    (`missing-exclusion-reason`) because "out of scope" with no reason is indistinguishable from
+    "I forgot", and the reason is what stops the next agent re-litigating the exclusion.
+  -->
+  <xs:element name="exclusion">
+    <xs:complexType>
+      <xs:attribute name="ref" type="auger:stableId" use="required"/>
+      <xs:attribute name="reason" type="xs:string" use="required"/>
+    </xs:complexType>
+  </xs:element>
 
   <!-- An explicit verification edge as a child of a requirement, beside `verifies=`. -->
   <xs:element name="verification-ref">

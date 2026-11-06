@@ -108,6 +108,24 @@ A requirement is not “verified” because an XML attribute says so. The attrib
 
 `ch:trace` follows the loaded fleet doctrine. At minimum, the checker validates the required `row=` field, resolvable spec/test/evidence pointers, explicit `none:<reason>` values for absent links, evidence that is an artifact or witness rather than another row, and verdict-to-commit binding. The full eleven-field marker remains the closeout contract: `row`, `spec`, `wave`, `test`, `doc`, `prompt`, `evidence`, `witness`, `verdict`, `commit`, `memory`.
 
+#### Generated task marker (AUG-121)
+
+A task packet generates its own marker rather than leaving the author to hand-write one, because a
+hand-written marker is where `row=` typos and bare `none` values come from. The contract:
+
+- `spec task-packet <root> --task <ID>` prints `{packet, digest, trace}`; `trace` is the marker.
+- `row=` is the canonical task id — the same id the canonical board row carries, never a mapping.
+- `spec=` is the task block's own `file.xml#ID` source, so it resolves to the exact XML block
+  rather than to a document heading. `auger.resolve_trace_marker` (and the `spec context` verb)
+  resolve it back to that block id; a value naming a file the block is not authored in is
+  `stale-spec-ref`, not a hit.
+- `test=` is the tracked test the packet's closure names (`path::selector`); when the closure names
+  none it is `none:no-test-declared`.
+- `evidence`, `verdict` and `commit` are absent at export time and therefore carry
+  `none:<reason>` — `none:no-evidence-recorded`, `none:not-judged`, `none:not-implemented`. A bare
+  `none` is refused (`unexplained-absent-field`), as is any field name outside the eleven-field
+  vocabulary (`unknown-trace-field`).
+
 ### 4. Boardctl and approval boundary
 
 Auger may draft a plan from selected XML requirements and verification blocks. It must not write canonical tasks until a person approves the exact plan version/digest. After approval, Auger uses the supported boardctl interface to create/update rows, then reads the exact rows back and checks that IDs, acceptance criteria, dependencies, and spec anchors match the approved plan. Re-export is idempotent. On partial failure, it reports which rows were written and resumes without duplicating them.

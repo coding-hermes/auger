@@ -268,8 +268,36 @@ def test_schema_matches_the_validator() -> None:
         )
     for optional in ("applies-to", "verification", "method"):
         assert optional in declared
+    # AUG-121: an edge may be declared on the block type OR on a type DERIVED from it — the task
+    # scope edges live on `taskType`, because an `in-scope=` on a <section> would be an edge nothing
+    # reads (the silent no-op this check exists to prevent). Derived types are resolved from the
+    # grammar, so adding one is a schema edit, never a hand-maintained list here.
+    block_type_names = {"blockType"} | {
+        node.get("name")
+        for node in root.iter(f"{XSD_NS}complexType")
+        if node.get("name")
+        and any(
+            extension.get("base") == "auger:blockType"
+            for extension in node.iter(f"{XSD_NS}extension")
+        )
+    }
+    declared_on_block_types = {
+        attribute.get("name")
+        for node in root.iter(f"{XSD_NS}complexType")
+        if node.get("name") in block_type_names
+        for attribute in node.iter(f"{XSD_NS}attribute")
+    }
     for edge in auger.SPEC_EDGE_ATTRS:
-        assert edge in declared, f"edge attribute {edge} missing from the schema"
+        assert edge in declared_on_block_types, (
+            f"edge attribute {edge} missing from the schema (on blockType or a type derived "
+            "from it)"
+        )
+    # ...and a task-only scope attribute must NOT be declared on every block kind, or it becomes
+    # writable where nothing reads it.
+    for scoped in auger.SPEC_TASK_EDGE_ATTRS:
+        assert scoped not in declared, (
+            f"{scoped} is a task-scope edge and must stay on taskType, not on every block"
+        )
 
 
 # ---------------------------------------------------------------- AC-2: selection and assembly

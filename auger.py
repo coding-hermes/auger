@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import importlib
 import io
 import json
@@ -7718,12 +7719,38 @@ SPEC_XML_NAMESPACE = "urn:auger:spec:1"
 # `test` is a block kind, not an obligation the schema merely tolerates: the obligation validator
 # has always enforced the <test> surface (SPEC_BLOCK_TAGS), so before AUG-133 an authored corpus
 # could not write the shape the validator reads. One element set, both halves (AUG-133).
-SPEC_BLOCK_KINDS = ("section", "requirement", "acceptance", "verification", "test")
+# `task` (AUG-121) is a block too: a task IS a small spec for one exact request, so it carries
+# stable identity, lifecycle, method and typed scope edges like every other authored block. Making
+# it a second storage shape (a fenced YAML block in a board row, say) is exactly the drift the XML
+# graph exists to remove.
+SPEC_BLOCK_KINDS = (
+    "section",
+    "requirement",
+    "acceptance",
+    "verification",
+    "test",
+    "task",
+)
 SPEC_STATUSES = ("active", "deprecated", "superseded")
 SPEC_VERIFICATION_METHODS = ("test", "demo", "analysis", "inspection")
 # Typed ID edges. EVERY one must resolve; only the closure attributes are followed by assembly,
 # so `refs`/`implements`/`supersedes` stay navigable and never silently expand a bundle.
-SPEC_EDGE_ATTRS = ("depends-on", "verifies", "refs", "implements", "supersedes")
+#
+# A TASK'S SCOPE IS A SET OF TYPED EDGES (AUG-121), not a prose list: `in-scope` is the contract the
+# task implements, `out-of-scope` is the explicit set of blocks it does NOT touch (each carrying a
+# reason through `<exclusion>`), `acceptance` names the criteria that decide it, and `acknowledges`
+# is the deliberate act that lets a NON-ACTIVE block into scope. They are separate attributes
+# because their meanings differ and a caller has to be able to tell them apart; sharing `refs`
+# would erase the distinction the packet exists to carry.
+SPEC_TASK_EDGE_ATTRS = ("in-scope", "out-of-scope", "acceptance", "acknowledges")
+SPEC_EDGE_ATTRS = (
+    "depends-on",
+    "verifies",
+    "refs",
+    "implements",
+    "supersedes",
+    *SPEC_TASK_EDGE_ATTRS,
+)
 SPEC_FORWARD_CLOSURE_ATTRS = ("depends-on",)
 # A block that VERIFIES a selected block belongs to that block's explicit dependency closure: a
 # requirement without its acceptance criteria and verification plan is not the selected contract.
@@ -7733,8 +7760,9 @@ SPEC_INVERSE_CLOSURE_ATTRS = ("verifies",)
 # their requirement through `verifies=`, which is the inverse edge `bundle` used to ignore.
 SPEC_OBLIGATION_KINDS = ("acceptance", "verification", "test")
 # Blocks whose verification METHOD is mandatory metadata (`verification=`); a <verification> block
-# carries the same closed set under `method=`.
-SPEC_REQUIRES_METHOD = ("requirement", "acceptance")
+# carries the same closed set under `method=`. A task states the method that proves it (AUG-121):
+# "how would we know this task is done" is part of the contract, not a footnote on the board row.
+SPEC_REQUIRES_METHOD = ("requirement", "acceptance", "task")
 # These patterns are the AUTHORING patterns. They are deliberately dialect-neutral — plain
 # capturing groups, no `(?:`, no lookahead, no Python-only escapes — because the same strings ship
 # in specs/schema/auger-spec-1.0.xsd, and an XSD 1.0 processor rejects a Python-dialect facet
@@ -7747,6 +7775,21 @@ SPEC_REQUIRES_METHOD = ("requirement", "acceptance")
 SPEC_ID_RE = re.compile(r"^[A-Z][A-Z0-9]*(-[A-Z0-9]+)+$")
 SPEC_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 SPEC_APPLIES_RE = re.compile(r"^[a-z0-9]+([._-][a-z0-9]+)*$")
+# AUG-121: an approved plan digest is the sha256 of the canonical task packet, lower-case hex. The
+# approval is bound to the DIGEST, never to the task id: a plan that changed after review must not
+# export just because its name did not.
+SPEC_TASK_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+# The fields a generated task marker carries. `row` and `spec` must resolve to the canonical task
+# and its exact XML ids; `evidence`/`verdict`/`commit` are absent at export time and therefore
+# carry `none:<reason>` — a bare `none` is refused (AUG-121 AC5, PRD R10).
+SPEC_TASK_MARKER_FIELDS = ("row", "spec", "test", "evidence", "verdict", "commit")
+# AUG-122: the closed set of outcomes a context query can answer with. Anything other than `ok`
+# carries a `reason` string, because "no result" and "the tool had nothing to say" must never look
+# the same to a caller.
+SPEC_CONTEXT_STATUSES = ("ok", "inactive", "unscoped", "ambiguous")
+# The only external command the task exporter runs. It is a NAME so a caller (and a test) can point
+# it at a wrapper without the exporter growing a second transport.
+BOARDCTL_BINARY = "boardctl"
 SPEC_ID_MAX_LEN = 80
 SPEC_FORBIDDEN_DECL_RE = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)", re.IGNORECASE)
 # AUG-146: the ONE document-level failure a selection-scoped verb tolerates. A half-written file
@@ -8209,6 +8252,55 @@ def _spec_block(element, rel: str, order: int) -> dict:
         targets = tuple((element.get(attribute) or "").split())
         if targets:
             refs[attribute] = targets
+    # AUG-123/AUG-121: the machine-checkable obligation a verification/test block names, and the
+    # task-only metadata. Both are READ here (not in a second parser) so the published block record
+    # is the one place a verb, a renderer and a packet learn what a block carries.
+    obligation = {}
+    if kind in ("verification", "test"):
+        obligation = {
+            "runner": (element.get("runner") or "").strip(),
+            "path": (element.get("path") or "").strip(),
+            "selector": (element.get("selector") or "").strip(),
+        }
+    plan_digest = ""
+    scope_version = ""
+    exclusions: tuple = ()
+    if kind == "task":
+        plan_digest = (element.get("plan-digest") or "").strip()
+        if plan_digest and not SPEC_TASK_DIGEST_RE.match(plan_digest):
+            raise SpecError(
+                "invalid-plan-digest",
+                f"{rel}: {block_id} plan-digest={plan_digest[:16]!r} (expected 64 lowercase hex "
+                "characters — the sha256 of the canonical task packet)",
+            )
+        scope_version = (element.get("scope-version") or "").strip()
+        if scope_version and not SPEC_VERSION_RE.match(scope_version):
+            raise SpecError(
+                "invalid-version",
+                f"{rel}: {block_id} scope-version={scope_version!r} (expected X.Y.Z)",
+            )
+        entries = []
+        for child in element:
+            if _spec_local(child.tag) != "exclusion":
+                continue
+            entries.append(
+                {
+                    "ref": (child.get("ref") or "").strip(),
+                    "reason": " ".join((child.get("reason") or "").split()),
+                }
+            )
+        exclusions = tuple(entries)
+    else:
+        # The grammar admits <exclusion> in any block's content (an XSD 1.0 extension of a mixed
+        # type cannot add an element particle), so the CODE is what keeps the shape honest: an
+        # exclusion outside a task means nothing and would otherwise be silently ignored.
+        for child in element:
+            if _spec_local(child.tag) == "exclusion":
+                raise SpecError(
+                    "unexpected-exclusion",
+                    f"{rel}: {block_id} <exclusion> is only meaningful inside a <task> block "
+                    "(it explains why a block is out of a TASK's scope)",
+                )
     return {
         "id": block_id,
         "kind": kind,
@@ -8217,6 +8309,10 @@ def _spec_block(element, rel: str, order: int) -> dict:
         "applies_to": applies_to,
         "method": method,
         "refs": refs,
+        "obligation": obligation,
+        "plan_digest": plan_digest,
+        "scope_version": scope_version,
+        "exclusions": exclusions,
         "text": _spec_text(element),
         "source": f"{rel}#{block_id}",
         "source_file": rel,
@@ -8356,7 +8452,116 @@ def _spec_validate_blocks(blocks: list) -> dict:
                             f"{found['kind']}",
                         )
     _spec_refuse_reference_cycles(by_id)
+    _spec_validate_tasks(blocks, by_id)
     return by_id
+
+
+def _spec_validate_tasks(blocks: list, by_id: dict) -> None:
+    """The AUG-121 task-scope contract: a task is an EXACT scope, not a prose intention.
+
+    Every rule here exists because the loose shape fails silently in a way the board cannot see.
+    A duplicate ref is an author's copy-paste (the packet would carry the block twice). A block in
+    both lists is a contradiction. An acceptance ref that is not an `<acceptance>` block means the
+    criteria the task is judged on are not criteria. A non-active block in scope without an
+    acknowledgment pulls RETIRED text into a fresh task. An exclusion with no reason is
+    indistinguishable from an oversight — and the reason is the only thing that stops the next
+    agent from re-litigating the exclusion. A cross-version ref silently mixes two contract
+    versions in one "exact mini-spec". Each is its own code, naming the task AND the block, because
+    a finding an author cannot act on is another round trip.
+    """
+    for block in blocks:
+        if block["kind"] != "task":
+            continue
+        task_id = block["id"]
+        in_scope = block["refs"].get("in-scope", ())
+        out_scope = block["refs"].get("out-of-scope", ())
+        accepted = block["refs"].get("acceptance", ())
+        acknowledged = block["refs"].get("acknowledges", ())
+        if not in_scope:
+            raise SpecError(
+                "task-scope-missing",
+                f"{task_id}: no in-scope references — a task is a scope over existing blocks, and "
+                "a task that names none cannot be dispatched against a contract",
+            )
+        for attribute, values in (
+            ("in-scope", in_scope),
+            ("out-of-scope", out_scope),
+            ("acceptance", accepted),
+            ("acknowledges", acknowledged),
+        ):
+            duplicated = sorted({value for value in values if values.count(value) > 1})
+            if duplicated:
+                raise SpecError(
+                    "task-duplicate-reference",
+                    f"{task_id} {attribute}={','.join(duplicated)} (listed more than once)",
+                )
+        conflict = sorted(set(in_scope) & set(out_scope))
+        if conflict:
+            raise SpecError(
+                "task-scope-conflict",
+                f"{task_id} lists {','.join(conflict)} as BOTH in-scope and out-of-scope",
+            )
+        for ref in accepted:
+            target = by_id[ref]
+            if target["kind"] != "acceptance":
+                raise SpecError(
+                    "task-invalid-acceptance-ref",
+                    f"{task_id} acceptance={ref} but {ref} is a {target['kind']} "
+                    "(the criteria a task is judged on must be <acceptance> blocks)",
+                )
+        for ref in (*in_scope, *accepted):
+            target = by_id[ref]
+            if target["status"] != "active" and ref not in acknowledged:
+                raise SpecError(
+                    "inactive-reference-unacknowledged",
+                    f"{task_id} references {ref} status={target['status']} without "
+                    f"acknowledges={ref} (a retired block must be named as a deliberate inclusion)",
+                )
+        exclusions: dict = {}
+        for entry in block["exclusions"]:
+            ref = entry["ref"]
+            if not ref:
+                raise SpecError(
+                    "missing-exclusion-ref",
+                    f"{task_id}: an <exclusion> element carries no ref",
+                )
+            if ref in exclusions:
+                raise SpecError(
+                    "task-duplicate-reference",
+                    f"{task_id} <exclusion ref={ref}> is declared more than once",
+                )
+            if not entry["reason"]:
+                raise SpecError(
+                    "missing-exclusion-reason",
+                    f"{task_id} exclusion {ref} carries no reason (why it is OUT of scope is "
+                    "the half of the contract a later agent reads first)",
+                )
+            exclusions[ref] = entry
+        unreasoned = [ref for ref in out_scope if ref not in exclusions]
+        if unreasoned:
+            raise SpecError(
+                "missing-exclusion-reason",
+                f"{task_id} out-of-scope={','.join(unreasoned)} with no "
+                "<exclusion ref=... reason=...> naming why it is excluded",
+            )
+        stray = [ref for ref in exclusions if ref not in out_scope]
+        if stray:
+            raise SpecError(
+                "unexpected-exclusion",
+                f"{task_id} exclusion {','.join(sorted(stray))} is not in out-of-scope "
+                "(an exclusion for a block the task never mentions is a contradiction)",
+            )
+        scope_version = block.get("scope_version") or ""
+        if scope_version:
+            for attribute in ("in-scope", "acceptance", "out-of-scope"):
+                for ref in block["refs"].get(attribute, ()):
+                    found = by_id[ref]
+                    if found["version"] != scope_version:
+                        raise SpecError(
+                            "cross-version-reference",
+                            f"{task_id} {attribute}={ref} version={found['version']} but the task "
+                            f"scope is pinned to {scope_version}",
+                        )
 
 
 def load_spec_corpus(
@@ -8474,6 +8679,7 @@ def select_spec_blocks(
     versions=(),
     closure: bool = True,
     empty_ok: bool = False,
+    forward_edges=SPEC_FORWARD_CLOSURE_ATTRS,
 ) -> tuple:
     """Select by id/attributes and expand ONLY the explicit dependency closure.
 
@@ -8481,6 +8687,12 @@ def select_spec_blocks(
     a selected block is part of that block's explicit closure — its acceptance criterion or
     verification plan). Every other typed edge must resolve but never expands a bundle.
     Returns (selection_text, ordered records covering matched + dependency blocks).
+
+    `forward_edges` (AUG-122) is how the CONTEXT query follows `verifies` forward as well: a
+    requirement's declared verification plan is part of the contract it is judged against, so a
+    context bundle that stopped at the requirement would hide the test that proves it. The default
+    stays `SPEC_FORWARD_CLOSURE_ATTRS`, so assembly semantics are unchanged for every existing
+    caller.
 
     `empty_ok` splits the two shapes a caller must be able to tell apart (AUG-149):
 
@@ -8527,7 +8739,7 @@ def select_spec_blocks(
             current = queue.popleft()
             edges = [
                 (target, attribute)
-                for attribute in SPEC_FORWARD_CLOSURE_ATTRS
+                for attribute in forward_edges
                 for target in by_id[current]["refs"].get(attribute, ())
             ]
             edges.extend(inverse.get(current, ()))
@@ -8681,6 +8893,894 @@ def _spec_write_atomic(path, text: str) -> None:
         with contextlib.suppress(OSError):
             os.unlink(temporary)
         raise
+
+
+# ----------------------------- task scope contract + one-query context (AUG-121 / AUG-122) -------
+# A task is a SMALL SPEC for one exact request (owner clarification 2026-10-30, PRD R14). The two
+# verbs here are the two halves of that claim:
+#
+#   `spec task-packet` — turn one authored `<task>` block into the exact packet: the task's own
+#                        identity, the in-scope blocks, the acceptance criteria, and the excluded
+#                        blocks WITH the reason each was excluded. Deterministic bytes, and a
+#                        sha256 digest bound to the whole packet so an approval cannot drift.
+#   `spec task-export` — write that packet to the canonical board through `boardctl`, and ONLY
+#                        after the plan digest matches the approved one. A refused export invokes
+#                        no boardctl at all, so the two canonical JSONL files cannot move.
+#   `spec context`     — the ONE query an agent runs when it reaches a task or a code location:
+#                        the task, its in-scope blocks and their closure, the explicit exclusions,
+#                        or (for code) the block a `ch:trace spec=` reference names. Never a
+#                        whole-document or whole-corpus dump.
+#
+# Deliberate non-goals, because they are how this surface would rot: no scheduler dispatch, no task
+# completion, no board UPDATE (a re-detected change is a new approval, not a silent write), no
+# second transport, no LLM, no semantic search. `boardctl` is the sole writer and a `create` plus a
+# read-back is the whole external surface.
+
+
+def _spec_task_block(blocks: list, task_id: str) -> dict:
+    """The `<task>` block named by `task_id`, or a typed refusal (never a silent miss)."""
+    for block in blocks:
+        if block["id"] == task_id and block["kind"] == "task":
+            return block
+    raise SpecError(
+        "unknown-task",
+        f"{task_id} is not a task block in this corpus (a task packet is built from a <task> "
+        "block, never from a board row's prose)",
+    )
+
+
+def _task_packet_entry(block: dict, edge: str) -> dict:
+    """One typed reference in a task packet: identity, lifecycle, provenance and the edge."""
+    return {
+        "id": block["id"],
+        "kind": block["kind"],
+        "status": block["status"],
+        "version": block["version"],
+        "source": block["source"],
+        "method": block["method"],
+        "applies_to": list(block["applies_to"]),
+        "path": (block.get("obligation") or {}).get("path", ""),
+        "selector": (block.get("obligation") or {}).get("selector", ""),
+        "text": block["text"],
+        "edge": edge,
+    }
+
+
+def task_packet(blocks: list, task_id: str) -> dict:
+    """The AUG-121 packet: exact scope, exact exclusions with reasons, nothing inferred.
+
+    The packet is DATA and it is complete in the sense that matters: every id it names is a block
+    the same corpus validated, every entry carries that block's source/version/status, and the
+    exclusion list carries the author's reason. It deliberately does NOT expand the graph closure —
+    the closure is the CONTEXT query's job (`spec context`), so a packet stays a statement of what
+    was approved rather than a snapshot of how the graph happened to look that day.
+    """
+    task = _spec_task_block(blocks, task_id)
+    by_id = {block["id"]: block for block in blocks}
+    packet = {
+        "task": task["id"],
+        "source": task["source"],
+        "version": task["version"],
+        "status": task["status"],
+        "method": task["method"],
+        "applies_to": list(task["applies_to"]),
+        "scope_version": task.get("scope_version") or None,
+        "in_scope": [
+            _task_packet_entry(by_id[ref], "in-scope")
+            for ref in task["refs"].get("in-scope", ())
+        ],
+        "acceptance": [
+            _task_packet_entry(by_id[ref], "acceptance")
+            for ref in task["refs"].get("acceptance", ())
+        ],
+        "out_of_scope": [
+            {
+                **_task_packet_entry(by_id[entry["ref"]], "out-of-scope"),
+                "reason": entry["reason"],
+            }
+            for entry in task["exclusions"]
+        ],
+        "acknowledges": list(task["refs"].get("acknowledges", ())),
+        "prose": task["text"],
+    }
+    return packet
+
+
+def task_packet_digest(packet: dict) -> str:
+    """sha256 of the CANONICAL packet — the thing an approval is bound to (AUG-121 AC3/AC4).
+
+    Canonical means: sorted keys, no insignificant whitespace, UTF-8. Two runs over the same corpus
+    produce the same digest, so "the approved plan" is a value an operator can compare, and any
+    edit to scope, reason or acceptance text changes it.
+    """
+    canonical = json.dumps(
+        packet, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def require_approved_plan(packet: dict, declared) -> str:
+    """The approved digest, or a typed refusal — called BEFORE any boardctl invocation.
+
+    Three shapes, three codes, because they need different fixes: no approval at all
+    (`unapproved-plan-digest`), an approval that is not a digest (`invalid-plan-digest`), and an
+    approval for a DIFFERENT plan (`stale-plan-digest`, naming both digests).
+    """
+    digest = task_packet_digest(packet)
+    if declared is None or not str(declared).strip():
+        raise SpecError(
+            "unapproved-plan-digest",
+            f"{packet['task']}: no approved plan digest (pass --plan-digest or declare "
+            f"plan-digest= on the task block); the plan currently hashes to {digest}",
+        )
+    declared = str(declared).strip()
+    if not SPEC_TASK_DIGEST_RE.match(declared):
+        raise SpecError(
+            "invalid-plan-digest",
+            f"{packet['task']}: {declared!r} is not a sha256 digest (64 lowercase hex characters)",
+        )
+    if declared != digest:
+        raise SpecError(
+            "stale-plan-digest",
+            f"{packet['task']}: approved plan {declared} does not match the current plan "
+            f"{digest} — the scope changed after approval, so re-approve the new digest",
+        )
+    return digest
+
+
+def _task_marker_value(key: str, value: str) -> str:
+    """One marker value: no whitespace (a marker is whitespace-separated key=value pairs)."""
+    if not value or any(character.isspace() for character in value):
+        raise SpecError(
+            "invalid-trace-value",
+            f"{key}={value!r} must be a single token (an absent value is none:<reason>)",
+        )
+    return value
+
+
+def render_task_trace_marker(
+    packet: dict, *, test=None, evidence=None, verdict=None, commit=None
+) -> str:
+    """The `ch:trace` marker for an exported task (AUG-121 AC5, PRD R10).
+
+    `row` is the canonical task id and `spec` is the task block's own `file.xml#ID` source, so both
+    resolve to the exact XML block rather than to a document heading. A field with nothing behind it
+    yet carries `none:<reason>` — never a bare `none`, and never a green-looking placeholder.
+    """
+    marker = "ch:trace " + " ".join(
+        f"{key}={_task_marker_value(key, value)}"
+        for key, value in (
+            ("row", packet["task"]),
+            ("spec", packet["source"]),
+            ("test", test or "none:no-test-declared"),
+            ("evidence", evidence or "none:no-evidence-recorded"),
+            ("verdict", verdict or "none:not-judged"),
+            ("commit", commit or "none:not-implemented"),
+        )
+    )
+    return marker
+
+
+def _task_obligation_test(blocks: list, packet: dict) -> str:
+    """The machine-checkable test the packet's closure names, as `path::selector`, or none:<reason>.
+
+    Reads the closure through the ONE selection primitive (with `verifies` followed forward, since a
+    requirement's declared verification plan is part of the contract, not a reverse-only edge), so
+    the marker cannot name a test the context bundle would not contain.
+    """
+    seeds = [entry["id"] for entry in packet["in_scope"] + packet["acceptance"]]
+    _selection, records = select_spec_blocks(
+        blocks,
+        ids=seeds,
+        closure=True,
+        forward_edges=("depends-on", "verifies"),
+    )
+    for record in records:
+        obligation = record["block"].get("obligation") or {}
+        if obligation.get("path"):
+            selector = obligation.get("selector") or ""
+            return (
+                f"{obligation['path']}::{selector}" if selector else obligation["path"]
+            )
+    return "none:no-test-declared"
+
+
+def parse_trace_marker(text: str) -> dict:
+    """Parse one `ch:trace` marker into its fields, refusing a marker that proves nothing.
+
+    A marker is a whitespace-separated list of `key=value` tokens on the `ch:trace` line. The rules
+    are the ones the PRD's risk list implies: `row` is mandatory, every key must be a declared
+    marker field (a typo'd field is silently ignored by every reader, which is worse than a crash),
+    no field may repeat, and an absent value must state WHY (`none:<reason>`) instead of leaving a
+    blank that reads as "fine".
+    """
+    line = None
+    for candidate in text.splitlines():
+        if SPEC_TRACE_MARKER_RE.search(candidate):
+            line = candidate
+            break
+    if line is None:
+        raise SpecError(
+            "missing-trace-marker", "no `ch:trace` marker in the given text"
+        )
+    body = SPEC_TRACE_MARKER_RE.search(line).group(1)
+    fields: dict = {}
+    for token in body.split():
+        key, separator, value = token.partition("=")
+        if not separator or not key:
+            raise SpecError(
+                "malformed-trace-marker", f"{token!r} is not key=value ({line.strip()})"
+            )
+        if not SPEC_TRACE_KEY_RE.fullmatch(key):
+            raise SpecError(
+                "malformed-trace-marker", f"{key!r} is not a marker field name"
+            )
+        if key not in SPEC_TRACE_FIELDS:
+            raise SpecError(
+                "unknown-trace-field",
+                f"{key!r} is not a ch:trace field (one of: {', '.join(SPEC_TRACE_FIELDS)})",
+            )
+        if key in fields:
+            raise SpecError("duplicate-trace-field", f"{key}= appears more than once")
+        fields[key] = value
+    if not fields.get("row"):
+        raise SpecError(
+            "missing-trace-field", "ch:trace carries no row= (the one mandatory field)"
+        )
+    for key, value in fields.items():
+        if value in ("", "none"):
+            raise SpecError(
+                "unexplained-absent-field",
+                f"{key}=" + value + " gives no reason — write none:<reason>",
+            )
+    return fields
+
+
+def resolve_trace_marker(text, blocks: list) -> dict:
+    """Resolve a marker's `row`/`spec` against the corpus, and expand the task's scope if it is one.
+
+    `spec` accepts the two shapes the fleet writes: a bare block id, or the block's `file.xml#ID`
+    source. A value that names a file the block is not authored in is a STALE reference, not a hit.
+    """
+    fields = parse_trace_marker(text) if isinstance(text, str) else dict(text)
+    by_id = {block["id"]: block for block in blocks}
+    row = fields["row"]
+    if row not in by_id:
+        raise SpecError("unknown-trace-row", f"row={row} names no block in this corpus")
+    reference = fields.get("spec", "")
+    if not reference or reference.startswith("none:"):
+        raise SpecError(
+            "missing-trace-field",
+            "spec= is absent or explicitly none: — nothing to resolve",
+        )
+    resolved: list = []
+    missing: list = []
+    foreign: list = []
+    for value in reference.split(","):
+        file_part, separator, fragment = value.partition("#")
+        block_id = fragment if separator else value
+        block = by_id.get(block_id)
+        if block is None:
+            missing.append(value)
+        elif separator and block["source_file"] != file_part:
+            foreign.append(value)
+        elif block_id not in resolved:
+            resolved.append(block_id)
+    if missing:
+        raise SpecError(
+            "unknown-spec-id", f"spec={','.join(missing)} names no block in this corpus"
+        )
+    if foreign:
+        raise SpecError(
+            "stale-spec-ref",
+            f"spec={','.join(foreign)} names a document the block is not authored in",
+        )
+    scope: list = []
+    for block_id in resolved:
+        if by_id[block_id]["kind"] == "task":
+            packet = task_packet(blocks, block_id)
+            if row != block_id:
+                raise SpecError(
+                    "trace-row-mismatch",
+                    f"row={row} but spec= names the task {block_id} — a marker points at ONE task",
+                )
+            scope = [
+                *packet["in_scope"],
+                *packet["acceptance"],
+                *packet["out_of_scope"],
+            ]
+    return {
+        "fields": fields,
+        "row": row,
+        "blocks": resolved,
+        "missing": missing,
+        "scope": scope,
+    }
+
+
+def _boardctl(boardctl_path, *argv: str) -> tuple:
+    """Run boardctl once. The ONLY external command this surface issues (AUG-121 AC6)."""
+    command = boardctl_path or BOARDCTL_BINARY
+    try:
+        done = subprocess.run(
+            [str(command), *argv], capture_output=True, text=True, check=False
+        )
+    except FileNotFoundError as exc:
+        raise SpecError(
+            "boardctl-missing",
+            f"{command}: {exc.strerror or exc} — the canonical board is written by boardctl only; "
+            "install coding-hermes-tools and re-run",
+        ) from None
+    return done.returncode, done.stdout, done.stderr
+
+
+def _board_readback(boardctl_path, board, row_id: str):
+    """`boardctl show <id>` as a dict, or None when the row does not exist yet."""
+    code, out, err = _boardctl(boardctl_path, "-C", str(board), "show", row_id)
+    if code != 0:
+        return None
+    try:
+        return json.loads(out)
+    except json.JSONDecodeError as exc:
+        raise SpecError(
+            "board-readback-unreadable",
+            f"boardctl show {row_id} printed no JSON ({exc}): {out.strip()[:200]}",
+        ) from None
+
+
+def _task_row_title(packet: dict) -> str:
+    """A short, deterministic row title built from the task's own prose."""
+    sentence = packet["prose"].split(".")[0].strip() or packet["task"]
+    title = f"[scoped task] {packet['task']}: {sentence}"
+    return title[:120]
+
+
+def task_board_row(packet: dict) -> dict:
+    """The canonical row body: existing supported fields only, byte-for-byte reproducible.
+
+    `capability_tags` carries the machine-readable scope (`<edge>:<ID>@<version>`, in packet order)
+    and `reasoning` carries the canonical packet JSON plus the generated marker. `depends_on` is
+    deliberately NOT used: boardctl resolves it against real task ids and refuses a create that
+    names spec blocks, so writing scope there would silently break the export.
+    """
+    tags = [
+        *(f"in-scope:{entry['id']}@{entry['version']}" for entry in packet["in_scope"]),
+        *(
+            f"acceptance:{entry['id']}@{entry['version']}"
+            for entry in packet["acceptance"]
+        ),
+        *(
+            f"out-of-scope:{entry['id']}@{entry['version']}"
+            for entry in packet["out_of_scope"]
+        ),
+    ]
+    canonical = json.dumps(
+        packet, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    return {
+        "title": _task_row_title(packet),
+        "capability_tags": tags,
+        "acceptance_criteria": "\n".join(
+            f"{entry['id']}: {entry['text']}" for entry in packet["acceptance"]
+        ),
+        "reasoning": canonical,
+    }
+
+
+def export_task_packet(
+    spec_root,
+    task_id: str,
+    *,
+    board,
+    plan_digest=None,
+    boardctl=None,
+    repo_root=None,
+) -> dict:
+    """Export ONE approved task packet to the canonical board through boardctl (AUG-121).
+
+    Order is the contract: load the corpus (a corpus-wide verdict, so a half-written neighbour is
+    refused rather than exported around), build the packet, verify the APPROVED DIGEST, and only
+    then touch boardctl. A refused approval therefore cannot move a single byte of `tasks.jsonl` or
+    `events.jsonl`, which is what AC4 measures.
+
+    An existing row with byte-identical scope and reasoning is reported as `unchanged` and NOT
+    re-created (one row per task id); an existing row that DIFFERS is a conflict and is refused —
+    updating a canonical row needs its own approval-bound path, not a side effect of this one.
+    """
+    _root, _documents, blocks = load_spec_corpus(spec_root)
+    packet = task_packet(blocks, task_id)
+    block = _spec_task_block(blocks, task_id)
+    declared = (
+        plan_digest if plan_digest is not None else (block.get("plan_digest") or None)
+    )
+    digest = require_approved_plan(packet, declared)
+    marker = render_task_trace_marker(
+        packet, test=_task_obligation_test(blocks, packet)
+    )
+    row = task_board_row(packet)
+    reasoning = f"{row['reasoning']}\n{marker}"
+
+    def outcome(status: str, readback) -> dict:
+        return {
+            "status": status,
+            "row": task_id,
+            "digest": digest,
+            "source": packet["source"],
+            "in_scope": [entry["id"] for entry in packet["in_scope"]],
+            "out_of_scope": [entry["id"] for entry in packet["out_of_scope"]],
+            "trace": marker,
+            "readback": {
+                "id": readback.get("id"),
+                "status": readback.get("status"),
+                "capability_tags": readback.get("capability_tags"),
+                "reasoning": readback.get("reasoning"),
+                "acceptance_criteria": readback.get("acceptance_criteria"),
+            },
+        }
+
+    existing = _board_readback(boardctl, board, task_id)
+    if existing is not None:
+        unchanged = (
+            existing.get("capability_tags") == row["capability_tags"]
+            and existing.get("reasoning") == reasoning
+        )
+        if not unchanged:
+            raise SpecError(
+                "board-row-conflict",
+                f"{task_id} already exists on {board} with a different scope or reasoning — an "
+                "update is its own approval-bound operation, not a side effect of an export",
+            )
+        return outcome("unchanged", existing)
+
+    argv = [
+        "-C",
+        str(board),
+        "create",
+        "--id",
+        task_id,
+        "--title",
+        row["title"],
+        "--status",
+        "pending",
+        "--capability-tags",
+        ",".join(row["capability_tags"]),
+        "--reasoning",
+        reasoning,
+    ]
+    if row["acceptance_criteria"]:
+        argv.extend(["--acceptance-criteria", row["acceptance_criteria"]])
+    code, out, err = _boardctl(boardctl, *argv)
+    if code != 0:
+        raise SpecError(
+            "board-create-refused",
+            f"boardctl create exited {code}: {(err or out).strip()[:400]}",
+        )
+    readback = _board_readback(boardctl, board, task_id)
+    if readback is None:
+        raise SpecError(
+            "board-readback-missing",
+            f"boardctl created {task_id} but `show` cannot read it back — the write is unproven",
+        )
+    if readback.get("reasoning") != reasoning:
+        raise SpecError(
+            "board-readback-mismatch",
+            f"the row read back from {board} does not match the approved packet byte for byte "
+            f"(expected {len(reasoning)} characters, got "
+            f"{len(readback.get('reasoning') or '')})",
+        )
+    if readback.get("capability_tags") != row["capability_tags"]:
+        raise SpecError(
+            "board-readback-mismatch",
+            f"the row's scope tags read back as {readback.get('capability_tags')!r}, expected "
+            f"{row['capability_tags']!r}",
+        )
+    return outcome("exported", readback)
+
+
+# ---------------------------------------------------------------- one-query context (AUG-122)
+#: A `spec=` token inside a marker line: any non-space value, so both the bare block id and the
+#: `file.xml#ID` source form are read. `SPEC_TRACE_ANNOTATION_RE` only matches the bare-id form,
+#: which would silently drop every source-shaped citation.
+SPEC_CONTEXT_SPEC_TOKEN_RE = re.compile(r"\bspec=([^\s]+)")
+
+
+def _context_rel(path: Path, base: Path) -> str:
+    """A path relative to `base` when it is inside it — an absolute tmp path in the response would
+    make the golden non-reproducible and would leak the caller's layout."""
+    try:
+        return path.resolve().relative_to(base.resolve()).as_posix()
+    except ValueError:
+        return path.name
+
+
+def _context_entry(block: dict, edge: str) -> dict:
+    """One selected block: everything a reader needs to act without opening the corpus."""
+    return {
+        "id": block["id"],
+        "kind": block["kind"],
+        "status": block["status"],
+        "version": block["version"],
+        "applies_to": list(block["applies_to"]),
+        "method": block["method"],
+        "source": block["source"],
+        "edge": edge,
+    }
+
+
+def _context_selection(blocks: list, ids, edges: dict) -> list:
+    """Expand the explicit closure for `ids`, keeping the edge that put each block in the bundle.
+
+    `verifies` is followed FORWARD as well as inversely here: a requirement's declared verification
+    plan is part of the contract the task is judged against (PRD R15), not a reverse-only edge, so
+    leaving it out would hand an agent the requirement and hide the test that proves it.
+    """
+    seeds = [block_id for block_id in ids if block_id]
+    if not seeds:
+        return []
+    _selection, records = select_spec_blocks(
+        blocks,
+        ids=seeds,
+        closure=True,
+        forward_edges=("depends-on", "verifies"),
+    )
+    entries = []
+    for record in records:
+        block_id = record["block"]["id"]
+        if record["why"] == "matched":
+            edge = edges.get(block_id, "matched")
+        else:
+            via = record["via"] or ""
+            edge = via.split()[-1] if via else "dependency"
+        entries.append(_context_entry(record["block"], edge))
+    return entries
+
+
+def _context_trace_refs(text: str) -> tuple:
+    """(marker count, `spec=` values) for every ch:trace line in a source file, in file order.
+
+    A line counts as a marker only when it carries `row=` — the doctrine's one mandatory field. That
+    is not pedantry: this parser reads WHOLE FILES, so a docstring that merely mentions `ch:trace
+    spec=` (as auger.py's own does) would otherwise contribute a phantom `spec=` value and turn a
+    real query into an `unknown-spec-id` refusal.
+    """
+    markers = 0
+    refs: list = []
+    for line in text.splitlines():
+        if not SPEC_TRACE_MARKER_RE.search(line):
+            continue
+        if not re.search(r"\brow=\S", line):
+            continue
+        markers += 1
+        for match in SPEC_CONTEXT_SPEC_TOKEN_RE.finditer(line):
+            for value in match.group(1).split(","):
+                if value:
+                    refs.append(value)
+    return markers, refs
+
+
+def _context_block_id(value: str, by_id: dict):
+    """The block a `spec=` value names: a bare id, or `file.xml#ID` resolved to its source file."""
+    file_part, separator, fragment = value.partition("#")
+    block_id = fragment if separator else value
+    block = by_id.get(block_id)
+    if block is None:
+        return None
+    if separator and block["source_file"] != file_part:
+        return None
+    return block_id
+
+
+def _context_is_block_id(value: str) -> bool:
+    """Does this `spec=` value CLAIM to be a block id (as opposed to a doc/path citation)?
+
+    The distinction matters for the diagnostic: a citation like `docs/SPEC-003.md#assembly` is a
+    legitimate trace that names no XML block (`spec-names-no-block`), while `AUG-REQ-404` claims an
+    id the corpus does not have (`unknown-spec-id`) — a different defect and a different fix.
+    """
+    fragment = value.partition("#")[2] or value
+    return SPEC_ID_RE.match(fragment) is not None
+
+
+def _context_source_file(raw: str, roots) -> Path | None:
+    """Resolve `--code` to a real file: absolute as given, relative against the stated roots."""
+    candidate = Path(raw).expanduser()
+    if candidate.is_absolute():
+        return candidate.resolve() if candidate.is_file() else None
+    for base in roots:
+        path = Path(base) / candidate
+        if path.is_file():
+            return path.resolve()
+    return None
+
+
+def _context_symbol_files(search_root: Path, symbol: str) -> list:
+    """Every `*.py` under `search_root` that DEFINES `symbol` (exact name, never a substring).
+
+    A substring match would make the symbol query useless on a real tree, where `export_row` and
+    `other_export_row` sit beside each other; the definition is read from the AST, so a mention in a
+    comment or a string is not a definition.
+    """
+    import ast
+
+    hits: list = []
+    for path in sorted(search_root.rglob("*.py")):
+        if not path.is_file():
+            continue
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8", errors="replace"))
+        except SyntaxError:
+            continue
+        names = {
+            node.name
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        }
+        names.update(
+            target.id
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        )
+        if symbol in names:
+            hits.append(path)
+    return hits
+
+
+def _context_corpus_bytes(root: Path, documents: dict) -> int:
+    """The bytes of the documents this query actually read (measured, not estimated)."""
+    total = 0
+    for rel in documents:
+        try:
+            total += (root / rel).stat().st_size
+        except OSError:  # pragma: no cover - the loader already read the file
+            continue
+    return total
+
+
+def build_spec_context(
+    spec_root,
+    *,
+    task=None,
+    code=None,
+    symbol=None,
+    search_root=None,
+    repo_root=None,
+) -> dict:
+    """The AUG-122 answer, as data: what governs this task / this code location, and what does not.
+
+    Exactly one selector may be given. The result is a dict with a closed `status`
+    (`ok|inactive|unscoped|ambiguous`), a `reason` whenever the status is not `ok`, the selected
+    blocks with their provenance and edge, the explicit exclusions with reasons, and measured
+    counts. There is no branch that returns the corpus: an unscoped query returns an empty
+    selection and a named reason.
+    """
+    selectors = [
+        name
+        for name, value in (("task", task), ("code", code), ("symbol", symbol))
+        if value
+    ]
+    if len(selectors) != 1:
+        raise SpecError(
+            "context-selector",
+            "pass exactly one of --task/--code/--symbol (a context query is never a whole-corpus "
+            "dump)",
+        )
+    root, documents, blocks = load_spec_corpus(
+        spec_root, tolerate_unreadable=True, skipped=[]
+    )
+    by_id = {block["id"]: block for block in blocks}
+    corpus_root = Path(spec_root).expanduser().resolve()
+    input_bytes = _context_corpus_bytes(corpus_root, documents)
+    payload = {
+        "query": {"kind": selectors[0], "value": str(task or code or symbol)},
+        "status": "ok",
+        "reason": "",
+        "task": None,
+        "selected": [],
+        "excluded": [],
+        "candidates": [],
+        "scan": {"files": [], "spec_refs": [], "traces": 0},
+        "counts": {"selected": 0, "dependencies": 0, "input_bytes": input_bytes},
+    }
+
+    if task is not None:
+        block = by_id.get(task)
+        if block is None or block["kind"] != "task":
+            payload["status"] = "unscoped"
+            payload["reason"] = "unknown-task"
+            return payload
+        packet = task_packet(blocks, task)
+        entry = _context_entry(block, "task")
+        payload["task"] = {**entry, "prose": block["text"]}
+        edges = {
+            **{item["id"]: "in-scope" for item in packet["in_scope"]},
+            **{item["id"]: "acceptance" for item in packet["acceptance"]},
+        }
+        seeds = [entry["id"] for entry in packet["in_scope"] + packet["acceptance"]]
+        payload["selected"] = [entry, *_context_selection(blocks, seeds, edges)]
+        payload["excluded"] = [
+            {
+                "id": item["id"],
+                "status": item["status"],
+                "version": item["version"],
+                "source": item["source"],
+                "reason": item["reason"],
+            }
+            for item in packet["out_of_scope"]
+        ]
+        if block["status"] != "active":
+            payload["status"] = "inactive"
+            payload["reason"] = "block-inactive"
+    else:
+        roots = [Path(repo_root)] if repo_root else [corpus_root, Path.cwd()]
+        files: list = []
+        if code is not None:
+            path = _context_source_file(code, roots)
+            if path is not None:
+                files = [path]
+        else:
+            search = Path(search_root) if search_root else roots[0]
+            files = _context_symbol_files(search, symbol)
+            if not files:
+                payload["status"] = "unscoped"
+                payload["reason"] = "unknown-symbol"
+                return payload
+        if not files:
+            payload["status"] = "unscoped"
+            payload["reason"] = "path-not-found"
+            return payload
+        base = (
+            Path(search_root)
+            if (symbol is not None and search_root)
+            else (Path(repo_root) if repo_root else Path.cwd())
+        )
+        payload["scan"]["files"] = [_context_rel(path, base) for path in files]
+        for path in files:
+            try:
+                input_bytes += path.stat().st_size
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            markers, refs = _context_trace_refs(text)
+            payload["scan"]["traces"] += markers
+            payload["scan"]["spec_refs"].extend(
+                value for value in refs if value not in payload["scan"]["spec_refs"]
+            )
+        payload["counts"]["input_bytes"] = input_bytes
+        if payload["scan"]["traces"] == 0:
+            payload["status"] = "unscoped"
+            payload["reason"] = "no-trace"
+            return payload
+        if not payload["scan"]["spec_refs"]:
+            payload["status"] = "unscoped"
+            payload["reason"] = "trace-without-spec"
+            return payload
+        resolved: dict = {}
+        unknown_ids: list = []
+        no_block: list = []
+        for value in payload["scan"]["spec_refs"]:
+            block_id = _context_block_id(value, by_id)
+            if block_id is not None:
+                resolved[value] = block_id
+            elif _context_is_block_id(value):
+                unknown_ids.append(value)
+            else:
+                no_block.append(value)
+        if unknown_ids:
+            payload["status"] = "unscoped"
+            payload["reason"] = "unknown-spec-id"
+            payload["candidates"] = sorted(set(unknown_ids))
+            return payload
+        if not resolved:
+            # A trace that cites only documents/paths names no XML block. That is an explicit
+            # `unscoped` answer, not a broken lookup and above all not a corpus dump.
+            payload["status"] = "unscoped"
+            payload["reason"] = "spec-names-no-block"
+            payload["scan"]["unresolved"] = no_block
+            return payload
+        unique = sorted(set(resolved.values()))
+        if len(unique) > 1:
+            payload["status"] = "ambiguous"
+            payload["reason"] = "ambiguous-match"
+            payload["candidates"] = unique
+            return payload
+        block = by_id[unique[0]]
+        payload["selected"] = _context_selection(
+            blocks, [block["id"]], {block["id"]: "spec"}
+        )
+        if block["status"] != "active":
+            payload["status"] = "inactive"
+            payload["reason"] = "block-inactive"
+
+    dependencies = sum(
+        1
+        for entry in payload["selected"]
+        if entry["edge"] not in ("task", "in-scope", "acceptance")
+    )
+    payload["counts"].update(
+        {"selected": len(payload["selected"]), "dependencies": dependencies}
+    )
+    return payload
+
+
+def render_spec_context(payload: dict) -> str:
+    """Serialize a context answer with a MEASURED `output_bytes` — proved against the real bytes.
+
+    `output_bytes` is self-referential (the value is inside the document it measures), so it is
+    solved as a FIXED POINT: render with a candidate, measure, re-render until the measurement and
+    the value agree. It converges in a couple of iterations because the serialization is stable, and
+    the result is exact rather than approximate — `counts.output_bytes` equals the length of the
+    bytes this function returns, which is what makes the number checkable at all.
+    """
+    counts = dict(payload.get("counts") or {})
+    value = 0
+    text = ""
+    for _attempt in range(8):
+        counts["output_bytes"] = value
+        text = (
+            json.dumps(
+                {**payload, "counts": counts},
+                indent=2,
+                sort_keys=True,
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+        measured = len(text.encode("utf-8"))
+        if measured == value:
+            return text
+        value = measured
+    return text
+
+
+def cmd_spec_task_packet(a) -> int:
+    """`spec task-packet`: the exact packet, its approved digest, and the generated marker."""
+    _root, _documents, blocks = load_spec_corpus(a.root)
+    packet = task_packet(blocks, a.task)
+    print(
+        json.dumps(
+            {
+                "packet": packet,
+                "digest": task_packet_digest(packet),
+                "trace": render_task_trace_marker(
+                    packet, test=_task_obligation_test(blocks, packet)
+                ),
+            },
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+    )
+    return 0
+
+
+def cmd_spec_task_export(a) -> int:
+    """`spec task-export`: write ONE approved packet to the canonical board through boardctl."""
+    result = export_task_packet(
+        a.root,
+        a.task,
+        board=a.board,
+        plan_digest=a.plan_digest,
+        boardctl=a.boardctl,
+        repo_root=getattr(a, "repo_root", None),
+    )
+    print(json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False))
+    return 0
+
+
+def cmd_spec_context(a) -> int:
+    """`spec context`: one query, minimal context, measured bytes, no writes."""
+    payload = build_spec_context(
+        a.root,
+        task=a.task,
+        code=a.code,
+        symbol=a.symbol,
+        search_root=getattr(a, "search_root", None),
+        repo_root=getattr(a, "repo_root", None),
+    )
+    sys.stdout.write(render_spec_context(payload))
+    return 0
 
 
 # ----------------------------- staged-diff spec alignment and ch:trace check ---------------------
@@ -9485,6 +10585,17 @@ def _spec_corpus_counts(documents: dict, unreadable: list, records: list) -> dic
 
 def _spec_dispatch(a):
     command = getattr(a, "spec_cmd", "validate")
+    # AUG-121/AUG-122: the task-scope contract and the one-query context have their own entry
+    # points. They are NOT variants of `assemble`: a task packet is a statement of what was
+    # approved (no closure), and a context answer carries exclusions with reasons plus measured
+    # bytes. Routing them through the assembly renderer would make three different answers share
+    # one shape, which is how a "minimal context" turns back into a dump.
+    if command == "task-packet":
+        return cmd_spec_task_packet(a)
+    if command == "task-export":
+        return cmd_spec_task_export(a)
+    if command == "context":
+        return cmd_spec_context(a)
     if command == "check" and (
         getattr(a, "diff_stdin", False) or getattr(a, "diff_file", None)
     ):
@@ -10612,6 +11723,98 @@ def main(argv=None):
     _add_spec_repo_root(aln)
     _add_spec_checker_flags(aln)
     aln.set_defaults(fn=cmd_spec_align)
+
+    tpk = spec_sub.add_parser(
+        "task-packet",
+        help="emit ONE task's exact scope packet, its approved digest and its ch:trace marker "
+        "(AUG-121)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Build the packet for one authored <task> block: stable identity, lifecycle and "
+            "verification method, the in-scope blocks, the acceptance criteria, and the excluded "
+            "blocks WITH the reason each was excluded. Deterministic bytes; `digest` is the sha256 "
+            "of the canonical packet and is what an approval is bound to.\n\n"
+            "This is corpus-wide: a document that is not well-formed refuses the whole run, "
+            "because a packet built from half a corpus is not the approved plan."
+        ),
+    )
+    tpk.add_argument("root", help="spec root directory")
+    tpk.add_argument("--task", required=True, metavar="ID", help="the <task> block id")
+    tpk.set_defaults(fn=cmd_spec)
+
+    tex = spec_sub.add_parser(
+        "task-export",
+        help="write ONE approved task packet to the canonical board through boardctl (AUG-121)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Export one task packet to the canonical JSONL board. The export is APPROVAL-BOUND: "
+            "the plan digest must match the packet's current digest (`--plan-digest`, else the "
+            "task block's own plan-digest=). With no approval, or a stale one, boardctl is not "
+            "invoked at all and both canonical files stay byte-identical.\n\n"
+            "The exporter issues boardctl `create` and `show` only: no scheduler dispatch, no task "
+            "completion, no board update. An existing row with identical scope is reported as "
+            "`unchanged`; a differing row is a conflict and is refused."
+        ),
+        epilog=(
+            "exit codes:\n"
+            "  0  exported, or unchanged (one row per task id)\n"
+            "  2  a typed refusal (unapproved/stale/invalid plan digest, no task block, a bad "
+            "corpus, a board conflict); nothing was written\n"
+        ),
+    )
+    tex.add_argument("root", help="spec root directory")
+    tex.add_argument("--task", required=True, metavar="ID", help="the <task> block id")
+    tex.add_argument(
+        "--board", required=True, metavar="DIR", help="board repo or board dir"
+    )
+    tex.add_argument(
+        "--plan-digest",
+        metavar="SHA256",
+        help="the approved plan digest (default: the task block's plan-digest= attribute)",
+    )
+    tex.add_argument(
+        "--boardctl",
+        metavar="PATH",
+        help=f"the boardctl binary to run (default: {BOARDCTL_BINARY} on PATH)",
+    )
+    tex.set_defaults(fn=cmd_spec)
+
+    ctx = spec_sub.add_parser(
+        "context",
+        help="one query: the minimal XML context for a task, a code path or a symbol (AUG-122)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Answer with ONLY the blocks that govern the query: the task and its in-scope blocks "
+            "plus their declared closure, or the block a `ch:trace spec=` reference names. "
+            "Out-of-scope blocks are listed explicitly WITH their exclusion reasons.\n\n"
+            "Never a whole-document or whole-corpus dump: a query with no trace, an unknown "
+            "symbol, an inactive block or an ambiguous match answers with a structured "
+            "unscoped/inactive/ambiguous result and an empty selection. The response reports "
+            "selected count, dependency count, input bytes and output bytes."
+        ),
+        epilog=(
+            "exit codes:\n"
+            "  0  an answer (including an unscoped/ambiguous/inactive answer — that is a result)\n"
+            "  2  a typed refusal (no selector, two selectors, a bad corpus)\n"
+        ),
+    )
+    ctx.add_argument("root", help="spec root directory")
+    ctx.add_argument("--task", metavar="ID", help="resolve a <task> block to its scope")
+    ctx.add_argument(
+        "--code", metavar="PATH", help="resolve a source file's ch:trace reference"
+    )
+    ctx.add_argument(
+        "--symbol",
+        metavar="NAME",
+        help="resolve the source file that DEFINES this symbol",
+    )
+    ctx.add_argument(
+        "--search-root",
+        metavar="DIR",
+        help="where --symbol looks for definitions (default: --repo-root, else the spec root)",
+    )
+    _add_spec_repo_root(ctx)
+    ctx.set_defaults(fn=cmd_spec)
 
     a = ap.parse_args(argv)
     return a.fn(a)
