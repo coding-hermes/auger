@@ -520,7 +520,7 @@ def test_the_query_is_read_only(
 
 # ---------------------------------------------------------------- the gate arm
 def test_gate_arm_runs_these_files() -> None:
-    """Both SG7 proofs must be named in tests/gate.sh's pytest arm or they never execute."""
+    """Every SG7/SG8 proof file must be named in tests/gate.sh's pytest arm or never executes."""
     arm = [
         line
         for line in GATE.read_text(encoding="utf-8").splitlines()
@@ -530,6 +530,9 @@ def test_gate_arm_runs_these_files() -> None:
     for required in (
         "tests/test_spec_context.py",
         "tests/test_xml_task_contract.py",
+        "tests/test_plan_approval.py",
+        "tests/test_task_context.py",
+        "tests/test_task_packet.py",
     ):
         assert required in arm[0], (
             f"{required} must be in tests/gate.sh's pytest arm — the guard runs exactly this "

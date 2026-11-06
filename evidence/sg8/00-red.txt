@@ -1,0 +1,798 @@
+FFFFFFFFFFF.FFFFFFFF                                                     [100%]
+=================================== FAILURES ===================================
+_________________ test_a_draft_plan_is_versioned_and_complete __________________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_a_draft_plan_is_versioned0')
+
+    def test_a_draft_plan_is_versioned_and_complete(tmp_path: Path) -> None:
+        """AC1: a plan carries ids, criteria, dependencies, anchors and expected evidence — versioned.
+    
+        Every field is compared against the CORPUS rather than against a re-run of the same builder:
+        the anchors name the exact authored blocks, the evidence is the verification block's own
+        runner/path/selector, the acceptance text is the block's verbatim prose. The digest is checked
+        for the two properties an approval depends on — it is stable across runs and it does not move
+        when the corpus is copied to another directory (no absolute path leaks into it).
+        """
+        root = write_plan_corpus(tmp_path)
+>       plan = draft(root)
+               ^^^^^^^^^^^
+
+tests/test_plan_approval.py:374: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_a_draft_plan_is_versioned0/corpus')
+plan = 'SG8-E2E-PLAN'
+
+    def draft(root: Path, plan: str = PLAN) -> dict:
+        """`spec plan-draft` as JSON — the reviewed plan, not a task packet."""
+        code, out, err = run_spec("plan-draft", str(root), "--plan", plan)
+>       assert code == 0, f"spec plan-draft refused: {err}"
+E       AssertionError: spec plan-draft refused: usage: auger spec [-h]
+E                           {validate,list,assemble,check,bundle,align,task-packet,task-export,context} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'plan-draft' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align', 'task-packet', 'task-export', 'context')
+E         
+E       assert 2 == 0
+
+tests/test_plan_approval.py:90: AssertionError
+___________ test_an_unapproved_draft_leaves_the_board_byte_identical ___________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_an_unapproved_draft_leave0')
+
+    def test_an_unapproved_draft_leaves_the_board_byte_identical(tmp_path: Path) -> None:
+        """AC2+AC5: with no approval record the export refuses and NO canonical byte moves.
+    
+        Proved three ways, because "we did not write" is easy to claim and hard to see: both canonical
+        JSONL files hash identically before and after, the export exits non-zero with a typed code, and
+        a boardctl wrapper on the exporter's `--boardctl` seam recorded no invocation at all.
+        """
+        boardctl_or_skip()
+        root = write_plan_corpus(tmp_path)
+        board = make_board(tmp_path)
+        ledger = tmp_path / "ledger"
+        ledger.mkdir()
+        script, log = wrapper(tmp_path)
+    
+        tasks, events = board_files(board)
+        before = (digest_of(tasks), digest_of(events))
+    
+        code, out, err = export(root, board, ledger, "--boardctl", str(script))
+        assert code == 2, f"an UNapproved plan exported: {out!r}"
+>       assert "unapproved-plan-digest" in err, err
+E       AssertionError: usage: auger spec [-h]
+E                           {validate,list,assemble,check,bundle,align,task-packet,task-export,context} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'plan-export' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align', 'task-packet', 'task-export', 'context')
+E         
+E       assert 'unapproved-plan-digest' in "usage: auger spec [-h]\n                  {validate,list,assemble,check,bundle,align,task-packet,task-export,context}...t' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align', 'task-packet', 'task-export', 'context')\n"
+
+tests/test_plan_approval.py:497: AssertionError
+_______________ test_a_rejected_or_stale_approval_refuses_export _______________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_a_rejected_or_stale_appro0')
+
+    def test_a_rejected_or_stale_approval_refuses_export(tmp_path: Path) -> None:
+        """AC2: an explicitly REJECTED plan, and an approval whose plan has since changed, both refuse.
+    
+        The rejection is not a silent no-op: it is a recorded decision that outranks the earlier
+        approval (the ledger is append-only and the LATEST record for a plan is the decision). The
+        stale case names BOTH digests, because "your approval is stale" without the pair leaves the
+        operator unable to tell a re-approval from a corrupted ledger.
+        """
+        boardctl_or_skip()
+        root = write_plan_corpus(tmp_path)
+        board = make_board(tmp_path)
+        ledger = tmp_path / "ledger"
+        ledger.mkdir()
+        script, log = wrapper(tmp_path)
+        tasks, events = board_files(board)
+        before = (digest_of(tasks), digest_of(events))
+    
+        # (a) rejection of the very digest that is current.
+>       plan = draft(root)
+               ^^^^^^^^^^^
+
+tests/test_plan_approval.py:528: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_a_rejected_or_stale_appro0/corpus')
+plan = 'SG8-E2E-PLAN'
+
+    def draft(root: Path, plan: str = PLAN) -> dict:
+        """`spec plan-draft` as JSON — the reviewed plan, not a task packet."""
+        code, out, err = run_spec("plan-draft", str(root), "--plan", plan)
+>       assert code == 0, f"spec plan-draft refused: {err}"
+E       AssertionError: spec plan-draft refused: usage: auger spec [-h]
+E                           {validate,list,assemble,check,bundle,align,task-packet,task-export,context} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'plan-draft' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align', 'task-packet', 'task-export', 'context')
+E         
+E       assert 2 == 0
+
+tests/test_plan_approval.py:90: AssertionError
+____________ test_an_approved_plan_exports_every_row_and_reads_back ____________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_an_approved_plan_exports_0')
+
+    def test_an_approved_plan_exports_every_row_and_reads_back(tmp_path: Path) -> None:
+        """AC3+AC5: every approved task becomes one canonical row, read back and compared.
+    
+        The criteria the row carries are the APPROVED criteria verbatim, the scope tags are the plan's,
+        and the packet JSON inside `reasoning` is byte-identical to the approved packet. A re-export of
+        the same approved plan is idempotent: no second create, one row per id, and both canonical
+        files byte-identical.
+        """
+        boardctl_or_skip()
+        root = write_plan_corpus(tmp_path)
+        board = make_board(tmp_path)
+        ledger = tmp_path / "ledger"
+        ledger.mkdir()
+>       plan, digest = approve_current(root, board, ledger)
+                       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_plan_approval.py:591: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_plan_approval.py:144: in approve_current
+    plan = draft(root, **({"plan": kwargs["plan"]} if "plan" in kwargs else {}))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_an_approved_plan_exports_0/corpus')
+plan = 'SG8-E2E-PLAN'
+
+    def draft(root: Path, plan: str = PLAN) -> dict:
+        """`spec plan-draft` as JSON — the reviewed plan, not a task packet."""
+        code, out, err = run_spec("plan-draft", str(root), "--plan", plan)
+>       assert code == 0, f"spec plan-draft refused: {err}"
+E       AssertionError: spec plan-draft refused: usage: auger spec [-h]
+E                           {validate,list,assemble,check,bundle,align,task-packet,task-export,context} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'plan-draft' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align', 'task-packet', 'task-export', 'context')
+E         
+E       assert 2 == 0
+
+tests/test_plan_approval.py:90: AssertionError
+____________ test_a_drifted_row_is_repaired_by_the_supported_update ____________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_a_drifted_row_is_repaired0')
+
+    def test_a_drifted_row_is_repaired_by_the_supported_update(tmp_path: Path) -> None:
+        """AC3's update half: an existing row whose criteria drifted is REPAIRED through boardctl.
+    
+        The exporter never writes the board itself, so the only way to bring a drifted row back to the
+        approved value is boardctl's supported `update`. The proof is the read-back: the criteria and
+        title are the approved ones again, the scope tags were never touched (they did not drift), and
+        a third export is `unchanged` again — so the repair converged instead of oscillating.
+        """
+        boardctl_or_skip()
+        root = write_plan_corpus(tmp_path)
+        board = make_board(tmp_path)
+        ledger = tmp_path / "ledger"
+        ledger.mkdir()
+>       plan, _digest = approve_current(root, board, ledger)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_plan_approval.py:662: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_plan_approval.py:144: in approve_current
+    plan = draft(root, **({"plan": kwargs["plan"]} if "plan" in kwargs else {}))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_a_drifted_row_is_repaired0/corpus')
+plan = 'SG8-E2E-PLAN'
+
+    def draft(root: Path, plan: str = PLAN) -> dict:
+        """`spec plan-draft` as JSON — the reviewed plan, not a task packet."""
+        code, out, err = run_spec("plan-draft", str(root), "--plan", plan)
+>       assert code == 0, f"spec plan-draft refused: {err}"
+E       AssertionError: spec plan-draft refused: usage: auger spec [-h]
+E                           {validate,list,assemble,check,bundle,align,task-packet,task-export,context} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'plan-draft' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align', 'task-packet', 'task-export', 'context')
+E         
+E       assert 2 == 0
+
+tests/test_plan_approval.py:90: AssertionError
+____________ test_the_plan_exporter_issues_only_boardctl_operations ____________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_the_plan_exporter_issues_0')
+
+    def test_the_plan_exporter_issues_only_boardctl_operations(tmp_path: Path) -> None:
+        """AC3/AC6: the plan exporter shells out to boardctl `create`/`update`/`show` and nothing else.
+    
+        Proved from OUTSIDE (a wrapper records every argv the exporter issued; the operations must be a
+        subset of {create, update, show}) and from INSIDE (the exporter's own source names no HTTP
+        client, no scheduler and no tick path), so there is no second board store to disable later.
+        """
+        boardctl_or_skip()
+        root = write_plan_corpus(tmp_path)
+        board = make_board(tmp_path)
+        ledger = tmp_path / "ledger"
+        ledger.mkdir()
+>       _plan, _digest = approve_current(root, board, ledger)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_plan_approval.py:721: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_plan_approval.py:144: in approve_current
+    plan = draft(root, **({"plan": kwargs["plan"]} if "plan" in kwargs else {}))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_the_plan_exporter_issues_0/corpus')
+plan = 'SG8-E2E-PLAN'
+
+    def draft(root: Path, plan: str = PLAN) -> dict:
+        """`spec plan-draft` as JSON — the reviewed plan, not a task packet."""
+        code, out, err = run_spec("plan-draft", str(root), "--plan", plan)
+>       assert code == 0, f"spec plan-draft refused: {err}"
+E       AssertionError: spec plan-draft refused: usage: auger spec [-h]
+E                           {validate,list,assemble,check,bundle,align,task-packet,task-export,context} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'plan-draft' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align', 'task-packet', 'task-export', 'context')
+E         
+E       assert 2 == 0
+
+tests/test_plan_approval.py:90: AssertionError
+_______________ test_a_partial_failure_is_recorded_and_resumable _______________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_a_partial_failure_is_reco0')
+
+    def test_a_partial_failure_is_recorded_and_resumable(tmp_path: Path) -> None:
+        """AC5: when the second row fails, the FIRST row's outcome is recorded and the run is not "done".
+    
+        A half-exported plan reported as success is the failure mode this row exists to prevent, so the
+        exporter stops at the failing row, exits non-zero, prints the outcome of the row it did write and
+        names the failure with boardctl's own words. The recovery record on disk says what happened and
+        what to do next, and re-running the SAME approved plan completes it: the already-written row is
+        `unchanged` (not re-created) and only the missing row is created.
+        """
+        boardctl_or_skip()
+        root = write_plan_corpus(tmp_path)
+        board = make_board(tmp_path)
+        ledger = tmp_path / "ledger"
+        ledger.mkdir()
+>       _plan, digest = approve_current(root, board, ledger)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_plan_approval.py:767: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_plan_approval.py:144: in approve_current
+    plan = draft(root, **({"plan": kwargs["plan"]} if "plan" in kwargs else {}))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_a_partial_failure_is_reco0/corpus')
+plan = 'SG8-E2E-PLAN'
+
+    def draft(root: Path, plan: str = PLAN) -> dict:
+        """`spec plan-draft` as JSON — the reviewed plan, not a task packet."""
+        code, out, err = run_spec("plan-draft", str(root), "--plan", plan)
+>       assert code == 0, f"spec plan-draft refused: {err}"
+E       AssertionError: spec plan-draft refused: usage: auger spec [-h]
+E                           {validate,list,assemble,check,bundle,align,task-packet,task-export,context} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'plan-draft' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align', 'task-packet', 'task-export', 'context')
+E         
+E       assert 2 == 0
+
+tests/test_plan_approval.py:90: AssertionError
+___________ test_reconciliation_reads_board_evidence_without_writing ___________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_reconciliation_reads_boar0')
+
+    def test_reconciliation_reads_board_evidence_without_writing(tmp_path: Path) -> None:
+        """AC4: board status/commit/verdict evidence is read INTO Auger; the board is not touched.
+    
+        The reconciliation record binds each task to its canonical row, its recorded commit (resolved in
+        the repository, not merely echoed) and its verdict — with `none:<reason>` where a field has
+        nothing behind it yet, so "pending" can never be read as "passed". The canonical files hash
+        identically before and after, which is what "without overwriting canonical board state" means.
+        """
+        boardctl_or_skip()
+        root = write_plan_corpus(tmp_path)
+        board = make_board(tmp_path)
+        ledger = tmp_path / "ledger"
+        ledger.mkdir()
+>       _plan, digest = approve_current(root, board, ledger)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_plan_approval.py:824: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_plan_approval.py:144: in approve_current
+    plan = draft(root, **({"plan": kwargs["plan"]} if "plan" in kwargs else {}))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_reconciliation_reads_boar0/corpus')
+plan = 'SG8-E2E-PLAN'
+
+    def draft(root: Path, plan: str = PLAN) -> dict:
+        """`spec plan-draft` as JSON — the reviewed plan, not a task packet."""
+        code, out, err = run_spec("plan-draft", str(root), "--plan", plan)
+>       assert code == 0, f"spec plan-draft refused: {err}"
+E       AssertionError: spec plan-draft refused: usage: auger spec [-h]
+E                           {validate,list,assemble,check,bundle,align,task-packet,task-export,context} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'plan-draft' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align', 'task-packet', 'task-export', 'context')
+E         
+E       assert 2 == 0
+
+tests/test_plan_approval.py:90: AssertionError
+________________ test_reconciliation_binds_commits_and_verdicts ________________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_reconciliation_binds_comm0')
+
+    def test_reconciliation_binds_commits_and_verdicts(tmp_path: Path) -> None:
+        """AC4/AC6: a commit that does not resolve, and a verdict for another commit, are both refused.
+    
+        A reconciliation record that merely copies whatever strings the board holds is not evidence: a
+        commit must exist in the repository it is claimed against, and a verdict must describe the SAME
+        commit the row records. Both refusals name the task and the values, so an operator can see which
+        side is wrong.
+        """
+        boardctl_or_skip()
+        root = write_plan_corpus(tmp_path)
+        board = make_board(tmp_path)
+        ledger = tmp_path / "ledger"
+        ledger.mkdir()
+>       _plan, _digest = approve_current(root, board, ledger)
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_plan_approval.py:901: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_plan_approval.py:144: in approve_current
+    plan = draft(root, **({"plan": kwargs["plan"]} if "plan" in kwargs else {}))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_reconciliation_binds_comm0/corpus')
+plan = 'SG8-E2E-PLAN'
+
+    def draft(root: Path, plan: str = PLAN) -> dict:
+        """`spec plan-draft` as JSON — the reviewed plan, not a task packet."""
+        code, out, err = run_spec("plan-draft", str(root), "--plan", plan)
+>       assert code == 0, f"spec plan-draft refused: {err}"
+E       AssertionError: spec plan-draft refused: usage: auger spec [-h]
+E                           {validate,list,assemble,check,bundle,align,task-packet,task-export,context} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'plan-draft' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align', 'task-packet', 'task-export', 'context')
+E         
+E       assert 2 == 0
+
+tests/test_plan_approval.py:90: AssertionError
+_________________ test_the_plan_trace_marker_names_every_field _________________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_the_plan_trace_marker_nam0')
+
+    def test_the_plan_trace_marker_names_every_field(tmp_path: Path) -> None:
+        """AC6: the marker carries row/spec/test/evidence/witness, with `none:<reason>` when absent.
+    
+        The doctrine's closeout marker has more fields than the exported stub used to carry, and
+        `witness` was missing from the PARSER's vocabulary — a field a reader never sees is a field no
+        marker may name. The exported marker is re-read from the canonical row, parsed, and resolved
+        back to the exact authored blocks; a bare `none` is refused rather than tolerated.
+        """
+        boardctl_or_skip()
+        root = write_plan_corpus(tmp_path)
+        board = make_board(tmp_path)
+        ledger = tmp_path / "ledger"
+        ledger.mkdir()
+>       plan, _digest = approve_current(root, board, ledger)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_plan_approval.py:1022: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_plan_approval.py:144: in approve_current
+    plan = draft(root, **({"plan": kwargs["plan"]} if "plan" in kwargs else {}))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_the_plan_trace_marker_nam0/corpus')
+plan = 'SG8-E2E-PLAN'
+
+    def draft(root: Path, plan: str = PLAN) -> dict:
+        """`spec plan-draft` as JSON — the reviewed plan, not a task packet."""
+        code, out, err = run_spec("plan-draft", str(root), "--plan", plan)
+>       assert code == 0, f"spec plan-draft refused: {err}"
+E       AssertionError: spec plan-draft refused: usage: auger spec [-h]
+E                           {validate,list,assemble,check,bundle,align,task-packet,task-export,context} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'plan-draft' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align', 'task-packet', 'task-export', 'context')
+E         
+E       assert 2 == 0
+
+tests/test_plan_approval.py:90: AssertionError
+________________________ test_gate_arm_runs_these_files ________________________
+
+    def test_gate_arm_runs_these_files() -> None:
+        """This proof file must be in tests/gate.sh's pytest arm, or it is never executed."""
+        arm = [
+            line
+            for line in GATE.read_text(encoding="utf-8").splitlines()
+            if "python3 -m pytest" in line
+        ]
+        assert arm, "tests/gate.sh must have a pytest arm"
+>       assert "tests/test_plan_approval.py" in arm[0], (
+            "tests/test_plan_approval.py must be in tests/gate.sh's pytest arm — the guard's test "
+            "command is the gate, so a proof file outside it is never run"
+        )
+E       AssertionError: tests/test_plan_approval.py must be in tests/gate.sh's pytest arm — the guard's test command is the gate, so a proof file outside it is never run
+E       assert 'tests/test_plan_approval.py' in '  setsid timeout --kill-after="$kill_after" "$budget" python3 -m pytest tests/test_auger.py tests/test_openapi_parity...t_usage_skill.py tests/test_packaging.py tests/test_packaging_wheel.py tests/test_teardown_resilience.py "$@" || rc=$?'
+
+tests/test_plan_approval.py:1073: AssertionError
+________________________ test_gate_arm_runs_these_files ________________________
+
+    def test_gate_arm_runs_these_files() -> None:
+        """This proof file must be in tests/gate.sh's pytest arm, or it is never executed."""
+        arm = [
+            line
+            for line in GATE.read_text(encoding="utf-8").splitlines()
+            if "python3 -m pytest" in line
+        ]
+        assert arm, "tests/gate.sh must have a pytest arm"
+>       assert "tests/test_task_context.py" in arm[0], (
+            "tests/test_task_context.py must be in tests/gate.sh's pytest arm — a proof file outside "
+            "it is never executed by the guard or CI"
+        )
+E       AssertionError: tests/test_task_context.py must be in tests/gate.sh's pytest arm — a proof file outside it is never executed by the guard or CI
+E       assert 'tests/test_task_context.py' in '  setsid timeout --kill-after="$kill_after" "$budget" python3 -m pytest tests/test_auger.py tests/test_openapi_parity...t_usage_skill.py tests/test_packaging.py tests/test_packaging_wheel.py tests/test_teardown_resilience.py "$@" || rc=$?'
+
+tests/test_task_context.py:224: AssertionError
+____________ test_the_packet_preserves_the_approved_input_verbatim _____________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_the_packet_preserves_the_0')
+
+    def test_the_packet_preserves_the_approved_input_verbatim(tmp_path: Path) -> None:
+        """AC-18: acceptance criteria, scope refs, obligations, id mapping and digests survive intake.
+    
+        Every field is compared against an INDEPENDENT source — the canonical board row for the
+        criteria, the approved plan for the digests, the corpus for the obligation — so a packet that
+        quietly re-derived any of them from the current XML would be caught. The packet is also re-read
+        from disk and re-emitted: two exports of the same approved plan are byte-identical.
+        """
+>       root, board, ledger, plan = approved_plan(tmp_path)
+                                    ^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_task_packet.py:254: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+base = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_the_packet_preserves_the_0')
+repo_root = PosixPath('/home/kara/proj-wt-auger-xml-hardening')
+corpus_kwargs = {}
+
+    def approved_plan(
+        base: Path, *, repo_root: Path = REPO_ROOT, **corpus_kwargs
+    ) -> tuple[Path, Path, Path, dict]:
+        """Draft → approve → export. Returns (root, board, ledger, plan).
+    
+        `repo_root` belongs to the HANDOFF (it is where the judge's tracked paths resolve), not to the
+        export: the export writes canonical rows and resolves no test obligation, so the corpus may name
+        a test in a repository other than the one it is drafted in.
+        """
+        boardctl_or_skip()
+        root = write_corpus(base, **corpus_kwargs)
+        board = make_board(base)
+        ledger = base / "ledger"
+        ledger.mkdir()
+        code, out, err = run_spec("plan-draft", str(root), "--plan", PLAN)
+>       assert code == 0, err
+E       AssertionError: usage: auger spec [-h]
+E                           {validate,list,assemble,check,bundle,align,task-packet,task-export,context} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'plan-draft' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align', 'task-packet', 'task-export', 'context')
+E         
+E       assert 2 == 0
+
+tests/test_task_packet.py:165: AssertionError
+________________ test_the_packet_is_bound_to_the_approved_plan _________________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_the_packet_is_bound_to_th0')
+
+    def test_the_packet_is_bound_to_the_approved_plan(tmp_path: Path) -> None:
+        """AC-18/AC-2: editing the corpus after approval refuses the handoff; it is never re-derived.
+    
+        This is the property the consumer can never check for itself: the packet must be a statement of
+        what was APPROVED. If the spec text moves after the approval, the plan digest no longer matches
+        and the handoff refuses — naming both digests — instead of shipping a packet whose digests
+        describe a corpus nobody reviewed.
+        """
+>       root, board, ledger, plan = approved_plan(tmp_path)
+                                    ^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_task_packet.py:344: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+base = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_the_packet_is_bound_to_th0')
+repo_root = PosixPath('/home/kara/proj-wt-auger-xml-hardening')
+corpus_kwargs = {}
+
+    def approved_plan(
+        base: Path, *, repo_root: Path = REPO_ROOT, **corpus_kwargs
+    ) -> tuple[Path, Path, Path, dict]:
+        """Draft → approve → export. Returns (root, board, ledger, plan).
+    
+        `repo_root` belongs to the HANDOFF (it is where the judge's tracked paths resolve), not to the
+        export: the export writes canonical rows and resolves no test obligation, so the corpus may name
+        a test in a repository other than the one it is drafted in.
+        """
+        boardctl_or_skip()
+        root = write_corpus(base, **corpus_kwargs)
+        board = make_board(base)
+        ledger = base / "ledger"
+        ledger.mkdir()
+        code, out, err = run_spec("plan-draft", str(root), "--plan", PLAN)
+>       assert code == 0, err
+E       AssertionError: usage: auger spec [-h]
+E                           {validate,list,assemble,check,bundle,align,task-packet,task-export,context} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'plan-draft' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align', 'task-packet', 'task-export', 'context')
+E         
+E       assert 2 == 0
+
+tests/test_task_packet.py:165: AssertionError
+____________ test_a_packet_naming_an_untracked_test_path_is_refused ____________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_a_packet_naming_an_untrac0')
+
+    def test_a_packet_naming_an_untracked_test_path_is_refused(tmp_path: Path) -> None:
+        """AC-18: an obligation whose path the consuming repository does not TRACK cannot be judged.
+    
+        The consumer resolves a test ref with `git ls-files --error-unmatch` inside its own workdir and
+        refuses an untracked path, so Auger refuses it first with the same vocabulary — a packet that
+        names a file the judge cannot see is a fail-closed Tier-1 result, not a packet.
+    
+        The scratch repository is a REAL one (its own package, its own committed test), never auger's
+        tree: a corpus inside auger's checkout hides exactly the defect worth catching.
+        """
+        boardctl_or_skip()
+        scratch = tmp_path / "consumer"
+        (scratch / "tests").mkdir(parents=True)
+        (scratch / "tests" / "test_good.py").write_text(
+            "def test_good():\n    assert True\n", encoding="utf-8"
+        )
+        (scratch / "tests" / "test_untracked.py").write_text(
+            "def test_untracked():\n    assert True\n", encoding="utf-8"
+        )
+        committed = subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.email=auger@example.invalid",
+                "-c",
+                "user.name=auger",
+                "init",
+                "-q",
+                "-b",
+                "main",
+                ".",
+            ],
+            cwd=str(scratch),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert committed.returncode == 0, committed.stderr
+        for argv in (["add", "tests/test_good.py"], ["commit", "-q", "-m", "the tracked test"]):
+            done = subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.email=auger@example.invalid",
+                    "-c",
+                    "user.name=auger",
+                    *argv,
+                ],
+                cwd=str(scratch),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            assert done.returncode == 0, done.stderr
+    
+        # The tracked obligation is accepted (so the refusal below is about tracking, not about paths).
+        good = tmp_path / "good"
+        good.mkdir()
+>       root, board, ledger, _plan = approved_plan(
+            good, repo_root=scratch, test_path="tests/test_good.py", selector="test_good"
+        )
+
+tests/test_task_packet.py:423: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+base = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_a_packet_naming_an_untrac0/good')
+repo_root = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_a_packet_naming_an_untrac0/consumer')
+corpus_kwargs = {'test_path': 'tests/test_good.py', 'selector': 'test_good'}
+
+    def approved_plan(
+        base: Path, *, repo_root: Path = REPO_ROOT, **corpus_kwargs
+    ) -> tuple[Path, Path, Path, dict]:
+        """Draft → approve → export. Returns (root, board, ledger, plan).
+    
+        `repo_root` belongs to the HANDOFF (it is where the judge's tracked paths resolve), not to the
+        export: the export writes canonical rows and resolves no test obligation, so the corpus may name
+        a test in a repository other than the one it is drafted in.
+        """
+        boardctl_or_skip()
+        root = write_corpus(base, **corpus_kwargs)
+        board = make_board(base)
+        ledger = base / "ledger"
+        ledger.mkdir()
+        code, out, err = run_spec("plan-draft", str(root), "--plan", PLAN)
+>       assert code == 0, err
+E       AssertionError: usage: auger spec [-h]
+E                           {validate,list,assemble,check,bundle,align,task-packet,task-export,context} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'plan-draft' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align', 'task-packet', 'task-export', 'context')
+E         
+E       assert 2 == 0
+
+tests/test_task_packet.py:165: AssertionError
+___________ test_an_invalid_trace_starts_no_judge_and_names_the_ids ____________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_an_invalid_trace_starts_n0')
+
+    def test_an_invalid_trace_starts_no_judge_and_names_the_ids(tmp_path: Path) -> None:
+        """AC-19: every invalid trace refuses the handoff and NAMES the row/spec/test that is wrong.
+    
+        Six shapes, because they need six different fixes: no marker at all, an id that is not in the
+        corpus, an id that is in the corpus but OUT of this task's scope, a marker for a DIFFERENT row,
+        a marker whose file is not the block's file, and a test value that is not one of the task's
+        obligations. In every case the dispatch seam records ZERO invocations — a judge that starts on
+        an invalid trace would be judging a packet nobody can resolve — and stderr names the offending
+        id instead of a generic "invalid".
+        """
+        boardctl_or_skip()
+>       root, board, ledger, _plan = approved_plan(tmp_path)
+                                     ^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_task_packet.py:462: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+base = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_an_invalid_trace_starts_n0')
+repo_root = PosixPath('/home/kara/proj-wt-auger-xml-hardening')
+corpus_kwargs = {}
+
+    def approved_plan(
+        base: Path, *, repo_root: Path = REPO_ROOT, **corpus_kwargs
+    ) -> tuple[Path, Path, Path, dict]:
+        """Draft → approve → export. Returns (root, board, ledger, plan).
+    
+        `repo_root` belongs to the HANDOFF (it is where the judge's tracked paths resolve), not to the
+        export: the export writes canonical rows and resolves no test obligation, so the corpus may name
+        a test in a repository other than the one it is drafted in.
+        """
+        boardctl_or_skip()
+        root = write_corpus(base, **corpus_kwargs)
+        board = make_board(base)
+        ledger = base / "ledger"
+        ledger.mkdir()
+        code, out, err = run_spec("plan-draft", str(root), "--plan", PLAN)
+>       assert code == 0, err
+E       AssertionError: usage: auger spec [-h]
+E                           {validate,list,assemble,check,bundle,align,task-packet,task-export,context} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'plan-draft' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align', 'task-packet', 'task-export', 'context')
+E         
+E       assert 2 == 0
+
+tests/test_task_packet.py:165: AssertionError
+_____________ test_a_valid_trace_starts_the_lifecycle_exactly_once _____________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_a_valid_trace_starts_the_0')
+
+    def test_a_valid_trace_starts_the_lifecycle_exactly_once(tmp_path: Path) -> None:
+        """AC-19: a valid trace calls the lifecycle entry point ONCE, with the board's criteria.
+    
+        The invocation count is the whole assertion: zero on an invalid trace, exactly one per handoff
+        on a valid one. The context handed over carries the board acceptance criteria VERBATIM (the
+        judge's authority is the board, not a re-rendering of it), and the packet that goes with it is
+        the one the consumer accepts.
+        """
+        boardctl_or_skip()
+>       root, board, ledger, _plan = approved_plan(tmp_path)
+                                     ^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_task_packet.py:546: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+base = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_a_valid_trace_starts_the_0')
+repo_root = PosixPath('/home/kara/proj-wt-auger-xml-hardening')
+corpus_kwargs = {}
+
+    def approved_plan(
+        base: Path, *, repo_root: Path = REPO_ROOT, **corpus_kwargs
+    ) -> tuple[Path, Path, Path, dict]:
+        """Draft → approve → export. Returns (root, board, ledger, plan).
+    
+        `repo_root` belongs to the HANDOFF (it is where the judge's tracked paths resolve), not to the
+        export: the export writes canonical rows and resolves no test obligation, so the corpus may name
+        a test in a repository other than the one it is drafted in.
+        """
+        boardctl_or_skip()
+        root = write_corpus(base, **corpus_kwargs)
+        board = make_board(base)
+        ledger = base / "ledger"
+        ledger.mkdir()
+        code, out, err = run_spec("plan-draft", str(root), "--plan", PLAN)
+>       assert code == 0, err
+E       AssertionError: usage: auger spec [-h]
+E                           {validate,list,assemble,check,bundle,align,task-packet,task-export,context} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'plan-draft' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align', 'task-packet', 'task-export', 'context')
+E         
+E       assert 2 == 0
+
+tests/test_task_packet.py:165: AssertionError
+___________ test_a_false_worker_summary_cannot_pass_a_red_obligation ___________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_a_false_worker_summary_ca0')
+
+    def test_a_false_worker_summary_cannot_pass_a_red_obligation(tmp_path: Path) -> None:
+        """AC-20: a summary claiming green cannot turn a red (or absent) obligation into a PASS.
+    
+        The obligation is run for real — a throwaway pytest file that fails — and the verdict function
+        is fed that failure plus a worker summary asserting the test passes. The verdict must be `fail`
+        and must CITE the obligation id and the reason; the summary is recorded as untrusted context and
+        has no path into the verdict. A green control run keeps the arm from being vacuously red.
+        """
+        boardctl_or_skip()
+>       root, board, ledger, _plan = approved_plan(tmp_path)
+                                     ^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_task_packet.py:643: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+base = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1650/test_a_false_worker_summary_ca0')
+repo_root = PosixPath('/home/kara/proj-wt-auger-xml-hardening')
+corpus_kwargs = {}
+
+    def approved_plan(
+        base: Path, *, repo_root: Path = REPO_ROOT, **corpus_kwargs
+    ) -> tuple[Path, Path, Path, dict]:
+        """Draft → approve → export. Returns (root, board, ledger, plan).
+    
+        `repo_root` belongs to the HANDOFF (it is where the judge's tracked paths resolve), not to the
+        export: the export writes canonical rows and resolves no test obligation, so the corpus may name
+        a test in a repository other than the one it is drafted in.
+        """
+        boardctl_or_skip()
+        root = write_corpus(base, **corpus_kwargs)
+        board = make_board(base)
+        ledger = base / "ledger"
+        ledger.mkdir()
+        code, out, err = run_spec("plan-draft", str(root), "--plan", PLAN)
+>       assert code == 0, err
+E       AssertionError: usage: auger spec [-h]
+E                           {validate,list,assemble,check,bundle,align,task-packet,task-export,context} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'plan-draft' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align', 'task-packet', 'task-export', 'context')
+E         
+E       assert 2 == 0
+
+tests/test_task_packet.py:165: AssertionError
+________________________ test_gate_arm_runs_these_files ________________________
+
+    def test_gate_arm_runs_these_files() -> None:
+        """This proof file must be in tests/gate.sh's pytest arm, or it is never executed."""
+        arm = [
+            line
+            for line in GATE.read_text(encoding="utf-8").splitlines()
+            if "python3 -m pytest" in line
+        ]
+        assert arm, "tests/gate.sh must have a pytest arm"
+>       assert "tests/test_task_packet.py" in arm[0], (
+            "tests/test_task_packet.py must be in tests/gate.sh's pytest arm — the guard's test "
+            "command is the gate, so a proof file outside it is never run"
+        )
+E       AssertionError: tests/test_task_packet.py must be in tests/gate.sh's pytest arm — the guard's test command is the gate, so a proof file outside it is never run
+E       assert 'tests/test_task_packet.py' in '  setsid timeout --kill-after="$kill_after" "$budget" python3 -m pytest tests/test_auger.py tests/test_openapi_parity...t_usage_skill.py tests/test_packaging.py tests/test_packaging_wheel.py tests/test_teardown_resilience.py "$@" || rc=$?'
+
+tests/test_task_packet.py:706: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_plan_approval.py::test_a_draft_plan_is_versioned_and_complete
+FAILED tests/test_plan_approval.py::test_an_unapproved_draft_leaves_the_board_byte_identical
+FAILED tests/test_plan_approval.py::test_a_rejected_or_stale_approval_refuses_export
+FAILED tests/test_plan_approval.py::test_an_approved_plan_exports_every_row_and_reads_back
+FAILED tests/test_plan_approval.py::test_a_drifted_row_is_repaired_by_the_supported_update
+FAILED tests/test_plan_approval.py::test_the_plan_exporter_issues_only_boardctl_operations
+FAILED tests/test_plan_approval.py::test_a_partial_failure_is_recorded_and_resumable
+FAILED tests/test_plan_approval.py::test_reconciliation_reads_board_evidence_without_writing
+FAILED tests/test_plan_approval.py::test_reconciliation_binds_commits_and_verdicts
+FAILED tests/test_plan_approval.py::test_the_plan_trace_marker_names_every_field
+FAILED tests/test_plan_approval.py::test_gate_arm_runs_these_files - Assertio...
+FAILED tests/test_task_context.py::test_gate_arm_runs_these_files - Assertion...
+FAILED tests/test_task_packet.py::test_the_packet_preserves_the_approved_input_verbatim
+FAILED tests/test_task_packet.py::test_the_packet_is_bound_to_the_approved_plan
+FAILED tests/test_task_packet.py::test_a_packet_naming_an_untracked_test_path_is_refused
+FAILED tests/test_task_packet.py::test_an_invalid_trace_starts_no_judge_and_names_the_ids
+FAILED tests/test_task_packet.py::test_a_valid_trace_starts_the_lifecycle_exactly_once
+FAILED tests/test_task_packet.py::test_a_false_worker_summary_cannot_pass_a_red_obligation
+FAILED tests/test_task_packet.py::test_gate_arm_runs_these_files - AssertionE...
+19 failed, 1 passed in 0.39s
+red_rc=1

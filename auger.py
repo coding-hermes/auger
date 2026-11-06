@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import copy
 import hashlib
 import importlib
 import io
@@ -52,6 +53,7 @@ import json
 import math
 import os
 import re
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -7781,8 +7783,33 @@ SPEC_APPLIES_RE = re.compile(r"^[a-z0-9]+([._-][a-z0-9]+)*$")
 SPEC_TASK_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 # The fields a generated task marker carries. `row` and `spec` must resolve to the canonical task
 # and its exact XML ids; `evidence`/`verdict`/`commit` are absent at export time and therefore
-# carry `none:<reason>` — a bare `none` is refused (AUG-121 AC5, PRD R10).
-SPEC_TASK_MARKER_FIELDS = ("row", "spec", "test", "evidence", "verdict", "commit")
+# carry `none:<reason>` — a bare `none` is refused (AUG-121 AC5, PRD R10). `witness` (AUG-119 AC6)
+# is the independent observer of the claim: the doctrine's own closeout markers carry it
+# (`witness=none:self-verified`), and a field a reader cannot see is a field no marker may name —
+# so it is part of the PARSER's vocabulary, not only of the renderer's.
+SPEC_TASK_MARKER_FIELDS = (
+    "row",
+    "spec",
+    "test",
+    "evidence",
+    "verdict",
+    "commit",
+    "witness",
+)
+# A marker written before any board row exists, and the marker bound INTO the row the exporter then
+# reads back. Two values, because "nothing has witnessed this yet" and "the canonical row was read
+# back" are different claims and a reader must be able to tell them apart.
+SPEC_TASK_DRAFT_WITNESS = "none:not-exported"
+SPEC_TASK_EXPORT_WITNESS = "boardctl:show-readback"
+# A plan's approval ledger (AUG-119). Append-only: the LATEST record for a plan is the decision, so
+# a rejection is a new fact rather than an edit of history, and a plan whose approval predates its
+# current digest is stale instead of silently still-approved.
+SPEC_PLAN_LEDGER_NAME = "plan-approvals.jsonl"
+SPEC_PLAN_DECISIONS = ("approved", "rejected")
+# The lifecycle states a GitReins packet accepts on a spec/test reference (AUG-124). Mirrors the
+# consumer's `_ACTIVE_STATES`: a packet Auger calls valid must be one the adapter will not refuse.
+SPEC_PACKET_ACTIVE_STATES = ("active", "current", "approved")
+SPEC_PACKET_VERSION = "1.0"
 # AUG-122: the closed set of outcomes a context query can answer with. Anything other than `ok`
 # carries a `reason` string, because "no result" and "the tool had nothing to say" must never look
 # the same to a caller.
@@ -8264,6 +8291,8 @@ def _spec_block(element, rel: str, order: int) -> dict:
         }
     plan_digest = ""
     scope_version = ""
+    plan_id = ""
+    plan_version = ""
     exclusions: tuple = ()
     if kind == "task":
         plan_digest = (element.get("plan-digest") or "").strip()
@@ -8278,6 +8307,22 @@ def _spec_block(element, rel: str, order: int) -> dict:
             raise SpecError(
                 "invalid-version",
                 f"{rel}: {block_id} scope-version={scope_version!r} (expected X.Y.Z)",
+            )
+        # AUG-119: PLAN MEMBERSHIP is authored, not inferred from a directory or a filename. A plan
+        # is many tasks, so the task is the one place that knows which plan it belongs to; the
+        # version rides beside it so a plan that changed shape cannot be approved under the old
+        # label (the plan builder refuses a mixed plan-version).
+        plan_id = (element.get("plan") or "").strip()
+        if plan_id and not SPEC_ID_RE.match(plan_id):
+            raise SpecError(
+                "invalid-plan-id",
+                f"{rel}: {block_id} plan={plan_id!r} (expected an UPPER-CASE block-style id)",
+            )
+        plan_version = (element.get("plan-version") or "").strip()
+        if plan_version and not SPEC_VERSION_RE.match(plan_version):
+            raise SpecError(
+                "invalid-version",
+                f"{rel}: {block_id} plan-version={plan_version!r} (expected X.Y.Z)",
             )
         entries = []
         for child in element:
@@ -8312,6 +8357,8 @@ def _spec_block(element, rel: str, order: int) -> dict:
         "obligation": obligation,
         "plan_digest": plan_digest,
         "scope_version": scope_version,
+        "plan": plan_id,
+        "plan_version": plan_version,
         "exclusions": exclusions,
         "text": _spec_text(element),
         "source": f"{rel}#{block_id}",
@@ -9039,13 +9086,23 @@ def _task_marker_value(key: str, value: str) -> str:
 
 
 def render_task_trace_marker(
-    packet: dict, *, test=None, evidence=None, verdict=None, commit=None
+    packet: dict,
+    *,
+    test=None,
+    evidence=None,
+    verdict=None,
+    commit=None,
+    witness=None,
 ) -> str:
-    """The `ch:trace` marker for an exported task (AUG-121 AC5, PRD R10).
+    """The `ch:trace` marker for an exported task (AUG-121 AC5, AUG-119 AC6, PRD R10).
 
     `row` is the canonical task id and `spec` is the task block's own `file.xml#ID` source, so both
     resolve to the exact XML block rather than to a document heading. A field with nothing behind it
     yet carries `none:<reason>` — never a bare `none`, and never a green-looking placeholder.
+
+    `witness` comes LAST so the marker a draft produced is a prefix of the marker its exported row
+    carries: a reader comparing the two sees one field differ (who witnessed it), not two markers
+    that share no text.
     """
     marker = "ch:trace " + " ".join(
         f"{key}={_task_marker_value(key, value)}"
@@ -9056,6 +9113,7 @@ def render_task_trace_marker(
             ("evidence", evidence or "none:no-evidence-recorded"),
             ("verdict", verdict or "none:not-judged"),
             ("commit", commit or "none:not-implemented"),
+            ("witness", witness or SPEC_TASK_DRAFT_WITNESS),
         )
     )
     return marker
@@ -9375,6 +9433,1477 @@ def export_task_packet(
             f"{row['capability_tags']!r}",
         )
     return outcome("exported", readback)
+
+
+# ---------------------------------------------------------------- approved plans (AUG-119)
+# A plan is the reviewed unit ABOVE a task: many tasks, one version, one digest. The SG7 seam
+# (`spec task-packet` / `spec task-export`) answers "what is this ONE task, and may it be written";
+# this seam answers "is THIS SET of tasks approved, write them all, and tell me what landed".
+#
+# Three properties are load-bearing, and each one is refused loudly rather than defaulted:
+#
+#   * APPROVAL IS A RECORD, not a flag. The digest an operator approved is written to an
+#     append-only ledger with the plan id, the plan VERSION and the approver, and the LATEST record
+#     for a plan is the decision — so a rejection is a new fact instead of an edit of history. Any
+#     edit to the corpus changes the digest, which makes the old approval STALE rather than
+#     silently still valid.
+#   * THE BOARD IS WRITTEN BY boardctl ONLY: `create` for a row that does not exist, `update` for
+#     the fields boardctl supports rewriting (title, acceptance criteria) when they drift.
+#     Everything else is a conflict — an export never overwrites a row's scope behind its owner.
+#   * RECONCILIATION IS READ-ONLY. Board status/commit/verdict evidence is copied INTO Auger with
+#     the witness named and `writes: none`; a commit or a verdict that does not BIND is refused
+#     rather than recorded as though it had.
+def spec_block_digest(block: dict) -> str:
+    """sha256 of one block's canonical record — the digest a packet reference must carry.
+
+    Canonical means sorted keys, no insignificant whitespace, and no absolute path: the block's
+    `source_file` is corpus-relative, so the same corpus hashed in two checkouts produces the same
+    digests. The edges are part of the hash on purpose — a requirement whose `verifies=` target
+    changed is not the requirement that was approved.
+    """
+    payload = {
+        "id": block["id"],
+        "kind": block["kind"],
+        "status": block["status"],
+        "version": block["version"],
+        "method": block.get("method") or "",
+        "text": block["text"],
+        "source_file": block["source_file"],
+        "obligation": dict(block.get("obligation") or {}),
+        "refs": {
+            key: list(value) for key, value in sorted((block.get("refs") or {}).items())
+        },
+    }
+    canonical = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _plan_scope_block(block: dict) -> dict:
+    """One reference in a plan/packet: identity, lifecycle, provenance and its digest."""
+    return {
+        "id": block["id"],
+        "kind": block["kind"],
+        "status": block["status"],
+        "version": block["version"],
+        "source": block["source"],
+        "digest": spec_block_digest(block),
+    }
+
+
+def _plan_test_obligations(blocks: list, packet: dict, task_id: str) -> tuple:
+    """(evidence, test_refs) for one task, read from the task's own closure — never from a glob.
+
+    The closure is expanded through the ONE selection primitive with `depends-on` and `verifies`
+    followed forward, so the tests a plan names are the tests its contract declares. A verification
+    block that names a runner GitReins cannot run, or a path with no selector, is refused HERE:
+    a packet carrying it would be a fail-closed Tier-1 result on the consumer side, which is the
+    worst place to discover an authoring mistake.
+    """
+    seeds = [entry["id"] for entry in packet["in_scope"] + packet["acceptance"]]
+    _selection, records = select_spec_blocks(
+        blocks,
+        ids=seeds,
+        closure=True,
+        forward_edges=("depends-on", "verifies"),
+    )
+    evidence: list = []
+    test_refs: list = []
+    for record in records:
+        block = record["block"]
+        if block["kind"] not in ("verification", "test"):
+            continue
+        obligation = block.get("obligation") or {}
+        path = (obligation.get("path") or "").strip()
+        if not path:
+            continue
+        runner = (obligation.get("runner") or "").strip()
+        if runner and runner != "pytest":
+            raise SpecError(
+                "unsupported-test-runner",
+                f"{task_id}: {block['id']} names runner={runner!r}; the judge harness runs pytest, "
+                "so a plan naming another runner produces a packet the consumer refuses",
+            )
+        selector = (obligation.get("selector") or "").strip()
+        if not selector:
+            raise SpecError(
+                "missing-test-selector",
+                f"{task_id}: {block['id']} names path={path} with no selector — a test reference "
+                "without a selector cannot be run, so it is not evidence",
+            )
+        evidence.append(
+            {
+                "id": block["id"],
+                "kind": block["kind"],
+                "method": block.get("method") or "",
+                "runner": "pytest",
+                "path": path,
+                "selector": selector,
+            }
+        )
+        test_refs.append(
+            {
+                "id": block["id"],
+                "kind": block["kind"],
+                "status": block["status"],
+                "version": block["version"],
+                "source": block["source"],
+                "digest": spec_block_digest(block),
+                "runner": "pytest",
+                "path": path,
+                "selector": selector,
+            }
+        )
+    return evidence, test_refs
+
+
+def _plan_task_entry(blocks: list, task: dict, plan_id: str) -> dict:
+    """One task's plan entry: identity, criteria, dependencies, anchors, evidence, packet, digest."""
+    packet = task_packet(blocks, task["id"])
+    by_id = {block["id"]: block for block in blocks}
+    evidence, test_refs = _plan_test_obligations(blocks, packet, task["id"])
+
+    scope_blocks: list = []
+    seen: set = set()
+    for item in (*packet["in_scope"], *packet["acceptance"]):
+        if item["id"] in seen:
+            continue
+        seen.add(item["id"])
+        scope_blocks.append(_plan_scope_block(by_id[item["id"]]))
+
+    anchors = [
+        {
+            "id": packet["task"],
+            "source": packet["source"],
+            "file": task["source_file"],
+        }
+    ]
+    known = {anchor["id"] for anchor in anchors}
+    for item in (*packet["in_scope"], *packet["acceptance"]):
+        if item["id"] in known:
+            continue
+        known.add(item["id"])
+        anchors.append(
+            {
+                "id": item["id"],
+                "source": item["source"],
+                "file": item["source"].split("#")[0],
+            }
+        )
+
+    return {
+        "task": packet["task"],
+        "source": packet["source"],
+        "status": packet["status"],
+        "version": packet["version"],
+        "method": packet["method"],
+        "applies_to": list(packet["applies_to"]),
+        "plan": plan_id,
+        "plan_version": task.get("plan_version") or "",
+        # Task-to-task edges, read from the corpus' own `depends-on`; the plan is exported in this
+        # list's order, so a plan that needs an order states it rather than relying on file order.
+        "dependencies": list(task["refs"].get("depends-on", ())),
+        "in_scope": [
+            _plan_scope_block(by_id[item["id"]]) for item in packet["in_scope"]
+        ],
+        "out_of_scope": [
+            {**_plan_scope_block(by_id[item["id"]]), "reason": item["reason"]}
+            for item in packet["out_of_scope"]
+        ],
+        "acceptance": [
+            {
+                **_plan_scope_block(by_id[item["id"]]),
+                "text": item["text"],
+            }
+            for item in packet["acceptance"]
+        ],
+        "anchors": anchors,
+        "evidence": evidence,
+        "spec_blocks": scope_blocks,
+        "test_refs": test_refs,
+        "packet": packet,
+        "packet_digest": task_packet_digest(packet),
+        "trace": render_task_trace_marker(
+            packet,
+            test=_task_obligation_test(blocks, packet),
+            witness=SPEC_TASK_EXPORT_WITNESS,
+        ),
+    }
+
+
+def plan_digest(plan: dict) -> str:
+    """sha256 of the canonical plan, EXCLUDING its own digest field.
+
+    The digest therefore lives INSIDE the document it describes without being self-referential, and
+    two drafts of the same corpus agree on it regardless of which checkout they were built in.
+    """
+    payload = {key: value for key, value in plan.items() if key != "digest"}
+    canonical = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def build_spec_plan(spec_root, plan_id: str, *, loaded=None) -> dict:
+    """The DRAFT plan for `plan_id`: every task carrying `plan=<plan_id>`, with one version+digest.
+
+    Membership is authored on the task (`plan=` / `plan-version=`), never inferred from a filename,
+    so a plan cannot silently grow by dropping a file into a directory. A plan whose members
+    disagree on the version is refused: half of it would be from a review the approval never saw.
+    The task order is the corpus order, which is deterministic; `dependencies` states any order the
+    plan actually requires.
+    """
+    root, documents, blocks = load_spec_corpus(spec_root) if loaded is None else loaded
+    members = [
+        block
+        for block in blocks
+        if block["kind"] == "task" and (block.get("plan") or "") == plan_id
+    ]
+    if not members:
+        raise SpecError(
+            "unknown-plan",
+            f"{plan_id}: no <task> block in {root} carries plan={plan_id} — plan membership is "
+            "authored on the task (`plan=` + `plan-version=`), never inferred from a directory",
+        )
+    versions = sorted({member.get("plan_version") or "" for member in members})
+    if len(versions) > 1:
+        shown = ", ".join(version or "absent" for version in versions)
+        raise SpecError(
+            "plan-version-conflict",
+            f"{plan_id}: its tasks disagree on plan-version ({shown}) — one plan has ONE version, "
+            "because an approval is bound to a version and a digest together",
+        )
+    version = versions[0]
+    if not version:
+        raise SpecError(
+            "missing-plan-version",
+            f"{plan_id}: its tasks carry no plan-version= — a plan is versioned (the approval "
+            "names the version as well as the digest), and an unversioned plan cannot be approved",
+        )
+    sources: dict = {}
+    for rel in sorted(documents):
+        try:
+            sources[rel] = hashlib.sha256((Path(root) / rel).read_bytes()).hexdigest()
+        except OSError as exc:
+            raise SpecError(
+                "unreadable-spec-source", f"{rel}: {exc.strerror or exc}"
+            ) from None
+    tasks = [_plan_task_entry(blocks, member, plan_id) for member in members]
+    plan = {
+        "plan": plan_id,
+        "version": version,
+        "sources": sources,
+        "tasks": tasks,
+        "counts": {
+            "tasks": len(tasks),
+            "in_scope": sum(len(entry["in_scope"]) for entry in tasks),
+            "out_of_scope": sum(len(entry["out_of_scope"]) for entry in tasks),
+            "test_refs": sum(len(entry["test_refs"]) for entry in tasks),
+            "dependencies": sum(len(entry["dependencies"]) for entry in tasks),
+        },
+    }
+    plan["digest"] = plan_digest(plan)
+    return plan
+
+
+# ---------------------------------------------------------------- the approval ledger
+def plan_ledger_dir(ledger=None, spec_root=None) -> Path:
+    """The directory holding a plan's approvals: explicit, else `<spec root>/.auger`."""
+    if ledger is not None and str(ledger).strip():
+        return Path(ledger).expanduser()
+    if spec_root is None:
+        raise SpecError(
+            "missing-ledger",
+            "no approval ledger given and no spec root to derive one from; pass --ledger <dir>",
+        )
+    return Path(spec_root).expanduser() / ".auger"
+
+
+def plan_approval_file(ledger=None, *, spec_root=None) -> Path:
+    return plan_ledger_dir(ledger, spec_root) / SPEC_PLAN_LEDGER_NAME
+
+
+def _plan_approval_records(path: Path) -> list:
+    """Every record in the ledger, validated — a corrupt line is a REFUSAL, never a skipped line.
+
+    Skipping an unreadable record could resurrect the decision before it, which is how a rejected
+    plan quietly becomes approved again.
+    """
+    if not path.is_file():
+        return []
+    records: list = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise SpecError(
+                "invalid-approval-record", f"{path}:{number}: not JSON ({exc})"
+            ) from None
+        if not isinstance(payload, dict):
+            raise SpecError(
+                "invalid-approval-record",
+                f"{path}:{number}: a record must be a JSON object",
+            )
+        plan = str(payload.get("plan") or "")
+        version = str(payload.get("version") or "")
+        digest = str(payload.get("digest") or "")
+        decision = str(payload.get("decision") or "")
+        approver = str(payload.get("approver") or "")
+        problems = []
+        if not plan:
+            problems.append("plan")
+        if not SPEC_VERSION_RE.match(version):
+            problems.append(f"version={version or 'absent'}")
+        if not SPEC_TASK_DIGEST_RE.match(digest):
+            problems.append(f"digest={digest[:16] or 'absent'}")
+        if decision not in SPEC_PLAN_DECISIONS:
+            problems.append(f"decision={decision or 'absent'}")
+        if not approver.strip():
+            problems.append("approver")
+        if problems:
+            raise SpecError(
+                "invalid-approval-record",
+                f"{path}:{number}: {', '.join(problems)} "
+                f"(expected plan, X.Y.Z version, a 64-hex digest, a decision in "
+                f"{', '.join(SPEC_PLAN_DECISIONS)} and a named approver)",
+            )
+        records.append(
+            {
+                "plan": plan,
+                "version": version,
+                "digest": digest,
+                "decision": decision,
+                "approver": approver,
+                "at": str(payload.get("at") or ""),
+            }
+        )
+    return records
+
+
+def read_plan_approval(ledger=None, plan_id: str = "", *, spec_root=None):
+    """The LATEST record for `plan_id` (the decision), or None when the plan was never decided."""
+    records = [
+        record
+        for record in _plan_approval_records(
+            plan_approval_file(ledger, spec_root=spec_root)
+        )
+        if record["plan"] == plan_id
+    ]
+    return records[-1] if records else None
+
+
+def record_plan_approval(
+    ledger,
+    plan: dict,
+    *,
+    digest,
+    decision: str,
+    approver: str,
+    at: str = "",
+    spec_root=None,
+) -> dict:
+    """Append one decision, BOUND to the plan's current version and digest.
+
+    The digest is checked against the plan as it exists NOW, so an operator cannot approve a digest
+    they are not looking at (the stale case names both values), and the record is read back before
+    it is reported as recorded — an approval nobody can read is not an approval.
+    """
+    if decision not in SPEC_PLAN_DECISIONS:
+        raise SpecError(
+            "invalid-approval-decision",
+            f"{decision!r} is not a decision (one of: {', '.join(SPEC_PLAN_DECISIONS)})",
+        )
+    declared = str(digest or "").strip()
+    if not SPEC_TASK_DIGEST_RE.match(declared):
+        raise SpecError(
+            "invalid-plan-digest",
+            f"{declared!r} is not a sha256 digest (64 lowercase hex characters)",
+        )
+    if declared != plan["digest"]:
+        raise SpecError(
+            "stale-plan-digest",
+            f"{plan['plan']}: approved digest {declared} does not match the current plan "
+            f"{plan['digest']} — approve the plan you are actually looking at",
+        )
+    if not str(approver or "").strip():
+        raise SpecError(
+            "missing-approver",
+            f"{plan['plan']}: an approval must name who decided (an anonymous approval is not a "
+            "decision anyone can be held to)",
+        )
+    record = {
+        "plan": plan["plan"],
+        "version": plan["version"],
+        "digest": declared,
+        "decision": decision,
+        "approver": str(approver).strip(),
+        "at": str(at or ""),
+    }
+    path = plan_approval_file(ledger, spec_root=spec_root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+    except OSError as exc:
+        raise SpecError(
+            "approval-ledger-unwritable", f"{path}: {exc.strerror or exc}"
+        ) from None
+    stored = read_plan_approval(ledger, plan["plan"], spec_root=spec_root)
+    if stored != record:
+        raise SpecError(
+            "approval-ledger-unverified",
+            f"{path}: the record written back does not match the decision ({stored!r})",
+        )
+    return record
+
+
+def require_plan_approval(
+    plan: dict, ledger=None, *, spec_root=None, declared=None
+) -> dict:
+    """The approval record bound to this plan version+digest, or a typed refusal.
+
+    Four shapes, four codes, because they need four different fixes: no decision at all
+    (`unapproved-plan-digest`), a decision that was a rejection (`plan-rejected`), an approval for a
+    digest the plan no longer has (`stale-plan-digest`, naming both), and an approval for another
+    VERSION of the plan (`stale-plan-version`). Called BEFORE any boardctl invocation, so a refused
+    approval cannot move a byte of `tasks.jsonl` or `events.jsonl`.
+    """
+    current = plan["digest"]
+    if declared is not None and str(declared).strip():
+        candidate = str(declared).strip()
+        if not SPEC_TASK_DIGEST_RE.match(candidate):
+            raise SpecError(
+                "invalid-plan-digest",
+                f"{plan['plan']}: {candidate!r} is not a sha256 digest (64 lowercase hex characters)",
+            )
+        if candidate != current:
+            raise SpecError(
+                "stale-plan-digest",
+                f"{plan['plan']}: declared digest {candidate} does not match the current plan "
+                f"{current}",
+            )
+    record = read_plan_approval(ledger, plan["plan"], spec_root=spec_root)
+    if record is None:
+        raise SpecError(
+            "unapproved-plan-digest",
+            f"{plan['plan']}: no approval record for this plan (the plan currently hashes to "
+            f"{current}); record one with `spec plan-approve --plan {plan['plan']} "
+            f"--digest {current} --approve --approver <name>`",
+        )
+    if record["decision"] == "rejected":
+        raise SpecError(
+            "plan-rejected",
+            f"{plan['plan']}: the plan was REJECTED by {record['approver']}"
+            f"{' at ' + record['at'] if record['at'] else ''} — an export needs a later approval",
+        )
+    if record["digest"] != current:
+        raise SpecError(
+            "stale-plan-digest",
+            f"{plan['plan']}: approved plan {record['digest']} does not match the current plan "
+            f"{current} — the plan changed after approval, so re-approve the new digest",
+        )
+    if record["version"] != plan["version"]:
+        raise SpecError(
+            "stale-plan-version",
+            f"{plan['plan']}: approved version {record['version']} does not match the current "
+            f"version {plan['version']} — re-approve the version that is being exported",
+        )
+    return record
+
+
+# ---------------------------------------------------------------- plan export
+def _plan_row_payload(entry: dict) -> tuple:
+    """(row fields, reasoning) for one plan task, built from the APPROVED packet."""
+    row = task_board_row(entry["packet"])
+    return row, f"{row['reasoning']}\n{entry['trace']}"
+
+
+def _readback_summary(readback: dict) -> dict:
+    return {
+        "id": readback.get("id"),
+        "status": readback.get("status"),
+        "capability_tags": readback.get("capability_tags"),
+        "reasoning": readback.get("reasoning"),
+        "acceptance_criteria": readback.get("acceptance_criteria"),
+        "title": readback.get("title"),
+    }
+
+
+def _verify_plan_row(entry: dict, row: dict, reasoning: str, readback: dict) -> None:
+    """The read-back must EQUAL the approved input, field by field, or the write is unproven."""
+    task_id = entry["task"]
+    if readback.get("id") != task_id:
+        raise SpecError(
+            "board-readback-mismatch",
+            f"{task_id}: boardctl read back {readback.get('id')!r} — the row's id is not the "
+            "approved task id",
+        )
+    if (readback.get("reasoning") or "") != reasoning:
+        raise SpecError(
+            "board-readback-mismatch",
+            f"{task_id}: the row's reasoning does not match the approved packet byte for byte "
+            f"(expected {len(reasoning)} characters, got "
+            f"{len(readback.get('reasoning') or '')})",
+        )
+    if readback.get("capability_tags") != row["capability_tags"]:
+        raise SpecError(
+            "board-readback-mismatch",
+            f"{task_id}: the row's scope tags read back as "
+            f"{readback.get('capability_tags')!r}, expected {row['capability_tags']!r}",
+        )
+    if (readback.get("acceptance_criteria") or "") != (
+        row["acceptance_criteria"] or ""
+    ):
+        raise SpecError(
+            "board-readback-mismatch",
+            f"{task_id}: the row's acceptance criteria do not equal the approved criteria",
+        )
+
+
+def _export_plan_task_row(boardctl, board, entry: dict) -> dict:
+    """Create, repair or confirm ONE canonical row — through boardctl's supported operations only.
+
+    Three outcomes, and nothing else: `exported` (the row did not exist), `updated` (it existed with
+    the approved scope but a drifted title/acceptance text, repaired through `boardctl update`), and
+    `unchanged` (it already equals the approved input). A row whose SCOPE differs is a conflict: the
+    exporter refuses rather than rewriting a row its owner may already be working.
+    """
+    row, reasoning = _plan_row_payload(entry)
+    task_id = entry["task"]
+    existing = _board_readback(boardctl, board, task_id)
+
+    def outcome(status: str, readback: dict) -> dict:
+        return {
+            "task": task_id,
+            "status": status,
+            "row": task_id,
+            "source": entry["source"],
+            "readback": _readback_summary(readback),
+        }
+
+    if existing is None:
+        argv = [
+            "-C",
+            str(board),
+            "create",
+            "--id",
+            task_id,
+            "--title",
+            row["title"],
+            "--status",
+            "pending",
+            "--capability-tags",
+            ",".join(row["capability_tags"]),
+            "--reasoning",
+            reasoning,
+        ]
+        if row["acceptance_criteria"]:
+            argv.extend(["--acceptance-criteria", row["acceptance_criteria"]])
+        code, out, err = _boardctl(boardctl, *argv)
+        if code != 0:
+            raise SpecError(
+                "board-create-refused",
+                f"{task_id}: boardctl create exited {code}: {(err or out).strip()[:400]}",
+            )
+        readback = _board_readback(boardctl, board, task_id)
+        if readback is None:
+            raise SpecError(
+                "board-readback-missing",
+                f"{task_id}: boardctl created the row but `show` cannot read it back — the write "
+                "is unproven",
+            )
+        _verify_plan_row(entry, row, reasoning, readback)
+        return outcome("exported", readback)
+
+    same_scope = (
+        existing.get("capability_tags") == row["capability_tags"]
+        and (existing.get("reasoning") or "") == reasoning
+    )
+    if not same_scope:
+        raise SpecError(
+            "board-row-conflict",
+            f"{task_id} already exists on {board} with a different SCOPE (capability tags or "
+            "approved packet). `boardctl update` cannot rewrite scope, and an export never "
+            "overwrites a row behind its owner — retire the row explicitly, or approve a plan "
+            "that matches it",
+        )
+    if existing.get("title") == row["title"] and (
+        existing.get("acceptance_criteria") or ""
+    ) == (row["acceptance_criteria"] or ""):
+        return outcome("unchanged", existing)
+
+    code, out, err = _boardctl(
+        boardctl,
+        "-C",
+        str(board),
+        "update",
+        task_id,
+        "--title",
+        row["title"],
+        "--acceptance-criteria",
+        row["acceptance_criteria"],
+    )
+    if code != 0:
+        raise SpecError(
+            "board-update-refused",
+            f"{task_id}: boardctl update exited {code}: {(err or out).strip()[:400]}",
+        )
+    readback = _board_readback(boardctl, board, task_id)
+    if readback is None:
+        raise SpecError(
+            "board-readback-missing",
+            f"{task_id}: boardctl updated the row but `show` cannot read it back",
+        )
+    _verify_plan_row(entry, row, reasoning, readback)
+    return outcome("updated", readback)
+
+
+def export_spec_plan(
+    spec_root,
+    plan_id: str,
+    *,
+    board,
+    ledger=None,
+    boardctl=None,
+    declared=None,
+    out=None,
+) -> dict:
+    """Write every row of an APPROVED plan; stop at the first failure and record what landed.
+
+    Fail-stop, not fail-silent: a half-written plan reported as "exported" is the failure mode this
+    row exists to prevent, so the run reports `partial`, exits non-zero, keeps the outcome of every
+    row it DID write and names the failure with boardctl's own words. The recovery record names the
+    resume path, and resuming is simply re-running the same approved plan: rows already written read
+    back `unchanged`, so nothing is created twice.
+    """
+    plan = build_spec_plan(spec_root, plan_id)
+    approval = require_plan_approval(
+        plan, ledger, spec_root=spec_root, declared=declared
+    )
+    rows: list = []
+    failed = None
+    for entry in plan["tasks"]:
+        try:
+            rows.append(_export_plan_task_row(boardctl, board, entry))
+        except SpecError as exc:
+            failed = {"task": entry["task"], "code": exc.code, "detail": exc.detail}
+            break
+    if failed is not None:
+        status = "partial"
+    elif all(row["status"] == "unchanged" for row in rows):
+        status = "unchanged"
+    else:
+        status = "exported"
+    record = {
+        "status": status,
+        "plan": plan["plan"],
+        "version": plan["version"],
+        "digest": plan["digest"],
+        "approver": approval["approver"],
+        "rows": rows,
+        "failed": failed,
+        "counts": {
+            "tasks": len(plan["tasks"]),
+            "exported": sum(1 for row in rows if row["status"] == "exported"),
+            "updated": sum(1 for row in rows if row["status"] == "updated"),
+            "unchanged": sum(1 for row in rows if row["status"] == "unchanged"),
+        },
+        "completed": [row["task"] for row in rows],
+        "resume": (
+            "re-run `spec plan-export` with the same plan and digest: rows already exported read "
+            "back as `unchanged` and are not re-created, and the failed row is retried"
+            if failed is not None
+            else "none:complete"
+        ),
+        "writes": "boardctl",
+    }
+    if out is not None:
+        _spec_write_atomic(
+            out, json.dumps(record, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+        )
+    return record
+
+
+# ---------------------------------------------------------------- reconciliation (read-only)
+def _git_tracks(root, path: str) -> bool:
+    """Is `path` tracked in the repository at `root`? (`git ls-files`, the consumer's own rule.)"""
+    if not path or os.path.isabs(path) or ".." in path.split(os.sep):
+        return False
+    if root is None:
+        return False
+    absolute = os.path.realpath(os.path.join(str(root), path))
+    if not os.path.isfile(absolute):
+        return False
+    done = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "--error-unmatch", "--", path],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return done.returncode == 0
+
+
+def _git_object_exists(root, commit: str) -> bool:
+    """Is `commit` a real commit in the repository at `root`? (Not merely a plausible string.)"""
+    done = subprocess.run(
+        ["git", "-C", str(root), "cat-file", "-e", f"{commit}^{{commit}}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return done.returncode == 0
+
+
+def _reconcile_repository_root(spec_root, repo_root):
+    try:
+        return _spec_repository_root(spec_root, repo_root)
+    except SpecValidationError as exc:
+        raise SpecError("unresolvable-repo-root", str(exc)) from exc
+
+
+def reconcile_spec_plan(
+    spec_root,
+    plan_id: str,
+    *,
+    board,
+    boardctl=None,
+    repo_root=None,
+    verdict_root=None,
+    out=None,
+) -> dict:
+    """Copy board status/commit/verdict evidence INTO Auger, without writing the board.
+
+    Read-only by construction: the only external command is `boardctl show`, and the record says
+    `writes: none` so a reader can tell this apart from an export. Evidence that does not BIND is
+    refused rather than recorded: a commit must exist in the repository it is claimed against, and a
+    verdict must describe the SAME commit the row records. Every absent field carries a
+    `none:<reason>` — "pending" must never be readable as "passed".
+    """
+    plan = build_spec_plan(spec_root, plan_id)
+    resolved_root = None
+    rows: list = []
+    for entry in plan["tasks"]:
+        task_id = entry["task"]
+        row = _board_readback(boardctl, board, task_id)
+        if row is None:
+            rows.append(
+                {
+                    "task": task_id,
+                    "board_status": "absent",
+                    "commit": "none:not-on-board",
+                    "guard": "none:not-on-board",
+                    "ci": "none:not-on-board",
+                    "verdict": "none:not-judged",
+                    "witness": "boardctl:show",
+                    "plan_digest": plan["digest"],
+                }
+            )
+            continue
+        commit = str(row.get("commit_hash") or "")
+        if commit:
+            if resolved_root is None:
+                resolved_root = _reconcile_repository_root(spec_root, repo_root)
+            if not _git_object_exists(resolved_root, commit):
+                raise SpecError(
+                    "unresolved-commit",
+                    f"{task_id}: the canonical row records commit {commit}, which does not exist "
+                    f"in {resolved_root} — a commit that cannot be resolved is not evidence",
+                )
+        verdict = "none:not-judged"
+        if verdict_root is not None:
+            path = Path(verdict_root) / f"{task_id}.json"
+            if path.is_file():
+                try:
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                except json.JSONDecodeError as exc:
+                    raise SpecError(
+                        "invalid-verdict-record", f"{path}: not JSON ({exc})"
+                    ) from None
+                if not isinstance(payload, dict) or not payload.get("status"):
+                    raise SpecError(
+                        "invalid-verdict-record",
+                        f"{path}: a verdict record needs a `status` (pass|fail|...)",
+                    )
+                verdict = str(payload["status"])
+                verdict_commit = str(payload.get("commit") or "")
+                if verdict_commit and commit and verdict_commit != commit:
+                    raise SpecError(
+                        "verdict-commit-mismatch",
+                        f"{task_id}: the verdict names commit {verdict_commit} but the board row "
+                        f"records {commit} — the verdict is about a different tree",
+                    )
+        rows.append(
+            {
+                "task": task_id,
+                "board_status": str(row.get("status") or ""),
+                "commit": commit or "none:not-recorded",
+                "guard": str(row.get("guard_result") or "") or "none:not-recorded",
+                "ci": str(row.get("ci_result") or "") or "none:not-recorded",
+                "verdict": verdict,
+                "worker_summary": str(row.get("worker_summary") or "")
+                or "none:not-recorded",
+                "witness": "boardctl:show",
+                "plan_digest": plan["digest"],
+            }
+        )
+    record = {
+        "plan": plan["plan"],
+        "version": plan["version"],
+        "digest": plan["digest"],
+        "rows": rows,
+        "counts": {
+            "tasks": len(rows),
+            "complete": sum(1 for row in rows if row["board_status"] == "complete"),
+            "pending": sum(1 for row in rows if row["board_status"] == "pending"),
+            "absent": sum(1 for row in rows if row["board_status"] == "absent"),
+        },
+        "writes": "none",
+        "witness": "boardctl:show",
+    }
+    if out is not None:
+        _spec_write_atomic(
+            out, json.dumps(record, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+        )
+    return record
+
+
+# ---------------------------------------------------------------- the GitReins packet (AUG-124)
+# The consumer is `engine/auger_packet.py` in the GitReins repository, and it fails CLOSED: its
+# `TaskPacketAdapter._unresolved` names every reference it cannot resolve and a packet that fails
+# there never reaches a judge. `validate_judge_packet` is the mirror of that rule set, so the same
+# matrix the live probe runs through the REAL adapter is also checked on every gate run — the
+# probe proves compatibility today, the mirror keeps it true tomorrow.
+SPEC_PACKET_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:/-]*$")
+SPEC_PACKET_SELECTOR_RE = re.compile(
+    r"^[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*$"
+)
+
+
+def _packet_ref_status_ok(ref: dict) -> bool:
+    return str(ref.get("status") or "").lower() in SPEC_PACKET_ACTIVE_STATES
+
+
+def _packet_test_ref_ok(ref: dict, repo_root) -> bool:
+    ref_id = str(ref.get("id") or "")
+    path = str(ref.get("path") or "")
+    selector = str(ref.get("selector") or "")
+    runner = ref.get("runner")
+    valid_runner = runner == "pytest" or (
+        isinstance(runner, list)
+        and len(runner) >= 2
+        and runner[-2:] == ["-m", "pytest"]
+    )
+    if not valid_runner:
+        return False
+    if not SPEC_PACKET_ID_RE.match(ref_id) or not SPEC_PACKET_SELECTOR_RE.match(
+        selector
+    ):
+        return False
+    if not path or os.path.isabs(path) or ".." in path.split(os.sep):
+        return False
+    if repo_root is None:
+        return True
+    return _git_tracks(repo_root, path)
+
+
+def validate_judge_packet(
+    packet: dict, board_task: dict | None = None, *, repo_root=None
+) -> list:
+    """The unresolved ids a GitReins judge would refuse, in the consumer's own vocabulary.
+
+    Empty means "the adapter's `_unresolved` should find nothing"; non-empty is the same id list its
+    `PacketValidationError` would carry. `repo_root` enables the tracked-path half: without a
+    repository a test path can only be checked for SHAPE, so the handoff always passes one.
+    """
+    unresolved: list = []
+    board_id = (board_task or {}).get("id") if isinstance(board_task, dict) else None
+    if isinstance(board_task, dict) and "acceptance_criteria" not in board_task:
+        unresolved.append(f"board:{board_id or 'unknown'}:acceptance_criteria")
+    packet_board_id = packet.get("board_id")
+    if not isinstance(packet_board_id, str) or not packet_board_id:
+        unresolved.append("board:id")
+    mapping = packet.get("id_mapping")
+    mapped_board_id = mapping.get("board_id") if isinstance(mapping, dict) else None
+    if board_id and packet_board_id != board_id and mapped_board_id != board_id:
+        unresolved.extend([str(board_id), str(packet_board_id or "packet:board_id")])
+
+    trace = packet.get("ch_trace")
+    if not isinstance(trace, dict):
+        unresolved.append("ch:trace")
+        trace = {}
+    if board_id and trace.get("row") != board_id:
+        unresolved.append(str(trace.get("row") or f"ch:trace:row:{board_id}"))
+
+    scope = packet.get("scope") if isinstance(packet.get("scope"), dict) else {}
+    in_scope = [str(item) for item in (scope.get("in_scope") or []) if item]
+    out_of_scope = {str(item) for item in (scope.get("out_of_scope") or []) if item}
+    if not in_scope:
+        unresolved.append("scope:in_scope")
+
+    spec_blocks: dict = {}
+    raw_blocks = (
+        packet.get("spec_blocks") if isinstance(packet.get("spec_blocks"), list) else []
+    )
+    for item in raw_blocks:
+        if not isinstance(item, dict) or not item.get("id"):
+            unresolved.append("packet:reference:id")
+            continue
+        if str(item["id"]) in spec_blocks:
+            unresolved.append(str(item["id"]))
+            continue
+        spec_blocks[str(item["id"])] = item
+    test_refs: dict = {}
+    raw_tests = (
+        packet.get("test_refs") if isinstance(packet.get("test_refs"), list) else []
+    )
+    for item in raw_tests:
+        if not isinstance(item, dict) or not item.get("id"):
+            unresolved.append("packet:reference:id")
+            continue
+        if str(item["id"]) in test_refs:
+            unresolved.append(str(item["id"]))
+            continue
+        test_refs[str(item["id"])] = item
+
+    for ref_id in in_scope:
+        if ref_id in out_of_scope or ref_id not in spec_blocks:
+            unresolved.append(ref_id)
+            continue
+        if not _packet_ref_status_ok(spec_blocks[ref_id]):
+            unresolved.append(ref_id)
+        if not spec_blocks[ref_id].get("digest"):
+            unresolved.append(ref_id)
+
+    trace_specs = [str(item) for item in (trace.get("spec") or []) if item]
+    if isinstance(trace.get("spec"), str):
+        trace_specs = [trace["spec"]]
+    if not trace_specs:
+        unresolved.append("ch:trace:spec")
+    for ref_id in trace_specs:
+        if (
+            ref_id not in in_scope
+            or ref_id in out_of_scope
+            or ref_id not in spec_blocks
+        ):
+            unresolved.append(ref_id)
+
+    trace_tests = [str(item) for item in (trace.get("test") or []) if item]
+    if isinstance(trace.get("test"), str):
+        trace_tests = [trace["test"]]
+    if test_refs and not trace_tests:
+        unresolved.append("ch:trace:test")
+    for ref_id in trace_tests:
+        if ref_id in out_of_scope or ref_id not in test_refs:
+            unresolved.append(ref_id)
+
+    for ref_id, ref in test_refs.items():
+        if not _packet_ref_status_ok(ref):
+            unresolved.append(ref_id)
+        if not ref.get("digest"):
+            unresolved.append(ref_id)
+        if not _packet_test_ref_ok(ref, repo_root):
+            unresolved.append(ref_id)
+
+    if not isinstance(packet.get("digests"), dict) or not packet.get("digests"):
+        unresolved.append("packet:digests")
+    return list(dict.fromkeys(unresolved))
+
+
+def _row_trace_marker(reasoning: str) -> str:
+    """The `ch:trace` line a canonical row carries, or a refusal (a row without one is unbound)."""
+    for line in (reasoning or "").splitlines():
+        if SPEC_TRACE_MARKER_RE.search(line):
+            return line.strip()
+    raise SpecError(
+        "missing-trace-marker",
+        "the canonical row carries no `ch:trace` marker, so no row/spec/test binding can be "
+        "proved — export the row from an approved plan before handing it to a judge",
+    )
+
+
+def _require_marker_binding(
+    marker: str, entry: dict, row_id: str, blocks: list
+) -> dict:
+    """Validate a marker against the APPROVED task: one row, that task, its own obligations.
+
+    Five refusals, each naming the offending value: the marker points at another row
+    (`trace-row-mismatch`), names an id the corpus does not have (`unknown-spec-id`, raised by the
+    resolver), names a block authored in another file (`stale-spec-ref`), names a block that is OUT
+    of this task's scope (`trace-spec-out-of-scope`), or names a test that is not one of the task's
+    obligations (`trace-test-not-obligation`). No judge starts on any of them.
+    """
+    fields = parse_trace_marker(marker)
+    if fields["row"] != row_id:
+        raise SpecError(
+            "trace-row-mismatch",
+            f"row={fields['row']} but the canonical board row is {row_id} — a marker points at "
+            "exactly ONE row, and this one is not it",
+        )
+    resolved = resolve_trace_marker(marker, blocks)
+    task_id = entry["task"]
+    if resolved["blocks"] != [task_id]:
+        out_scope = {item["id"] for item in entry["out_of_scope"]}
+        stray = [block_id for block_id in resolved["blocks"] if block_id != task_id]
+        if stray and all(block_id in out_scope for block_id in stray):
+            raise SpecError(
+                "trace-spec-out-of-scope",
+                f"spec={','.join(stray)} names a block that is OUT of {task_id}'s approved scope — "
+                "the handoff would judge a contract this task does not own",
+            )
+        raise SpecError(
+            "trace-spec-not-task",
+            f"spec={fields.get('spec')} resolves to {','.join(resolved['blocks']) or '<nothing>'}, "
+            f"not to the approved task {task_id}",
+        )
+    targets = {
+        f"{ref['path']}::{ref['selector']}"
+        for ref in entry["test_refs"]
+        if ref.get("selector")
+    } | {ref["path"] for ref in entry["test_refs"]}
+    value = str(fields.get("test") or "")
+    if value.startswith("none:"):
+        if targets:
+            raise SpecError(
+                "trace-test-missing",
+                f"{task_id} has approved test obligations ({', '.join(sorted(targets))}) but the "
+                f"marker says test={value} — a marker that names no obligation proves nothing",
+            )
+    else:
+        named = {token for token in value.split(",") if token}
+        if not named <= targets:
+            raise SpecError(
+                "trace-test-not-obligation",
+                f"test={value} names no obligation of {task_id} (approved obligations: "
+                f"{', '.join(sorted(targets)) or 'none'})",
+            )
+    return fields
+
+
+def build_judge_packet(
+    spec_root,
+    plan_id: str,
+    row_id: str,
+    *,
+    board,
+    ledger=None,
+    boardctl=None,
+    repo_root=None,
+    trace=None,
+    worker_summary=None,
+) -> dict:
+    """Assemble the packet `engine.auger_packet.TaskPacketAdapter` accepts, from the APPROVED plan.
+
+    Nothing here re-derives scope from the raw XML at handoff time: the plan is rebuilt only to be
+    checked against the approval (a changed corpus is `stale-plan-digest`), and every scope ref,
+    obligation and digest the packet carries comes out of that approved plan. The canonical row is
+    re-read, and it must still carry the approved packet and the approved acceptance criteria — a
+    row edited after export is refused, not blessed.
+    """
+    loaded = load_spec_corpus(spec_root)
+    plan = build_spec_plan(spec_root, plan_id, loaded=loaded)
+    blocks = loaded[2]
+    require_plan_approval(plan, ledger, spec_root=spec_root)
+    entry = next(
+        (item for item in plan["tasks"] if item["task"] == row_id),
+        None,
+    )
+    if entry is None:
+        raise SpecError(
+            "unknown-plan-task",
+            f"{row_id} is not a task in plan {plan['plan']} (its tasks: "
+            f"{', '.join(item['task'] for item in plan['tasks'])})",
+        )
+    row = _board_readback(boardctl, board, row_id)
+    if row is None:
+        raise SpecError(
+            "board-row-missing",
+            f"{row_id} has no canonical row on {board} — a judge packet binds to an APPROVED "
+            "board task, so export the plan first",
+        )
+    canonical = json.dumps(
+        entry["packet"], sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    )
+    if canonical not in (row.get("reasoning") or ""):
+        raise SpecError(
+            "board-row-not-approved-packet",
+            f"{row_id}: the canonical row does not carry the approved packet byte for byte — the "
+            "row was written by another plan or edited after export",
+        )
+    expected_criteria = "\n".join(
+        f"{item['id']}: {item['text']}" for item in entry["acceptance"]
+    )
+    if (row.get("acceptance_criteria") or "") != expected_criteria:
+        raise SpecError(
+            "board-acceptance-drift",
+            f"{row_id}: the row's acceptance criteria differ from the approved criteria "
+            f"(expected {expected_criteria!r})",
+        )
+
+    marker = _row_trace_marker(row.get("reasoning") or "") if trace is None else trace
+    _require_marker_binding(marker, entry, row_id, blocks)
+
+    packet = {
+        "packet_version": SPEC_PACKET_VERSION,
+        "board_id": row_id,
+        "id_mapping": {
+            "board_id": row_id,
+            "gitreins_task_id": row_id,
+            "auger_task_id": entry["task"],
+        },
+        "task": entry["task"],
+        "plan": {
+            "plan": plan["plan"],
+            "version": plan["version"],
+            "digest": plan["digest"],
+        },
+        # The consumer indexes these by ID, so the trace carries ids — the row marker's path-shaped
+        # `test=` value is resolved to the obligation id HERE, once, instead of by the judge.
+        "ch_trace": {
+            "row": row_id,
+            "spec": [item["id"] for item in entry["in_scope"]],
+            "test": [item["id"] for item in entry["test_refs"]],
+        },
+        "scope": {
+            "in_scope": [item["id"] for item in entry["in_scope"]],
+            "out_of_scope": [item["id"] for item in entry["out_of_scope"]],
+        },
+        "acceptance_criteria": row.get("acceptance_criteria") or "",
+        "board_acceptance_criteria": row.get("acceptance_criteria") or "",
+        "acceptance": [
+            {"id": item["id"], "text": item["text"]} for item in entry["acceptance"]
+        ],
+        "spec_blocks": copy.deepcopy(entry["spec_blocks"]),
+        "test_refs": copy.deepcopy(entry["test_refs"]),
+        "digests": {
+            "plan": plan["digest"],
+            "packet": entry["packet_digest"],
+            **{
+                ref["id"]: ref["digest"]
+                for ref in [*entry["spec_blocks"], *entry["test_refs"]]
+            },
+        },
+        "sources": dict(plan["sources"]),
+        "worker_summary": worker_summary,
+    }
+    if repo_root is not None:
+        for ref in packet["test_refs"]:
+            if not _git_tracks(repo_root, ref["path"]):
+                raise SpecError(
+                    "untracked-test-ref",
+                    f"{entry['task']}: the obligation {ref['id']} names {ref['path']}, which is "
+                    f"not tracked in {repo_root} — a judge cannot run a path `git ls-files` does "
+                    "not resolve, so the packet is refused here rather than failed closed there",
+                )
+    unresolved = validate_judge_packet(packet, row, repo_root=repo_root)
+    if unresolved:
+        raise SpecError(
+            "packet-invalid",
+            f"{row_id}: unresolved Auger packet references: {', '.join(unresolved)}",
+        )
+    return packet
+
+
+def judge_packet_verdict(packet: dict, results, *, worker_summary=None) -> dict:
+    """The verdict a judge would reach from the packet's obligations and their RUN results.
+
+    A worker summary is context, never authority: it is copied out with `trust: untrusted` and has
+    no path into the verdict, so a summary claiming green cannot turn a red obligation, or a missing
+    one, into a pass. Every non-pass carries the obligation id AND the reason it was not proved.
+    """
+    by_id: dict = {}
+    for result in results or []:
+        if isinstance(result, dict) and result.get("id"):
+            by_id[str(result["id"])] = result
+    citations: list = []
+    for ref in packet.get("test_refs") or []:
+        ref_id = str(ref["id"])
+        target = f"{ref['path']}::{ref.get('selector', '')}"
+        result = by_id.get(ref_id)
+        if result is None:
+            citations.append(
+                {
+                    "id": ref_id,
+                    "reason": "missing-test-obligation",
+                    "target": target,
+                }
+            )
+            continue
+        if not result.get("passed"):
+            citations.append(
+                {
+                    "id": ref_id,
+                    "reason": "failed-test-obligation",
+                    "target": target,
+                    "exit_code": result.get("exit_code"),
+                }
+            )
+    if not (packet.get("test_refs") or []):
+        citations.append(
+            {
+                "id": "packet:test_refs",
+                "reason": "no-test-obligation",
+                "target": "",
+            }
+        )
+    return {
+        "status": "fail" if citations else "pass",
+        "citations": citations,
+        "obligations": [str(ref["id"]) for ref in packet.get("test_refs") or []],
+        "test_results": [
+            dict(result) for result in (results or []) if isinstance(result, dict)
+        ],
+        "worker_summary": {
+            "value": worker_summary,
+            "trust": "untrusted",
+            "authoritative": False,
+        },
+    }
+
+
+def judge_packet_path(
+    ledger, plan_id: str, row_id: str, *, spec_root=None, out=None
+) -> Path:
+    """Where a handoff's packet is written: `--out`, else `<ledger>/judge-packets/<plan>-<row>.json`."""
+    if out is not None:
+        return Path(out).expanduser()
+    directory = plan_ledger_dir(ledger, spec_root) / "judge-packets"
+    return directory / f"{plan_id}-{row_id}.json"
+
+
+def write_judge_packet(
+    packet: dict, *, ledger, plan_id: str, row_id: str, spec_root=None, out=None
+) -> Path:
+    """Write the packet atomically and return its path (deterministic bytes: repeat = identical)."""
+    path = judge_packet_path(ledger, plan_id, row_id, spec_root=spec_root, out=out)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    document = {
+        "packet": packet,
+        "digest": packet["digests"]["plan"],
+        "board_id": packet["board_id"],
+        "acceptance_criteria": packet["acceptance_criteria"],
+    }
+    _spec_write_atomic(
+        path, json.dumps(document, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    )
+    return path
+
+
+def start_judge_handoff(
+    spec_root,
+    plan_id: str,
+    row_id: str,
+    *,
+    board,
+    ledger=None,
+    boardctl=None,
+    repo_root=None,
+    trace=None,
+    dispatch=None,
+    out=None,
+    worker_summary=None,
+) -> dict:
+    """Hand an APPROVED board row to the GitReins lifecycle — or refuse and start nothing.
+
+    Order is the contract, and it is the whole of AC-19: the packet (and therefore the row, the
+    spec binding and every obligation) is validated FIRST; only then is the dispatch seam called,
+    exactly once, with the board acceptance criteria verbatim. `dispatch=None` refuses — Auger never
+    invents a judge invocation, and a caller that has not wired one gets a named refusal instead of
+    a silent no-op.
+    """
+    packet = build_judge_packet(
+        spec_root,
+        plan_id,
+        row_id,
+        board=board,
+        ledger=ledger,
+        boardctl=boardctl,
+        repo_root=repo_root,
+        trace=trace,
+        worker_summary=worker_summary,
+    )
+    if dispatch is None:
+        raise SpecError(
+            "dispatch-unconfigured",
+            f"{row_id}: no judge dispatch is configured; pass a lifecycle entry point (or "
+            "`--dispatch-cmd <command>`) — a handoff that silently starts nothing is worse than a "
+            "handoff that refuses",
+        )
+    row = _board_readback(boardctl, board, row_id)
+    path = write_judge_packet(
+        packet,
+        ledger=ledger,
+        plan_id=plan_id,
+        row_id=row_id,
+        spec_root=spec_root,
+        out=out,
+    )
+    context = {
+        "packet": packet,
+        "board_task": row,
+        "board_id": row_id,
+        "acceptance_criteria": packet["acceptance_criteria"],
+        "packet_path": str(path),
+    }
+    handed = dispatch(context)
+    return {
+        "status": "dispatched",
+        "row": row_id,
+        "invocations": 1,
+        "digest": packet["digests"]["plan"],
+        "packet_digest": packet["digests"]["packet"],
+        "acceptance_criteria": packet["acceptance_criteria"],
+        "packet_path": str(path),
+        "dispatch": handed if isinstance(handed, dict) else {"result": handed},
+    }
+
+
+def run_dispatch_command(command, packet_path) -> dict:
+    """Run an operator-supplied judge command with the packet path appended (the CLI's seam)."""
+    try:
+        words = shlex.split(command)
+    except ValueError as exc:
+        raise SpecError("invalid-dispatch-command", f"{command!r}: {exc}") from None
+    if not words:
+        raise SpecError(
+            "invalid-dispatch-command", "an empty dispatch command names nothing"
+        )
+    done = subprocess.run(
+        [*words, str(packet_path)], capture_output=True, text=True, check=False
+    )
+    if done.returncode != 0:
+        raise SpecError(
+            "dispatch-refused",
+            f"the dispatch command exited {done.returncode}: {(done.stderr or done.stdout).strip()[:400]}",
+        )
+    return {
+        "command": [*words, str(packet_path)],
+        "exit_code": done.returncode,
+        "stdout": done.stdout.strip()[:2000],
+    }
+
+
+def cmd_spec_plan_draft(a) -> int:
+    """`spec plan-draft`: the versioned draft plan, its task list and its digest."""
+    plan = build_spec_plan(a.root, a.plan)
+    print(json.dumps(plan, indent=2, sort_keys=True, ensure_ascii=False))
+    return 0
+
+
+def cmd_spec_plan_approve(a) -> int:
+    """`spec plan-approve`: record an approval (or a rejection) bound to version + digest."""
+    plan = build_spec_plan(a.root, a.plan)
+    decision = "approved" if a.approve else "rejected"
+    record = record_plan_approval(
+        a.ledger,
+        plan,
+        digest=a.digest,
+        decision=decision,
+        approver=a.approver,
+        at=a.at or "",
+        spec_root=a.root,
+    )
+    print(
+        json.dumps({"status": "recorded", "record": record}, indent=2, sort_keys=True)
+    )
+    return 0
+
+
+def cmd_spec_plan_export(a) -> int:
+    """`spec plan-export`: write every approved row; exit 1 when the run is PARTIAL."""
+    result = export_spec_plan(
+        a.root,
+        a.plan,
+        board=a.board,
+        ledger=a.ledger,
+        boardctl=a.boardctl,
+        declared=getattr(a, "plan_digest", None),
+        out=getattr(a, "out", None),
+    )
+    print(json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False))
+    return 1 if result["status"] == "partial" else 0
+
+
+def cmd_spec_plan_reconcile(a) -> int:
+    """`spec plan-reconcile`: copy board evidence into Auger; never write the board."""
+    record = reconcile_spec_plan(
+        a.root,
+        a.plan,
+        board=a.board,
+        boardctl=a.boardctl,
+        repo_root=getattr(a, "repo_root", None),
+        verdict_root=getattr(a, "verdict_root", None),
+        out=getattr(a, "out", None),
+    )
+    print(json.dumps(record, indent=2, sort_keys=True, ensure_ascii=False))
+    return 0
+
+
+def cmd_spec_judge_packet(a) -> int:
+    """`spec judge-packet`: the GitReins packet for one approved row, its digest and its path."""
+    repo_root = getattr(a, "repo_root", None) or None
+    resolved = _reconcile_repository_root(a.root, repo_root) if repo_root else None
+    packet = build_judge_packet(
+        a.root,
+        a.plan,
+        a.row,
+        board=a.board,
+        ledger=a.ledger,
+        boardctl=a.boardctl,
+        repo_root=resolved,
+        trace=getattr(a, "trace", None),
+        worker_summary=getattr(a, "worker_summary", None),
+    )
+    path = write_judge_packet(
+        packet,
+        ledger=a.ledger,
+        plan_id=a.plan,
+        row_id=a.row,
+        spec_root=a.root,
+        out=getattr(a, "out", None),
+    )
+    print(
+        json.dumps(
+            {
+                "packet": packet,
+                "digest": packet["digests"]["plan"],
+                "path": str(path),
+            },
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+    )
+    return 0
+
+
+def cmd_spec_judge_handoff(a) -> int:
+    """`spec judge-handoff`: validate the binding, then start the lifecycle ONCE (or refuse)."""
+    repo_root = getattr(a, "repo_root", None) or None
+    resolved = _reconcile_repository_root(a.root, repo_root) if repo_root else None
+    dispatch = None
+    command = getattr(a, "dispatch_cmd", None)
+    if command:
+        dispatch = lambda context: run_dispatch_command(  # noqa: E731 - one-line seam
+            command, context["packet_path"]
+        )
+    result = start_judge_handoff(
+        a.root,
+        a.plan,
+        a.row,
+        board=a.board,
+        ledger=a.ledger,
+        boardctl=a.boardctl,
+        repo_root=resolved,
+        trace=getattr(a, "trace", None),
+        dispatch=dispatch,
+        out=getattr(a, "out", None),
+        worker_summary=getattr(a, "worker_summary", None),
+    )
+    print(json.dumps(result, indent=2, sort_keys=True, ensure_ascii=False))
+    return 0
 
 
 # ---------------------------------------------------------------- one-query context (AUG-122)
@@ -10596,6 +12125,21 @@ def _spec_dispatch(a):
         return cmd_spec_task_export(a)
     if command == "context":
         return cmd_spec_context(a)
+    # AUG-119/AUG-124: the PLAN seam above the task packet, and the GitReins handoff. Like the
+    # task verbs they are not variants of `assemble`: they write through boardctl (or hand a packet
+    # to a judge) and their answers are records, not rendered selections.
+    if command == "plan-draft":
+        return cmd_spec_plan_draft(a)
+    if command == "plan-approve":
+        return cmd_spec_plan_approve(a)
+    if command == "plan-export":
+        return cmd_spec_plan_export(a)
+    if command == "plan-reconcile":
+        return cmd_spec_plan_reconcile(a)
+    if command == "judge-packet":
+        return cmd_spec_judge_packet(a)
+    if command == "judge-handoff":
+        return cmd_spec_judge_handoff(a)
     if command == "check" and (
         getattr(a, "diff_stdin", False) or getattr(a, "diff_file", None)
     ):
@@ -11815,6 +13359,236 @@ def main(argv=None):
     )
     _add_spec_repo_root(ctx)
     ctx.set_defaults(fn=cmd_spec)
+
+    pln = spec_sub.add_parser(
+        "plan-draft",
+        help="emit the versioned DRAFT plan for a set of tasks: ids, criteria, dependencies, "
+        "anchors, expected evidence and the plan digest (AUG-119)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "A plan is many tasks with ONE version and ONE digest. Membership is authored on the "
+            "task (`plan=` + `plan-version=`), so a plan cannot grow by dropping a file into a "
+            "directory. The digest is the sha256 of the canonical plan and is what an approval is "
+            "bound to; `spec plan-export` refuses to write a board row without it.\n\n"
+            "Read-only: drafting a plan touches nothing."
+        ),
+    )
+    pln.add_argument("root", help="spec root directory")
+    pln.add_argument(
+        "--plan", required=True, metavar="ID", help="the plan id tasks carry in `plan=`"
+    )
+    pln.set_defaults(fn=cmd_spec)
+
+    pap = spec_sub.add_parser(
+        "plan-approve",
+        help="record an approval (or a rejection) BOUND to a plan's version and digest (AUG-119)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Append one decision to the plan approval ledger (default: `<spec root>/.auger/"
+            "plan-approvals.jsonl`). The digest must be the plan's CURRENT digest, so nobody can "
+            "approve a plan they are not looking at. The ledger is append-only and the LATEST "
+            "record for a plan is the decision: a rejection is a new fact, never an edit.\n\n"
+            "Exit codes:\n"
+            "  0  the decision was recorded and read back\n"
+            "  2  a typed refusal (stale/invalid digest, missing approver, unwritable ledger)\n"
+        ),
+    )
+    pap.add_argument("root", help="spec root directory")
+    pap.add_argument("--plan", required=True, metavar="ID", help="the plan id")
+    decision = pap.add_mutually_exclusive_group(required=True)
+    decision.add_argument("--approve", action="store_true", help="approve this digest")
+    decision.add_argument(
+        "--reject", dest="approve", action="store_false", help="reject it"
+    )
+    pap.add_argument(
+        "--digest",
+        required=True,
+        metavar="SHA256",
+        help="the plan digest being decided on",
+    )
+    pap.add_argument(
+        "--approver", required=True, metavar="NAME", help="who is deciding"
+    )
+    pap.add_argument(
+        "--ledger",
+        metavar="DIR",
+        help="approval ledger directory (default: <spec root>/.auger)",
+    )
+    pap.add_argument(
+        "--at",
+        metavar="TIMESTAMP",
+        help="when the decision was made (recorded verbatim)",
+    )
+    pap.set_defaults(fn=cmd_spec)
+
+    pex = spec_sub.add_parser(
+        "plan-export",
+        help="write every row of an APPROVED plan through boardctl, read them all back (AUG-119)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Export a whole approved plan. The approval is checked BEFORE any boardctl call, so an "
+            "unapproved, rejected or stale plan cannot move a byte of the canonical board.\n\n"
+            "Per row: `boardctl create` when the row does not exist, `boardctl update` when only the "
+            "title/acceptance text drifted, `unchanged` when the row already equals the approved "
+            "input. Every write is read back with `boardctl show` and compared field by field. A row "
+            "whose SCOPE differs is a conflict and is refused: an export never overwrites a row "
+            "behind its owner.\n\n"
+            "Fail-stop: the first failing row ends the run with status `partial`, exit 1, the "
+            "outcome of every row that DID land, the boardctl error, and a recovery record naming "
+            "the resume path (re-running the same approved plan completes it).\n\n"
+            "Exit codes:\n"
+            "  0  exported, or unchanged\n"
+            "  1  PARTIAL — at least one row landed, one failed; nothing was reported as complete\n"
+            "  2  a typed refusal (no approval / rejected / stale / invalid digest, a bad corpus, a "
+            "scope conflict); nothing was written\n"
+        ),
+    )
+    pex.add_argument("root", help="spec root directory")
+    pex.add_argument("--plan", required=True, metavar="ID", help="the plan id")
+    pex.add_argument(
+        "--board", required=True, metavar="DIR", help="board repo or board dir"
+    )
+    pex.add_argument("--ledger", metavar="DIR", help="approval ledger directory")
+    pex.add_argument(
+        "--plan-digest",
+        metavar="SHA256",
+        help="an out-of-band approval digest to ALSO require (must equal the ledger's and the plan's)",
+    )
+    pex.add_argument(
+        "--boardctl",
+        metavar="PATH",
+        help=f"the boardctl binary (default: {BOARDCTL_BINARY})",
+    )
+    pex.add_argument("--out", metavar="PATH", help="write the run record here (atomic)")
+    pex.set_defaults(fn=cmd_spec)
+
+    prc = spec_sub.add_parser(
+        "plan-reconcile",
+        help="copy board status/commit/verdict evidence into Auger, read-only (AUG-119)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Reconcile a plan's canonical rows back into Auger. READ-ONLY: the only external command "
+            "is `boardctl show`, the record says `writes: none`, and no board byte moves. A commit "
+            "that does not exist in `--repo-root` and a verdict naming another commit are refused "
+            "rather than recorded as if they bound; absent evidence carries `none:<reason>`.\n\n"
+            "Exit codes:\n"
+            "  0  a reconciliation record was produced\n"
+            "  2  a typed refusal (unresolved commit, verdict/commit mismatch, bad corpus)\n"
+        ),
+    )
+    prc.add_argument("root", help="spec root directory")
+    prc.add_argument("--plan", required=True, metavar="ID", help="the plan id")
+    prc.add_argument(
+        "--board", required=True, metavar="DIR", help="board repo or board dir"
+    )
+    prc.add_argument(
+        "--boardctl",
+        metavar="PATH",
+        help=f"the boardctl binary (default: {BOARDCTL_BINARY})",
+    )
+    _add_spec_repo_root(prc)
+    prc.add_argument(
+        "--verdict-root",
+        metavar="DIR",
+        help="directory of <row id>.json verdict records to bind (optional)",
+    )
+    prc.add_argument("--out", metavar="PATH", help="write the record here (atomic)")
+    prc.set_defaults(fn=cmd_spec)
+
+    jpk = spec_sub.add_parser(
+        "judge-packet",
+        help="assemble the GitReins packet for one APPROVED board row (AUG-124)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "Produce the packet `engine.auger_packet.TaskPacketAdapter` consumes, from the APPROVED "
+            "plan: the board id (plus an explicit id mapping), the resolved `ch:trace` ids, the in/out "
+            "of-scope references, the exact test obligations, the board acceptance criteria VERBATIM, "
+            "and the digests that were approved. The canonical row must still carry the approved "
+            "packet, and the marker must resolve to this row, this task and its own obligations — "
+            "anything else is refused with the offending ids named, and no packet is emitted.\n\n"
+            "Exit codes:\n"
+            "  0  the packet was written (path on stdout)\n"
+            "  2  a typed refusal naming the invalid row/spec/test ids\n"
+        ),
+    )
+    jpk.add_argument("root", help="spec root directory")
+    jpk.add_argument("--plan", required=True, metavar="ID", help="the plan id")
+    jpk.add_argument(
+        "--row", required=True, metavar="ID", help="the canonical board row id"
+    )
+    jpk.add_argument(
+        "--board", required=True, metavar="DIR", help="board repo or board dir"
+    )
+    jpk.add_argument("--ledger", metavar="DIR", help="approval ledger directory")
+    jpk.add_argument(
+        "--boardctl",
+        metavar="PATH",
+        help=f"the boardctl binary (default: {BOARDCTL_BINARY})",
+    )
+    _add_spec_repo_root(jpk)
+    jpk.add_argument(
+        "--trace",
+        metavar="MARKER",
+        help="validate THIS ch:trace marker instead of the one bound into the approved row",
+    )
+    jpk.add_argument(
+        "--worker-summary",
+        metavar="TEXT",
+        help="the worker's own summary, carried as untrusted context",
+    )
+    jpk.add_argument("--out", metavar="PATH", help="write the packet here (atomic)")
+    jpk.set_defaults(fn=cmd_spec)
+
+    jhd = spec_sub.add_parser(
+        "judge-handoff",
+        help="validate the boardctl→GitReins binding and start the lifecycle ONCE, or refuse "
+        "(AUG-124)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description=(
+            "The handoff. The packet is validated FIRST (row, trace, scope, obligations, digests); an "
+            "invalid binding refuses with the offending ids and starts NOTHING. A valid binding calls "
+            "the dispatch command exactly once, with the packet path appended, carrying the board's "
+            "acceptance criteria verbatim. Without `--dispatch-cmd` the verb REFUSES "
+            "(`dispatch-unconfigured`) instead of pretending to have started a judge.\n\n"
+            "Auger never dispatches a BOARD task from here: this seam hands a packet to a judge and "
+            "writes only the packet file.\n\n"
+            "Exit codes:\n"
+            "  0  the lifecycle was started exactly once\n"
+            "  2  a typed refusal — no dispatch, no judge, no partial handoff\n"
+        ),
+    )
+    jhd.add_argument("root", help="spec root directory")
+    jhd.add_argument("--plan", required=True, metavar="ID", help="the plan id")
+    jhd.add_argument(
+        "--row", required=True, metavar="ID", help="the canonical board row id"
+    )
+    jhd.add_argument(
+        "--board", required=True, metavar="DIR", help="board repo or board dir"
+    )
+    jhd.add_argument("--ledger", metavar="DIR", help="approval ledger directory")
+    jhd.add_argument(
+        "--boardctl",
+        metavar="PATH",
+        help=f"the boardctl binary (default: {BOARDCTL_BINARY})",
+    )
+    _add_spec_repo_root(jhd)
+    jhd.add_argument(
+        "--trace",
+        metavar="MARKER",
+        help="validate THIS ch:trace marker instead of the one bound into the approved row",
+    )
+    jhd.add_argument(
+        "--worker-summary",
+        metavar="TEXT",
+        help="the worker's own summary, carried as untrusted context",
+    )
+    jhd.add_argument(
+        "--dispatch-cmd",
+        metavar="COMMAND",
+        help="the judge lifecycle command; the packet path is appended as its last argument",
+    )
+    jhd.add_argument("--out", metavar="PATH", help="write the packet here (atomic)")
+    jhd.set_defaults(fn=cmd_spec)
 
     a = ap.parse_args(argv)
     return a.fn(a)
