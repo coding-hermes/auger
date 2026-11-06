@@ -387,6 +387,7 @@ def test_gate_arm_runs_this_file() -> None:
         "tests/test_spec_repository_root.py",
         "tests/test_spec_validate_obligations.py",
         "tests/test_spec_validators_agree.py",
+        "tests/test_spec_obligation_gate.py",
         "tests/test_verification_graph.py",
         "tests/test_xml_specs.py",
         "tests/test_xsd_conformance.py",

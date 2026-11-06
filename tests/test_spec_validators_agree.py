@@ -39,6 +39,9 @@ GATE = REPO_ROOT / "tests" / "gate.sh"
 EXPECTED = {
     "specs": None,
     "verification": None,
+    # AUG-150: the method vocabulary fixture — every verification method and NO test pointer, so
+    # it is valid and proves the obligation gate does not over-block a verification PLAN.
+    "methods": None,
     # AUG-121/AUG-122: the task-scope + context fixture. Valid, and the `spec context` proof's
     # golden corpus — registering it here means BOTH validators also grade it on every run.
     "context": None,
@@ -50,6 +53,12 @@ EXPECTED = {
     "invalid/include-cycle": "include-cycle",
     "invalid/invalid-verification-method": "invalid-verification-method",
     "invalid/missing-verification-method": "invalid-verification-method",
+    # AUG-150: three corpora that differ ONLY in which attribute carries the word `test` (or in
+    # carrying neither). All three cite a path that does not exist, so all three refuse — the
+    # proof that the obligation check is keyed on the pointer, not on one spelling.
+    "invalid/obligation-attr-pair/type-only": "invalid-spec-graph",
+    "invalid/obligation-attr-pair/method-only": "invalid-spec-graph",
+    "invalid/obligation-attr-pair/neither": "invalid-spec-graph",
     "invalid/reference-cycle": "reference-cycle",
     "invalid/schema-invalid": "schema-invalid",
     "invalid/schema-version": "unsupported-schema-version",

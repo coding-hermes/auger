@@ -135,6 +135,33 @@ A block that only declares `type="test"`/`method="test"` states a METHOD (the au
 grammar's `verification=`/`method=` shape), not a test location; an obligation is a block that
 actually points at a test with `runner`/`selector`/`path`.
 
+### What the obligation check keys on (AUG-150)
+
+Two different checks read these blocks, and confusing them is how a corpus can look proven while
+nothing is resolved:
+
+| check | keys on | refuses with |
+| --- | --- | --- |
+| block KIND | the ELEMENT NAME (`<requirement>`, `<test>`, …) plus `kind=` matching it | `kind-mismatch` |
+| obligation | a `<test>` block, or ANY block carrying a `runner`/`path`/`selector` POINTER | `invalid-test-ref`, `stale-test-ref`, `untracked-test-ref`, `escaping-test-ref` |
+| method vocabulary | the VALUE of `type=` and/or `method=`, whichever are present | `invalid-verification-method` / `invalid-verification-type` |
+
+Consequences, each pinned by `tests/test_spec_obligation_gate.py`:
+
+* **Both spellings are accepted and both are checked.** `type="test"` and `method="test"` are two
+  spellings of the METHOD vocabulary; a citation carrying either, or *neither*, is graded, because
+  the POINTER is what makes it a citation. A fixture pair that differs only in which attribute
+  carries the word `test`, plus a third variant carrying neither, is refused by both `spec
+  validate` and `spec check` when its cited path does not exist — naming the document, the block
+  and the resolved path.
+* **`type="test"` is not required.** It is recommended (it says out loud how the obligation is
+  meant to be verified, and an editor validates it against the grammar), but stripping it from
+  every block of the authored `specs/` corpus leaves the corpus valid, so no author needs it as a
+  workaround. The authored corpus keeps it; the proof that it is optional lives in the test.
+* **A method-only block is not over-blocked.** `method="test"` (or `demo`, `analysis`,
+  `inspection`) with no pointer is a verification PLAN, and it validates. Only a block that names
+  a test location is resolved.
+
 Assembly is deterministic JSON data and does not invoke tests. Consumers may pass the returned registered runner argv and tracked selector to the repository harness under their own policy; XML never executes code.
 
 ## Task scope and the one-query context (AUG-121 / AUG-122)
