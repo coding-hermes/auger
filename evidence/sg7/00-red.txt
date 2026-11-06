@@ -1,0 +1,618 @@
+FFFFFFFFFFFFFFFFFFFFF                                                    [100%]
+=================================== FAILURES ===================================
+___________________________ test_task_scope_contract ___________________________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_task_scope_contract0')
+
+    def test_task_scope_contract(tmp_path: Path) -> None:
+        """AC1: a task's id, lifecycle, scope, reasons, acceptance and method are typed + resolving.
+    
+        Every reference must land on an EXISTING block: the packet is compared field by field against
+        the corpus, and each id it names is checked against `spec list`, which is a second reader of
+        the same corpus — a packet that invented an id could not survive both.
+        """
+        root = write_corpus(tmp_path)
+        code, out, err = validate(root)
+>       assert code == 0, f"a well-formed task corpus was refused: {err}"
+E       AssertionError: a well-formed task corpus was refused: spec error (unknown-element): tasks.xml: <task> is not a spec block (one of: section, requirement, acceptance, verification, test, include)
+E         
+E       assert 2 == 0
+
+tests/test_xml_task_contract.py:195: AssertionError
+________________ test_a_task_naming_a_missing_block_is_refused _________________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_a_task_naming_a_missing_b0')
+
+    def test_a_task_naming_a_missing_block_is_refused(tmp_path: Path) -> None:
+        """AC2: a dangling in-scope id is a typed finding naming the TASK and the BLOCK, no packet."""
+        root = write_corpus(tmp_path, in_scope="SG7-REQ-404")
+        code, out, err = validate(root)
+        assert code == 2, f"a task naming a nonexistent block was accepted: {out!r}"
+        assert out == "", "a refusal emitted a partial verdict/packet"
+>       assert "spec error (unresolved-reference)" in err, err
+E       AssertionError: spec error (unknown-element): tasks.xml: <task> is not a spec block (one of: section, requirement, acceptance, verification, test, include)
+E         
+E       assert 'spec error (unresolved-reference)' in 'spec error (unknown-element): tasks.xml: <task> is not a spec block (one of: section, requirement, acceptance, verification, test, include)\n'
+
+tests/test_xml_task_contract.py:254: AssertionError
+____________________ test_multiple_scope_refusals_are_typed ____________________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_multiple_scope_refusals_a0')
+
+    def test_multiple_scope_refusals_are_typed(tmp_path: Path) -> None:
+        """AC2: a duplicated scope reference, a conflict, and a wrong acceptance type each refuse.
+    
+        Three distinct authoring mistakes, three distinct codes: a duplicate is an author copy-paste,
+        a conflict says the same block is both in and out of scope, and an acceptance ref pointing at
+        a requirement is a type error. Collapsing them into one error would tell the author nothing.
+        """
+        root = write_corpus(tmp_path, in_scope="SG7-REQ-1 SG7-REQ-1")
+        code, _out, err = validate(root)
+        assert code == 2, "a duplicated in-scope reference was accepted"
+>       assert "task-duplicate-reference" in err, err
+E       AssertionError: spec error (unknown-element): tasks.xml: <task> is not a spec block (one of: section, requirement, acceptance, verification, test, include)
+E         
+E       assert 'task-duplicate-reference' in 'spec error (unknown-element): tasks.xml: <task> is not a spec block (one of: section, requirement, acceptance, verification, test, include)\n'
+
+tests/test_xml_task_contract.py:274: AssertionError
+_______________ test_an_inactive_reference_needs_acknowledgment ________________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_an_inactive_reference_nee0')
+
+    def test_an_inactive_reference_needs_acknowledgment(tmp_path: Path) -> None:
+        """AC2: an in-scope DEPRECATED block is refused unless the task explicitly acknowledges it.
+    
+        Lifecycle is part of the contract: silently pulling a retired block into a task's scope is how
+        a worker ends up implementing against superseded text. The acknowledgment is a deliberate,
+        inspectable act, and the packet then reports the block's real status instead of hiding it.
+        """
+        root = write_corpus(
+            tmp_path,
+            deprecated_requirement=True,
+            in_scope="SG7-REQ-1 SG7-REQ-OLD",
+        )
+        code, _out, err = validate(root)
+        assert code == 2, "an unacknowledged deprecated block was accepted into scope"
+>       assert "inactive-reference-unacknowledged" in err, err
+E       AssertionError: spec error (unknown-element): tasks.xml: <task> is not a spec block (one of: section, requirement, acceptance, verification, test, include)
+E         
+E       assert 'inactive-reference-unacknowledged' in 'spec error (unknown-element): tasks.xml: <task> is not a spec block (one of: section, requirement, acceptance, verification, test, include)\n'
+
+tests/test_xml_task_contract.py:306: AssertionError
+__________________ test_a_cross_version_reference_is_refused ___________________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_a_cross_version_reference0')
+
+    def test_a_cross_version_reference_is_refused(tmp_path: Path) -> None:
+        """AC2: a scope pinned to one contract version refuses a ref from another version.
+    
+        Without the pin a task silently mixes a 1.0.0 requirement with a 2.0.0 acceptance criterion,
+        and the "exact mini-spec" claim is false at the one place it matters. Pinned, the mismatch is
+        named with both versions so the author can see it.
+        """
+        root = write_corpus(tmp_path, scope_version="2.0.0")
+        code, _out, err = validate(root)
+        assert code == 2, "a cross-version scope reference was accepted"
+>       assert "cross-version-reference" in err, err
+E       AssertionError: spec error (unknown-element): tasks.xml: <task> is not a spec block (one of: section, requirement, acceptance, verification, test, include)
+E         
+E       assert 'cross-version-reference' in 'spec error (unknown-element): tasks.xml: <task> is not a spec block (one of: section, requirement, acceptance, verification, test, include)\n'
+
+tests/test_xml_task_contract.py:334: AssertionError
+____________ test_an_out_of_scope_entry_without_a_reason_is_refused ____________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_an_out_of_scope_entry_wit0')
+
+    def test_an_out_of_scope_entry_without_a_reason_is_refused(tmp_path: Path) -> None:
+        """AC2: an excluded id with no `<exclusion reason=...>` is refused, never defaulted.
+    
+        "Out of scope" without a reason is indistinguishable from "I forgot", and the reason is the
+        only thing that stops the next agent from re-litigating the exclusion. Both shapes are refused:
+        no exclusion element at all, and an element carrying an empty reason.
+        """
+        root = write_corpus(tmp_path, exclusions="")
+        code, out, err = validate(root)
+        assert code == 2, f"an out-of-scope entry with no reason was accepted: {out!r}"
+        assert out == ""
+>       assert "missing-exclusion-reason" in err, err
+E       AssertionError: spec error (unknown-element): tasks.xml: <task> is not a spec block (one of: section, requirement, acceptance, verification, test, include)
+E         
+E       assert 'missing-exclusion-reason' in 'spec error (unknown-element): tasks.xml: <task> is not a spec block (one of: section, requirement, acceptance, verification, test, include)\n'
+
+tests/test_xml_task_contract.py:355: AssertionError
+______________ test_an_approved_plan_digest_exports_one_board_row ______________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_an_approved_plan_digest_e0')
+
+    def test_an_approved_plan_digest_exports_one_board_row(tmp_path: Path) -> None:
+        """AC3: the approved packet becomes ONE canonical row, and the read-back matches byte for byte.
+    
+        The row's scope is carried in existing supported fields only (`capability_tags` and
+        `reasoning`) — `depends_on` cannot hold spec ids (boardctl resolves it against real task ids
+        and refuses the create), so the ids ride the field that exists for machine-readable tags. The
+        comparison is against an INDEPENDENTLY produced string: the canonical packet JSON from
+        `spec task-packet`, re-serialized here, must appear verbatim in what boardctl shows.
+        """
+        boardctl_or_skip()
+        root = write_corpus(tmp_path)
+>       board = make_board(tmp_path)
+                ^^^^^^^^^^^^^^^^^^^^
+
+tests/test_xml_task_contract.py:454: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+base = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_an_approved_plan_digest_e0')
+
+    def make_board(base: Path) -> Path:
+        """An ephemeral canonical board (tasks.jsonl + events.jsonl) from the real boardctl."""
+        boardctl = boardctl_or_skip()
+        board = base / "board"
+        done = subprocess.run(
+            [boardctl, "init", "-C", str(board), "--project", "auger", "--namespace", "auger"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert done.returncode == 0, done.stderr
+        board_dir = board / ".coding-hermes" / "board"
+>       assert (board_dir / "tasks.jsonl").is_file(), sorted(map(str, board.iterdir()))
+E       AssertionError: ['/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_an_approved_plan_digest_e0/board/board.jsonl', '/var/tmp/her...ixtures.jsonl', '/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_an_approved_plan_digest_e0/board/tasks.jsonl']
+E       assert False
+E        +  where False = is_file()
+E        +    where is_file = (PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_an_approved_plan_digest_e0/board/.coding-hermes/board') / 'tasks.jsonl').is_file
+
+tests/test_xml_task_contract.py:402: AssertionError
+________ test_an_unapproved_or_stale_digest_leaves_the_board_untouched _________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_an_unapproved_or_stale_di0')
+
+    def test_an_unapproved_or_stale_digest_leaves_the_board_untouched(tmp_path: Path) -> None:
+        """AC4: with no approval, or an approval that no longer matches, boardctl is never invoked.
+    
+        Proved three ways, because "we did not write" is easy to claim and hard to see: both canonical
+        JSONL files hash identically before and after, the export exits non-zero with a typed code,
+        and a boardctl WRAPPER placed on the exporter's `--boardctl` seam records no invocation at all
+        (a refused export that still shells out could create a row and fail later).
+        """
+        boardctl = boardctl_or_skip()
+        root = write_corpus(tmp_path)
+>       board = make_board(tmp_path)
+                ^^^^^^^^^^^^^^^^^^^^
+
+tests/test_xml_task_contract.py:506: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+base = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_an_unapproved_or_stale_di0')
+
+    def make_board(base: Path) -> Path:
+        """An ephemeral canonical board (tasks.jsonl + events.jsonl) from the real boardctl."""
+        boardctl = boardctl_or_skip()
+        board = base / "board"
+        done = subprocess.run(
+            [boardctl, "init", "-C", str(board), "--project", "auger", "--namespace", "auger"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert done.returncode == 0, done.stderr
+        board_dir = board / ".coding-hermes" / "board"
+>       assert (board_dir / "tasks.jsonl").is_file(), sorted(map(str, board.iterdir()))
+E       AssertionError: ['/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_an_unapproved_or_stale_di0/board/board.jsonl', '/var/tmp/her...ixtures.jsonl', '/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_an_unapproved_or_stale_di0/board/tasks.jsonl']
+E       assert False
+E        +  where False = is_file()
+E        +    where is_file = (PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_an_unapproved_or_stale_di0/board/.coding-hermes/board') / 'tasks.jsonl').is_file
+
+tests/test_xml_task_contract.py:402: AssertionError
+___________________ test_the_generated_trace_marker_resolves ___________________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_the_generated_trace_marke0')
+
+    def test_the_generated_trace_marker_resolves(tmp_path: Path) -> None:
+        """AC5: row/spec resolve to the canonical task and its exact XML ids; absent fields are `none:`.
+    
+        A generated marker that names a doc heading instead of a block would be the paperwork failure
+        the PRD's risk list names, so the `spec=` value is the block's own `file.xml#ID` source and it
+        is resolved back to that block id here. `evidence`/`verdict`/`commit` are ABSENT at export
+        time and must say why — a bare `none` is refused.
+        """
+        root = write_corpus(tmp_path)
+>       payload = packet_of(root)
+                  ^^^^^^^^^^^^^^^
+
+tests/test_xml_task_contract.py:560: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_the_generated_trace_marke0/corpus')
+task = 'SG7-TASK-1'
+
+    def packet_of(root: Path, task: str = "SG7-TASK-1") -> dict:
+        """`spec task-packet` as JSON: the packet, its approved digest, and its trace marker."""
+        code, out, err = run_spec("task-packet", str(root), "--task", task)
+>       assert code == 0, f"spec task-packet refused: {err}"
+E       AssertionError: spec task-packet refused: usage: auger spec [-h] {validate,list,assemble,check,bundle,align} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'task-packet' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align')
+E         
+E       assert 2 == 0
+
+tests/test_xml_task_contract.py:88: AssertionError
+_________ test_the_exporter_only_invokes_boardctl_create_and_readback __________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_the_exporter_only_invokes0')
+
+    def test_the_exporter_only_invokes_boardctl_create_and_readback(tmp_path: Path) -> None:
+        """AC6: the exporter runs boardctl `create`/`show` and nothing else — no dispatcher client.
+    
+        Proved from OUTSIDE: a wrapper on the `--boardctl` seam records every argv, and the operations
+        it saw must be a subset of {create, show}. Proved from INSIDE: the exporter's own source names
+        no HTTP client and no scheduler/API mutation path, so there is no second write surface to
+        disable later.
+        """
+        boardctl = boardctl_or_skip()
+        root = write_corpus(tmp_path)
+>       board = make_board(tmp_path)
+                ^^^^^^^^^^^^^^^^^^^^
+
+tests/test_xml_task_contract.py:611: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+base = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_the_exporter_only_invokes0')
+
+    def make_board(base: Path) -> Path:
+        """An ephemeral canonical board (tasks.jsonl + events.jsonl) from the real boardctl."""
+        boardctl = boardctl_or_skip()
+        board = base / "board"
+        done = subprocess.run(
+            [boardctl, "init", "-C", str(board), "--project", "auger", "--namespace", "auger"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert done.returncode == 0, done.stderr
+        board_dir = board / ".coding-hermes" / "board"
+>       assert (board_dir / "tasks.jsonl").is_file(), sorted(map(str, board.iterdir()))
+E       AssertionError: ['/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_the_exporter_only_invokes0/board/board.jsonl', '/var/tmp/her...ixtures.jsonl', '/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_the_exporter_only_invokes0/board/tasks.jsonl']
+E       assert False
+E        +  where False = is_file()
+E        +    where is_file = (PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_the_exporter_only_invokes0/board/.coding-hermes/board') / 'tasks.jsonl').is_file
+
+tests/test_xml_task_contract.py:402: AssertionError
+________________________ test_gate_arm_runs_these_files ________________________
+
+    def test_gate_arm_runs_these_files() -> None:
+        """Both SG7 proofs must be in tests/gate.sh's pytest arm, or neither is ever executed.
+    
+        The guard runs exactly `bash tests/gate.sh`, so a proof file outside the arm is unrun in CI and
+        in the guard while still looking like coverage. This assertion is the seam that stops a future
+        edit from narrowing the arm silently — prove it BITES by removing a name from the arm (the
+        evidence transcript keeps that pair).
+        """
+        arm = [
+            line
+            for line in GATE.read_text(encoding="utf-8").splitlines()
+            if "python3 -m pytest" in line
+        ]
+        assert arm, "tests/gate.sh must have a pytest arm"
+        for required in (
+            "tests/test_xml_task_contract.py",
+            "tests/test_spec_context.py",
+        ):
+>           assert required in arm[0], (
+                f"{required} must be in tests/gate.sh's pytest arm — the guard's test command is the "
+                "gate, so a proof file outside it is never run"
+            )
+E           AssertionError: tests/test_xml_task_contract.py must be in tests/gate.sh's pytest arm — the guard's test command is the gate, so a proof file outside it is never run
+E           assert 'tests/test_xml_task_contract.py' in '  setsid timeout --kill-after="$kill_after" "$budget" python3 -m pytest tests/test_auger.py tests/test_openapi_parity...t_usage_skill.py tests/test_packaging.py tests/test_packaging_wheel.py tests/test_teardown_resilience.py "$@" || rc=$?'
+
+tests/test_xml_task_contract.py:666: AssertionError
+_________________ test_task_context_excludes_unrelated_blocks __________________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_task_context_excludes_unr0')
+
+    def test_task_context_excludes_unrelated_blocks(tmp_path: Path) -> None:
+        """AC1: one query returns the task, its in-scope blocks, and the exclusions WITH reasons.
+    
+        The corpus carries two unrelated ACTIVE blocks in one document and a third in a second
+        document. None of them may appear: "returns only relevant blocks" is the whole product claim,
+        and a decoy that leaks makes the response a smaller dump rather than a context bundle.
+        """
+        root = write_corpus(tmp_path, decoys=True)
+>       payload = context(root, "--task", "SG7-TASK-1")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_spec_context.py:184: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_task_context_excludes_unr0/corpus')
+args = ('--task', 'SG7-TASK-1')
+
+    def context(root: Path, *args: str) -> dict:
+        """`spec context` as parsed JSON; the verb must also exit 0 (a refusal is a finding, not JSON)."""
+        code, out, err = run_spec("context", str(root), *args)
+>       assert code == 0, f"spec context refused: {err}"
+E       AssertionError: spec context refused: usage: auger spec [-h] {validate,list,assemble,check,bundle,align} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'context' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align')
+E         
+E       assert 2 == 0
+
+tests/test_spec_context.py:73: AssertionError
+___________________________ test_code_trace_context ____________________________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_code_trace_context0')
+
+    def test_code_trace_context(tmp_path: Path) -> None:
+        """AC2: a source path carrying `ch:trace spec=<id>` resolves that block and its closure.
+    
+        The answer must carry everything a reader needs to act without opening the corpus: source file,
+        block id, version, lifecycle status, applicability, verification method and the relationship
+        EDGE that put each block there.
+        """
+        root = write_corpus(tmp_path)
+        write_source(tmp_path, "service.py", "SG7-REQ-1")
+    
+>       payload = context(root, "--code", "code/service.py", "--repo-root", str(tmp_path))
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_spec_context.py:233: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_code_trace_context0/corpus')
+args = ('--code', 'code/service.py', '--repo-root', '/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_code_trace_context0')
+
+    def context(root: Path, *args: str) -> dict:
+        """`spec context` as parsed JSON; the verb must also exit 0 (a refusal is a finding, not JSON)."""
+        code, out, err = run_spec("context", str(root), *args)
+>       assert code == 0, f"spec context refused: {err}"
+E       AssertionError: spec context refused: usage: auger spec [-h] {validate,list,assemble,check,bundle,align} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'context' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align')
+E         
+E       assert 2 == 0
+
+tests/test_spec_context.py:73: AssertionError
+___________________ test_a_path_without_a_trace_is_unscoped ____________________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_a_path_without_a_trace_is0')
+
+    def test_a_path_without_a_trace_is_unscoped(tmp_path: Path) -> None:
+        """AC3: a file with no ch:trace is an explicit `unscoped` result — never a corpus dump."""
+        root = write_corpus(tmp_path, decoys=True)
+        plain = tmp_path / "code" / "plain.py"
+        plain.parent.mkdir(parents=True, exist_ok=True)
+        plain.write_text('"""No trace here."""\n\n\ndef helper():\n    return 1\n', encoding="utf-8")
+    
+>       payload = context(root, "--code", "code/plain.py", "--repo-root", str(tmp_path))
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_spec_context.py:276: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_a_path_without_a_trace_is0/corpus')
+args = ('--code', 'code/plain.py', '--repo-root', '/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_a_path_without_a_trace_is0')
+
+    def context(root: Path, *args: str) -> dict:
+        """`spec context` as parsed JSON; the verb must also exit 0 (a refusal is a finding, not JSON)."""
+        code, out, err = run_spec("context", str(root), *args)
+>       assert code == 0, f"spec context refused: {err}"
+E       AssertionError: spec context refused: usage: auger spec [-h] {validate,list,assemble,check,bundle,align} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'context' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align')
+E         
+E       assert 2 == 0
+
+tests/test_spec_context.py:73: AssertionError
+______________________ test_an_unknown_symbol_is_unscoped ______________________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_an_unknown_symbol_is_unsc0')
+
+    def test_an_unknown_symbol_is_unscoped(tmp_path: Path) -> None:
+        """AC3: a symbol no file defines is `unscoped`/`unknown-symbol`, with no substitution."""
+        root = write_corpus(tmp_path)
+        write_source(tmp_path, "service.py", "SG7-REQ-1")
+>       payload = context(root, "--symbol", "no_such_symbol", "--search-root", str(tmp_path))
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_spec_context.py:305: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_an_unknown_symbol_is_unsc0/corpus')
+args = ('--symbol', 'no_such_symbol', '--search-root', '/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_an_unknown_symbol_is_unsc0')
+
+    def context(root: Path, *args: str) -> dict:
+        """`spec context` as parsed JSON; the verb must also exit 0 (a refusal is a finding, not JSON)."""
+        code, out, err = run_spec("context", str(root), *args)
+>       assert code == 0, f"spec context refused: {err}"
+E       AssertionError: spec context refused: usage: auger spec [-h] {validate,list,assemble,check,bundle,align} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'context' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align')
+E         
+E       assert 2 == 0
+
+tests/test_spec_context.py:73: AssertionError
+________________ test_an_inactive_block_is_reported_as_inactive ________________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_an_inactive_block_is_repo0')
+
+    def test_an_inactive_block_is_reported_as_inactive(tmp_path: Path) -> None:
+        """AC3: a trace pointing at a DEPRECATED block reports `inactive` — it never picks a stand-in.
+    
+        Silently substituting the active block with the same intent would be the worst outcome: the
+        agent would implement against a contract that no longer governs the code.
+        """
+        root = write_corpus(tmp_path, deprecated=True)
+        write_source(tmp_path, "legacy.py", "SG7-REQ-OLD")
+>       payload = context(root, "--code", "code/legacy.py", "--repo-root", str(tmp_path))
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_spec_context.py:320: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_an_inactive_block_is_repo0/corpus')
+args = ('--code', 'code/legacy.py', '--repo-root', '/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_an_inactive_block_is_repo0')
+
+    def context(root: Path, *args: str) -> dict:
+        """`spec context` as parsed JSON; the verb must also exit 0 (a refusal is a finding, not JSON)."""
+        code, out, err = run_spec("context", str(root), *args)
+>       assert code == 0, f"spec context refused: {err}"
+E       AssertionError: spec context refused: usage: auger spec [-h] {validate,list,assemble,check,bundle,align} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'context' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align')
+E         
+E       assert 2 == 0
+
+tests/test_spec_context.py:73: AssertionError
+_____________________ test_an_ambiguous_match_is_reported ______________________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_an_ambiguous_match_is_rep0')
+
+    def test_an_ambiguous_match_is_reported(tmp_path: Path) -> None:
+        """AC3: one symbol citing two DIFFERENT blocks is `ambiguous`, and names both candidates.
+    
+        Choosing one would be a guess presented as a fact, which is exactly what an unmarked search
+        does — and the reason this verb exists at all.
+        """
+        root = write_corpus(tmp_path)
+        write_source(tmp_path, "one.py", "SG7-REQ-1", symbol="shared_helper")
+        write_source(tmp_path, "two.py", "SG7-REQ-9", symbol="shared_helper")
+    
+>       payload = context(root, "--symbol", "shared_helper", "--search-root", str(tmp_path))
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_spec_context.py:338: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_an_ambiguous_match_is_rep0/corpus')
+args = ('--symbol', 'shared_helper', '--search-root', '/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_an_ambiguous_match_is_rep0')
+
+    def context(root: Path, *args: str) -> dict:
+        """`spec context` as parsed JSON; the verb must also exit 0 (a refusal is a finding, not JSON)."""
+        code, out, err = run_spec("context", str(root), *args)
+>       assert code == 0, f"spec context refused: {err}"
+E       AssertionError: spec context refused: usage: auger spec [-h] {validate,list,assemble,check,bundle,align} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'context' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align')
+E         
+E       assert 2 == 0
+
+tests/test_spec_context.py:73: AssertionError
+_________________ test_the_same_query_is_byte_identical_twice __________________
+
+    def test_the_same_query_is_byte_identical_twice() -> None:
+        """AC4: same query + same XML tree -> identical ids, order and BYTES (golden pinned).
+    
+        The golden is a committed document, not a re-render of the run: it pins the whole response
+        shape — counts, byte measurements and provenance order included — so a change to any of them
+        is a deliberate edit to a reviewed file rather than a silent drift.
+        """
+>       assert GOLDEN_CORPUS.is_dir(), f"missing golden corpus: {GOLDEN_CORPUS}"
+E       AssertionError: missing golden corpus: /home/kara/proj-wt-auger-xml-hardening/tests/fixtures/xml/context/corpus
+E       assert False
+E        +  where False = is_dir()
+E        +    where is_dir = PosixPath('/home/kara/proj-wt-auger-xml-hardening/tests/fixtures/xml/context/corpus').is_dir
+
+tests/test_spec_context.py:354: AssertionError
+___________ test_a_narrow_query_reports_no_decoys_and_measured_bytes ___________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_a_narrow_query_reports_no0')
+
+    def test_a_narrow_query_reports_no_decoys_and_measured_bytes(tmp_path: Path) -> None:
+        """AC5: a narrow query over a decoy-heavy corpus reports counts and REAL byte measurements.
+    
+        `output_bytes` is proved against the length of the bytes the CLI actually wrote, and
+        `input_bytes` against the on-disk size of the documents that were read — a self-reported
+        measurement that cannot be checked is the same defect as no measurement.
+        """
+        root = write_corpus(tmp_path, decoys=True, second_file=True)
+        code, out, err = run_spec("context", str(root), "--task", "SG7-TASK-1")
+>       assert code == 0, err
+E       AssertionError: usage: auger spec [-h] {validate,list,assemble,check,bundle,align} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'context' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align')
+E         
+E       assert 2 == 0
+
+tests/test_spec_context.py:392: AssertionError
+_________________________ test_the_query_is_read_only __________________________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_the_query_is_read_only0')
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x76c5db064770>
+
+    def test_the_query_is_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """AC6: the query writes nothing, dispatches nothing, and calls no LLM/provider seam.
+    
+        Proved three ways: the corpus bytes are unchanged after the run, the module's write/client
+        surfaces are made to EXPLODE (any call would fail the test), and the query's own source names
+        no HTTP client, boardctl, or model provider.
+        """
+        root = write_corpus(tmp_path, decoys=True)
+        before = {
+            path: hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(root.rglob("*"))
+            if path.is_file()
+        }
+    
+        def explode(*_args, **_kwargs):
+            raise AssertionError("spec context reached a write or substrate seam")
+    
+        for seam in ("db", "insert", "patch", "delete_row", "remember", "recall"):
+            if hasattr(auger, seam):
+                monkeypatch.setattr(auger, seam, explode)
+    
+>       payload = context(root, "--task", "SG7-TASK-1")
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_spec_context.py:435: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+root = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-1609/test_the_query_is_read_only0/corpus')
+args = ('--task', 'SG7-TASK-1')
+
+    def context(root: Path, *args: str) -> dict:
+        """`spec context` as parsed JSON; the verb must also exit 0 (a refusal is a finding, not JSON)."""
+        code, out, err = run_spec("context", str(root), *args)
+>       assert code == 0, f"spec context refused: {err}"
+E       AssertionError: spec context refused: usage: auger spec [-h] {validate,list,assemble,check,bundle,align} ...
+E         auger spec: error: argument spec_cmd: invalid choice: 'context' (choose from 'validate', 'list', 'assemble', 'check', 'bundle', 'align')
+E         
+E       assert 2 == 0
+
+tests/test_spec_context.py:73: AssertionError
+________________________ test_gate_arm_runs_these_files ________________________
+
+    def test_gate_arm_runs_these_files() -> None:
+        """Both SG7 proofs must be named in tests/gate.sh's pytest arm or they never execute."""
+        arm = [
+            line
+            for line in GATE.read_text(encoding="utf-8").splitlines()
+            if "python3 -m pytest" in line
+        ]
+        assert arm, "tests/gate.sh must have a pytest arm"
+        for required in (
+            "tests/test_spec_context.py",
+            "tests/test_xml_task_contract.py",
+        ):
+>           assert required in arm[0], (
+                f"{required} must be in tests/gate.sh's pytest arm — the guard runs exactly this "
+                "script, so a proof file outside it is never executed"
+            )
+E           AssertionError: tests/test_spec_context.py must be in tests/gate.sh's pytest arm — the guard runs exactly this script, so a proof file outside it is never executed
+E           assert 'tests/test_spec_context.py' in '  setsid timeout --kill-after="$kill_after" "$budget" python3 -m pytest tests/test_auger.py tests/test_openapi_parity...t_usage_skill.py tests/test_packaging.py tests/test_packaging_wheel.py tests/test_teardown_resilience.py "$@" || rc=$?'
+
+tests/test_spec_context.py:469: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_xml_task_contract.py::test_task_scope_contract - AssertionE...
+FAILED tests/test_xml_task_contract.py::test_a_task_naming_a_missing_block_is_refused
+FAILED tests/test_xml_task_contract.py::test_multiple_scope_refusals_are_typed
+FAILED tests/test_xml_task_contract.py::test_an_inactive_reference_needs_acknowledgment
+FAILED tests/test_xml_task_contract.py::test_a_cross_version_reference_is_refused
+FAILED tests/test_xml_task_contract.py::test_an_out_of_scope_entry_without_a_reason_is_refused
+FAILED tests/test_xml_task_contract.py::test_an_approved_plan_digest_exports_one_board_row
+FAILED tests/test_xml_task_contract.py::test_an_unapproved_or_stale_digest_leaves_the_board_untouched
+FAILED tests/test_xml_task_contract.py::test_the_generated_trace_marker_resolves
+FAILED tests/test_xml_task_contract.py::test_the_exporter_only_invokes_boardctl_create_and_readback
+FAILED tests/test_xml_task_contract.py::test_gate_arm_runs_these_files - Asse...
+FAILED tests/test_spec_context.py::test_task_context_excludes_unrelated_blocks
+FAILED tests/test_spec_context.py::test_code_trace_context - AssertionError: ...
+FAILED tests/test_spec_context.py::test_a_path_without_a_trace_is_unscoped - ...
+FAILED tests/test_spec_context.py::test_an_unknown_symbol_is_unscoped - Asser...
+FAILED tests/test_spec_context.py::test_an_inactive_block_is_reported_as_inactive
+FAILED tests/test_spec_context.py::test_an_ambiguous_match_is_reported - Asse...
+FAILED tests/test_spec_context.py::test_the_same_query_is_byte_identical_twice
+FAILED tests/test_spec_context.py::test_a_narrow_query_reports_no_decoys_and_measured_bytes
+FAILED tests/test_spec_context.py::test_the_query_is_read_only - AssertionErr...
+FAILED tests/test_spec_context.py::test_gate_arm_runs_these_files - Assertion...
+21 failed in 0.35s
+red_rc=1

@@ -1,4 +1,4 @@
-# XML spec graph schema (AUG-118 / AUG-120 / AUG-123 / AUG-125 / AUG-127 / AUG-129 / AUG-133 / AUG-135)
+# XML spec graph schema (AUG-118 / AUG-120 / AUG-121 / AUG-122 / AUG-123 / AUG-125 / AUG-127 / AUG-129 / AUG-133 / AUG-135)
 
 Auger XML specs are rooted at `<spec id="...">` in the `urn:auger:spec:1` namespace, carry `version` and `schema-version`, and every graph node has a stable, repository-unique `id`. This implementation recognizes `<requirement>`, `<verification>`, and `<test>` nodes — all three are block kinds in the published grammar, and `<test>` is the shape that carries a machine-checkable obligation. A requirement's whitespace-separated `verifies` attribute names one or more verification IDs; `<verification-ref ref="..."/>` is an equivalent explicit edge. A verification may also name its requirement with `verifies="REQ-ID"`. References must resolve to the expected node type.
 
@@ -136,6 +136,63 @@ grammar's `verification=`/`method=` shape), not a test location; an obligation i
 actually points at a test with `runner`/`selector`/`path`.
 
 Assembly is deterministic JSON data and does not invoke tests. Consumers may pass the returned registered runner argv and tracked selector to the repository harness under their own policy; XML never executes code.
+
+## Task scope and the one-query context (AUG-121 / AUG-122)
+
+A **task is a block**, not a prose row: `<task>` is a `blockKind` like `requirement`, so it carries
+stable identity, lifecycle and a mandatory verification method, and its scope is a set of typed ID
+edges. `taskType` extends `blockType`, so the scope attributes cannot be written on any other kind.
+
+```xml
+<task id="AUG-121" kind="task" status="active" version="1.0.0" verification="test"
+      in-scope="AUG-REQ-1 AUG-AC-1" acceptance="AUG-AC-1" out-of-scope="AUG-REQ-9"
+      acknowledges="AUG-REQ-OLD" scope-version="1.0.0" plan-digest="<sha256 of the packet>">
+  Export one approved task packet to the canonical board.
+  <exclusion ref="AUG-REQ-9" reason="owned by a later wave"/>
+</task>
+```
+
+| attribute | meaning | refused when |
+| --- | --- | --- |
+| `in-scope` | the blocks the task implements | empty (`task-scope-missing`) |
+| `out-of-scope` | the blocks it explicitly does NOT touch | a member has no `<exclusion>` (`missing-exclusion-reason`) |
+| `acceptance` | the `<acceptance>` criteria that decide it | a ref is not an `<acceptance>` block (`task-invalid-acceptance-ref`) |
+| `acknowledges` | deliberate inclusion of a non-active block | an inactive ref is missing from it (`inactive-reference-unacknowledged`) |
+| `scope-version` | pins the whole scope to one contract version | a ref has another version (`cross-version-reference`) |
+| `plan-digest` | sha256 of the canonical packet the approval covers | shape is not 64 lower-case hex (`invalid-plan-digest`) |
+
+A ref listed twice is `task-duplicate-reference`; a block listed both inside and outside the scope is
+`task-scope-conflict`; an `<exclusion>` for a block that is not out of scope is
+`unexpected-exclusion`; an unresolved ref is `unresolved-reference` naming the task **and** the block.
+Every one of these refuses the whole corpus verdict and emits no partial packet.
+
+**Verbs.** `spec task-packet <root> --task <ID>` prints `{packet, digest, trace}` — the packet, the
+sha256 an approval binds to, and the generated `ch:trace` marker (contract in
+[`docs/prd/xml-spec-graph.md`](prd/xml-spec-graph.md)). `spec task-export <root> --task <ID> --board
+<dir> [--plan-digest <sha256>] [--boardctl <path>]` writes ONE canonical row through `boardctl`
+`create` plus a `show` read-back, and refuses before invoking boardctl at all when the approval is
+absent (`unapproved-plan-digest`), malformed (`invalid-plan-digest`) or stale
+(`stale-plan-digest`). A re-export of an identical packet answers `unchanged`; a differing existing
+row is `board-row-conflict` — updating a canonical row is its own approval-bound operation.
+
+`spec context <root> (--task <ID> | --code <path> | --symbol <name>) [--search-root <dir>]
+[--repo-root <dir>]` is the single query an agent runs to get the minimal context: the task and its
+in-scope blocks plus declared closure, or the block a `ch:trace spec=` reference names, with
+`source`/`version`/`status`/`method`/`edge` per block, the explicit exclusions with reasons, and
+`counts.selected`/`counts.dependencies`/`counts.input_bytes`/`counts.output_bytes`.
+`status` is closed: `ok | inactive | unscoped | ambiguous`, and anything other than `ok` carries a
+`reason` (`no-trace`, `trace-without-spec`, `unknown-spec-id`, `unknown-symbol`, `unknown-task`,
+`block-inactive`, `ambiguous-match`, `path-not-found`). It never substitutes a whole-document or
+whole-corpus dump, and it reads: no board write, no dispatch, no LLM.
+
+```bash
+auger spec task-packet specs --task AUG-121 | jq -r .trace
+auger spec context specs --task AUG-121 | jq '.counts, [.selected[].id]'
+auger spec context specs --code auger.py --repo-root . | jq -r .status
+```
+
+ch:trace row=AUG-121,AUG-122 spec=docs/XML-SPEC-SCHEMA.md#task-scope-and-the-one-query-context
+         test=tests/test_xml_task_contract.py,tests/test_spec_context.py doc=docs/XML-SPEC-SCHEMA.md
 
 ## The staged-diff checker (AUG-120 / AUG-135)
 

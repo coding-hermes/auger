@@ -39,6 +39,10 @@ GATE = REPO_ROOT / "tests" / "gate.sh"
 EXPECTED = {
     "specs": None,
     "verification": None,
+    # AUG-121/AUG-122: the task-scope + context fixture. Valid, and the `spec context` proof's
+    # golden corpus — registering it here means BOTH validators also grade it on every run.
+    "context": None,
+    "context/corpus": None,
     "expected": "empty-corpus",
     "invalid": "external-entity-forbidden",
     "invalid/duplicate-id": "duplicate-id",
