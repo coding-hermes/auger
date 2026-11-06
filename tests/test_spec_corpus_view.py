@@ -23,6 +23,7 @@ Arms:
   reference index ......... test_the_reference_index_lists_every_typed_edge
   narrative stays linked .. test_the_narrative_doc_links_the_generated_view
   determinism ............. test_two_renders_of_one_corpus_are_identical
+  location independence ... test_a_byte_identical_corpus_renders_identically_wherever_it_lives
   the arm itself .......... test_gate_arm_runs_this_file
 
 ch:trace row=AUG-136 spec=docs/SPEC-CORPUS.md test=tests/test_spec_corpus_view.py doc=docs/SPEC-CORPUS-VIEW.md
@@ -188,6 +189,40 @@ def test_the_narrative_doc_links_the_generated_view() -> None:
 def test_two_renders_of_one_corpus_are_identical() -> None:
     """Determinism: the render is a pure function of the corpus (no timestamps, no dict order)."""
     assert gen_spec_view.build_view(SPECS) == gen_spec_view.build_view(SPECS)
+
+
+def test_a_byte_identical_corpus_renders_identically_wherever_it_lives(
+    tmp_path: Path,
+) -> None:
+    """Provenance is the corpus CONTENT, not the directory it sits in (AUG-137 P2).
+
+    `scripts/replay_prd_proofs.py` documents `--specs-root` as the knob for measuring a corpus
+    copy, and P2 compares the committed view against a render of that root. If the render carries
+    the root directory's name or a checkout-relative path, a byte-identical copy outside the repo
+    renders differently and P2 FAILS on unmutated input — the knob is then unusable and the
+    reproducibility claim is false.
+    """
+    elsewhere = tmp_path / "not-the-checkout" / "arbitrary-directory-name"
+    elsewhere.parent.mkdir(parents=True)
+    shutil.copytree(SPECS, elsewhere)
+    assert gen_spec_view.build_view(elsewhere) == gen_spec_view.build_view(SPECS), (
+        "the rendered view depends on where the corpus lives, so a byte-identical copy cannot "
+        "reproduce the committed view — render paths relative to the corpus root instead"
+    )
+
+
+def test_the_rendered_view_names_no_checkout_absolute_path() -> None:
+    """The committed view is an artifact other hosts must be able to regenerate byte for byte."""
+    view = gen_spec_view.build_view(SPECS)
+    assert str(REPO_ROOT) not in view, (
+        f"the rendered view embeds this checkout's path ({REPO_ROOT}) — no other host can "
+        "regenerate it"
+    )
+    for token in view.split():
+        assert not token.startswith("/"), (
+            f"the rendered view embeds the absolute path {token!r} — paths must be relative to "
+            "the corpus root"
+        )
 
 
 def test_gate_arm_runs_this_file() -> None:
