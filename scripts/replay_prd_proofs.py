@@ -215,6 +215,22 @@ def _run(argv, cwd=None, timeout=600) -> subprocess.CompletedProcess:
     )
 
 
+def _recorded_runner(runner) -> str:
+    """A runner argv as a READER can retype it: the interpreter is `python3`, never this host's path.
+
+    The artifact is compared field by field (`_signature`) on every gate, so the recorded command
+    must not depend on which interpreter ran the replay. `obligation["runner"]` is
+    `(sys.executable, "-m", "pytest")`, and `sys.executable` is `…/python3` under the gate,
+    `…/python` under a developer's venv shim and `/usr/bin/python3.11` on another host — recording
+    it verbatim makes `--check` disagree with itself on one tree. Only the DISPLAY string is
+    normalized; the subprocess still runs the real interpreter.
+    """
+    tokens = [str(token) for token in runner]
+    if tokens and Path(tokens[0]).name.startswith("python"):
+        tokens[0] = "python3"
+    return " ".join(tokens)
+
+
 def _staged_view_corpus(workdir: Path, specs_root: Path) -> Path:
     corpus = workdir / "specs"
     shutil.copytree(specs_root, corpus)
@@ -382,9 +398,9 @@ def replay_p5(ctx: dict) -> dict:
     )
     return {
         "command": (
-            f"python3 auger.py spec bundle tests/fixtures/xml/verification REQ-MIG-1; then "
-            f"{' '.join(obligation['runner'])} {node} in a git copy of the repo, and the same "
-            "after the named migration is replaced by a no-op"
+            "python3 auger.py spec bundle tests/fixtures/xml/verification REQ-MIG-1; then "
+            f"{_recorded_runner(obligation['runner'])} {node} in a git copy of the repo, and the "
+            "same after the named migration is replaced by a no-op"
         ),
         "corpus_bytes": _corpus_bytes(corpus),
         "bundle_bytes": len(queried.stdout.encode("utf-8")),
@@ -555,7 +571,9 @@ def build_report(rows: list, workdir: Path, prd_path: Path, specs_root: Path) ->
             "corpus_bytes/bundle_bytes/latency_ms are null when a proof did not run; the reason is "
             "in its `detail`. `--check` compares this structure (verdict, counts, disposition, "
             "status, command) with the committed artifact and ignores the timings, which are a "
-            "snapshot of the run that recorded them."
+            "snapshot of the run that recorded them. A recorded `command` names its interpreter "
+            "as `python3` and uses repo-relative paths, so the same tree replayed under any "
+            "interpreter name on any host produces the same signature."
         ),
         "verdict": "fail" if required_bad else "pass",
         "counts": counts,
