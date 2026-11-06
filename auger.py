@@ -8242,8 +8242,14 @@ def _spec_include_map(documents: dict, root: Path) -> dict:
     return include_map
 
 
-def _spec_block(element, rel: str, order: int) -> dict:
-    """Validate one block's stable identity and typed metadata, and index its edges."""
+def _spec_block(element, rel: str, order: int, *, body: bool = True) -> dict:
+    """Validate one block's stable identity and typed metadata, and index its edges.
+
+    `body=False` is the AUG-140 index pass: identity, lifecycle, method and typed edges are read
+    (they are ATTRIBUTES, and a selection needs them), while the block's PROSE is not extracted.
+    `blocks_parsed` in the measured assembly report counts the blocks whose body was materialized,
+    so a lazy selection is a number a caller can read instead of a claim this docstring makes.
+    """
     kind = _spec_local(element.tag)
     block_id = (element.get("id") or "").strip()
     if not block_id:
@@ -8399,7 +8405,7 @@ def _spec_block(element, rel: str, order: int) -> dict:
         "plan": plan_id,
         "plan_version": plan_version,
         "exclusions": exclusions,
-        "text": _spec_text(element),
+        "text": _spec_text(element) if body else "",
         "source": f"{rel}#{block_id}",
         "source_file": rel,
         "order": order,
@@ -8414,6 +8420,9 @@ def _spec_collect(
     stack: list,
     out: list,
     spliced: dict,
+    *,
+    body: bool = True,
+    elements: dict | None = None,
 ) -> None:
     """Walk a document in order, splicing included fragments at their <include> site.
 
@@ -8445,6 +8454,8 @@ def _spec_collect(
                 stack + [target],
                 out,
                 spliced,
+                body=body,
+                elements=elements,
             )
             continue
         if local not in SPEC_BLOCK_KINDS:
@@ -8453,7 +8464,12 @@ def _spec_collect(
                 f"{rel}: <{local}> is not a spec block "
                 f"(one of: {', '.join(SPEC_BLOCK_KINDS)}, include)",
             )
-        out.append(_spec_block(child, rel, len(out)))
+        position = len(out)
+        out.append(_spec_block(child, rel, position, body=body))
+        if elements is not None:
+            # AUG-140: the element behind each indexed block, so `materialize_spec_records` can
+            # build the bodies a SELECTION needs without walking (or re-parsing) the corpus.
+            elements[position] = (child, rel)
 
 
 def _spec_refuse_reference_cycles(by_id: dict) -> None:
@@ -8735,6 +8751,134 @@ def load_spec_corpus(
     return root, documents, blocks
 
 
+def _spec_clock() -> float:
+    """The clock the measured assembly report reads (a SEAM: `elapsed_ms` must be provable).
+
+    A private function, not `time.perf_counter()` inlined at the call site, because the report's
+    `elapsed_ms` is the one number a test cannot re-derive: pinning this to a known sequence is how
+    `tests/test_spec_assembly_report.py` proves the field is MEASURED and not a constant.
+    """
+    return time.perf_counter()
+
+
+def load_spec_corpus_indexed(
+    spec_root, *, tolerate_unreadable: bool = False, skipped: list | None = None
+) -> dict:
+    """Load a corpus for a SELECTION: index every block, materialize NO body (AUG-140 / AC-14).
+
+    `load_spec_corpus` remains the corpus-wide verdict for `validate`/`check`/`bundle` and for every
+    Python caller; this function runs the SAME steps — discovery, the root/shape/schema checks, the
+    include graph, block validation, XSD conformance — and differs in exactly one place: each block
+    is read for its ATTRIBUTES only (`_spec_block(..., body=False)`), so its prose is not extracted
+    and its element is kept aside for `materialize_spec_records`.
+
+    That is what makes "a selection reads no unselected document body" measurable: AC-14 allows the
+    index a selection needs, and this returns it as numbers —
+
+      * `documents_read`  — documents whose bytes were read (the index needs every document);
+      * `input_bytes`     — the sum of those files' sizes, measured with `os.stat`;
+      * `blocks_indexed`  — blocks whose identity/lifecycle/edges were read;
+      * `blocks_parsed`   — reported by the caller: how many bodies were then materialized.
+
+    Returns `{"root", "documents", "blocks", "elements", "measured"}`.
+    """
+    root = Path(spec_root).expanduser()
+    if not root.is_dir():
+        raise SpecError("missing-spec-root", f"{spec_root} is not a directory")
+    root = root.resolve()
+    paths, refusals = _spec_discover_documents(root)
+    if not paths:
+        if refusals:
+            raise SpecError(refusals[0]["code"], refusals[0]["detail"])
+        raise SpecError("empty-corpus", f"no *.xml documents under {root}")
+    if refusals and not tolerate_unreadable:
+        raise SpecError(refusals[0]["code"], refusals[0]["detail"])
+    schema = _spec_load_schema()
+    unreadable = [] if skipped is None else skipped
+    unreadable.extend(refusals)
+    documents = _spec_read_documents(
+        paths, root, tolerate_unreadable=tolerate_unreadable, skipped=unreadable
+    )
+    if not documents:
+        first = unreadable[0]
+        raise SpecError(first["code"], first["detail"])
+    include_map = _spec_include_map(documents, root)
+    included = {target for targets in include_map.values() for target in targets}
+    blocks: list = []
+    elements: dict = {}
+    spliced: dict = {}
+    for rel in sorted(documents):
+        if rel in included:
+            continue  # a fragment: its blocks are assembled at their <include> site
+        _spec_collect(
+            documents[rel],
+            rel,
+            root,
+            documents,
+            [rel],
+            blocks,
+            spliced,
+            body=False,
+            elements=elements,
+        )
+    if not blocks:
+        raise SpecError(
+            "no-root-document", f"{root}: every document is included by another"
+        )
+    _spec_validate_blocks(blocks)
+    _spec_assert_schema_conformance(
+        schema,
+        [path for path in paths if path.relative_to(root).as_posix() in documents],
+        root,
+    )
+    read_paths = [
+        path
+        for path in paths
+        if path.relative_to(root).as_posix()
+        in (set(documents) | {entry["file"] for entry in unreadable})
+    ]
+    return {
+        "root": root,
+        "documents": documents,
+        "blocks": blocks,
+        "elements": elements,
+        "measured": {
+            "documents_read": len(read_paths),
+            "input_bytes": sum(
+                path.stat().st_size for path in read_paths if path.is_file()
+            ),
+            "blocks_indexed": len(blocks),
+            # A self-measuring falsifier for the laziness claim: this is 0 by construction, and it
+            # stops being 0 the moment the index pass starts extracting prose. The report adds it to
+            # the materialized selection, so a regression that re-introduces a full-corpus parse
+            # shows up as a real number instead of as a docstring nobody re-reads.
+            "bodies_materialized": sum(1 for block in blocks if block["text"]),
+        },
+    }
+
+
+def materialize_spec_records(indexed: dict, records: list) -> list:
+    """Build the BODY of every selected record (and only those) from the indexed elements.
+
+    The rebuilt record is produced by `_spec_block` itself — the function `load_spec_corpus` uses —
+    so a materialized block cannot differ from the block the corpus-wide loader would have built.
+    `len(result)` is the `blocks_parsed` number the measured report prints.
+    """
+    elements = indexed["elements"]
+    materialized: list = []
+    for record in records:
+        order = record["block"]["order"]
+        element, rel = elements[order]
+        materialized.append(
+            {
+                "block": _spec_block(element, rel, order),
+                "why": record["why"],
+                "via": record["via"],
+            }
+        )
+    return materialized
+
+
 def _spec_describe_selection(ids, kinds, applies_to, statuses, versions) -> str:
     pairs = (
         ("id", ids),
@@ -8846,6 +8990,13 @@ def select_spec_blocks(
     return selection, records
 
 
+#: The measured assembly report's OWN shape version (AUG-140 / PRD AC-14). Deliberately not the
+#: corpus `schema_version`: one describes the XML grammar, the other the JSON report a consumer
+#: parses, and they change for different reasons. 1.0 was the implicit shape (`schema_version`,
+#: `selection`, `counts`, `blocks`, `corpus`); 1.1 adds the measured block below.
+SPEC_ASSEMBLY_REPORT_VERSION = "1.1"
+
+
 def render_spec_assembly(
     records: list,
     *,
@@ -8853,6 +9004,7 @@ def render_spec_assembly(
     fmt: str = "markdown",
     schema_version: str = SPEC_SCHEMA_VERSION,
     corpus: dict | None = None,
+    report: dict | None = None,
 ) -> str:
     """Render a selected bundle. Deterministic: same inputs, byte-identical output.
 
@@ -8861,7 +9013,18 @@ def render_spec_assembly(
     `documents_selected`, so AC-14 ("a selection reads no unselected document body") is a number
     a test can read instead of a claim a docstring makes. It is JSON-only: the Markdown document
     is a byte-pinned golden and its shape belongs to the assembly contract, not to loader health.
+
+    `report` (AUG-140) is the MEASURED report — input/output bytes, documents read, bodies parsed,
+    elapsed time — and it is JSON-only for the same reason, plus one more: `elapsed_ms` is a wall
+    clock, so a report in the DEFAULT document would make AC-4's "two runs are byte-identical"
+    unkeepable. `spec assemble --measure` is the only caller.
     """
+    if report is not None and fmt != "json":
+        raise SpecError(
+            "unsupported-format",
+            f"a measured report is JSON-only (got {fmt!r}) — the Markdown document is a "
+            "byte-pinned golden",
+        )
     matched = sum(1 for record in records if record["why"] == "matched")
     counts = {
         "matched": matched,
@@ -8895,6 +9058,8 @@ def render_spec_assembly(
         }
         if corpus is not None:
             payload["corpus"] = dict(corpus)
+        if report is not None:
+            payload.update(report)
         return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
     if fmt != "markdown":
         raise SpecError("unsupported-format", f"{fmt!r} (markdown or json)")
@@ -12508,11 +12673,35 @@ def _spec_dispatch(a):
     # AUG-146: `list` and `assemble` select, they do not adjudicate the corpus — a neighbouring
     # file that is still being written is skipped and counted instead of taking every query
     # offline. `validate`/`check`/`bundle` are corpus-wide verdicts and never get the tolerance.
+    #
+    # AUG-140: a SELECTION also does not need every block's BODY. The indexed loader reads every
+    # document (the index is what a selector matches against) but extracts prose only for the blocks
+    # the selection then returns, so `--measure` can report `blocks_parsed` against `blocks_indexed`
+    # instead of asserting laziness in a docstring. Corpus-wide verbs keep `load_spec_corpus`.
     selection_scoped = command in ("list", "assemble")
     unreadable: list = []
-    root, documents, blocks = load_spec_corpus(
-        a.root, tolerate_unreadable=selection_scoped, skipped=unreadable
-    )
+    indexed: dict | None = None
+    measure = bool(getattr(a, "measure", False))
+    if measure and getattr(a, "format", "markdown") != "json":
+        # A flag that silently does nothing is a declared surface that lies. The report is JSON-only
+        # (the Markdown assembly is a byte-pinned golden), so an unusable combination refuses.
+        raise SpecError(
+            "measure-requires-json",
+            "--measure reports a JSON object; pass --format json (the Markdown assembly is a "
+            "byte-pinned golden and carries no report)",
+        )
+    started = _spec_clock()
+    if selection_scoped:
+        indexed = load_spec_corpus_indexed(
+            a.root, tolerate_unreadable=True, skipped=unreadable
+        )
+        root, documents, blocks = (
+            indexed["root"],
+            indexed["documents"],
+            indexed["blocks"],
+        )
+    else:
+        root, documents, blocks = load_spec_corpus(a.root)
     _spec_report_unreadable(unreadable)
     # AUG-127: the repository the obligations resolve in is EXPLICIT, never auger's own
     # directory. `--repo-root` names it; without the flag the validator resolves
@@ -12630,12 +12819,64 @@ def _spec_dispatch(a):
     )
     if not records:
         _spec_no_match_notice(selection)
-    text = render_spec_assembly(
-        records,
-        selection=selection,
-        fmt=a.format,
-        corpus=_spec_corpus_counts(documents, unreadable, records),
-    )
+    # AUG-140: the bodies of the SELECTED blocks are materialized here, and this is the only place
+    # that materializes a body for a selection — `len(records)` is `blocks_parsed`.
+    if indexed is not None:
+        records = materialize_spec_records(indexed, records)
+    corpus_counts = _spec_corpus_counts(documents, unreadable, records)
+    if measure and a.format == "json" and indexed is not None:
+        # The report is measured AROUND the real assembly: the clock started before the loader read
+        # the corpus, and stops after the selection was rendered once.
+        text = render_spec_assembly(
+            records,
+            selection=selection,
+            fmt=a.format,
+            corpus=corpus_counts,
+        )
+        report = {
+            "report_schema_version": SPEC_ASSEMBLY_REPORT_VERSION,
+            "input_bytes": indexed["measured"]["input_bytes"],
+            "output_bytes": len(text.encode("utf-8")),
+            "documents_read": indexed["measured"]["documents_read"],
+            "blocks_indexed": indexed["measured"]["blocks_indexed"],
+            "blocks_parsed": indexed["measured"]["bodies_materialized"] + len(records),
+            "elapsed_ms": round((_spec_clock() - started) * 1000, 3),
+        }
+        # `output_bytes` is the SERIALIZED length, and the field itself is part of those bytes: a
+        # digit-count change moves the total, so settle the fixpoint instead of reporting a number
+        # that was true one serialization ago.
+        text = render_spec_assembly(
+            records,
+            selection=selection,
+            fmt=a.format,
+            corpus=corpus_counts,
+            report=report,
+        )
+        for _attempt in range(8):
+            width = len(text.encode("utf-8"))
+            if width == report["output_bytes"]:
+                break
+            report["output_bytes"] = width
+            text = render_spec_assembly(
+                records,
+                selection=selection,
+                fmt=a.format,
+                corpus=corpus_counts,
+                report=report,
+            )
+        if len(text.encode("utf-8")) != report["output_bytes"]:
+            raise SpecError(
+                "unstable-report",
+                "output_bytes did not settle against the serialized document; the report would "
+                "carry a number that is not the output's length",
+            )
+    else:
+        text = render_spec_assembly(
+            records,
+            selection=selection,
+            fmt=a.format,
+            corpus=corpus_counts,
+        )
     out = getattr(a, "out", None)
     if out:
         _spec_write_atomic(out, text)
@@ -13764,6 +14005,14 @@ def main(argv=None):
         "--out",
         help="write the assembly here atomically; the parent directory must already exist "
         "(nothing is created when the run refuses)",
+    )
+    asm.add_argument(
+        "--measure",
+        action="store_true",
+        help="add the MEASURED report to the JSON document: report_schema_version, input_bytes, "
+        "output_bytes, documents_read, blocks_indexed, blocks_parsed and elapsed_ms (PRD AC-14). "
+        "Opt-in because elapsed_ms is a wall clock and the default document is byte-reproducible "
+        "(AC-4); the report is JSON-only",
     )
     asm.set_defaults(fn=cmd_spec)
 

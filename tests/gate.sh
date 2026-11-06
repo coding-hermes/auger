@@ -194,7 +194,11 @@ run_pytest_arm(){
   # mutation moves the mutated block's section in both views and leaves untouched blocks
   # byte-identical; the render path is read-only on the corpus and refuses an --out inside it.
   # Hermetic (~1s), and it is the arm that would have caught a cached/stale body.
-  setsid timeout --kill-after="$kill_after" "$budget" python3 -m pytest tests/test_auger.py tests/test_openapi_parity.py tests/test_api_service.py tests/test_upgrade_path.py tests/test_xml_specs.py tests/test_verification_graph.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_spec_obligation_gate.py tests/test_spec_decision_ref.py tests/test_spec_rollback.py tests/test_spec_render.py tests/test_xsd_conformance.py tests/test_spec_repository_root.py tests/test_spec_alignment_check.py tests/test_spec_corpus_view.py tests/test_xml_task_contract.py tests/test_spec_context.py tests/test_plan_approval.py tests/test_task_context.py tests/test_task_packet.py tests/test_prd_proofs.py tests/test_usage_skill.py tests/test_packaging.py tests/test_packaging_wheel.py tests/test_teardown_resilience.py "$@" || rc=$?
+  # tests/test_spec_assembly_report.py (AUG-140, PRD AC-14): `assemble --measure` reports real
+  # input/output bytes, documents read, blocks indexed/parsed and a clock-measured elapsed_ms; the
+  # unmeasured document is untouched (AC-4) and the indexed loader's blocks equal the full loader's.
+  # Hermetic (~1s).
+  setsid timeout --kill-after="$kill_after" "$budget" python3 -m pytest tests/test_auger.py tests/test_openapi_parity.py tests/test_api_service.py tests/test_upgrade_path.py tests/test_xml_specs.py tests/test_verification_graph.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_spec_obligation_gate.py tests/test_spec_decision_ref.py tests/test_spec_rollback.py tests/test_spec_render.py tests/test_spec_assembly_report.py tests/test_xsd_conformance.py tests/test_spec_repository_root.py tests/test_spec_alignment_check.py tests/test_spec_corpus_view.py tests/test_xml_task_contract.py tests/test_spec_context.py tests/test_plan_approval.py tests/test_task_context.py tests/test_task_packet.py tests/test_prd_proofs.py tests/test_usage_skill.py tests/test_packaging.py tests/test_packaging_wheel.py tests/test_teardown_resilience.py "$@" || rc=$?
   if [ "$rc" -eq 124 ]; then
     echo "GATE TIMEOUT: the pytest arm exceeded ${budget} and was killed as a process group (setsid+timeout, AUG-081) — investigate hung tests; failing the gate" >&2
     exit 1

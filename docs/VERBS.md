@@ -632,6 +632,15 @@ writes nothing back to them. Subcommands:
   remains the obligation verdict.
 - `auger spec list ROOT [--id ID] [--kind K] [--applies-to SCOPE] [--status S] [--version X.Y.Z]`
 - `auger spec assemble ROOT <the same selectors> [--no-deps] [--format markdown|json] [--out PATH]`
+  — add `--measure` to the JSON form for the MEASURED report (AUG-140, PRD AC-14):
+  `report_schema_version` (the report's own 1.1, distinct from the corpus `schema_version`),
+  `input_bytes` (sum of the documents read), `output_bytes` (the emitted document's own length,
+  settled to a fixpoint), `documents_read`, `blocks_indexed`, `blocks_parsed` (bodies materialized —
+  matched + closure only) and `elapsed_ms` (a wall clock, read through `auger._spec_clock`). It is
+  opt-in because AC-4 pins two runs of the unmeasured document to byte-identical bytes, and it is
+  JSON-only because the Markdown assembly is a byte-pinned golden. `list`/`assemble` index every
+  block's ATTRIBUTES and materialize only the selected bodies; `validate`/`check`/`bundle` stay
+  corpus-wide and eager, so no proof weakens to buy the saving.
 - `auger spec render ROOT --out DIR` — write every generated view of the corpus (AUG-139):
   `SPEC-CORPUS-VIEW.md` and `SPEC-CORPUS-VIEW.html`, both rendered from the ONE loaded corpus
   (`auger.render_spec_view_document`), so the two views cannot disagree about what the XML says. The

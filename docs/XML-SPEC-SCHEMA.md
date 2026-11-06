@@ -121,7 +121,36 @@ auger spec check    <spec-root> [--repo-root DIR]        # the same verdict, obl
 auger spec bundle   <spec-root> <requirement-id> [--repo-root DIR]   # one requirement's verification bundle as JSON
 auger spec list     <spec-root>                          # blocks with kind, status, version, source
 auger spec assemble <spec-root> --id <block-id>          # block selection + explicit dependency closure
+auger spec assemble <spec-root> --id <block-id> --format json --measure   # + the measured report (AC-14)
+auger spec render   <spec-root> --out <dir>              # every generated view (Markdown + HTML, AUG-139)
 ```
+
+### The measured assembly report (AUG-140, PRD AC-14)
+
+`assemble --format json --measure` adds a report **beside** the keys that were already there
+(`schema_version`, `selection`, `counts`, `blocks`, `corpus`):
+
+| key | what it measures |
+| --- | --- |
+| `report_schema_version` | the REPORT's own shape version — `1.1` today. Not the corpus `schema_version`: one describes the XML grammar, the other the JSON a consumer parses, and they change for different reasons. |
+| `input_bytes` | `os.stat` sum of the corpus documents that were READ (every document is read to build the selection index). |
+| `output_bytes` | the length of the emitted document itself, in bytes, settled to a fixpoint — the field is part of the bytes it measures, so the run re-serializes until the number and the length agree (a report that cannot settle refuses `unstable-report`). |
+| `documents_read` | documents whose bytes were read. |
+| `blocks_indexed` | blocks whose identity, lifecycle, method and typed edges were read. |
+| `blocks_parsed` | blocks whose **body** (prose) was materialized: the matched blocks plus their explicit closure, **plus** any body the index pass itself extracted (zero by construction — the loader counts it, so a regression that re-introduces a full-corpus parse shows up as a number). This is what makes AC-14's "reads no unselected document bodies beyond the index needed for selection" measurable: `blocks_parsed < blocks_indexed` on any corpus larger than its selection. |
+| `elapsed_ms` | wall-clock time around the real assembly (loader read → selection → first render), read through `auger._spec_clock`. |
+
+Two consequences worth stating, because both are deliberate:
+
+* **It is opt-in.** PRD AC-4 and `tests/test_xml_specs.py::test_selection_is_byte_identical_across_runs`
+  pin two runs of the same `assemble --format json` to *byte-identical* output. `elapsed_ms` is a wall
+  clock, so a report in the default document would make that contract unkeepable. Without `--measure`
+  the document is byte-for-byte what it always was.
+* **Corpus-wide verbs stay eager.** `validate`, `check`, `bundle`, `task-packet`, `plan-*` and the
+  judge packet keep `load_spec_corpus`, which materializes every block body — they adjudicate the whole
+  corpus, so laziness there would be a missing proof, not a saving. Only the selection-scoped
+  `list`/`assemble` use `load_spec_corpus_indexed`, and `tests/test_spec_assembly_report.py` pins that
+  the indexed path produces exactly the blocks the full loader produces.
 
 `spec validate` and `spec check` are one verdict from one loader. The corpus root, the
 `urn:auger:spec:1` namespace, the schema version, the document metadata and the
