@@ -288,3 +288,11 @@ Cross-repo acceptance must be evaluated against the exact Auger checker version 
 ## ch:trace
 
 `ch:trace row=AUG-118 spec=docs/prd/xml-spec-graph.md#proposed-design wave=none:prd-only test=none:prd-not-implemented doc=docs/prd/xml-spec-graph.md prompt=none:not-dispatched evidence=none:prd-not-implementation-evidence witness=none:proposal-only verdict=none:not-judged commit=none:not-implemented memory=/project/auger/integration/xml-boardctl-gitreins-2026-10-29`
+
+The sample end-to-end trace AC-15 asks for is GENERATED, never hand-written:
+`python3 scripts/gen_trace_artifact.py` writes `docs/prd/evidence/AUG-136-trace.json` from live
+repository facts (a real board row, a real spec block, a tracked test, a commit reachable from HEAD),
+refuses with a typed `spec error (<code>)` when any pointer does not land, and `--check` exits 1 when
+the committed file differs from a fresh build. `tests/test_trace_artifact.py` resolves every pointer
+in it independently of the generator, so renaming a cited test breaks the artifact test instead of
+silently rotting the sample.
