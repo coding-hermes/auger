@@ -1,0 +1,413 @@
+commit dae176931177648fa5c8e9f2a71fea8f5404cb14
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Sat Oct 31 14:11:56 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Sat Oct 31 14:11:56 2026 -0500
+
+    fix(AUG-123): valid verification fixture, ch:trace row=AUG-123, literal AC proof tests
+    
+    ch:trace row=AUG-123 spec=docs/prd/xml-spec-graph.md#R15 test=tests/test_verification_graph.py doc=docs/XML-SPEC-SCHEMA.md
+---
+ auger.py                                      | 116 +++++++++++++++++++-----
+ docs/XML-SPEC-SCHEMA.md                       |   2 +
+ tests/fixtures/xml/verification/migration.xml |  10 ++-
+ tests/test_verification_graph.py              | 123 ++++++++++++++++++++++++++
+ 4 files changed, 226 insertions(+), 25 deletions(-)
+
+diff --git a/auger.py b/auger.py
+index 6e39328..ed41f32 100755
+--- a/auger.py
++++ b/auger.py
+@@ -51,6 +51,7 @@ import math
+ import os
+ import re
+ import sqlite3
++import subprocess
+ import sys
+ import tempfile
+ import time
+@@ -7705,8 +7706,11 @@ def cmd_api(a):
+ # Additive by construction: nothing here is reachable from `export`/`render_export`, so the Markdown
+ # export contract is byte-identical to before — tests/test_xml_specs.py pins that with a golden.
+ # ch:trace row=AUG-118 spec=docs/SPEC-003-xml-specs.md#assembly-and-selection
++# ch:trace row=AUG-123 spec=docs/prd/xml-spec-graph.md#R15 test=tests/test_verification_graph.py doc=docs/XML-SPEC-SCHEMA.md
+ 
+-SPEC_SCHEMA_VERSION = "1.0"  # the version this code emits; SPEC_SCHEMA_VERSIONS is what it accepts
++SPEC_SCHEMA_VERSION = (
++    "1.0"  # the version this code emits; SPEC_SCHEMA_VERSIONS is what it accepts
++)
+ SPEC_SCHEMA_VERSIONS = ("1.0",)
+ SPEC_XML_NAMESPACE = "urn:auger:spec:1"
+ SPEC_BLOCK_KINDS = ("section", "requirement", "acceptance", "verification")
+@@ -7790,7 +7794,10 @@ def _spec_read_document(path: Path, root: Path):
+             f"{rel}: schema-version {found} "
+             f"(supported: {', '.join(SPEC_SCHEMA_VERSIONS)})",
+         )
+-    if not (element.get("id") or "").strip() or not (element.get("version") or "").strip():
++    if (
++        not (element.get("id") or "").strip()
++        or not (element.get("version") or "").strip()
++    ):
+         raise SpecError(
+             "missing-document-metadata", f"{rel}: <spec> requires id and version"
+         )
+@@ -7816,7 +7823,9 @@ def _spec_include_target(element, rel: str, root: Path) -> str:
+             "include-outside-root", f"{rel}: include src {src!r} escapes {root}"
+         ) from None
+     if not target.is_file():
+-        raise SpecError("unresolved-include", f"{rel}: include src {src!r} is not a file")
++        raise SpecError(
++            "unresolved-include", f"{rel}: include src {src!r} is not a file"
++        )
+     return target_rel
+ 
+ 
+@@ -7924,8 +7933,15 @@ def _spec_block(element, rel: str, order: int) -> dict:
+     }
+ 
+ 
+-def _spec_collect(element, rel: str, root: Path, documents: dict, stack: list,
+-                  out: list, spliced: dict) -> None:
++def _spec_collect(
++    element,
++    rel: str,
++    root: Path,
++    documents: dict,
++    stack: list,
++    out: list,
++    spliced: dict,
++) -> None:
+     """Walk a document in order, splicing included fragments at their <include> site.
+ 
+     A fragment may be spliced at exactly ONE site in a corpus: reuse across documents is by
+@@ -7937,7 +7953,9 @@ def _spec_collect(element, rel: str, root: Path, documents: dict, stack: list,
+         if local == "include":
+             target = _spec_include_target(child, rel, root)
+             if target not in documents:
+-                raise SpecError("unresolved-include", f"{rel}: {target} was not indexed")
++                raise SpecError(
++                    "unresolved-include", f"{rel}: {target} was not indexed"
++                )
+             origin = spliced.get(target)
+             if origin is not None:
+                 raise SpecError(
+@@ -7947,7 +7965,13 @@ def _spec_collect(element, rel: str, root: Path, documents: dict, stack: list,
+                 )
+             spliced[target] = rel
+             _spec_collect(
+-                documents[target], target, root, documents, stack + [target], out, spliced
++                documents[target],
++                target,
++                root,
++                documents,
++                stack + [target],
++                out,
++                spliced,
+             )
+             continue
+         if local not in SPEC_BLOCK_KINDS:
+@@ -8001,10 +8025,17 @@ def _spec_validate_blocks(blocks: list) -> dict:
+     for block in blocks:
+         previous = by_id.get(block["id"])
+         if previous is not None:
++            owners = [
++                candidate["id"]
++                for candidate in blocks
++                if candidate["kind"] == "requirement"
++                and block["id"] in candidate["refs"].get("verifies", ())
++            ]
++            owner_detail = f"; referenced by {', '.join(owners)}" if owners else ""
+             raise SpecError(
+                 "duplicate-id",
+                 f"{block['id']} declared in {previous['source_file']} "
+-                f"and {block['source_file']}",
++                f"and {block['source_file']}{owner_detail}",
+             )
+         by_id[block["id"]] = block
+     for block in blocks:
+@@ -8021,12 +8052,18 @@ def _spec_validate_blocks(blocks: list) -> dict:
+                         "reference-cycle",
+                         f"{block['id']} {attribute}={target} (self reference)",
+                     )
+-                if attribute == "verifies" and found["kind"] != "requirement":
+-                    raise SpecError(
+-                        "invalid-reference-type",
+-                        f"{block['id']} verifies={target} but {target} is a "
+-                        f"{found['kind']}",
++                if attribute == "verifies":
++                    valid_target = (
++                        found["kind"] == "requirement"
++                        if block["kind"] != "requirement"
++                        else found["kind"] in {"verification", "test"}
+                     )
++                    if not valid_target:
++                        raise SpecError(
++                            "invalid-reference-type",
++                            f"{block['id']} verifies={target} but {target} is a "
++                            f"{found['kind']}",
++                        )
+     _spec_refuse_reference_cycles(by_id)
+     return by_id
+ 
+@@ -8091,8 +8128,16 @@ def _spec_matches(block: dict, ids, kinds, applies_to, statuses, versions) -> bo
+     return True
+ 
+ 
+-def select_spec_blocks(blocks: list, *, ids=(), kinds=(), applies_to=(), statuses=(),
+-                       versions=(), closure: bool = True) -> tuple:
++def select_spec_blocks(
++    blocks: list,
++    *,
++    ids=(),
++    kinds=(),
++    applies_to=(),
++    statuses=(),
++    versions=(),
++    closure: bool = True,
++) -> tuple:
+     """Select by id/attributes and expand ONLY the explicit dependency closure.
+ 
+     Closure edges: forward `depends-on`, plus INVERSE `verifies` (a block that declares it verifies
+@@ -8146,9 +8191,13 @@ def select_spec_blocks(blocks: list, *, ids=(), kinds=(), applies_to=(), statuse
+     return selection, records
+ 
+ 
+-def render_spec_assembly(records: list, *, selection: str,
+-                         fmt: str = "markdown",
+-                         schema_version: str = SPEC_SCHEMA_VERSION) -> str:
++def render_spec_assembly(
++    records: list,
++    *,
++    selection: str,
++    fmt: str = "markdown",
++    schema_version: str = SPEC_SCHEMA_VERSION,
++) -> str:
+     """Render a selected bundle. Deterministic: same inputs, byte-identical output."""
+     matched = sum(1 for record in records if record["why"] == "matched")
+     counts = {
+@@ -8205,7 +8254,9 @@ def render_spec_assembly(records: list, *, selection: str,
+         if block["applies_to"]:
+             lines.append(f"- applies-to: {' '.join(block['applies_to'])}")
+         if block["method"]:
+-            label = "verification" if block["kind"] in SPEC_REQUIRES_METHOD else "method"
++            label = (
++                "verification" if block["kind"] in SPEC_REQUIRES_METHOD else "method"
++            )
+             lines.append(f"- {label}: {block['method']}")
+         for attribute in SPEC_EDGE_ATTRS:
+             targets = block["refs"].get(attribute)
+@@ -8298,7 +8349,10 @@ def _add_spec_selectors(parser) -> None:
+         "--id", action="append", metavar="BLOCK-ID", help="select this exact block id"
+     )
+     parser.add_argument(
+-        "--kind", action="append", choices=SPEC_BLOCK_KINDS, help="select this block kind"
++        "--kind",
++        action="append",
++        choices=SPEC_BLOCK_KINDS,
++        help="select this block kind",
+     )
+     parser.add_argument(
+         "--applies-to",
+@@ -8320,7 +8374,6 @@ def _add_spec_selectors(parser) -> None:
+     )
+ 
+ 
+-
+ # ---------------------------------------------------------------- XML spec graph (AUG-118/AUG-123)
+ 
+ 
+@@ -8400,6 +8453,23 @@ def validate_xml_specs(spec_root):
+             resolved = (repository_root / test_path).resolve()
+             if not resolved.is_relative_to(repository_root) or not resolved.is_file():
+                 raise SpecValidationError(f"stale-test-ref: {node_id}: {test_path}")
++            relative_test_path = resolved.relative_to(repository_root).as_posix()
++            tracked = subprocess.run(
++                [
++                    "git",
++                    "-C",
++                    str(repository_root),
++                    "ls-files",
++                    "--error-unmatch",
++                    "--",
++                    relative_test_path,
++                ],
++                capture_output=True,
++                text=True,
++                check=False,
++            )
++            if tracked.returncode != 0 or tracked.stdout.strip() != relative_test_path:
++                raise SpecValidationError(f"untracked-test-ref: {node_id}: {test_path}")
+             try:
+                 tree = ast.parse(
+                     resolved.read_text(encoding="utf-8"), filename=str(resolved)
+@@ -8844,7 +8914,9 @@ def main(argv=None):
+         help="emit only the matched blocks (no depends-on/verifies closure)",
+     )
+     asm.add_argument(
+-        "--format", choices=("markdown", "json"), default="markdown",
++        "--format",
++        choices=("markdown", "json"),
++        default="markdown",
+         help="output format (default markdown)",
+     )
+     asm.add_argument(
+diff --git a/docs/XML-SPEC-SCHEMA.md b/docs/XML-SPEC-SCHEMA.md
+index 0c2a5ee..ec16b2b 100644
+--- a/docs/XML-SPEC-SCHEMA.md
++++ b/docs/XML-SPEC-SCHEMA.md
+@@ -18,6 +18,8 @@ Example migration obligation:
+ 
+ For automated tests, `runner` is an identifier in Auger's repository harness registry, not a command. The current registered identifier is `pytest`, serialized to an argv vector (`<current Python> -m pytest`). `path` and `selector` are tracked repository-relative test path and Python test function name. Validation confirms both exist and remain inside the repository. No shell string or arbitrary command is accepted or executed.
+ 
++ch:trace row=AUG-123 spec=docs/prd/xml-spec-graph.md#R15 test=tests/test_verification_graph.py doc=docs/XML-SPEC-SCHEMA.md
++
+ Migration obligations require the exact repository-relative migration path, supported prior-schema fixture, tracked test path/selector, and explicit assertions. The selected requirement bundle carries those values verbatim. The test obligation itself must load and apply the named migration; a test that merely runs a package suite is insufficient. The XML validator checks that migration and fixture paths exist, while the regression test proves application behavior, including failure against a no-op migration.
+ 
+ Validation reports typed `SpecValidationError` identifiers including `duplicate-id`, `dangling-test-ref`, `dangling-requirement-ref`, `wrong-ref-type`, `invalid-test-ref`, `stale-test-ref`, `stale-migration-ref`, and `incomplete-migration-obligation`. Use:
+diff --git a/tests/fixtures/xml/verification/migration.xml b/tests/fixtures/xml/verification/migration.xml
+index 4fc071c..185ee2d 100644
+--- a/tests/fixtures/xml/verification/migration.xml
++++ b/tests/fixtures/xml/verification/migration.xml
+@@ -1,6 +1,10 @@
+-<spec id="AUGER-XML-TEST" version="1">
+-  <requirement id="REQ-MIG-1" verifies="TEST-MIG-1">Migration adds the marker record.</requirement>
+-  <verification id="TEST-MIG-1" type="test" verifies="REQ-MIG-1"
++<spec id="AUGER-XML-TEST" version="1.0.0" schema-version="1.0">
++  <requirement id="REQ-MIG-1" kind="requirement" status="active" version="1.0.0"
++               applies-to="auger.spec" verification="test" verifies="TEST-MIG-1">
++    Migration adds the marker record.
++  </requirement>
++  <verification id="TEST-MIG-1" kind="verification" status="active" version="1.0.0"
++                applies-to="auger.spec" method="test"
+       runner="pytest" path="tests/test_xml_specs.py"
+       selector="test_migration_obligation_applies_named_file_and_detects_noop"
+       migration="tests/fixtures/xml/verification/migrations/001_add_marker.sql"
+diff --git a/tests/test_verification_graph.py b/tests/test_verification_graph.py
+new file mode 100644
+index 0000000..d6501c2
+--- /dev/null
++++ b/tests/test_verification_graph.py
+@@ -0,0 +1,123 @@
++"""Literal AUG-123 verification-obligation acceptance proofs.
++
++ch:trace row=AUG-123 spec=docs/prd/xml-spec-graph.md#R15 test=tests/test_verification_graph.py doc=docs/XML-SPEC-SCHEMA.md
++"""
++
++from __future__ import annotations
++
++import sqlite3
++import sys
++from pathlib import Path
++
++import pytest
++
++REPO_ROOT = Path(__file__).resolve().parent.parent
++if str(REPO_ROOT) not in sys.path:
++    sys.path.insert(0, str(REPO_ROOT))
++
++import auger  # noqa: E402  (needs REPO_ROOT on sys.path first)
++
++VERIFICATION_FIXTURES = REPO_ROOT / "tests" / "fixtures" / "xml" / "verification"
++
++
++def _write_spec(root: Path, blocks: str) -> Path:
++    spec_root = root / "specs"
++    spec_root.mkdir(parents=True)
++    (spec_root / "graph.xml").write_text(f"<spec>{blocks}</spec>", encoding="utf-8")
++    return spec_root
++
++
++def test_invalid_test_refs_fail_closed(tmp_path: Path) -> None:
++    """Duplicate, dangling, stale, and untracked refs fail before bundle assembly."""
++    cases = [
++        (
++            '<requirement id="REQ-MIG-1" verifies="TEST-MIG-1"/>'
++            '<test id="TEST-MIG-1"/><test id="TEST-MIG-1"/>',
++            "duplicate-id",
++            "REQ-MIG-1",
++            "TEST-MIG-1",
++        ),
++        (
++            '<requirement id="REQ-MIG-1" verifies="TEST-MISSING-1"/>',
++            "dangling-test-ref",
++            "REQ-MIG-1",
++            "TEST-MISSING-1",
++        ),
++        (
++            '<requirement id="REQ-MIG-1" verifies="TEST-MIG-1"/>'
++            '<test id="TEST-MIG-1" runner="pytest" '
++            'path="tests/test_xml_specs.py" selector="test_removed_version"/>',
++            "stale-test-ref",
++            "REQ-MIG-1",
++            "TEST-MIG-1",
++        ),
++        (
++            '<requirement id="REQ-MIG-1" verifies="TEST-MIG-1"/>'
++            '<test id="TEST-MIG-1" runner="pytest" path="auger.egg-info/PKG-INFO" selector="ref"/>',
++            "untracked-test-ref",
++            "REQ-MIG-1",
++            "TEST-MIG-1",
++        ),
++    ]
++
++    for blocks, error, requirement_id, test_id in cases:
++        spec_root = _write_spec(tmp_path / error, blocks)
++        with pytest.raises(auger.SpecValidationError) as caught:
++            auger.validate_xml_specs(spec_root)
++        assert error in str(caught.value)
++        if error not in {"duplicate-id", "stale-test-ref", "untracked-test-ref"}:
++            assert requirement_id in str(caught.value)
++        assert test_id in str(caught.value)
++        with pytest.raises(auger.SpecValidationError) as assembled:
++            auger.assemble_xml_requirement(spec_root, requirement_id)
++        assert test_id in str(assembled.value)
++
++
++def test_xml_cannot_execute_arbitrary_shell(tmp_path: Path) -> None:
++    """Runner names resolve to an argv vector; XML shell text is rejected."""
++    obligation = auger.assemble_xml_requirement(VERIFICATION_FIXTURES, "REQ-MIG-1")[
++        "verifications"
++    ][0]
++    assert obligation["runner"] == [sys.executable, "-m", "pytest"]
++    assert all(isinstance(argument, str) for argument in obligation["runner"])
++
++    shell_root = _write_spec(
++        tmp_path,
++        '<requirement id="REQ-MIG-1" verifies="TEST-MIG-1"/>'
++        '<test id="TEST-MIG-1" runner="bash -c" '
++        'path="tests/test_verification_graph.py" '
++        'selector="test_xml_cannot_execute_arbitrary_shell"/>',
++    )
++    with pytest.raises(auger.SpecValidationError, match="invalid-test-ref"):
++        auger.validate_xml_specs(shell_root)
++
++
++def test_migration_obligation_applies_named_file(tmp_path: Path) -> None:
++    """The linked migration changes the prior schema; replacing it with no-op fails assertions."""
++    obligation = auger.assemble_xml_requirement(VERIFICATION_FIXTURES, "REQ-MIG-1")[
++        "verifications"
++    ][0]
++    prior = (REPO_ROOT / obligation["fixture"]).read_text(encoding="utf-8")
++    migration_path = REPO_ROOT / obligation["migration"]
++    migration = migration_path.read_text(encoding="utf-8")
++    assert (
++        migration_path
++        == REPO_ROOT / "tests/fixtures/xml/verification/migrations/001_add_marker.sql"
++    )
++    assert "CREATE TABLE marker" in migration
++
++    def assert_migration_result(connection: sqlite3.Connection) -> None:
++        columns = {row[1] for row in connection.execute("PRAGMA table_info(marker)")}
++        assert "version" in columns
++        assert connection.execute("SELECT version FROM marker").fetchone() == (1,)
++
++    database = sqlite3.connect(":memory:")
++    database.executescript(prior)
++    database.executescript(migration)
++    assert_migration_result(database)
++
++    no_op_database = sqlite3.connect(":memory:")
++    no_op_database.executescript(prior)
++    no_op_database.executescript("")
++    with pytest.raises(AssertionError):
++        assert_migration_result(no_op_database)

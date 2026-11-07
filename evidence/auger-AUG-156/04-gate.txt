@@ -1,0 +1,48 @@
+# AUG-156 — gate evidence
+
+## Run 002 (final, on the exact staged tree) — GREEN
+
+```
+$ PATH="$PWD/.venv/bin:$PATH" \
+  DUCKBRAIN_URL=http://127.0.0.1:3000 \
+  DUCKBRAIN_API_KEY=$(cat ~/.duckbrain/token-1787620243982.token) \
+  AUGER_GATE_PYTEST_BUDGET=3000s bash tests/gate.sh
+```
+
+- transcript: `evidence/auger-AUG-156/gate-transcript.txt`
+- pytest arm: `710 passed, 2 skipped in 888.48s (0:14:48)` — includes the 17 new
+  `tests/test_board_evidence_audit.py` tests (the arm names the file)
+- live arms: `LIVE ARMS: ran 2; skipped 0` (no arm skipped, no `AUGER_ALLOW_SKIPPED_ARMS` anywhere)
+- final verdict line: **`GATE PASS`**
+- exit code: **0** (`GATE_EXIT=0`)
+
+Tree identity: the gate ran on staged tree `8949ee05645e5e20982f1e4301a5fce34354915f`. The commit
+adds exactly two evidence blobs on top of that tree — this file (written after the run, because it
+records the run's outcome) and `gate-transcript.txt` (the run's own output). Nothing the gate
+executes (`auger.py`, `tests/`, `specs/`, `scripts/`, the board) differs between the verified tree
+and the commit.
+
+## Run 001 (first attempt) — RED, attributed to the substrate, not to this diff
+
+Transcript kept at `evidence/auger-AUG-156/gate-transcript-run001-red.txt`:
+`3 failed, 707 passed, 2 skipped, 7 errors in 1430.99s`, `GATE_EXIT=1`.
+
+All ten defects named one mechanism:
+
+```
+DELETE /api/namespaces/auger-pytest-9a02e3c6-66c5465247dc returned 409:
+{'error': "Push in flight for 'auger-pytes... remove sync lock held by pid 314870
+ (since 2026-11-07T07:03:24.467Z)). Retry after it completes.", 'code': 'CONFLICT'}
+```
+
+A concurrent DuckBrain process held the namespace **remove-sync lock** for the whole run, so every
+namespace teardown was refused. The teardown correctly refuses to delete the directory while the
+registry row survives, so the session's namespaces leaked and the suite's own leak audit
+(`test_no_test_namespace_survives_the_suite`) failed as designed; the two `init` assertions and the
+seven fixture errors are downstream of the same refused teardown. Nothing in the diff touches
+namespace lifecycle, the board's evidence fields are not read by `test_auger.py`, and the identical
+code tree passes in run 002 with the lock free (`create=201 delete=200` probe before the re-run).
+
+Cleanup performed between the runs: the 8 namespaces the failed run leaked
+(`auger-pytest-9a02e3c6-*`) plus one diagnostic namespace were deleted over the API
+(`DELETE ... {"confirm":true}` → 200 each) so run 002 started from a clean substrate.

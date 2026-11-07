@@ -1,0 +1,112 @@
+{
+  "task_id": "AUG-114",
+  "task_title": "Fix 'no such row' false claim in status",
+  "task_criteria": [
+    "python3 auger.py -n df18 status | grep -c 'no such row' returns 0 on the seeded df18 fixture (literal AC probe of the STATUS OUTPUT pipeline, not of source files)"
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "5b1f3aff1566c8d439bfede3e004376ac60c3563",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": false,
+      "any_failed": true,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2717 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2717 tests: scanners: nice=nice -n 10",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261030T205734.406377Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": false,
+          "output": "secrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: scanners=gitleaks+builtin cross-check\nscanners: nice=nice -n 10\n4:13PM INF scanned ~1922739 bytes (1.92 MB) in 1.12s\n4:13PM WRN leaks found: 2\nsecrets: gitleaks: findings found (exit 1)\nsecrets: builtin cross-check: Scanned 114 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 1,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261030T205734.406377Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": false,
+          "output": "scanners: nice=nice -n 10\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n  SKIPPED [pytest]: pytest not importable by python3 (pip install pytest) \u2014 suite arm NOT run, NOT passed\n== wrapper regression (AUG-081) ==\ngate mode regression: PASS\nAUG-116: zombie pid 81423 classified dead (kill -0 alone would have said alive)\nAUG-081 wrapper regression: PASS\n== end-to-end smoke ==\nnamespace: auger-smoke-81700\nnamespace sweep: no stale auger-smoke-*/auger-eval-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n  PASS toggle changed the stored configuration\n== verdict: record + list round-trip ==\n  PASS a good verdict is recorded\n  PASS a bad verdict is recorded\n  PASS the good verdict shows in the list\n  PASS the bad verdict's reasons show in the list\n  PASS both --good and --bad refuse\n  PASS the refused pair wrote nothing\n\nnamespace auger-smoke-81700 removed\npassed 21, failed 0\n== openapi-parity (AUG-066) ==\nopenapi parity FAILED: scripts/gen_openapi.py could not run\nPyYAML is required to emit the spec (pip install pyyaml)\n",
+          "error": "",
+          "data": {
+            "exit_code": 1,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261030T205734.406377Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 python3 auger.py -n df18 status | grep -c 'no such row' returns 0 on the seeded df18 fixture (literal AC probe of the STATUS OUTPUT pipeline, not of source files): Seeded the df18 fixture live: `python3 auger.py -n df18 init --seed-domains` -> 'domain grid: 44 domains -> 44 row(s) written' (exit 0), then `auger start --name df18 --seed-file` -> project P-20261030211429. Literal probe `python3 auger.py -n df18 status | grep -c 'no such row'` printed `0` (grep exit 1 = no match; status exit 0). The status output now reads 'answered 0 (a decision or question row carries the num) | NOT-REACHED 44 (a seeded row with no decision or question row carrying the num)' at auger.py:6207-6211, replacing the old '(no such row)' gloss. Fix is committed as 149962c 'fix(AUG-114): NOT-REACHED summary names a stored row, not a missing one' and `git diff HEAD -- auger.py` is empty, so the tree under test carries the fix. Pinning test tests/test_auger.py:9007 test_status_never_claims_a_not_reached_row_does_not_exist asserts `\"no such row\" not in out` (line 9036) plus the gloss text, count 44, and 44 per-domain coverage lines; run `AUGER_TEST_LOCK=/tmp/aug114-eval.lock venv/bin/python -m pytest tests/test_auger.py -k not_reached_row_does_not_exist -q` -> '1 passed, 334 deselected in 5.83s' (exit 0). The earlier FAIL verdict 476f5f68 grepped SOURCE files (auger.py comments/docs), which this criterion explicitly excludes.\nThe literal AC probe on a freshly seeded df18 fixture returns 0, the status pipeline prints the corrected NOT-REACHED gloss, and the pinning test passes.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 python3 auger.py -n df18 status | grep -c 'no such row' returns 0 on the seeded df18 fixture (literal AC probe of the STATUS OUTPUT pipeline, not of source files): Seeded the df18 fixture live: `python3 auger.py -n df18 init --seed-domains` -> 'domain grid: 44 domains -> 44 row(s) written' (exit 0), then `auger start --name df18 --seed-file` -> project P-20261030211429. Literal probe `python3 auger.py -n df18 status | grep -c 'no such row'` printed `0` (grep exit 1 = no match; status exit 0). The status output now reads 'answered 0 (a decision or question row carries the num) | NOT-REACHED 44 (a seeded row with no decision or question row carrying the num)' at auger.py:6207-6211, replacing the old '(no such row)' gloss. Fix is committed as 149962c 'fix(AUG-114): NOT-REACHED summary names a stored row, not a missing one' and `git diff HEAD -- auger.py` is empty, so the tree under test carries the fix. Pinning test tests/test_auger.py:9007 test_status_never_claims_a_not_reached_row_does_not_exist asserts `\"no such row\" not in out` (line 9036) plus the gloss text, count 44, and 44 per-domain coverage lines; run `AUGER_TEST_LOCK=/tmp/aug114-eval.lock venv/bin/python -m pytest tests/test_auger.py -k not_reached_row_does_not_exist -q` -> '1 passed, 334 deselected in 5.83s' (exit 0). The earlier FAIL verdict 476f5f68 grepped SOURCE files (auger.py comments/docs), which this criterion explicitly excludes.\nThe literal AC probe on a freshly seeded df18 fixture returns 0, the status pipeline prints the corrected NOT-REACHED gloss, and the pinning test passes.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "python3 auger.py -n df18 status | grep -c 'no such row' returns 0 on the seeded df18 fixture (literal AC probe of the STATUS OUTPUT pipeline, not of source files)",
+                "status": "PASS",
+                "detail": "Seeded the df18 fixture live: `python3 auger.py -n df18 init --seed-domains` -> 'domain grid: 44 domains -> 44 row(s) written' (exit 0), then `auger start --name df18 --seed-file` -> project P-20261030211429. Literal probe `python3 auger.py -n df18 status | grep -c 'no such row'` printed `0` (grep exit 1 = no match; status exit 0). The status output now reads 'answered 0 (a decision or question row carries the num) | NOT-REACHED 44 (a seeded row with no decision or question row carrying the num)' at auger.py:6207-6211, replacing the old '(no such row)' gloss. Fix is committed as 149962c 'fix(AUG-114): NOT-REACHED summary names a stored row, not a missing one' and `git diff HEAD -- auger.py` is empty, so the tree under test carries the fix. Pinning test tests/test_auger.py:9007 test_status_never_claims_a_not_reached_row_does_not_exist asserts `\"no such row\" not in out` (line 9036) plus the gloss text, count 44, and 44 per-domain coverage lines; run `AUGER_TEST_LOCK=/tmp/aug114-eval.lock venv/bin/python -m pytest tests/test_auger.py -k not_reached_row_does_not_exist -q` -> '1 passed, 334 deselected in 5.83s' (exit 0). The earlier FAIL verdict 476f5f68 grepped SOURCE files (auger.py comments/docs), which this criterion explicitly excludes."
+              }
+            ],
+            "summary": "The literal AC probe on a freshly seeded df18 fixture returns 0, the status pipeline prints the corrected NOT-REACHED gloss, and the pinning test passes.",
+            "provenance": {
+              "model": "deepseek-v4-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "deepseek-v4-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY"
+    }
+  },
+  "summary": "Judge Result: AUG-114\n\nStage tier1: FAIL\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2717 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n  \u2717 tests: scanners: nice=nice -n 10\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 python3 auger.py -n df18 status | grep -c 'no such row' returns 0 on the seeded df18 fixture (literal AC probe of the STATUS OUTPUT pipeline, not of source files): Seeded the df18 fixture live: `python3 auger.py -n df18 init --seed-domains` -> 'domain grid: 44 domains -> 44 row(s) written' (exit 0), then `auger start --name df18 --seed-file` -> project P-20261030211429. Literal probe `python3 auger.py -n df18 status | grep -c 'no such row'` printed `0` (grep exit 1 = no match; status exit 0). The status output now reads 'answered 0 (a decision or question row carries the num) | NOT-REACHED 44 (a seeded row with no decision or question row carrying the num)' at auger.py:6207-6211, replacing the old '(no such row)' gloss. Fix is committed as 149962c 'fix(AUG-114): NOT-REACHED summary names a stored row, not a missing one' and `git diff HEAD -- auger.py` is empty, so the tree under test carries the fix. Pinning test tests/test_auger.py:9007 test_status_never_claims_a_not_reached_row_does_not_exist asserts `\"no such row\" not in out` (line 9036) plus the gloss text, count 44, and 44 per-domain coverage lines; run `AUGER_TEST_LOCK=/tmp/aug114-eval.lock venv/bin/python -m pytest tests/test_auger.py -k not_reached_row_does_not_exist -q` -> '1 passed, 334 deselected in 5.83s' (exit 0). The earlier FAIL verdict 476f5f68 grepped SOURCE files (auger.py comments/docs), which this criterion explicitly excludes.\nThe literal AC probe on a freshly seeded df18 fixture returns 0, the status pipeline prints the corrected NOT-REACHED gloss, and the pinning test passes.\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-10-30T21:14:57.590077",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-10-30T21:14:57.606190+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 4026,
+        "truncated": false,
+        "source": "git show 5b1f3aff1566"
+      }
+    ],
+    "task_id": "AUG-114"
+  }
+}

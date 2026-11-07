@@ -1,0 +1,120 @@
+{
+  "task_id": "AUG-119",
+  "task_title": "Approved Auger plan to boardctl task lifecycle integration",
+  "task_criteria": [
+    "1. Auger can produce a versioned draft plan with task IDs, acceptance criteria, dependencies, source spec anchors, and expected verification evidence. 2. No board mutation occurs before explicit approval bound to the plan version/digest; rejected or stale approvals refuse export. 3. After approval, Auger invokes the supported boardctl CLI/API (no parallel board store) to create/update canonical board rows and reads them back to verify exact IDs and criteria. 4. Board status/commit/verdict evidence can be reconciled into Auger without Auger dispatching or overwriting canonical board state. 5. Tests prove idempotent export, partial-failure recovery, and that unapproved drafts leave tasks.jsonl/events.jsonl byte-identical. 6. Ch:trace includes row/spec/test/evidence/witness and explicit none:<reason> values for absent fields; commits and verdicts are bound as required by the traceability skill."
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "ea819d9fae1a7bf53140384798b80afdbdd8a02c",
+  "items": [],
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": false,
+      "any_failed": true,
+      "summary": "  \u2717 tests: scanners: nice=nice -n 10\n  \u2713 lint: scanners: nice=nice -n 10\n  \u2717 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)",
+      "steps": [
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": false,
+          "output": "scanners: nice=nice -n 10\nERROR: DuckBrain URL missing \u2014 set DUCKBRAIN_URL before running the live gate (or use AUGER_CI=1 on hosted CI).\n",
+          "error": "",
+          "data": {
+            "exit_code": 2,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261030T215035.450908Z.log"
+          }
+        },
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261030T215035.450908Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": false,
+          "output": "secrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: scanners=gitleaks+builtin cross-check\nscanners: nice=nice -n 10\n12:10AM INF scanned ~1983022 bytes (1.98 MB) in 1.65s\n12:10AM WRN leaks found: 2\nsecrets: gitleaks: findings found (exit 1)\nsecrets: builtin cross-check: Scanned 134 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 1,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261030T215035.450908Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 1. Auger can produce a versioned draft plan with task IDs, acceptance criteria, dependencies, source spec anchors, and expected verification evidence. 2. No board mutation occurs before explicit approval bound to the plan version/digest; rejected or stale approvals refuse export. 3. After approval, Auger invokes the supported boardctl CLI/API (no parallel board store) to create/update canonical board rows and reads them back to verify exact IDs and criteria. 4. Board status/commit/verdict evidence can be reconciled into Auger without Auger dispatching or overwriting canonical board state. 5. Tests prove idempotent export, partial-failure recovery, and that unapproved drafts leave tasks.jsonl/events.jsonl byte-identical. 6. Ch:trace includes row/spec/test/evidence/witness and explicit none:<reason> values for absent fields; commits and verdicts are bound as required by the traceability skill.: All six sub-criteria verified in worktree /home/kara/worktrees/auger-AUG-119 (branch wt/AUG-119, commit f8b9d65). TEST EVIDENCE: `pytest tests/test_plan_board.py -v` => exit 0, '32 passed in 93.49s', 32 PASSED / 0 SKIPPED (boardctl present at /home/kara/.local/bin/boardctl, so the @needs_boardctl canonical-board arms actually executed, not skipped). (1) auger.py:7697-7760 plan ledger + PLAN_SCHEMA 'auger.plan/v1'; normalize_plan_task (auger.py:7900-7955) validates id/title/priority/complexity/depends_on/capability_tags/acceptance_criteria/spec_anchors/verification/trace; plan_digest is content-addressed and cmd_plan_draft mints v1/v2 (test_draft_versions_and_digests_are_content_addressed, test_draft_carries_criteria_dependencies_anchors_and_evidence PASSED). (2) plan_require_approval (auger.py:8044-8075) fails closed on unapproved/stale/rejected before any boardctl call; tests test_unapproved_draft_export_leaves_the_board_byte_identical, test_stale_approval_refuses_export..., test_rejected_plan_refuses_export... all PASSED. (3) plan_export (auger.py:8264+) shells out to `boardctl create`/`boardctl update` via boardctl_run and reads each row back with `boardctl show` (board_row, auger.py:8116-8132) comparing ids/criteria/deps/trace; test_approved_export_creates_rows_and_reads_back_exact_ids_and_criteria and test_export_goes_through_the_boardctl_cli PASSED. (4) plan_reconcile (auger.py:8482+) uses only the `show` verb and appends to Auger's own ledger; test_reconcile_uses_only_the_read_verb_and_writes_only_the_ledger asserts verbs == ['show'] and tasks.jsonl bytes unchanged \u2014 PASSED. (5) test_second_export_of_the_same_plan_is_idempotent (board bytes unchanged, no duplicate rows) and test_partial_failure_names_what_landed_and_resumes_without_duplicates (created AUG-901, drift AUG-902, skipped AUG-903, then resume with exactly one row per id) PASSED; unapproved/stale/rejected tests assert board_files(board) byte-identical. (6) TRACE_FIELDS (auger.py:7724-7736) lists all eleven doctrine fields incl. row/spec/test/evidence/witness/commit/verdict; PLAN_TRACE_DEFAULTS (7739-7749) supplies explicit none:<reason> for every absent field and _plan_trace_value refuses blank or reasonless 'none:'; test_trace_marker_names_all_eleven_fields_and_every_absent_one_by_reason PASSED. Note: the implementation lives on branch wt/AUG-119 and is not yet merged into main (HEAD ea819d9), while .gitreins/tasks.yaml on main marks AUG-119 complete \u2014 a merge-state observation, not a criterion failure.\nAll six AUG-119 sub-criteria are implemented in auger.py's plan ledger/boardctl integration and proven by 32 passing, zero-skipped tests in tests/test_plan_board.py.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 1. Auger can produce a versioned draft plan with task IDs, acceptance criteria, dependencies, source spec anchors, and expected verification evidence. 2. No board mutation occurs before explicit approval bound to the plan version/digest; rejected or stale approvals refuse export. 3. After approval, Auger invokes the supported boardctl CLI/API (no parallel board store) to create/update canonical board rows and reads them back to verify exact IDs and criteria. 4. Board status/commit/verdict evidence can be reconciled into Auger without Auger dispatching or overwriting canonical board state. 5. Tests prove idempotent export, partial-failure recovery, and that unapproved drafts leave tasks.jsonl/events.jsonl byte-identical. 6. Ch:trace includes row/spec/test/evidence/witness and explicit none:<reason> values for absent fields; commits and verdicts are bound as required by the traceability skill.: All six sub-criteria verified in worktree /home/kara/worktrees/auger-AUG-119 (branch wt/AUG-119, commit f8b9d65). TEST EVIDENCE: `pytest tests/test_plan_board.py -v` => exit 0, '32 passed in 93.49s', 32 PASSED / 0 SKIPPED (boardctl present at /home/kara/.local/bin/boardctl, so the @needs_boardctl canonical-board arms actually executed, not skipped). (1) auger.py:7697-7760 plan ledger + PLAN_SCHEMA 'auger.plan/v1'; normalize_plan_task (auger.py:7900-7955) validates id/title/priority/complexity/depends_on/capability_tags/acceptance_criteria/spec_anchors/verification/trace; plan_digest is content-addressed and cmd_plan_draft mints v1/v2 (test_draft_versions_and_digests_are_content_addressed, test_draft_carries_criteria_dependencies_anchors_and_evidence PASSED). (2) plan_require_approval (auger.py:8044-8075) fails closed on unapproved/stale/rejected before any boardctl call; tests test_unapproved_draft_export_leaves_the_board_byte_identical, test_stale_approval_refuses_export..., test_rejected_plan_refuses_export... all PASSED. (3) plan_export (auger.py:8264+) shells out to `boardctl create`/`boardctl update` via boardctl_run and reads each row back with `boardctl show` (board_row, auger.py:8116-8132) comparing ids/criteria/deps/trace; test_approved_export_creates_rows_and_reads_back_exact_ids_and_criteria and test_export_goes_through_the_boardctl_cli PASSED. (4) plan_reconcile (auger.py:8482+) uses only the `show` verb and appends to Auger's own ledger; test_reconcile_uses_only_the_read_verb_and_writes_only_the_ledger asserts verbs == ['show'] and tasks.jsonl bytes unchanged \u2014 PASSED. (5) test_second_export_of_the_same_plan_is_idempotent (board bytes unchanged, no duplicate rows) and test_partial_failure_names_what_landed_and_resumes_without_duplicates (created AUG-901, drift AUG-902, skipped AUG-903, then resume with exactly one row per id) PASSED; unapproved/stale/rejected tests assert board_files(board) byte-identical. (6) TRACE_FIELDS (auger.py:7724-7736) lists all eleven doctrine fields incl. row/spec/test/evidence/witness/commit/verdict; PLAN_TRACE_DEFAULTS (7739-7749) supplies explicit none:<reason> for every absent field and _plan_trace_value refuses blank or reasonless 'none:'; test_trace_marker_names_all_eleven_fields_and_every_absent_one_by_reason PASSED. Note: the implementation lives on branch wt/AUG-119 and is not yet merged into main (HEAD ea819d9), while .gitreins/tasks.yaml on main marks AUG-119 complete \u2014 a merge-state observation, not a criterion failure.\nAll six AUG-119 sub-criteria are implemented in auger.py's plan ledger/boardctl integration and proven by 32 passing, zero-skipped tests in tests/test_plan_board.py.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "1. Auger can produce a versioned draft plan with task IDs, acceptance criteria, dependencies, source spec anchors, and expected verification evidence. 2. No board mutation occurs before explicit approval bound to the plan version/digest; rejected or stale approvals refuse export. 3. After approval, Auger invokes the supported boardctl CLI/API (no parallel board store) to create/update canonical board rows and reads them back to verify exact IDs and criteria. 4. Board status/commit/verdict evidence can be reconciled into Auger without Auger dispatching or overwriting canonical board state. 5. Tests prove idempotent export, partial-failure recovery, and that unapproved drafts leave tasks.jsonl/events.jsonl byte-identical. 6. Ch:trace includes row/spec/test/evidence/witness and explicit none:<reason> values for absent fields; commits and verdicts are bound as required by the traceability skill.",
+                "status": "PASS",
+                "detail": "All six sub-criteria verified in worktree /home/kara/worktrees/auger-AUG-119 (branch wt/AUG-119, commit f8b9d65). TEST EVIDENCE: `pytest tests/test_plan_board.py -v` => exit 0, '32 passed in 93.49s', 32 PASSED / 0 SKIPPED (boardctl present at /home/kara/.local/bin/boardctl, so the @needs_boardctl canonical-board arms actually executed, not skipped). (1) auger.py:7697-7760 plan ledger + PLAN_SCHEMA 'auger.plan/v1'; normalize_plan_task (auger.py:7900-7955) validates id/title/priority/complexity/depends_on/capability_tags/acceptance_criteria/spec_anchors/verification/trace; plan_digest is content-addressed and cmd_plan_draft mints v1/v2 (test_draft_versions_and_digests_are_content_addressed, test_draft_carries_criteria_dependencies_anchors_and_evidence PASSED). (2) plan_require_approval (auger.py:8044-8075) fails closed on unapproved/stale/rejected before any boardctl call; tests test_unapproved_draft_export_leaves_the_board_byte_identical, test_stale_approval_refuses_export..., test_rejected_plan_refuses_export... all PASSED. (3) plan_export (auger.py:8264+) shells out to `boardctl create`/`boardctl update` via boardctl_run and reads each row back with `boardctl show` (board_row, auger.py:8116-8132) comparing ids/criteria/deps/trace; test_approved_export_creates_rows_and_reads_back_exact_ids_and_criteria and test_export_goes_through_the_boardctl_cli PASSED. (4) plan_reconcile (auger.py:8482+) uses only the `show` verb and appends to Auger's own ledger; test_reconcile_uses_only_the_read_verb_and_writes_only_the_ledger asserts verbs == ['show'] and tasks.jsonl bytes unchanged \u2014 PASSED. (5) test_second_export_of_the_same_plan_is_idempotent (board bytes unchanged, no duplicate rows) and test_partial_failure_names_what_landed_and_resumes_without_duplicates (created AUG-901, drift AUG-902, skipped AUG-903, then resume with exactly one row per id) PASSED; unapproved/stale/rejected tests assert board_files(board) byte-identical. (6) TRACE_FIELDS (auger.py:7724-7736) lists all eleven doctrine fields incl. row/spec/test/evidence/witness/commit/verdict; PLAN_TRACE_DEFAULTS (7739-7749) supplies explicit none:<reason> for every absent field and _plan_trace_value refuses blank or reasonless 'none:'; test_trace_marker_names_all_eleven_fields_and_every_absent_one_by_reason PASSED. Note: the implementation lives on branch wt/AUG-119 and is not yet merged into main (HEAD ea819d9), while .gitreins/tasks.yaml on main marks AUG-119 complete \u2014 a merge-state observation, not a criterion failure."
+              }
+            ],
+            "summary": "All six AUG-119 sub-criteria are implemented in auger.py's plan ledger/boardctl integration and proven by 32 passing, zero-skipped tests in tests/test_plan_board.py.",
+            "provenance": {
+              "model": "deepseek-v4-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "deepseek-v4-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY"
+    }
+  },
+  "summary": "Judge Result: AUG-119\n\nStage tier1: FAIL\n    \u2717 tests: scanners: nice=nice -n 10\n  \u2713 lint: scanners: nice=nice -n 10\n  \u2717 secrets: secrets: harness state excluded from gitleaks scope (.gitreins/**)\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 1. Auger can produce a versioned draft plan with task IDs, acceptance criteria, dependencies, source spec anchors, and expected verification evidence. 2. No board mutation occurs before explicit approval bound to the plan version/digest; rejected or stale approvals refuse export. 3. After approval, Auger invokes the supported boardctl CLI/API (no parallel board store) to create/update canonical board rows and reads them back to verify exact IDs and criteria. 4. Board status/commit/verdict evidence can be reconciled into Auger without Auger dispatching or overwriting canonical board state. 5. Tests prove idempotent export, partial-failure recovery, and that unapproved drafts leave tasks.jsonl/events.jsonl byte-identical. 6. Ch:trace includes row/spec/test/evidence/witness and explicit none:<reason> values for absent fields; commits and verdicts are bound as required by the traceability skill.: All six sub-criteria verified in worktree /home/kara/worktrees/auger-AUG-119 (branch wt/AUG-119, commit f8b9d65). TEST EVIDENCE: `pytest tests/test_plan_board.py -v` => exit 0, '32 passed in 93.49s', 32 PASSED / 0 SKIPPED (boardctl present at /home/kara/.local/bin/boardctl, so the @needs_boardctl canonical-board arms actually executed, not skipped). (1) auger.py:7697-7760 plan ledger + PLAN_SCHEMA 'auger.plan/v1'; normalize_plan_task (auger.py:7900-7955) validates id/title/priority/complexity/depends_on/capability_tags/acceptance_criteria/spec_anchors/verification/trace; plan_digest is content-addressed and cmd_plan_draft mints v1/v2 (test_draft_versions_and_digests_are_content_addressed, test_draft_carries_criteria_dependencies_anchors_and_evidence PASSED). (2) plan_require_approval (auger.py:8044-8075) fails closed on unapproved/stale/rejected before any boardctl call; tests test_unapproved_draft_export_leaves_the_board_byte_identical, test_stale_approval_refuses_export..., test_rejected_plan_refuses_export... all PASSED. (3) plan_export (auger.py:8264+) shells out to `boardctl create`/`boardctl update` via boardctl_run and reads each row back with `boardctl show` (board_row, auger.py:8116-8132) comparing ids/criteria/deps/trace; test_approved_export_creates_rows_and_reads_back_exact_ids_and_criteria and test_export_goes_through_the_boardctl_cli PASSED. (4) plan_reconcile (auger.py:8482+) uses only the `show` verb and appends to Auger's own ledger; test_reconcile_uses_only_the_read_verb_and_writes_only_the_ledger asserts verbs == ['show'] and tasks.jsonl bytes unchanged \u2014 PASSED. (5) test_second_export_of_the_same_plan_is_idempotent (board bytes unchanged, no duplicate rows) and test_partial_failure_names_what_landed_and_resumes_without_duplicates (created AUG-901, drift AUG-902, skipped AUG-903, then resume with exactly one row per id) PASSED; unapproved/stale/rejected tests assert board_files(board) byte-identical. (6) TRACE_FIELDS (auger.py:7724-7736) lists all eleven doctrine fields incl. row/spec/test/evidence/witness/commit/verdict; PLAN_TRACE_DEFAULTS (7739-7749) supplies explicit none:<reason> for every absent field and _plan_trace_value refuses blank or reasonless 'none:'; test_trace_marker_names_all_eleven_fields_and_every_absent_one_by_reason PASSED. Note: the implementation lives on branch wt/AUG-119 and is not yet merged into main (HEAD ea819d9), while .gitreins/tasks.yaml on main marks AUG-119 complete \u2014 a merge-state observation, not a criterion failure.\nAll six AUG-119 sub-criteria are implemented in auger.py's plan ledger/boardctl integration and proven by 32 passing, zero-skipped tests in tests/test_plan_board.py.\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-10-31T05:17:36.022213",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-10-31T05:17:36.056572+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 95245,
+        "truncated": false,
+        "source": "git show ea819d9fae1a"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 2901,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-119"
+  }
+}

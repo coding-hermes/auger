@@ -1,0 +1,2075 @@
+commit ea819d9fae1a7bf53140384798b80afdbdd8a02c
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Fri Oct 30 23:35:44 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Fri Oct 30 23:35:44 2026 -0500
+
+    feat(spec): XML spec source + targeted cross-file assembly (AUG-118)
+    
+    - Versioned XML schema (specs/schema/auger-spec-1.0.xsd) with stable IDs, kind,
+      applies-to, status/version, verification-method attributes
+    - New 'spec' verb: select by ID/attributes, assemble from multiple XML files in
+      deterministic order, preserve source IDs and citations
+    - Refusal tests: unresolved references, duplicate IDs, cycles, unsupported schema
+      versions, invalid verification metadata — no partial document emitted on failure
+    - Golden test: default Markdown export unchanged; XML selection emits only requested
+      blocks plus explicit dependencies
+    - Spec doc: docs/SPEC-003-xml-specs.md with rationale, alternatives, verification,
+      ch:trace row=AUG-118
+    - 474 lines of new tests in tests/test_xml_specs.py
+    
+    ch:trace row=AUG-118 spec=docs/SPEC-003-xml-specs.md test=tests/test_xml_specs.py
+---
+ auger.py                                           | 674 ++++++++++++++++++++-
+ docs/SPEC-003-xml-specs.md                         | 211 +++++++
+ docs/VERBS.md                                      |  34 +-
+ specs/schema/auger-spec-1.0.xsd                    | 144 +++++
+ .../xml/expected/assembly-active-auger-export.md   |  40 ++
+ .../xml/expected/markdown-export-golden.md         |  94 +++
+ .../xml/invalid/duplicate-id/duplicate-a.xml       |   8 +
+ .../xml/invalid/duplicate-id/duplicate-b.xml       |   8 +
+ .../xml/invalid/external-entity/entity.xml         |  12 +
+ .../xml/invalid/include-cycle/include-a.xml        |   9 +
+ .../xml/invalid/include-cycle/include-b.xml        |   9 +
+ .../invalid-verification-method/bad-method.xml     |   8 +
+ .../missing-verification-method/no-method.xml      |   8 +
+ .../xml/invalid/reference-cycle/cycle-a.xml        |   8 +
+ .../xml/invalid/reference-cycle/cycle-b.xml        |   8 +
+ .../xml/invalid/schema-version/unsupported.xml     |   8 +
+ .../xml/invalid/unresolved-reference/broken.xml    |   8 +
+ tests/fixtures/xml/specs/assembly.xml              |  22 +
+ tests/fixtures/xml/specs/export.xml                |  42 ++
+ tests/fixtures/xml/specs/shared.xml                |  21 +
+ tests/gate.sh                                      |   5 +-
+ tests/test_xml_specs.py                            | 474 +++++++++++++++
+ 22 files changed, 1851 insertions(+), 4 deletions(-)
+
+diff --git a/auger.py b/auger.py
+index 476f1a9..018de21 100755
+--- a/auger.py
++++ b/auger.py
+@@ -52,12 +52,15 @@ import os
+ import re
+ import sqlite3
+ import sys
++import tempfile
+ import time
+ import urllib.error
+ import urllib.request
+-from collections import Counter
++import xml.etree.ElementTree as ET
++from collections import Counter, deque
+ from datetime import datetime, timezone
+ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
++from pathlib import Path
+ from urllib.parse import parse_qs, quote, unquote, urlsplit
+ 
+ AUGER_VERSION = "0.3"
+@@ -7691,6 +7694,632 @@ def cmd_api(a):
+     return serve(a.host, a.port)
+ 
+ 
++# ---------------------------------------------------------------- XML spec graph (AUG-118)
++# XML specifications are authored as versioned documents; specs/schema/auger-spec-1.0.xsd is the
++# normative grammar and this code is its executable half. Every block carries a stable
++# repository-unique `id` plus typed metadata (`kind`, `status`, `version`, `applies-to`, verification
++# method) and typed reference edges. `assemble` selects by id/attributes and emits the matched
++# blocks PLUS their explicit dependency closure, in corpus order, citing the declaring file for
++# every block. Design record and rationale: docs/SPEC-003-xml-specs.md.
++#
++# Additive by construction: nothing here is reachable from `export`/`render_export`, so the Markdown
++# export contract is byte-identical to before — tests/test_xml_specs.py pins that with a golden.
++# ch:trace row=AUG-118 spec=docs/SPEC-003-xml-specs.md#assembly-and-selection
++
++SPEC_SCHEMA_VERSION = "1.0"  # the version this code emits; SPEC_SCHEMA_VERSIONS is what it accepts
++SPEC_SCHEMA_VERSIONS = ("1.0",)
++SPEC_XML_NAMESPACE = "urn:auger:spec:1"
++SPEC_BLOCK_KINDS = ("section", "requirement", "acceptance", "verification")
++SPEC_STATUSES = ("active", "deprecated", "superseded")
++SPEC_VERIFICATION_METHODS = ("test", "demo", "analysis", "inspection")
++# Typed ID edges. EVERY one must resolve; only the closure attributes are followed by assembly,
++# so `refs`/`implements`/`supersedes` stay navigable and never silently expand a bundle.
++SPEC_EDGE_ATTRS = ("depends-on", "verifies", "refs", "implements", "supersedes")
++SPEC_FORWARD_CLOSURE_ATTRS = ("depends-on",)
++# A block that VERIFIES a selected block belongs to that block's explicit dependency closure: a
++# requirement without its acceptance criteria and verification plan is not the selected contract.
++SPEC_INVERSE_CLOSURE_ATTRS = ("verifies",)
++# Blocks whose verification METHOD is mandatory metadata (`verification=`); a <verification> block
++# carries the same closed set under `method=`.
++SPEC_REQUIRES_METHOD = ("requirement", "acceptance")
++SPEC_ID_RE = re.compile(r"^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$")
++SPEC_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
++SPEC_APPLIES_RE = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
++SPEC_ID_MAX_LEN = 80
++SPEC_FORBIDDEN_DECL_RE = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)", re.IGNORECASE)
++
++
++class SpecError(ValueError):
++    """A typed XML specification refusal: `code` names the rule, `detail` names the evidence."""
++
++    def __init__(self, code: str, detail: str):
++        super().__init__(f"{code}: {detail}")
++        self.code = code
++        self.detail = detail
++
++
++def _spec_local(tag: str) -> str:
++    """The element's local name, namespace stripped (stdlib ElementTree keeps `{ns}tag`)."""
++    return tag.rsplit("}", 1)[-1]
++
++
++def _spec_namespace(tag: str) -> str:
++    """The element's namespace, or '' for an unnamespaced document."""
++    return tag[1:].split("}", 1)[0] if tag.startswith("{") else ""
++
++
++def _spec_text(element) -> str:
++    """Normalized body text: full prose for a leaf, the block's own intro for a section."""
++    nested = [child for child in element if _spec_local(child.tag) in SPEC_BLOCK_KINDS]
++    if nested:
++        return " ".join((element.text or "").split())
++    return " ".join("".join(element.itertext()).split())
++
++
++def _spec_read_document(path: Path, root: Path):
++    """Parse one XML document, refusing entity declarations before any element is built."""
++    rel = path.relative_to(root).as_posix()
++    try:
++        raw = path.read_bytes()
++    except OSError as exc:
++        raise SpecError("unreadable-document", f"{rel}: {exc}") from None
++    if SPEC_FORBIDDEN_DECL_RE.search(raw.decode("utf-8", "replace")):
++        raise SpecError(
++            "external-entity-forbidden",
++            f"{rel}: DOCTYPE/ENTITY declarations are refused "
++            "(no entity expansion, no network fetch)",
++        )
++    try:
++        element = ET.fromstring(raw)
++    except ET.ParseError as exc:
++        raise SpecError("invalid-xml", f"{rel}: {exc}") from None
++    namespace = _spec_namespace(element.tag)
++    if namespace and namespace != SPEC_XML_NAMESPACE:
++        raise SpecError(
++            "unsupported-namespace",
++            f"{rel}: {namespace} (supported: {SPEC_XML_NAMESPACE})",
++        )
++    local = _spec_local(element.tag)
++    if local != "spec":
++        raise SpecError("invalid-root", f"{rel}: <{local}> (expected <spec>)")
++    declared = element.get("schema-version")
++    if declared not in SPEC_SCHEMA_VERSIONS:
++        found = "absent" if declared is None else declared
++        raise SpecError(
++            "unsupported-schema-version",
++            f"{rel}: schema-version {found} "
++            f"(supported: {', '.join(SPEC_SCHEMA_VERSIONS)})",
++        )
++    if not (element.get("id") or "").strip() or not (element.get("version") or "").strip():
++        raise SpecError(
++            "missing-document-metadata", f"{rel}: <spec> requires id and version"
++        )
++    return element
++
++
++def _spec_include_target(element, rel: str, root: Path) -> str:
++    """Resolve an <include src> to a repository-relative path inside the spec root."""
++    src = (element.get("src") or "").strip()
++    if not src:
++        raise SpecError("invalid-include", f"{rel}: <include> requires src")
++    if "://" in src or src.startswith("/") or ".." in Path(src).parts:
++        raise SpecError(
++            "remote-reference-rejected",
++            f"{rel}: include src {src!r} "
++            "(only repository-relative local files are allowed)",
++        )
++    target = (root / src).resolve()
++    try:
++        target_rel = target.relative_to(root).as_posix()
++    except ValueError:
++        raise SpecError(
++            "include-outside-root", f"{rel}: include src {src!r} escapes {root}"
++        ) from None
++    if not target.is_file():
++        raise SpecError("unresolved-include", f"{rel}: include src {src!r} is not a file")
++    return target_rel
++
++
++def _spec_include_map(documents: dict, root: Path) -> dict:
++    """Every document's include targets, with include cycles refused before any traversal."""
++    include_map = {}
++    for rel in sorted(documents):
++        targets = []
++        for element in documents[rel].iter():
++            if _spec_local(element.tag) == "include":
++                targets.append(_spec_include_target(element, rel, root))
++        include_map[rel] = tuple(targets)
++    state: dict[str, str] = {}
++
++    def visit(rel: str, path: list) -> None:
++        mark = state.get(rel)
++        if mark == "done":
++            return
++        if mark == "open":
++            start = path.index(rel)
++            raise SpecError("include-cycle", " -> ".join(path[start:] + [rel]))
++        state[rel] = "open"
++        for target in include_map.get(rel, ()):
++            visit(target, path + [rel])
++        state[rel] = "done"
++
++    for rel in sorted(documents):
++        visit(rel, [])
++    return include_map
++
++
++def _spec_block(element, rel: str, order: int) -> dict:
++    """Validate one block's stable identity and typed metadata, and index its edges."""
++    kind = _spec_local(element.tag)
++    block_id = (element.get("id") or "").strip()
++    if not block_id:
++        raise SpecError("missing-id", f"{rel}: <{kind}> has no id")
++    if len(block_id) > SPEC_ID_MAX_LEN or not SPEC_ID_RE.match(block_id):
++        raise SpecError(
++            "invalid-id",
++            f"{rel}: {block_id!r} (expected UPPER-CASE alphanumerics with at least one "
++            f"dash, at most {SPEC_ID_MAX_LEN} chars)",
++        )
++    declared_kind = (element.get("kind") or "").strip()
++    if not declared_kind:
++        raise SpecError("missing-kind", f"{rel}: {block_id} has no kind attribute")
++    if declared_kind != kind:
++        raise SpecError(
++            "kind-mismatch", f"{rel}: {block_id} kind={declared_kind!r} vs <{kind}>"
++        )
++    status = (element.get("status") or "").strip()
++    if status not in SPEC_STATUSES:
++        found = status or "absent"
++        raise SpecError(
++            "invalid-status",
++            f"{rel}: {block_id} status={found!r} (one of: {', '.join(SPEC_STATUSES)})",
++        )
++    version = (element.get("version") or "").strip()
++    if not SPEC_VERSION_RE.match(version):
++        found = version or "absent"
++        raise SpecError(
++            "invalid-version",
++            f"{rel}: {block_id} version={found!r} (expected X.Y.Z)",
++        )
++    applies_to = tuple((element.get("applies-to") or "").split())
++    for token in applies_to:
++        if not SPEC_APPLIES_RE.match(token):
++            raise SpecError(
++                "invalid-applies-to",
++                f"{rel}: {block_id} applies-to={token!r} "
++                "(expected dotted tokens like auger.export)",
++            )
++    method = ""
++    if kind in SPEC_REQUIRES_METHOD:
++        method = (element.get("verification") or "").strip()
++        attribute = "verification"
++    elif kind == "verification":
++        method = (element.get("method") or "").strip()
++        attribute = "method"
++    if kind in SPEC_REQUIRES_METHOD or kind == "verification":
++        if method not in SPEC_VERIFICATION_METHODS:
++            found = method or "absent"
++            raise SpecError(
++                "invalid-verification-method",
++                f"{rel}: {block_id} {attribute}={found!r} "
++                f"(one of: {', '.join(SPEC_VERIFICATION_METHODS)})",
++            )
++    refs = {}
++    for attribute in SPEC_EDGE_ATTRS:
++        targets = tuple((element.get(attribute) or "").split())
++        if targets:
++            refs[attribute] = targets
++    return {
++        "id": block_id,
++        "kind": kind,
++        "status": status,
++        "version": version,
++        "applies_to": applies_to,
++        "method": method,
++        "refs": refs,
++        "text": _spec_text(element),
++        "source": f"{rel}#{block_id}",
++        "source_file": rel,
++        "order": order,
++    }
++
++
++def _spec_collect(element, rel: str, root: Path, documents: dict, stack: list,
++                  out: list, spliced: dict) -> None:
++    """Walk a document in order, splicing included fragments at their <include> site.
++
++    A fragment may be spliced at exactly ONE site in a corpus: reuse across documents is by
++    explicit ID reference (`depends-on`/`verifies`), not by including the same block twice.
++    A second splice is refused instead of silently duplicating or silently skipping blocks.
++    """
++    for child in element:
++        local = _spec_local(child.tag)
++        if local == "include":
++            target = _spec_include_target(child, rel, root)
++            if target not in documents:
++                raise SpecError("unresolved-include", f"{rel}: {target} was not indexed")
++            origin = spliced.get(target)
++            if origin is not None:
++                raise SpecError(
++                    "duplicate-include",
++                    f"{rel} includes {target}, already spliced into {origin} "
++                    "(reuse a block by ID reference instead of including it twice)",
++                )
++            spliced[target] = rel
++            _spec_collect(
++                documents[target], target, root, documents, stack + [target], out, spliced
++            )
++            continue
++        if local not in SPEC_BLOCK_KINDS:
++            raise SpecError(
++                "unknown-element",
++                f"{rel}: <{local}> is not a spec block "
++                f"(one of: {', '.join(SPEC_BLOCK_KINDS)}, include)",
++            )
++        out.append(_spec_block(child, rel, len(out)))
++
++
++def _spec_refuse_reference_cycles(by_id: dict) -> None:
++    """Refuse any cycle over the typed reference graph, naming the path."""
++    edges = {
++        block_id: sorted(
++            target
++            for attribute in SPEC_EDGE_ATTRS
++            for target in block["refs"].get(attribute, ())
++        )
++        for block_id, block in by_id.items()
++    }
++    state: dict[str, str] = {}
++    for start in sorted(edges):
++        if state.get(start) == "done":
++            continue
++        state[start] = "open"
++        path = [start]
++        stack = [(start, iter(edges[start]))]
++        while stack:
++            node, pending = stack[-1]
++            target = next(pending, None)
++            if target is None:
++                state[node] = "done"
++                stack.pop()
++                path.pop()
++                continue
++            mark = state.get(target)
++            if mark == "open":
++                begin = path.index(target)
++                raise SpecError("reference-cycle", " -> ".join(path[begin:] + [target]))
++            if mark == "done":
++                continue
++            state[target] = "open"
++            path.append(target)
++            stack.append((target, iter(edges[target])))
++
++
++def _spec_validate_blocks(blocks: list) -> dict:
++    """Repository-wide ID and edge constraints. Returns the id -> block index."""
++    by_id: dict = {}
++    for block in blocks:
++        previous = by_id.get(block["id"])
++        if previous is not None:
++            raise SpecError(
++                "duplicate-id",
++                f"{block['id']} declared in {previous['source_file']} "
++                f"and {block['source_file']}",
++            )
++        by_id[block["id"]] = block
++    for block in blocks:
++        for attribute, targets in block["refs"].items():
++            for target in targets:
++                found = by_id.get(target)
++                if found is None:
++                    raise SpecError(
++                        "unresolved-reference",
++                        f"{block['id']} {attribute}={target} (no block with that id)",
++                    )
++                if target == block["id"]:
++                    raise SpecError(
++                        "reference-cycle",
++                        f"{block['id']} {attribute}={target} (self reference)",
++                    )
++                if attribute == "verifies" and found["kind"] != "requirement":
++                    raise SpecError(
++                        "invalid-reference-type",
++                        f"{block['id']} verifies={target} but {target} is a "
++                        f"{found['kind']}",
++                    )
++    _spec_refuse_reference_cycles(by_id)
++    return by_id
++
++
++def load_spec_corpus(spec_root) -> tuple:
++    """Parse and validate every XML document under a spec root.
++
++    Returns (root, documents_by_relpath, blocks_in_corpus_order). Any integrity failure raises a
++    typed SpecError BEFORE a caller can render, so a refusal never yields a partial document.
++    """
++    root = Path(spec_root).expanduser()
++    if not root.is_dir():
++        raise SpecError("missing-spec-root", f"{spec_root} is not a directory")
++    root = root.resolve()
++    paths = sorted(path for path in root.rglob("*.xml") if path.is_file())
++    if not paths:
++        raise SpecError("empty-corpus", f"no *.xml documents under {root}")
++    documents = {
++        path.relative_to(root).as_posix(): _spec_read_document(path, root)
++        for path in paths
++    }
++    include_map = _spec_include_map(documents, root)
++    included = {target for targets in include_map.values() for target in targets}
++    blocks: list = []
++    spliced: dict = {}
++    for rel in sorted(documents):
++        if rel in included:
++            continue  # a fragment: its blocks are assembled at their <include> site
++        _spec_collect(documents[rel], rel, root, documents, [rel], blocks, spliced)
++    if not blocks:
++        raise SpecError(
++            "no-root-document", f"{root}: every document is included by another"
++        )
++    _spec_validate_blocks(blocks)
++    return root, documents, blocks
++
++
++def _spec_describe_selection(ids, kinds, applies_to, statuses, versions) -> str:
++    pairs = (
++        ("id", ids),
++        ("kind", kinds),
++        ("applies-to", applies_to),
++        ("status", statuses),
++        ("version", versions),
++    )
++    parts = [f"{label}={value}" for label, values in pairs for value in values]
++    return ", ".join(parts)
++
++
++def _spec_matches(block: dict, ids, kinds, applies_to, statuses, versions) -> bool:
++    """Attribute matching: AND across criteria, OR within one criterion's repeated values."""
++    if ids and block["id"] not in ids:
++        return False
++    if kinds and block["kind"] not in kinds:
++        return False
++    if applies_to and not (set(applies_to) & set(block["applies_to"])):
++        return False
++    if statuses and block["status"] not in statuses:
++        return False
++    if versions and block["version"] not in versions:
++        return False
++    return True
++
++
++def select_spec_blocks(blocks: list, *, ids=(), kinds=(), applies_to=(), statuses=(),
++                       versions=(), closure: bool = True) -> tuple:
++    """Select by id/attributes and expand ONLY the explicit dependency closure.
++
++    Closure edges: forward `depends-on`, plus INVERSE `verifies` (a block that declares it verifies
++    a selected block is part of that block's explicit closure — its acceptance criterion or
++    verification plan). Every other typed edge must resolve but never expands a bundle.
++    Returns (selection_text, ordered records covering matched + dependency blocks).
++    """
++    ids = tuple(ids)
++    kinds = tuple(kinds)
++    applies_to = tuple(applies_to)
++    statuses = tuple(statuses)
++    versions = tuple(versions)
++    if not (ids or kinds or applies_to or statuses or versions):
++        raise SpecError(
++            "empty-selector",
++            "pass at least one of --id/--kind/--applies-to/--status/--version "
++            "(assembly is never a silent whole-corpus dump)",
++        )
++    selection = _spec_describe_selection(ids, kinds, applies_to, statuses, versions)
++    matched = [
++        block
++        for block in blocks
++        if _spec_matches(block, ids, kinds, applies_to, statuses, versions)
++    ]
++    if not matched:
++        raise SpecError("no-match", f"{selection} matched no block")
++    by_id = {block["id"]: block for block in blocks}
++    inverse: dict = {}
++    for block in blocks:
++        for attribute in SPEC_INVERSE_CLOSURE_ATTRS:
++            for target in block["refs"].get(attribute, ()):
++                inverse.setdefault(target, []).append((block["id"], attribute))
++    chosen = {block["id"]: {"why": "matched", "via": None} for block in matched}
++    if closure:
++        queue = deque(block["id"] for block in matched)
++        while queue:
++            current = queue.popleft()
++            edges = [
++                (target, attribute)
++                for attribute in SPEC_FORWARD_CLOSURE_ATTRS
++                for target in by_id[current]["refs"].get(attribute, ())
++            ]
++            edges.extend(inverse.get(current, ()))
++            for target, attribute in edges:
++                if target in chosen:
++                    continue
++                chosen[target] = {"why": "dependency", "via": f"{current} {attribute}"}
++                queue.append(target)
++    ordered = sorted(chosen, key=lambda block_id: by_id[block_id]["order"])
++    records = [{"block": by_id[block_id], **chosen[block_id]} for block_id in ordered]
++    return selection, records
++
++
++def render_spec_assembly(records: list, *, selection: str,
++                         fmt: str = "markdown",
++                         schema_version: str = SPEC_SCHEMA_VERSION) -> str:
++    """Render a selected bundle. Deterministic: same inputs, byte-identical output."""
++    matched = sum(1 for record in records if record["why"] == "matched")
++    counts = {
++        "matched": matched,
++        "dependencies": len(records) - matched,
++        "total": len(records),
++    }
++    if fmt == "json":
++        payload = {
++            "schema_version": schema_version,
++            "selection": selection,
++            "counts": counts,
++            "blocks": [
++                {
++                    "id": record["block"]["id"],
++                    "kind": record["block"]["kind"],
++                    "status": record["block"]["status"],
++                    "version": record["block"]["version"],
++                    "applies_to": list(record["block"]["applies_to"]),
++                    "method": record["block"]["method"],
++                    "refs": {
++                        key: list(value)
++                        for key, value in record["block"]["refs"].items()
++                    },
++                    "source": record["block"]["source"],
++                    "selection": record["why"],
++                    "via": record["via"],
++                    "text": record["block"]["text"],
++                }
++                for record in records
++            ],
++        }
++        return json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n"
++    if fmt != "markdown":
++        raise SpecError("unsupported-format", f"{fmt!r} (markdown or json)")
++    lines = [
++        f"# Auger spec assembly — {counts['total']} block(s)",
++        "",
++        f"selector: {selection}",
++        f"matched: {counts['matched']} · dependencies: {counts['dependencies']} "
++        f"· total: {counts['total']}",
++        f"schema: {schema_version}",
++    ]
++    for record in records:
++        block = record["block"]
++        lines.extend(
++            [
++                "",
++                f"## {block['id']} · {block['kind']} · {block['status']} "
++                f"· v{block['version']}",
++                f"- source: {block['source']}",
++            ]
++        )
++        if block["applies_to"]:
++            lines.append(f"- applies-to: {' '.join(block['applies_to'])}")
++        if block["method"]:
++            label = "verification" if block["kind"] in SPEC_REQUIRES_METHOD else "method"
++            lines.append(f"- {label}: {block['method']}")
++        for attribute in SPEC_EDGE_ATTRS:
++            targets = block["refs"].get(attribute)
++            if targets:
++                lines.append(f"- {attribute}: {' '.join(targets)}")
++        if record["why"] == "matched":
++            lines.append("- selection: matched")
++        else:
++            lines.append(f"- selection: dependency (via {record['via']})")
++        if block["text"]:
++            lines.extend(["", block["text"]])
++    return "\n".join(lines) + "\n"
++
++
++def _spec_write_atomic(path, text: str) -> None:
++    """Write `text` to `path` via a sibling temp file + rename, so no partial file is ever left."""
++    target = Path(path).expanduser()
++    directory = target.parent if str(target.parent) else Path(".")
++    handle_fd, temporary = tempfile.mkstemp(
++        prefix=f".{target.name}.", suffix=".tmp", dir=str(directory)
++    )
++    try:
++        with os.fdopen(handle_fd, "w", encoding="utf-8") as handle:
++            handle.write(text)
++        os.replace(temporary, target)
++    except BaseException:
++        with contextlib.suppress(OSError):
++            os.unlink(temporary)
++        raise
++
++
++def cmd_spec(a):
++    """`auger spec validate|list|assemble` — the XML spec authoring surface (AUG-118)."""
++    try:
++        return _spec_dispatch(a)
++    except SpecError as exc:
++        print(f"spec error ({exc.code}): {exc.detail}", file=sys.stderr)
++        raise SystemExit(2) from None
++
++
++def _spec_dispatch(a):
++    _root, documents, blocks = load_spec_corpus(a.root)
++    command = getattr(a, "spec_cmd", "validate")
++    if command == "validate":
++        references = sum(
++            len(targets) for block in blocks for targets in block["refs"].values()
++        )
++        print(
++            f"spec: {len(documents)} document(s), {len(blocks)} block(s), "
++            f"{references} reference(s) ok"
++        )
++        return 0
++    ids = tuple(getattr(a, "id", None) or ())
++    kinds = tuple(getattr(a, "kind", None) or ())
++    applies_to = tuple(getattr(a, "applies_to", None) or ())
++    statuses = tuple(getattr(a, "status", None) or ())
++    versions = tuple(getattr(a, "version", None) or ())
++    if command == "list":
++        for block in blocks:
++            if not _spec_matches(block, ids, kinds, applies_to, statuses, versions):
++                continue
++            scopes = " ".join(block["applies_to"]) or "-"
++            print(
++                f"{block['id']}\t{block['kind']}\t{block['status']}\t"
++                f"{block['version']}\t{block['source']}\t{scopes}"
++            )
++        return 0
++    selection, records = select_spec_blocks(
++        blocks,
++        ids=ids,
++        kinds=kinds,
++        applies_to=applies_to,
++        statuses=statuses,
++        versions=versions,
++        closure=not getattr(a, "no_deps", False),
++    )
++    text = render_spec_assembly(records, selection=selection, fmt=a.format)
++    out = getattr(a, "out", None)
++    if out:
++        _spec_write_atomic(out, text)
++        print(f"wrote {len(records)} block(s) to {out}")
++    else:
++        sys.stdout.write(text)
++    return 0
++
++
++def _add_spec_selectors(parser) -> None:
++    """The selector flags `spec list` and `spec assemble` share (AND across, OR within)."""
++    parser.add_argument(
++        "--id", action="append", metavar="BLOCK-ID", help="select this exact block id"
++    )
++    parser.add_argument(
++        "--kind", action="append", choices=SPEC_BLOCK_KINDS, help="select this block kind"
++    )
++    parser.add_argument(
++        "--applies-to",
++        action="append",
++        metavar="SCOPE",
++        help="select blocks that apply to this scope token (for example auger.export)",
++    )
++    parser.add_argument(
++        "--status",
++        action="append",
++        choices=SPEC_STATUSES,
++        help="select this lifecycle status",
++    )
++    parser.add_argument(
++        "--version",
++        action="append",
++        metavar="X.Y.Z",
++        help="select this block version attribute",
++    )
++
++
+ def main(argv=None):
+     ap = argparse.ArgumentParser(
+         prog="auger", description="spec drilling backed by DuckBrain"
+@@ -8020,6 +8649,49 @@ def main(argv=None):
+     r.add_argument("--breaks", help="what choosing this option breaks")
+     r.set_defaults(fn=cmd_record_option)
+ 
++    s = sub.add_parser(
++        "spec",
++        help="validate and assemble XML specifications (AUG-118: IDs, typed metadata, "
++        "attribute selection, cross-file assembly)",
++    )
++    spec_sub = s.add_subparsers(dest="spec_cmd", required=True)
++
++    v = spec_sub.add_parser(
++        "validate",
++        help="validate a spec corpus: schema version, stable IDs, typed edges, methods",
++    )
++    v.add_argument("root", help="spec root directory; every *.xml below it is indexed")
++    v.set_defaults(fn=cmd_spec)
++
++    lst = spec_sub.add_parser(
++        "list", help="list blocks with their kind, status, version and source citation"
++    )
++    lst.add_argument("root")
++    _add_spec_selectors(lst)
++    lst.set_defaults(fn=cmd_spec)
++
++    asm = spec_sub.add_parser(
++        "assemble",
++        help="select blocks by ID/attributes and assemble them deterministically "
++        "(matched blocks plus their explicit dependency closure)",
++    )
++    asm.add_argument("root")
++    _add_spec_selectors(asm)
++    asm.add_argument(
++        "--no-deps",
++        action="store_true",
++        help="emit only the matched blocks (no depends-on/verifies closure)",
++    )
++    asm.add_argument(
++        "--format", choices=("markdown", "json"), default="markdown",
++        help="output format (default markdown)",
++    )
++    asm.add_argument(
++        "--out",
++        help="write the assembly here atomically; nothing is created when the run refuses",
++    )
++    asm.set_defaults(fn=cmd_spec)
++
+     a = ap.parse_args(argv)
+     return a.fn(a)
+ 
+diff --git a/docs/SPEC-003-xml-specs.md b/docs/SPEC-003-xml-specs.md
+new file mode 100644
+index 0000000..f76028b
+--- /dev/null
++++ b/docs/SPEC-003-xml-specs.md
+@@ -0,0 +1,211 @@
++# SPEC-003 — XML specification source and targeted cross-file assembly
++
++> Status: **implemented (AUG-118).** Additive: the Markdown export contract is unchanged and
++> pinned by a golden captured from the base commit.
++
++Feature request and full product rationale: `docs/prd/xml-spec-graph.md` (board rows
++`AUG-118`–`AUG-124`). This document is the **engineering design record for the first slice**: the
++XML source model, the selector/assembler, and the refusal contract. Later slices (task packets,
++one-pass context retrieval, typed test obligations, staged-diff checking) build on this model and
++are deliberately out of scope here.
++
++## Rationale
++
++Auger's specifications are currently Markdown documents rendered from DuckBrain tables. Markdown
++has no stable identity: a requirement can be quoted, copied into a second page, and edited
++independently, and no tool can say whether two paragraphs are the same contract. The concrete
++failure this slice fixes is **unresolved identity and relationship**, not reading speed — a
++prose search finds a *likely* paragraph but cannot prove that a requirement, its acceptance
++criterion, its verification plan and a later change all refer to the same thing.
++
++The design consequence: authored spec content becomes versioned XML where
++
++* every block carries a **stable, repository-unique ID** that is never renumbered;
++* the block's **kind, lifecycle status, version, applicability and verification method** are
++  typed attributes, so selection is a filter rather than a search;
++* relationships are **typed edges** between IDs, so a tool can expand exactly the declared
++  closure instead of the whole corpus; and
++* Markdown/HTML remain **generated views** — `auger spec assemble` renders a selected bundle and
++  never writes back to the XML.
++
++The engineering win is small, exact context: one command returns the requirement you named, its
++acceptance criterion, its verification plan, and the shared blocks it declares it depends on —
++with a citation per block — instead of a multi-thousand-character document.
++
++## The schema
++
++Normative grammar: `specs/schema/auger-spec-1.0.xsd` (XSD 1.0, `targetNamespace`
++`urn:auger:spec:1`, `version="1.0"`). `auger.py` carries the executable half of the same rules,
++and `tests/test_xml_specs.py::test_schema_matches_the_validator` compares the two so the prose
++grammar and the validator cannot drift: the closed sets, the ID/version/scope patterns and the
++attribute inventory are asserted equal.
++
++A document is a `<spec>` root; its children are blocks and `<include>` instructions.
++
++```xml
++<spec xmlns="urn:auger:spec:1" id="AUGER-EXPORT" version="1.0.0" schema-version="1.0">
++  <include src="shared.xml"/>
++  <requirement id="AUG-REQ-014" kind="requirement" status="active" version="1.0.0"
++               applies-to="auger.export" verification="test"
++               depends-on="AUG-SHARED-DETERMINISM">
++    The default `auger export` output remains deterministic and read-only.
++  </requirement>
++  <acceptance id="AUG-AC-014-1" kind="acceptance" status="active" version="1.0.0"
++              applies-to="auger.export" verification="test" verifies="AUG-REQ-014">
++    Running the export twice over the same stored rows produces byte-identical output.
++  </acceptance>
++</spec>
++```
++
++| Attribute | On | Rule |
++|---|---|---|
++| `id` | every block | Stable ID, `^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$`, ≤ 80 chars, unique repository-wide, never renumbered |
++| `kind` | every block | One of `section`, `requirement`, `acceptance`, `verification`; **must equal the element name** |
++| `status` | every block | One of `active`, `deprecated`, `superseded` |
++| `version` | every block | The block's own `X.Y.Z` revision, independent of the document version |
++| `applies-to` | optional | Whitespace-separated scope tokens (`auger.export`), matched by the selector |
++| `verification` | required on `requirement`, `acceptance` | The *declared* verification method: `test`, `demo`, `analysis`, `inspection` |
++| `method` | required on `verification` | The same closed set, under the block that describes the plan |
++| `depends-on` | optional | **Closure** edge: forward, expanded by assembly |
++| `verifies` | optional | Edge to a `requirement`; expanded **inversely** (see below) |
++| `refs`, `implements`, `supersedes` | optional | Navigable edges: must resolve, never expand a bundle |
++
++Document root: `id`, `version` and `schema-version` are required. `schema-version` names the
++schema file the document was authored against; any version this build does not implement is
++refused rather than guessed at.
++
++**Verification is declared, not claimed.** The attribute states the intended method. A block is
++not "verified" because the attribute says `test`; the evidence side of the chain (test path,
++verdict, commit) belongs to later slices (`AUG-123`, `AUG-124`).
++
++## Assembly and selection
++
++`auger spec assemble <root> --id … --kind … --applies-to … --status … --version …`
++(`--format markdown|json`, `--out PATH`, `--no-deps`).
++
++* **Corpus**: every `*.xml` under the spec root, indexed recursively.
++* **Matching**: AND across different criteria, OR within one criterion's repeated values. An
++  empty selector is refused — assembly is never a silent whole-corpus dump.
++* **Closure** (`--no-deps` disables it): forward `depends-on`, plus **inverse `verifies`** — a
++  block that declares it verifies a selected block is part of that block's explicit closure,
++  because a requirement without its acceptance criteria and verification plan is not the selected
++  contract. `refs`/`implements`/`supersedes` must resolve but never expand a bundle.
++* **Order**: corpus order — documents in sorted repository-relative path order, blocks in
++  document order, and a spliced fragment's blocks at their `<include>` position. Identical inputs
++  produce byte-identical output (`test_selection_is_byte_identical_across_runs`).
++* **Citations**: every block carries `source: <repo-relative file>#<id>` — the file the block is
++  **authored** in, even when another document splices it, so a citation always points at the
++  source of truth rather than at an assembly site.
++
++`auger spec list <root>` prints the same metadata without assembling, so an author can inspect
++the corpus (`id`, `kind`, `status`, `version`, citation, scopes) before selecting.
++
++### Includes versus references
++
++Both cross-document mechanisms exist, and they are different tools:
++
++* `<include src="shared.xml"/>` **splices** a fragment's blocks at that position. A fragment may
++  be spliced at exactly one site in a corpus; a second splice is refused (`duplicate-include`)
++  rather than silently duplicating or silently skipping blocks.
++* An **ID reference** (`depends-on`, `verifies`, `refs`, …) is how a block is reused from any
++  number of documents without copying or splicing it. This is the mechanism R4 calls for, and the
++  fixture corpus demonstrates both: `export.xml` includes `shared.xml`, while `assembly.xml`
++  references the same shared blocks by ID.
++
++Only repository-relative local paths are accepted: a scheme-bearing, absolute, or `..`-escaping
++`src` is refused (`remote-reference-rejected`, `include-outside-root`). There is no network
++fetch and no external entity expansion — a document containing a `DOCTYPE`/`ENTITY` declaration
++is refused before any element is built (`external-entity-forbidden`), which also means no
++billion-laughs or entity-substitution surface.
++
++## Refusal contract
++
++Every failure is a typed `SpecError(code, detail)`; the CLI prints
++`spec error (<code>): <detail>` to **stderr** and exits **2**. Nothing is written to stdout, and
++`--out` is created only after the whole corpus has validated and the document has rendered (a
++sibling temp file plus `os.replace`, so even an I/O failure cannot leave a truncated document).
++
++| Code | Refused when |
++|---|---|
++| `missing-spec-root`, `empty-corpus`, `no-root-document` | the root is not a directory / has no `*.xml` / every document is included by another |
++| `invalid-xml`, `invalid-root`, `unreadable-document` | unparsable XML, wrong root element, unreadable file |
++| `unsupported-schema-version` | `schema-version` is absent or not in `SPEC_SCHEMA_VERSIONS` |
++| `unsupported-namespace` | a non-empty namespace other than `urn:auger:spec:1` |
++| `external-entity-forbidden` | a `DOCTYPE`/`ENTITY` declaration anywhere in the document |
++| `missing-document-metadata` | `<spec>` without `id` or `version` |
++| `missing-id`, `invalid-id` | a block with no ID, or an ID outside the stable-ID pattern |
++| `missing-kind`, `kind-mismatch` | no `kind`, or `kind` ≠ element name |
++| `invalid-status`, `invalid-version`, `invalid-applies-to` | metadata outside the declared shapes |
++| `invalid-verification-method` | a `requirement`/`acceptance` without a valid `verification`, or a `<verification>` without a valid `method` |
++| `duplicate-id` | one stable ID declared by two blocks (across files) |
++| `unresolved-reference`, `invalid-reference-type` | an edge naming a missing block, or `verifies` naming a non-`requirement` |
++| `reference-cycle` | a cycle over the typed reference graph (including a self-reference) |
++| `invalid-include`, `unresolved-include`, `remote-reference-rejected`, `include-outside-root`, `duplicate-include`, `include-cycle`, `unknown-element` | include instruction and traversal failures |
++| `empty-selector`, `no-match` | assembly without a selector, or a selector that matches nothing |
++| `unsupported-format` | a format other than `markdown`/`json` (also refused by argparse choices) |
++
++Cycles are refused at validation time, not discovered during assembly, so a cyclic corpus can
++never produce a partial bundle.
++
++## Alternatives considered
++
++1. **XSD validation via `lxml` versus a stdlib strict validator (chosen: both, in their places).**
++   `pyproject.toml` documents auger as deliberately stdlib-only; adding `lxml` would make the
++   runtime dependency surface depend on a C toolchain for a read-only feature. The XSD ships as
++   the **normative, editor-facing grammar** (IDE completion, schema-aware validation in an
++   editor), and `auger.py` carries an executable validator that enforces the same rules with no
++   dependency. The parity test compares the schema's enumerations and patterns with the code's, so
++   "same rules" is asserted rather than promised. Rejected: Relax NG (worse editor support,
++   still needs a third-party library).
++2. **General XInclude / XPath versus a closed `include` element and fixed selector flags
++   (chosen: closed).** XInclude invites arbitrary URI resolution and entity expansion, which the
++   PRD forbids for security reasons; XPath is a query language whose expressive power the selector
++   does not need and whose failure modes (empty match, surprise ordering) are hard to make
++   explicit. Fixed typed flags keep the selection inspectable and the ordering specifiable.
++   Rejected: `--query EXPR` (a second language to learn, debug and secure).
++3. **One aggregate document versus a corpus of documents with cross-file references (chosen:
++   corpus).** A single file gives identity but reintroduces the retrieval problem the feature
++   exists to solve. The corpus keeps authoring local and lets selection assemble across files.
++4. **Follow every typed edge during closure versus only `depends-on` + inverse `verifies`
++   (chosen: the narrow pair).** Silent expansion through `refs`/`implements` would make "what did
++   I ask for" unknowable; the narrow pair is the exact closure a requirement needs to be
++   actionable. Everything else stays navigable, and `--no-deps` turns closure off entirely.
++5. **Rewrite `export` to render from XML versus adding a new verb (chosen: additive).** The
++   export contract is consumed by other tooling; the golden in `tests/fixtures/xml/expected/`
++   (captured from base commit `86764e7`) makes "unchanged" a test rather than an intention.
++6. **Multiple `<include>` sites for one fragment versus refuse the second splice (chosen:
++   refuse).** Silently skipping or silently duplicating blocks are both lies about the corpus;
++   reuse belongs to ID references, and the refusal message says so.
++
++## Verification
++
++| Acceptance criterion | Proof |
++|---|---|
++| AC-1 versioned schema, stable IDs, typed attributes | `tests/test_xml_specs.py::test_schema_matches_the_validator` (enumerations, patterns, required attributes compared against the code) |
++| AC-2 select by ID and attributes, ≥ 2 files, deterministic order, citations preserved | `test_shared_block_reference`, `test_selects_only_requested_blocks_and_their_dependencies`, `test_selection_is_byte_identical_across_runs`, `test_list_reports_ids_attributes_and_citations`, `test_version_and_status_selectors_are_exact`, `test_verifies_expands_from_the_requirement_not_from_the_criterion` |
++| AC-3 refusals (unresolved ref, duplicate ID, cycle, unsupported schema version, invalid verification metadata), no partial document | `test_refusals_are_typed_and_emit_no_document` (8 fixtures; each asserts exit 2, empty stdout, the typed code, and that `--out` was not created), plus `test_empty_selector_refused`, `test_unknown_id_is_a_typed_no_match`, `test_successful_out_is_written_atomically` |
++| AC-4 Markdown export unchanged; selection emits only requested blocks + explicit dependencies | `test_markdown_export_is_unchanged` against `tests/fixtures/xml/expected/markdown-export-golden.md` (generated from base `86764e7` and re-verified identical against it), `test_selection_matches_the_golden` against `tests/fixtures/xml/expected/assembly-active-auger-export.md` |
++| AC-5 the record and its wiring | `test_spec_doc_records_the_decision`, `test_gate_runs_these_tests` (asserts `tests/gate.sh` names this file) |
++
++`tests/gate.sh` names `tests/test_xml_specs.py` in its pytest arm, and the commit guard's test
++command is `bash tests/gate.sh`, so the guard and CI run these tests. The suite is hermetic: no
++DuckBrain, no JEV, no network, no clock, so it runs identically on hosted CI.
++
++Fixture corpus (`tests/fixtures/xml/specs/`): `export.xml` (splices `shared.xml`, plus a decoy
++requirement in another scope and a deprecated one in the same scope), `shared.xml` (authored once,
++reused from two documents), `assembly.xml` (reuses the shared blocks by ID; its `refs=` target must
++NOT be expanded). Refusal fixtures live under `tests/fixtures/xml/invalid/<code>/`, one directory
++per rule, so a refusal test names the rule it proves.
++
++Reproduce by hand:
++
++```bash
++python3 auger.py spec validate tests/fixtures/xml/specs
++python3 auger.py spec assemble tests/fixtures/xml/specs \
++    --kind requirement --applies-to auger.export --status active
++python3 -m pytest tests/test_xml_specs.py -q
++```
++
++## ch:trace
++
++`ch:trace row=AUG-118 spec=docs/SPEC-003-xml-specs.md#assembly-and-selection test=tests/test_xml_specs.py doc=docs/SPEC-003-xml-specs.md evidence=tests/fixtures/xml/expected wave=none:no-wave-single-worker prompt=none:worker-brief-issued-out-of-band witness=none:self-verified verdict=none:not-judged commit=none:this-commit memory=/project/auger/spec/xml-spec-graph-2026-10-30`
+diff --git a/docs/VERBS.md b/docs/VERBS.md
+index 60cb9c2..31863fd 100644
+--- a/docs/VERBS.md
++++ b/docs/VERBS.md
+@@ -5,11 +5,11 @@ write. This is the contract — the verb names are public, and every argument li
+ exists in the verb's `add_parser` definition in `auger.py`. If the code and this file
+ disagree, the code wins and this file is a bug.
+ 
+-The 17 top-level verbs — one `add_parser` registration each in `auger.py`, and the count here is
++The 18 top-level verbs — one `add_parser` registration each in `auger.py`, and the count here is
+ the registry's own, not a hand-kept tally — in the order `auger --help` lists them:
+ 
+ ```
+-init  start  bundle  ask  answer  check  status  toggle  dump  export  propagate  feedback  recall  serve  api  verdict  record
++init  start  bundle  ask  answer  check  status  toggle  dump  export  propagate  feedback  recall  serve  api  verdict  record  spec
+ ```
+ 
+ Conventions every verb shares:
+@@ -594,3 +594,33 @@ with an empty required field; an assumption without a falsifier; a `record optio
+ neither `--costs` nor `--breaks`; a PATCH that changes nothing; anything in any other table —
+ `record` never touches decisions, questions, edges, facets, or the `active` selection flags
+ (a costs/breaks record is not a toggle).
++
++## spec
++
++Author, validate and assemble XML specifications (AUG-118). This verb is the one verb that
++reads NO DuckBrain state: it works on a directory of XML documents in the repository and
++writes nothing back to them. Subcommands:
++
++- `auger spec validate ROOT` — schema version, stable IDs, typed metadata, reference edges,
++  include graph and verification methods.
++- `auger spec list ROOT [--id ID] [--kind K] [--applies-to SCOPE] [--status S] [--version X.Y.Z]`
++- `auger spec assemble ROOT <the same selectors> [--no-deps] [--format markdown|json] [--out PATH]`
++
++Corpus: every `*.xml` under ROOT. Selection is AND across different flags and OR within one
++flag's repeated values (the `--option`/`--on` shape). Assembly emits the matched blocks plus
++their explicit dependency closure — forward `depends-on`, and INVERSE `verifies` (a block that
++declares it verifies a selected block is part of that block's closure) — in corpus order, each
++with a `source: <file>#<id>` citation. `refs`/`implements`/`supersedes` must resolve but never
++expand. `--no-deps` emits the matched set alone.
++
++**Writes:** nothing in DuckBrain and nothing in the corpus. `--out PATH` writes the assembled
++document through a sibling temp file plus `os.replace`, so a refusal never leaves a partial
++document — the file is created only after the whole corpus has validated. Success prints
++`wrote N block(s) to PATH`; without `--out` the document goes to stdout.
++
++**Never writes:** a row, a namespace, a table declaration, an embedded memory, or any XML file
++it read. A refusal (typed `spec error (<code>): <detail>`, exit 2) prints nothing on stdout and
++creates no `--out` file. An empty selector is refused — assembly is never a silent whole-corpus
++dump — and so is a selector that matches nothing. The design record, the schema
++(`specs/schema/auger-spec-1.0.xsd`) and the refusal-code table live in
++[docs/SPEC-003-xml-specs.md](SPEC-003-xml-specs.md).
+diff --git a/specs/schema/auger-spec-1.0.xsd b/specs/schema/auger-spec-1.0.xsd
+new file mode 100644
+index 0000000..900ca5d
+--- /dev/null
++++ b/specs/schema/auger-spec-1.0.xsd
+@@ -0,0 +1,144 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!--
++  auger XML specification grammar — schema version 1.0 (AUG-118).
++
++  This file is the normative grammar for authored specs: `auger spec validate` accepts exactly the
++  documents this schema describes, and `auger spec assemble` selects from the same block model.
++  The schema version a document declares (`schema-version="1.0"` on <spec>) names THIS file; a
++  document declaring any other version is refused rather than guessed at.
++
++  Design record: docs/SPEC-003-xml-specs.md.
++  ch:trace row=AUG-118 spec=docs/SPEC-003-xml-specs.md#the-schema
++
++  The pattern/enumeration strings below are byte-identical to the constants in auger.py
++  (SPEC_ID_RE, SPEC_VERSION_RE, SPEC_APPLIES_RE, SPEC_BLOCK_KINDS, SPEC_STATUSES,
++  SPEC_VERIFICATION_METHODS, SPEC_SCHEMA_VERSIONS); tests/test_xml_specs.py compares them so the
++  prose grammar and the executable validator cannot drift apart.
++-->
++<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
++           xmlns:auger="urn:auger:spec:1"
++           targetNamespace="urn:auger:spec:1"
++           elementFormDefault="qualified"
++           attributeFormDefault="unqualified"
++           version="1.0">
++
++  <!-- A stable block ID: upper-case alphanumerics with at least one dash, never renumbered. -->
++  <xs:simpleType name="stableId">
++    <xs:restriction base="xs:string">
++      <xs:pattern value="^[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)+$"/>
++      <xs:maxLength value="80"/>
++    </xs:restriction>
++  </xs:simpleType>
++
++  <!-- The block's own revision, independent of the document version. -->
++  <xs:simpleType name="semanticVersion">
++    <xs:restriction base="xs:string">
++      <xs:pattern value="^[0-9]+\.[0-9]+\.[0-9]+$"/>
++    </xs:restriction>
++  </xs:simpleType>
++
++  <!-- An applicability scope token, e.g. auger.export. -->
++  <xs:simpleType name="scopeToken">
++    <xs:restriction base="xs:string">
++      <xs:pattern value="^[a-z0-9]+(?:[._-][a-z0-9]+)*$"/>
++    </xs:restriction>
++  </xs:simpleType>
++
++  <xs:simpleType name="blockKind">
++    <xs:restriction base="xs:string">
++      <xs:enumeration value="section"/>
++      <xs:enumeration value="requirement"/>
++      <xs:enumeration value="acceptance"/>
++      <xs:enumeration value="verification"/>
++    </xs:restriction>
++  </xs:simpleType>
++
++  <xs:simpleType name="lifecycleStatus">
++    <xs:restriction base="xs:string">
++      <xs:enumeration value="active"/>
++      <xs:enumeration value="deprecated"/>
++      <xs:enumeration value="superseded"/>
++    </xs:restriction>
++  </xs:simpleType>
++
++  <xs:simpleType name="verificationMethod">
++    <xs:restriction base="xs:string">
++      <xs:enumeration value="test"/>
++      <xs:enumeration value="demo"/>
++      <xs:enumeration value="analysis"/>
++      <xs:enumeration value="inspection"/>
++    </xs:restriction>
++  </xs:simpleType>
++
++  <xs:simpleType name="schemaVersion">
++    <xs:restriction base="xs:string">
++      <xs:enumeration value="1.0"/>
++    </xs:restriction>
++  </xs:simpleType>
++
++  <!-- Whitespace-separated list of stable IDs, resolved repository-wide. -->
++  <xs:simpleType name="idRefList">
++    <xs:list itemType="auger:stableId"/>
++  </xs:simpleType>
++
++  <!-- Whitespace-separated list of applicability scope tokens. -->
++  <xs:simpleType name="scopeList">
++    <xs:list itemType="auger:scopeToken"/>
++  </xs:simpleType>
++
++  <!--
++    One block. `kind` must equal the element name (the validator refuses a mismatch), so a
++    selector can filter on `kind` uniformly across mixed element names.
++    `verification` is required on <requirement> and <acceptance>; a <verification> block carries
++    the same closed set under `method`.
++  -->
++  <xs:complexType name="blockType" mixed="true">
++    <xs:choice minOccurs="0" maxOccurs="unbounded">
++      <xs:element ref="auger:block"/>
++      <xs:element ref="auger:include"/>
++    </xs:choice>
++    <xs:attribute name="id" type="auger:stableId" use="required"/>
++    <xs:attribute name="kind" type="auger:blockKind" use="required"/>
++    <xs:attribute name="status" type="auger:lifecycleStatus" use="required"/>
++    <xs:attribute name="version" type="auger:semanticVersion" use="required"/>
++    <xs:attribute name="applies-to" type="auger:scopeList" use="optional"/>
++    <xs:attribute name="verification" type="auger:verificationMethod" use="optional"/>
++    <xs:attribute name="method" type="auger:verificationMethod" use="optional"/>
++    <xs:attribute name="depends-on" type="auger:idRefList" use="optional"/>
++    <xs:attribute name="verifies" type="auger:idRefList" use="optional"/>
++    <xs:attribute name="refs" type="auger:idRefList" use="optional"/>
++    <xs:attribute name="implements" type="auger:idRefList" use="optional"/>
++    <xs:attribute name="supersedes" type="auger:idRefList" use="optional"/>
++  </xs:complexType>
++
++  <xs:element name="block" type="auger:blockType" abstract="true"/>
++
++  <xs:element name="section" type="auger:blockType" substitutionGroup="auger:block"/>
++  <xs:element name="requirement" type="auger:blockType" substitutionGroup="auger:block"/>
++  <xs:element name="acceptance" type="auger:blockType" substitutionGroup="auger:block"/>
++  <xs:element name="verification" type="auger:blockType" substitutionGroup="auger:block"/>
++
++  <!--
++    Include another authored document at this position. Local repository-relative paths only:
++    scheme-bearing, absolute and `..` sources are refused, and an include cycle is refused
++    before any fragment is assembled.
++  -->
++  <xs:element name="include">
++    <xs:complexType>
++      <xs:attribute name="src" type="xs:string" use="required"/>
++    </xs:complexType>
++  </xs:element>
++
++  <xs:element name="spec">
++    <xs:complexType>
++      <xs:choice minOccurs="0" maxOccurs="unbounded">
++        <xs:element ref="auger:block"/>
++        <xs:element ref="auger:include"/>
++      </xs:choice>
++      <xs:attribute name="id" type="auger:stableId" use="required"/>
++      <xs:attribute name="version" type="auger:semanticVersion" use="required"/>
++      <xs:attribute name="schema-version" type="auger:schemaVersion" use="required"/>
++    </xs:complexType>
++  </xs:element>
++
++</xs:schema>
+diff --git a/tests/fixtures/xml/expected/assembly-active-auger-export.md b/tests/fixtures/xml/expected/assembly-active-auger-export.md
+new file mode 100644
+index 0000000..97146ef
+--- /dev/null
++++ b/tests/fixtures/xml/expected/assembly-active-auger-export.md
+@@ -0,0 +1,40 @@
++# Auger spec assembly — 4 block(s)
++
++selector: kind=requirement, applies-to=auger.export, status=active
++matched: 2 · dependencies: 2 · total: 4
++schema: 1.0
++
++## AUG-SHARED-DETERMINISM · requirement · active · v1.1.0
++- source: shared.xml#AUG-SHARED-DETERMINISM
++- applies-to: auger.export auger.spec
++- verification: analysis
++- selection: matched
++
++Identical inputs shall produce byte-identical assembled output; assembly reads the corpus and writes nothing back to it.
++
++## AUG-REQ-014 · requirement · active · v1.0.0
++- source: export.xml#AUG-REQ-014
++- applies-to: auger.export
++- verification: test
++- depends-on: AUG-SHARED-DETERMINISM
++- selection: matched
++
++The default `auger export` output remains deterministic and read-only.
++
++## AUG-AC-014-1 · acceptance · active · v1.0.0
++- source: export.xml#AUG-AC-014-1
++- applies-to: auger.export
++- verification: test
++- verifies: AUG-REQ-014
++- selection: dependency (via AUG-REQ-014 verifies)
++
++Running the export twice over the same stored rows produces byte-identical output.
++
++## AUG-VER-014-1 · verification · active · v1.0.0
++- source: export.xml#AUG-VER-014-1
++- applies-to: auger.export
++- method: test
++- verifies: AUG-REQ-014
++- selection: dependency (via AUG-REQ-014 verifies)
++
++Golden Markdown fixture compared against render_export output, twice, byte for byte.
+diff --git a/tests/fixtures/xml/expected/markdown-export-golden.md b/tests/fixtures/xml/expected/markdown-export-golden.md
+new file mode 100644
+index 0000000..5cae088
+--- /dev/null
++++ b/tests/fixtures/xml/expected/markdown-export-golden.md
+@@ -0,0 +1,94 @@
++# Auger spec export — namespace golden-ns
++
++Read-only deterministic rendering of every declared table.
++Scope: whole namespace (no rows are written).
++
++## Projects (1 rows)
++### P-000001
++- id: P-000001
++- name: golden-project
++- seed: one line of seed text
++- core_statement: the thing this project is about
++- status: active
++- created_at: 2026-01-01T00:00:00Z
++
++## Domains (0 rows)
++### (none stored)
++
++## Questions (0 rows)
++### (none stored)
++
++## Decisions (2 rows)
++### D-001
++- id: D-001
++- project_id: P-000001
++- domain: 4.01
++- question_id: Q-000001
++- chosen: ship the additive feature
++- why_not: {"O2": "breaks the export contract"}
++- reversal_cost: cheap
++- confidence: 0.8
++- status: answered
++- evidence_key: /P-000001/decision/D-001
++- scope: —
++### D-002
++- id: D-002
++- project_id: P-000001
++- domain: 4.02
++- question_id: —
++- chosen: keep Markdown untouched
++- why_not: —
++- reversal_cost: —
++- confidence: 0.55
++- status: answered
++- evidence_key: —
++- scope: bundle
++
++## Options (2 rows)
++### D-001-O1
++- id: D-001-O1
++- decision_id: D-001
++- label: additive
++- costs: one new module
++- breaks: nothing
++- active: true
++### D-001-O2
++- id: D-001-O2
++- decision_id: D-001
++- label: replace
++- costs: migration
++- breaks: every existing consumer
++- active: false
++
++## Break records (0 rows)
++### (none stored)
++
++## Escalations (0 rows)
++### (none stored)
++
++## Assumptions (0 rows)
++### (none stored)
++
++## Unknowns (1 rows)
++### U-001
++- id: U-001
++- project_id: P-000001
++- text: does the substrate page at scale?
++- owner: unassigned
++- trigger: first 10k rows
++- containment: page the reads
++
++## Graph edges (0 rows)
++### (none stored)
++
++## Question facets (0 rows)
++### (none stored)
++
++## Bundles (0 rows)
++### (none stored)
++
++## Bundle members (0 rows)
++### (none stored)
++
++## Verdicts (0 rows)
++### (none stored)
+\ No newline at end of file
+diff --git a/tests/fixtures/xml/invalid/duplicate-id/duplicate-a.xml b/tests/fixtures/xml/invalid/duplicate-id/duplicate-a.xml
+new file mode 100644
+index 0000000..6b83348
+--- /dev/null
++++ b/tests/fixtures/xml/invalid/duplicate-id/duplicate-a.xml
+@@ -0,0 +1,8 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!-- Refusal fixture: this document and duplicate-b.xml both declare AUG-DUP-001. -->
++<spec xmlns="urn:auger:spec:1" id="AUGER-DUP-A" version="1.0.0" schema-version="1.0">
++  <requirement id="AUG-DUP-001" kind="requirement" status="active" version="1.0.0"
++               applies-to="auger.spec" verification="test">
++    First declaration of the duplicated stable ID.
++  </requirement>
++</spec>
+diff --git a/tests/fixtures/xml/invalid/duplicate-id/duplicate-b.xml b/tests/fixtures/xml/invalid/duplicate-id/duplicate-b.xml
+new file mode 100644
+index 0000000..0693f40
+--- /dev/null
++++ b/tests/fixtures/xml/invalid/duplicate-id/duplicate-b.xml
+@@ -0,0 +1,8 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!-- Refusal fixture: second declaration of AUG-DUP-001 (duplicate-id, across two files). -->
++<spec xmlns="urn:auger:spec:1" id="AUGER-DUP-B" version="1.0.0" schema-version="1.0">
++  <requirement id="AUG-DUP-001" kind="requirement" status="active" version="1.0.0"
++               applies-to="auger.spec" verification="test">
++    Second declaration of the same stable ID in another file.
++  </requirement>
++</spec>
+diff --git a/tests/fixtures/xml/invalid/external-entity/entity.xml b/tests/fixtures/xml/invalid/external-entity/entity.xml
+new file mode 100644
+index 0000000..5c97721
+--- /dev/null
++++ b/tests/fixtures/xml/invalid/external-entity/entity.xml
+@@ -0,0 +1,12 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!DOCTYPE spec [
++  <!ENTITY leak SYSTEM "file:///etc/hostname">
++]>
++<!-- Refusal fixture (external-entity-forbidden): the DOCTYPE/ENTITY declaration is rejected
++     before any element is built, so the entity is never resolved and no network/file read happens. -->
++<spec xmlns="urn:auger:spec:1" id="AUGER-ENTITY" version="1.0.0" schema-version="1.0">
++  <requirement id="AUG-ENTITY-001" kind="requirement" status="active" version="1.0.0"
++               applies-to="auger.spec" verification="test">
++    Body text &leak; comes from an external entity.
++  </requirement>
++</spec>
+diff --git a/tests/fixtures/xml/invalid/include-cycle/include-a.xml b/tests/fixtures/xml/invalid/include-cycle/include-a.xml
+new file mode 100644
+index 0000000..e3d732a
+--- /dev/null
++++ b/tests/fixtures/xml/invalid/include-cycle/include-a.xml
+@@ -0,0 +1,9 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!-- Refusal fixture: include-a.xml includes include-b.xml, which includes include-a.xml again. -->
++<spec xmlns="urn:auger:spec:1" id="AUGER-INCLUDE-A" version="1.0.0" schema-version="1.0">
++  <include src="include-b.xml"/>
++  <requirement id="AUG-INC-A" kind="requirement" status="active" version="1.0.0"
++               applies-to="auger.spec" verification="test">
++    First half of an include cycle.
++  </requirement>
++</spec>
+diff --git a/tests/fixtures/xml/invalid/include-cycle/include-b.xml b/tests/fixtures/xml/invalid/include-cycle/include-b.xml
+new file mode 100644
+index 0000000..42e56db
+--- /dev/null
++++ b/tests/fixtures/xml/invalid/include-cycle/include-b.xml
+@@ -0,0 +1,9 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!-- Refusal fixture: closes the include cycle opened by include-a.xml. -->
++<spec xmlns="urn:auger:spec:1" id="AUGER-INCLUDE-B" version="1.0.0" schema-version="1.0">
++  <include src="include-a.xml"/>
++  <requirement id="AUG-INC-B" kind="requirement" status="active" version="1.0.0"
++               applies-to="auger.spec" verification="test">
++    Second half of an include cycle.
++  </requirement>
++</spec>
+diff --git a/tests/fixtures/xml/invalid/invalid-verification-method/bad-method.xml b/tests/fixtures/xml/invalid/invalid-verification-method/bad-method.xml
+new file mode 100644
+index 0000000..f979053
+--- /dev/null
++++ b/tests/fixtures/xml/invalid/invalid-verification-method/bad-method.xml
+@@ -0,0 +1,8 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!-- Refusal fixture: verification="vibes" is outside the closed method set. -->
++<spec xmlns="urn:auger:spec:1" id="AUGER-BAD-METHOD" version="1.0.0" schema-version="1.0">
++  <requirement id="AUG-BAD-001" kind="requirement" status="active" version="1.0.0"
++               applies-to="auger.spec" verification="vibes">
++    Declares a verification method that is not one of test/demo/analysis/inspection.
++  </requirement>
++</spec>
+diff --git a/tests/fixtures/xml/invalid/missing-verification-method/no-method.xml b/tests/fixtures/xml/invalid/missing-verification-method/no-method.xml
+new file mode 100644
+index 0000000..5865312
+--- /dev/null
++++ b/tests/fixtures/xml/invalid/missing-verification-method/no-method.xml
+@@ -0,0 +1,8 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!-- Refusal fixture: a <requirement> with no verification method at all (invalid-verification-method). -->
++<spec xmlns="urn:auger:spec:1" id="AUGER-NO-METHOD" version="1.0.0" schema-version="1.0">
++  <requirement id="AUG-NOMETHOD-001" kind="requirement" status="active" version="1.0.0"
++               applies-to="auger.spec">
++    Says what must hold but never how it is verified.
++  </requirement>
++</spec>
+diff --git a/tests/fixtures/xml/invalid/reference-cycle/cycle-a.xml b/tests/fixtures/xml/invalid/reference-cycle/cycle-a.xml
+new file mode 100644
+index 0000000..9f595c5
+--- /dev/null
++++ b/tests/fixtures/xml/invalid/reference-cycle/cycle-a.xml
+@@ -0,0 +1,8 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!-- Refusal fixture: cycle-a depends-on AUG-CYCLE-B, which (other file) depends-on AUG-CYCLE-A. -->
++<spec xmlns="urn:auger:spec:1" id="AUGER-CYCLE-A" version="1.0.0" schema-version="1.0">
++  <requirement id="AUG-CYCLE-A" kind="requirement" status="active" version="1.0.0"
++               applies-to="auger.spec" verification="test" depends-on="AUG-CYCLE-B">
++    First half of a cross-file dependency cycle.
++  </requirement>
++</spec>
+diff --git a/tests/fixtures/xml/invalid/reference-cycle/cycle-b.xml b/tests/fixtures/xml/invalid/reference-cycle/cycle-b.xml
+new file mode 100644
+index 0000000..c613779
+--- /dev/null
++++ b/tests/fixtures/xml/invalid/reference-cycle/cycle-b.xml
+@@ -0,0 +1,8 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!-- Refusal fixture: closes the cycle opened by cycle-a.xml (reference-cycle). -->
++<spec xmlns="urn:auger:spec:1" id="AUGER-CYCLE-B" version="1.0.0" schema-version="1.0">
++  <requirement id="AUG-CYCLE-B" kind="requirement" status="active" version="1.0.0"
++               applies-to="auger.spec" verification="test" depends-on="AUG-CYCLE-A">
++    Second half of a cross-file dependency cycle.
++  </requirement>
++</spec>
+diff --git a/tests/fixtures/xml/invalid/schema-version/unsupported.xml b/tests/fixtures/xml/invalid/schema-version/unsupported.xml
+new file mode 100644
+index 0000000..a9549e7
+--- /dev/null
++++ b/tests/fixtures/xml/invalid/schema-version/unsupported.xml
+@@ -0,0 +1,8 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!-- Refusal fixture: schema-version 2.0 is not one this code accepts (unsupported-schema-version). -->
++<spec xmlns="urn:auger:spec:1" id="AUGER-FUTURE" version="2.0.0" schema-version="2.0">
++  <requirement id="AUG-FUTURE-001" kind="requirement" status="active" version="1.0.0"
++               applies-to="auger.spec" verification="test">
++    Written against a schema version this build does not implement.
++  </requirement>
++</spec>
+diff --git a/tests/fixtures/xml/invalid/unresolved-reference/broken.xml b/tests/fixtures/xml/invalid/unresolved-reference/broken.xml
+new file mode 100644
+index 0000000..d8efeb8
+--- /dev/null
++++ b/tests/fixtures/xml/invalid/unresolved-reference/broken.xml
+@@ -0,0 +1,8 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!-- Refusal fixture: depends-on names an ID no block declares -> unresolved-reference. -->
++<spec xmlns="urn:auger:spec:1" id="AUGER-BROKEN-REF" version="1.0.0" schema-version="1.0">
++  <requirement id="AUG-BROKEN-001" kind="requirement" status="active" version="1.0.0"
++               applies-to="auger.spec" verification="test" depends-on="AUG-MISSING-999">
++    Depends on a block that does not exist in this corpus.
++  </requirement>
++</spec>
+diff --git a/tests/fixtures/xml/specs/assembly.xml b/tests/fixtures/xml/specs/assembly.xml
+new file mode 100644
+index 0000000..54f3734
+--- /dev/null
++++ b/tests/fixtures/xml/specs/assembly.xml
+@@ -0,0 +1,22 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!--
++  Assembly contract document. It reuses the shared fragment by explicit ID reference (no include):
++  AUG-SHARED-DETERMINISM through `depends-on`, and AUG-SHARED-CITATION only through `refs`, which
++  is navigable but NEVER expands a bundle — that distinction is asserted by the tests.
++-->
++<spec xmlns="urn:auger:spec:1" id="AUGER-ASSEMBLY" version="1.0.0" schema-version="1.0">
++
++  <requirement id="AUG-REQ-030" kind="requirement" status="active" version="2.0.0"
++               applies-to="auger.spec" verification="analysis"
++               depends-on="AUG-SHARED-DETERMINISM" refs="AUG-SHARED-CITATION">
++    Assembly selects blocks by stable ID and typed attributes and emits only the selection plus its
++    explicit dependency closure.
++  </requirement>
++
++  <acceptance id="AUG-AC-030-1" kind="acceptance" status="active" version="2.0.0"
++              applies-to="auger.spec" verification="test" verifies="AUG-REQ-030">
++    A selection over two files emits the matched blocks and their declared dependencies in corpus
++    order, with a citation per block.
++  </acceptance>
++
++</spec>
+diff --git a/tests/fixtures/xml/specs/export.xml b/tests/fixtures/xml/specs/export.xml
+new file mode 100644
+index 0000000..ab04e0f
+--- /dev/null
++++ b/tests/fixtures/xml/specs/export.xml
+@@ -0,0 +1,42 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!--
++  Export contract document. It splices the shared fragment and adds its own requirement, acceptance
++  criterion and verification plan. Selection golden:
++  tests/fixtures/xml/expected/assembly-active-auger-export.md
++-->
++<spec xmlns="urn:auger:spec:1" id="AUGER-EXPORT" version="1.0.0" schema-version="1.0">
++
++  <include src="shared.xml"/>
++
++  <section id="AUGER-EXPORT-SURFACE" kind="section" status="active" version="1.0.0"
++           applies-to="auger.export">
++    The Markdown export surface: one deterministic, read-only document per namespace.
++  </section>
++
++  <requirement id="AUG-REQ-014" kind="requirement" status="active" version="1.0.0"
++               applies-to="auger.export" verification="test"
++               depends-on="AUG-SHARED-DETERMINISM">
++    The default `auger export` output remains deterministic and read-only.
++  </requirement>
++
++  <acceptance id="AUG-AC-014-1" kind="acceptance" status="active" version="1.0.0"
++              applies-to="auger.export" verification="test" verifies="AUG-REQ-014">
++    Running the export twice over the same stored rows produces byte-identical output.
++  </acceptance>
++
++  <verification id="AUG-VER-014-1" kind="verification" status="active" version="1.0.0"
++                applies-to="auger.export" method="test" verifies="AUG-REQ-014">
++    Golden Markdown fixture compared against render_export output, twice, byte for byte.
++  </verification>
++
++  <requirement id="AUG-REQ-020" kind="requirement" status="active" version="1.0.0"
++               applies-to="auger.recall" verification="test">
++    Decoy: recall semantics, out of every export-scoped selection.
++  </requirement>
++
++  <requirement id="AUG-REQ-021" kind="requirement" status="deprecated" version="0.9.0"
++               applies-to="auger.export" verification="test">
++    Retired export requirement: kept for traceability, excluded by a status=active selector.
++  </requirement>
++
++</spec>
+diff --git a/tests/fixtures/xml/specs/shared.xml b/tests/fixtures/xml/specs/shared.xml
+new file mode 100644
+index 0000000..389a817
+--- /dev/null
++++ b/tests/fixtures/xml/specs/shared.xml
+@@ -0,0 +1,21 @@
++<?xml version="1.0" encoding="UTF-8"?>
++<!--
++  Shared fragment: blocks authored ONCE here and reused from several documents by explicit stable
++  ID (AUG-118 AC-2/R4). export.xml splices this file with <include>; assembly.xml references these
++  blocks by ID without including them, so the two documents cannot drift into stale copies.
++-->
++<spec xmlns="urn:auger:spec:1" id="AUGER-SHARED" version="1.0.0" schema-version="1.0">
++
++  <requirement id="AUG-SHARED-DETERMINISM" kind="requirement" status="active" version="1.1.0"
++               applies-to="auger.export auger.spec" verification="analysis">
++    Identical inputs shall produce byte-identical assembled output; assembly reads the corpus and
++    writes nothing back to it.
++  </requirement>
++
++  <requirement id="AUG-SHARED-CITATION" kind="requirement" status="active" version="1.0.0"
++               applies-to="auger.spec" verification="inspection">
++    Every assembled block shall cite the repository-relative source file and stable ID it was
++    authored in.
++  </requirement>
++
++</spec>
+diff --git a/tests/gate.sh b/tests/gate.sh
+index 524f6fd..6e65b0a 100755
+--- a/tests/gate.sh
++++ b/tests/gate.sh
+@@ -137,7 +137,10 @@ run_pytest_arm(){
+   local budget="${AUGER_GATE_PYTEST_BUDGET:-2400s}"
+   local kill_after="${AUGER_GATE_PYTEST_KILL_AFTER:-30s}"
+   local rc=0
+-  setsid timeout --kill-after="$kill_after" "$budget" python3 -m pytest tests/test_auger.py tests/test_openapi_parity.py tests/test_api_service.py tests/test_upgrade_path.py "$@" || rc=$?
++  # tests/test_xml_specs.py (AUG-118): the XML spec corpus suite — hermetic (no DuckBrain, no JEV),
++  # so it runs in the hosted-CI mode too. Named here so the guard's test command (`bash tests/gate.sh`)
++  # cannot silently stop covering the XML surface.
++  setsid timeout --kill-after="$kill_after" "$budget" python3 -m pytest tests/test_auger.py tests/test_openapi_parity.py tests/test_api_service.py tests/test_upgrade_path.py tests/test_xml_specs.py "$@" || rc=$?
+   if [ "$rc" -eq 124 ]; then
+     echo "GATE TIMEOUT: the pytest arm exceeded ${budget} and was killed as a process group (setsid+timeout, AUG-081) — investigate hung tests; failing the gate" >&2
+     exit 1
+diff --git a/tests/test_xml_specs.py b/tests/test_xml_specs.py
+new file mode 100644
+index 0000000..4fe602f
+--- /dev/null
++++ b/tests/test_xml_specs.py
+@@ -0,0 +1,474 @@
++"""XML specification authoring, selection and assembly — AUG-118.
++
++These tests are HERMETIC: no DuckBrain, no JEV, no network, no clock. They read the checked-in
++corpus under tests/fixtures/xml/ and drive `auger spec ...` in-process, so they run in both the
++live gate and hosted CI (tests/gate.sh names this file in its pytest arm).
++
++What each acceptance criterion is proven by:
++
++  AC-1  versioned schema + stable IDs + typed attributes .... test_schema_matches_the_validator
++  AC-2  selection by ID/attributes, >=2 files, deterministic . test_shared_block_reference,
++                                                              test_selects_only_requested_blocks_
++                                                              and_their_dependencies,
++                                                              test_selection_is_byte_identical
++  AC-3  refusals: unresolved ref, duplicate ID, cycle,
++        unsupported schema version, bad verification
++        metadata, no partial document emitted .............. test_refusals_are_typed_and_emit_no
++                                                              _document, test_empty_selector_refused
++  AC-4  Markdown export golden unchanged; XML selection
++        emits requested blocks + explicit dependencies ..... test_markdown_export_is_unchanged,
++                                                              test_selection_matches_the_golden
++  AC-5  spec doc records rationale/alternatives/verification
++        + ch:trace row=AUG-118; the gate runs this file ... test_spec_doc_records_the_decision,
++                                                              test_gate_runs_these_tests
++
++ch:trace row=AUG-118 spec=docs/SPEC-003-xml-specs.md#verification
++         test=tests/test_xml_specs.py doc=docs/SPEC-003-xml-specs.md
++         evidence=tests/fixtures/xml/expected
++"""
++
++from __future__ import annotations
++
++import contextlib
++import hashlib
++import io
++import json
++import sys
++import xml.etree.ElementTree as ET
++from pathlib import Path
++
++import pytest
++
++REPO_ROOT = Path(__file__).resolve().parent.parent
++if str(REPO_ROOT) not in sys.path:
++    sys.path.insert(0, str(REPO_ROOT))
++
++import auger  # noqa: E402  (needs REPO_ROOT on sys.path first)
++
++FIXTURES = REPO_ROOT / "tests" / "fixtures" / "xml"
++SPECS = FIXTURES / "specs"
++INVALID = FIXTURES / "invalid"
++EXPECTED = FIXTURES / "expected"
++SCHEMA = REPO_ROOT / "specs" / "schema" / "auger-spec-1.0.xsd"
++SPEC_DOC = REPO_ROOT / "docs" / "SPEC-003-xml-specs.md"
++GATE = REPO_ROOT / "tests" / "gate.sh"
++
++XSD_NS = "{http://www.w3.org/2001/XMLSchema}"
++
++#: The export golden's row set. `render_export` reads through `select`/`graph_edges`; patching
++#: exactly those two seams makes the golden hermetic. The golden file was captured from the BASE
++#: commit (86764e7, before this feature) and re-verified identical against that revision, so a
++#: drift here means the export contract changed — which AUG-118 forbids.
++EXPORT_ROWS = {
++    "project": [
++        {
++            "id": "P-000001",
++            "name": "golden-project",
++            "seed": "one line of seed text",
++            "core_statement": "the thing this project is about",
++            "status": "active",
++            "created_at": "2026-01-01T00:00:00Z",
++        }
++    ],
++    "decision": [
++        {
++            "id": "D-001",
++            "project_id": "P-000001",
++            "domain": "4.01",
++            "question_id": "Q-000001",
++            "chosen": "ship the additive feature",
++            "why_not": '{"O2": "breaks the export contract"}',
++            "reversal_cost": "cheap",
++            "confidence": 0.8,
++            "status": "answered",
++            "evidence_key": "/P-000001/decision/D-001",
++            "scope": "",
++        },
++        {
++            "id": "D-002",
++            "project_id": "P-000001",
++            "domain": "4.02",
++            "question_id": "",
++            "chosen": "keep Markdown untouched",
++            "why_not": "",
++            "reversal_cost": None,
++            "confidence": 0.55,
++            "status": "answered",
++            "evidence_key": "",
++            "scope": "bundle",
++        },
++    ],
++    "option": [
++        {
++            "id": "D-001-O1",
++            "decision_id": "D-001",
++            "label": "additive",
++            "costs": "one new module",
++            "breaks": "nothing",
++            "active": True,
++        },
++        {
++            "id": "D-001-O2",
++            "decision_id": "D-001",
++            "label": "replace",
++            "costs": "migration",
++            "breaks": "every existing consumer",
++            "active": False,
++        },
++    ],
++    "unknown": [
++        {
++            "id": "U-001",
++            "project_id": "P-000001",
++            "text": "does the substrate page at scale?",
++            "owner": "unassigned",
++            "trigger": "first 10k rows",
++            "containment": "page the reads",
++        }
++    ],
++}
++
++
++def run_spec(*argv: str) -> tuple[int, str, str]:
++    """Drive `auger spec ...` in-process; returns (exit_code, stdout, stderr)."""
++    out, err = io.StringIO(), io.StringIO()
++    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
++        try:
++            code = auger.main(["spec", *argv])
++        except SystemExit as exc:
++            code = exc.code if isinstance(exc.code, int) else 1
++    return code, out.getvalue(), err.getvalue()
++
++
++def assembled_ids(text: str) -> list[str]:
++    """The block IDs an assembled Markdown document names, in output order."""
++    return [
++        line[3:].split(" · ", 1)[0]
++        for line in text.splitlines()
++        if line.startswith("## ")
++    ]
++
++
++# ---------------------------------------------------------------- AC-1: the schema
++def xsd_type(name: str):
++    root = ET.parse(SCHEMA).getroot()
++    for node in root.iter(f"{XSD_NS}simpleType"):
++        if node.get("name") == name:
++            return node
++    raise AssertionError(f"schema has no simpleType {name!r}")
++
++
++def xsd_enum(name: str) -> list[str]:
++    restriction = xsd_type(name).find(f"{XSD_NS}restriction")
++    return [node.get("value") for node in restriction.iter(f"{XSD_NS}enumeration")]
++
++
++def xsd_pattern(name: str) -> str:
++    restriction = xsd_type(name).find(f"{XSD_NS}restriction")
++    return restriction.find(f"{XSD_NS}pattern").get("value")
++
++
++def test_schema_matches_the_validator() -> None:
++    """AC-1: one versioned grammar, and the code enforces exactly what the XSD declares."""
++    assert SCHEMA.is_file(), f"missing versioned schema: {SCHEMA}"
++    root = ET.parse(SCHEMA).getroot()
++
++    # Versioned: the schema carries its own version AND targets the document namespace.
++    assert root.get("version") == auger.SPEC_SCHEMA_VERSION
++    assert root.get("targetNamespace") == auger.SPEC_XML_NAMESPACE
++
++    # The closed sets the validator enforces are the ones the grammar publishes.
++    assert xsd_enum("blockKind") == list(auger.SPEC_BLOCK_KINDS)
++    assert xsd_enum("lifecycleStatus") == list(auger.SPEC_STATUSES)
++    assert xsd_enum("verificationMethod") == list(auger.SPEC_VERIFICATION_METHODS)
++    assert xsd_enum("schemaVersion") == list(auger.SPEC_SCHEMA_VERSIONS)
++
++    # Stable identity and version shapes are the same regular expressions, byte for byte.
++    assert xsd_pattern("stableId") == auger.SPEC_ID_RE.pattern
++    assert xsd_pattern("semanticVersion") == auger.SPEC_VERSION_RE.pattern
++    assert xsd_pattern("scopeToken") == auger.SPEC_APPLIES_RE.pattern
++
++    # Every attribute the editor-facing grammar advertises is one the block model reads.
++    block_type = None
++    for node in root.iter(f"{XSD_NS}complexType"):
++        if node.get("name") == "blockType":
++            block_type = node
++    assert block_type is not None, "schema has no blockType"
++    declared = {
++        attribute.get("name"): attribute.get("use")
++        for attribute in block_type.iter(f"{XSD_NS}attribute")
++    }
++    for required in ("id", "kind", "status", "version"):
++        assert declared.get(required) == "required", (
++            f"{required} must be a required attribute in the schema"
++        )
++    for optional in ("applies-to", "verification", "method"):
++        assert optional in declared
++    for edge in auger.SPEC_EDGE_ATTRS:
++        assert edge in declared, f"edge attribute {edge} missing from the schema"
++
++
++# ---------------------------------------------------------------- AC-2: selection and assembly
++def test_shared_block_reference() -> None:
++    """AC-2: a block authored once is reused across files by stable ID, not by a copy."""
++    code, out, err = run_spec("validate", str(SPECS))
++    assert code == 0, err
++    assert "3 document(s)" in out and "10 block(s)" in out, out
++
++    _root, documents, blocks = auger.load_spec_corpus(SPECS)
++    by_id = {block["id"]: block for block in blocks}
++    assert len(blocks) == len(by_id), "a stable ID was declared twice"
++
++    shared = by_id["AUG-SHARED-DETERMINISM"]
++    assert shared["source"] == "shared.xml#AUG-SHARED-DETERMINISM"
++    # The fragment's blocks are cited to the file they are AUTHORED in, even though export.xml
++    # splices them — a citation points at the source of truth, not at the assembly site.
++    assert shared["applies_to"] == ("auger.export", "auger.spec")
++    assert shared["version"] == "1.1.0"
++
++    # The second document reuses that block by ID, with no include of its own.
++    rebuilt = by_id["AUG-REQ-030"]
++    assert rebuilt["refs"]["depends-on"] == ("AUG-SHARED-DETERMINISM",)
++    assert rebuilt["source_file"] == "assembly.xml"
++    assert "shared.xml" in documents and "assembly.xml" in documents
++
++
++def test_selects_only_requested_blocks_and_their_dependencies() -> None:
++    """AC-2/AC-4: matched blocks plus their explicit closure — nothing else, from two files."""
++    code, out, err = run_spec("assemble", str(SPECS), "--id", "AUG-REQ-030")
++    assert code == 0, err
++    ids = assembled_ids(out)
++    assert ids == ["AUG-REQ-030", "AUG-AC-030-1", "AUG-SHARED-DETERMINISM"], out
++
++    # AUG-SHARED-CITATION is named only by `refs=`, which is navigable but NEVER expands.
++    # Its ID legitimately appears as the matched block's own edge listing; it must never be
++    # EMITTED as a block.
++    assert "AUG-SHARED-CITATION" not in ids, out
++    # The requirement's acceptance criterion and its depends-on target are the closure.
++    assert "- selection: dependency (via AUG-REQ-030 verifies)" in out
++    assert "- selection: dependency (via AUG-REQ-030 depends-on)" in out
++    sources = {line.split("- source: ", 1)[1] for line in out.splitlines() if "- source: " in line}
++    assert sources == {
++        "assembly.xml#AUG-REQ-030",
++        "assembly.xml#AUG-AC-030-1",
++        "shared.xml#AUG-SHARED-DETERMINISM",
++    }
++    # Two source FILES, which is the cross-file requirement.
++    assert len({source.split("#", 1)[0] for source in sources}) == 2
++
++
++def test_selection_matches_the_golden() -> None:
++    """AC-4: the attribute selection is pinned to a checked-in golden document."""
++    code, out, err = run_spec(
++        "assemble", str(SPECS),
++        "--kind", "requirement", "--applies-to", "auger.export", "--status", "active",
++    )
++    assert code == 0, err
++    golden = (EXPECTED / "assembly-active-auger-export.md").read_text(encoding="utf-8")
++    assert out == golden
++    assert assembled_ids(out) == [
++        "AUG-SHARED-DETERMINISM",
++        "AUG-REQ-014",
++        "AUG-AC-014-1",
++        "AUG-VER-014-1",
++    ]
++    # Decoys: another scope, and a deprecated requirement in the selected scope.
++    assert "AUG-REQ-020" not in out
++    assert "AUG-REQ-021" not in out
++    assert "AUGER-EXPORT-SURFACE" not in out, "a section matched a requirement selector"
++
++
++def test_no_deps_emits_only_the_matched_block() -> None:
++    """The closure is explicit and switchable: --no-deps is the matched set alone."""
++    code, out, err = run_spec("assemble", str(SPECS), "--id", "AUG-REQ-014", "--no-deps")
++    assert code == 0, err
++    assert assembled_ids(out) == ["AUG-REQ-014"]
++    assert "matched: 1 · dependencies: 0 · total: 1" in out
++
++
++def test_selection_is_byte_identical_across_runs() -> None:
++    """AC-2: deterministic bytes and provenance order; the JSON view carries both counts."""
++    args = (
++        "assemble", str(SPECS), "--kind", "requirement", "--applies-to", "auger.export",
++        "--status", "active", "--format", "json",
++    )
++    first_code, first, first_err = run_spec(*args)
++    second_code, second, second_err = run_spec(*args)
++    assert (first_code, second_code) == (0, 0), (first_err, second_err)
++    assert first == second
++    assert hashlib.sha256(first.encode()).hexdigest() == hashlib.sha256(
++        second.encode()
++    ).hexdigest()
++
++    payload = json.loads(first)
++    assert payload["schema_version"] == auger.SPEC_SCHEMA_VERSION
++    assert payload["counts"] == {"matched": 2, "dependencies": 2, "total": 4}
++    assert payload["selection"] == (
++        "kind=requirement, applies-to=auger.export, status=active"
++    )
++    assert [block["id"] for block in payload["blocks"]] == [
++        "AUG-SHARED-DETERMINISM",
++        "AUG-REQ-014",
++        "AUG-AC-014-1",
++        "AUG-VER-014-1",
++    ]
++    # Every block is cited to its source file and carries its own version metadata.
++    for block in payload["blocks"]:
++        assert block["source"] == f"{block['source'].split('#')[0]}#{block['id']}"
++        assert block["version"]
++        assert block["status"] in auger.SPEC_STATUSES
++
++
++def test_list_reports_ids_attributes_and_citations() -> None:
++    """The corpus is inspectable without assembling: id, kind, status, version, citation."""
++    code, out, err = run_spec("list", str(SPECS), "--kind", "requirement")
++    assert code == 0, err
++    assert "AUG-REQ-014\trequirement\tactive\t1.0.0\texport.xml#AUG-REQ-014" in out
++    assert "AUG-REQ-021\trequirement\tdeprecated\t0.9.0" in out
++    assert "AUG-AC-014-1" not in out, "a kind filter leaked another kind"
++
++
++def test_version_and_status_selectors_are_exact() -> None:
++    """The remaining two attributes select exactly, not fuzzily."""
++    code, out, err = run_spec("list", str(SPECS), "--version", "1.1.0")
++    assert code == 0, err
++    assert [line.split("\t", 1)[0] for line in out.splitlines()] == [
++        "AUG-SHARED-DETERMINISM"
++    ]
++
++    code, out, err = run_spec("list", str(SPECS), "--status", "deprecated")
++    assert code == 0, err
++    assert [line.split("\t", 1)[0] for line in out.splitlines()] == ["AUG-REQ-021"]
++
++
++def test_verifies_expands_from_the_requirement_not_from_the_criterion() -> None:
++    """Directionality is explicit: the requirement owns its criteria, not the reverse.
++
++    Selecting a requirement pulls the blocks that declare `verifies=<it>`; selecting a
++    verification block alone pulls nothing, because the closure is defined from the contract
++    the caller asked for. Documented in docs/SPEC-003-xml-specs.md#assembly-and-selection.
++    """
++    code, out, err = run_spec("assemble", str(SPECS), "--id", "AUG-VER-014-1")
++    assert code == 0, err
++    assert assembled_ids(out) == ["AUG-VER-014-1"]
++    assert "matched: 1 · dependencies: 0 · total: 1" in out
++
++
++# ---------------------------------------------------------------- AC-3: refusals
++REFUSALS = [
++    ("unresolved-reference", "unresolved-reference"),
++    ("duplicate-id", "duplicate-id"),
++    ("reference-cycle", "reference-cycle"),
++    ("schema-version", "unsupported-schema-version"),
++    ("invalid-verification-method", "invalid-verification-method"),
++    ("missing-verification-method", "invalid-verification-method"),
++    ("include-cycle", "include-cycle"),
++    ("external-entity", "external-entity-forbidden"),
++]
++
++
++@pytest.mark.parametrize("fixture,code_name", REFUSALS)
++def test_refusals_are_typed_and_emit_no_document(fixture: str, code_name: str,
++                                                 tmp_path: Path) -> None:
++    """AC-3: each integrity failure is a typed non-zero refusal with no partial document."""
++    root = INVALID / fixture
++    assert root.is_dir(), f"missing refusal fixture {root}"
++
++    validate_code, validate_out, validate_err = run_spec("validate", str(root))
++    assert validate_code == 2, (fixture, validate_out, validate_err)
++    assert validate_out == "", f"{fixture} emitted output before refusing: {validate_out!r}"
++    assert f"spec error ({code_name})" in validate_err, validate_err
++
++    target = tmp_path / "assembled.md"
++    assemble_code, assemble_out, assemble_err = run_spec(
++        "assemble", str(root), "--kind", "requirement", "--out", str(target)
++    )
++    assert assemble_code == 2, (fixture, assemble_out, assemble_err)
++    assert assemble_out == "", f"{fixture} emitted output before refusing: {assemble_out!r}"
++    assert f"spec error ({code_name})" in assemble_err, assemble_err
++    assert not target.exists(), f"{fixture} left a partial document at {target}"
++
++    # The same refusal is reachable through the API, typed rather than stringly.
++    with pytest.raises(auger.SpecError) as caught:
++        auger.load_spec_corpus(root)
++    assert caught.value.code == code_name
++
++
++def test_empty_selector_refused(tmp_path: Path) -> None:
++    """Assembly is never a silent whole-corpus dump."""
++    target = tmp_path / "assembled.md"
++    code, out, err = run_spec("assemble", str(SPECS), "--out", str(target))
++    assert code == 2, (out, err)
++    assert out == ""
++    assert "spec error (empty-selector)" in err
++    assert not target.exists()
++
++
++def test_unknown_id_is_a_typed_no_match(tmp_path: Path) -> None:
++    target = tmp_path / "assembled.md"
++    code, out, err = run_spec(
++        "assemble", str(SPECS), "--id", "AUG-NOT-A-BLOCK", "--out", str(target)
++    )
++    assert code == 2, (out, err)
++    assert out == ""
++    assert "spec error (no-match)" in err
++    assert not target.exists()
++
++
++def test_successful_out_is_written_atomically(tmp_path: Path) -> None:
++    """The happy path writes the file the failure path must never create."""
++    target = tmp_path / "assembled.md"
++    code, out, err = run_spec("assemble", str(SPECS), "--id", "AUG-REQ-030",
++                              "--out", str(target))
++    assert code == 0, err
++    assert out.strip() == f"wrote 3 block(s) to {target}"
++    assert target.read_text(encoding="utf-8").startswith("# Auger spec assembly")
++    assert sorted(path.name for path in tmp_path.iterdir()) == ["assembled.md"], (
++        "a temporary file survived the atomic write"
++    )
++
++
++# ---------------------------------------------------------------- AC-4: export unchanged
++def test_markdown_export_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
++    """AC-4: the default Markdown export contract is byte-identical to the base commit."""
++    monkeypatch.setattr(
++        auger,
++        "select",
++        lambda ns, table, query="": [dict(row) for row in EXPORT_ROWS.get(table, [])],
++    )
++    monkeypatch.setattr(auger, "graph_edges", lambda ns, project_id: [])
++    first = auger.render_export("golden-ns")
++    second = auger.render_export("golden-ns")
++    golden = (EXPECTED / "markdown-export-golden.md").read_text(encoding="utf-8")
++    assert first == golden
++    assert second == first, "the export renderer is not deterministic"
++
++
++# ---------------------------------------------------------------- AC-5: the record
++def test_spec_doc_records_the_decision() -> None:
++    """AC-5: rationale, alternatives, verification, and a resolvable ch:trace anchor."""
++    assert SPEC_DOC.is_file(), f"missing spec doc: {SPEC_DOC}"
++    doc = SPEC_DOC.read_text(encoding="utf-8")
++    for heading in ("## Rationale", "## Alternatives considered", "## Verification"):
++        assert heading in doc, f"spec doc lost its {heading!r} section"
++    assert "ch:trace row=AUG-118" in doc
++    assert "spec=docs/SPEC-003-xml-specs.md#" in doc, (
++        "the trace must name a repository-relative spec anchor"
++    )
++    assert "tests/test_xml_specs.py" in doc, "the spec must name its test evidence"
++    assert "tests/fixtures/xml/expected" in doc, "the spec must name its golden evidence"
++
++
++def test_gate_runs_these_tests() -> None:
++    """AC-5: CI and the commit guard run this file, via tests/gate.sh's pytest arm."""
++    gate = GATE.read_text(encoding="utf-8")
++    assert "tests/test_xml_specs.py" in gate, (
++        "tests/gate.sh must run tests/test_xml_specs.py — the guard's test command is the gate"
++    )
++    arm = [
++        line for line in gate.splitlines()
++        if "python3 -m pytest" in line
++    ]
++    assert arm and "tests/test_xml_specs.py" in arm[0], (
++        "the file must be in the pytest arm's explicit file list"
++    )
