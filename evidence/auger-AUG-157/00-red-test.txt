@@ -1,0 +1,49 @@
+# AUG-157 — new tests RED against pre-fix code (eager root, base 37374fa), 2026-11-07T21:15:11Z
+
+auger.py reverted to 37374fa; new test present (test-first order per brief step 1)
+
+$ python -m pytest tests/test_spec_repository_root.py::test_an_obligation_free_corpus_validates_outside_any_repository -q
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______ test_an_obligation_free_corpus_validates_outside_any_repository ________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-2350/test_an_obligation_free_corpus0')
+
+    def test_an_obligation_free_corpus_validates_outside_any_repository(
+        tmp_path: Path,
+    ) -> None:
+        """AUG-157 (criterion 2): an obligation-free corpus needs NO repository.
+    
+        The shipped `examples/xml/minimal.xml` claims it "validates outside any
+        repository" — and before the lazy root it refused `unresolvable-repo-root`
+        instead, because `validate_xml_specs` resolved the root EAGERLY for every
+        corpus, before reading a single obligation. With the root resolved lazily, a
+        corpus that names no `path`/`migration`/`fixture` has nothing to resolve and
+        validates rc 0 in a non-git directory with no `--repo-root`.
+        """
+        outside = tmp_path / "obligation-free-specs"
+        outside.mkdir()
+        (outside / "minimal.xml").write_text(OBLIGATION_FREE_CORPUS, encoding="utf-8")
+        top = run_git(outside, "rev-parse", "--show-toplevel")
+        if (
+            top.returncode == 0
+        ):  # pragma: no cover - only when TMPDIR sits inside a work tree
+            pytest.skip(
+                f"tmp_path is inside a work tree ({top.stdout.strip()}); cannot prove it"
+            )
+    
+        for verb in ("validate", "check"):
+            code, out, err = run_auger(verb, str(outside))
+>           assert code == 0, (
+                f"an obligation-free corpus was refused outside a repository "
+                f"(spec {verb}): {err}"
+            )
+E           AssertionError: an obligation-free corpus was refused outside a repository (spec validate): spec error (invalid-spec-graph): unresolvable-repo-root: /var/tmp/hermes-scratch/pytest-of-kara/pytest-2350/test_an_obligation_free_corpus0/obligation-free-specs is not inside a git work tree and no --repo-root was given; pass --repo-root <repository> so test, migration and fixture paths can be resolved and proved tracked there
+E             
+E           assert 2 == 0
+
+tests/test_spec_repository_root.py:417: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_spec_repository_root.py::test_an_obligation_free_corpus_validates_outside_any_repository
+1 failed in 0.32s
+rc=1

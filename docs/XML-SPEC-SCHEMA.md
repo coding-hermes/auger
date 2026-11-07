@@ -97,6 +97,15 @@ that CONSUMES the spec — not Auger's own checkout. It is chosen explicitly, in
 3. Otherwise the run is refused (`unresolvable-repo-root`). There is no fallback to Auger's
    own directory; a corpus with no root is not graded.
 
+The root is resolved **lazily** (AUG-157): an explicit `--repo-root` is validated as soon as
+it is given, but the implicit work-tree resolution in steps 2–3 happens only when a block
+actually names a `path`, `migration` or `fixture` that must be resolved against the
+repository. An obligation-free corpus — one with no `type="test"`/`method="test"` pointer —
+names no repository-relative path, so it needs no repository and validates outside any git
+work tree with no flag (the shipped `examples/xml/minimal.xml` does exactly this). The
+moment one block carries a test obligation, the root is required and step 3's refusal
+applies unchanged.
+
 Use `--repo-root` when the corpus does not live inside the repository it describes (a contract
 drafted in a reports tree that names tests in a source repository, or the same corpus checked
 from several repositories).

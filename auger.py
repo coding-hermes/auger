@@ -13277,7 +13277,12 @@ def validate_xml_specs(
 
     `repository_root` is the repository the obligations resolve in (AUG-127). Omitted, it
     is `git rev-parse --show-toplevel` from the SPEC ROOT — never auger's own directory;
-    see `_spec_repository_root`.
+    see `_spec_repository_root`. The root is resolved LAZILY (AUG-157): an explicit root
+    is validated eagerly, but an implicit one is resolved only when a block actually
+    names a `path`/`migration`/`fixture` that must be resolved against it — an
+    obligation-free corpus (the shipped wheel example) validates outside any git work
+    tree with no `--repo-root`, while a corpus that names an obligation still refuses
+    `unresolvable-repo-root` (the AUG-127 invariant, unchanged).
 
     `decision_namespace` is the DuckBrain namespace `decision-ref` values resolve in (AUG-138).
     It is consulted ONLY when some block actually declares one, so a corpus without a ledger edge
@@ -13289,7 +13294,19 @@ def validate_xml_specs(
         root, documents = _xml_spec_documents(spec_root)
     else:
         root, documents = loaded
-    repository_root = _spec_repository_root(root, repository_root)
+    if repository_root is not None:
+        # An EXPLICIT root (--repo-root / repository_root=) is validated eagerly, even
+        # when no obligation ever uses it: a bad explicit root is a typed refusal
+        # immediately, not silently ignored (AUG-157).
+        repository_root = _spec_repository_root(root, repository_root)
+    else:
+        # No explicit root: resolved LAZILY below, the moment a block actually names a
+        # `path`/`migration`/`fixture` that must be resolved against one. An
+        # obligation-free corpus (examples/xml/minimal.xml) names none, so it validates
+        # outside any git work tree without --repo-root; a corpus that names an
+        # obligation still requires a resolvable root and still refuses
+        # `unresolvable-repo-root` — the AUG-127 invariant, unchanged (AUG-157).
+        repository_root = None
     nodes = {}
     sources = {}
     for rel, document in documents.items():
@@ -13389,6 +13406,10 @@ def validate_xml_specs(
                 f"invalid-test-ref: {rel}: {node_id} "
                 "(needs runner=<registered runner>, selector= and path=)"
             )
+        if repository_root is None:
+            # AUG-157: the first obligation that names a path needs the root — resolve
+            # it HERE, from the spec root, or refuse. Never a fallback to auger's tree.
+            repository_root = _spec_repository_root(root, None)
         resolved = (repository_root / test_path).resolve()
         # Escaping the root and pointing at a missing file are SEPARATE refusals: "this
         # path leaves the repository" is not a stale test, and a caller scripting on the

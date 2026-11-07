@@ -29,6 +29,7 @@ Each acceptance line and the test that pins it:
   AC4 untracked path => untracked-test-ref ... test_an_existing_untracked_test_fails_closed
   AC4 escaping path => escaping-test-ref ..... test_a_path_escaping_the_root_fails_closed
   fail-closed, no fallback to auger .......... test_no_root_and_no_flag_refuses_instead_of_using_augers_tree
+  AUG-157 obligation-free needs NO root ...... test_an_obligation_free_corpus_validates_outside_any_repository
 
 ch:trace row=AUG-127 spec=docs/XML-SPEC-SCHEMA.md#the-repository-root test=tests/test_spec_repository_root.py doc=docs/XML-SPEC-SCHEMA.md
 """
@@ -372,6 +373,63 @@ def test_no_root_and_no_flag_refuses_instead_of_using_augers_tree(
     assert code == 2, f"a corpus with no repository root was graded: {out!r}"
     assert "unresolvable-repo-root" in err, err
     assert "--repo-root" in err, f"the refusal does not say how to fix it: {err}"
+
+
+# ---------------------------------------------------------------- AUG-157: the root is LAZY
+OBLIGATION_FREE_CORPUS = (
+    '<spec xmlns="urn:auger:spec:1" id="AUG157-FREE" version="1.0.0" '
+    'schema-version="1.0">\n'
+    '  <requirement id="AUG157-REQ-1" kind="requirement" status="active" '
+    'version="1.0.0" applies-to="auger.spec.validate" verification="inspection" '
+    'verifies="AUG157-VERIFY-1">A corpus with no obligation.</requirement>\n'
+    '  <verification id="AUG157-VERIFY-1" kind="verification" status="active" '
+    'version="1.0.0" applies-to="auger.spec.validate" method="inspection">Read '
+    "the block above: the edge resolves.</verification>\n"
+    "</spec>\n"
+)
+
+
+def test_an_obligation_free_corpus_validates_outside_any_repository(
+    tmp_path: Path,
+) -> None:
+    """AUG-157 (criterion 2): an obligation-free corpus needs NO repository.
+
+    The shipped `examples/xml/minimal.xml` claims it "validates outside any
+    repository" — and before the lazy root it refused `unresolvable-repo-root`
+    instead, because `validate_xml_specs` resolved the root EAGERLY for every
+    corpus, before reading a single obligation. With the root resolved lazily, a
+    corpus that names no `path`/`migration`/`fixture` has nothing to resolve and
+    validates rc 0 in a non-git directory with no `--repo-root`.
+    """
+    outside = tmp_path / "obligation-free-specs"
+    outside.mkdir()
+    (outside / "minimal.xml").write_text(OBLIGATION_FREE_CORPUS, encoding="utf-8")
+    top = run_git(outside, "rev-parse", "--show-toplevel")
+    if (
+        top.returncode == 0
+    ):  # pragma: no cover - only when TMPDIR sits inside a work tree
+        pytest.skip(
+            f"tmp_path is inside a work tree ({top.stdout.strip()}); cannot prove it"
+        )
+
+    for verb in ("validate", "check"):
+        code, out, err = run_auger(verb, str(outside))
+        assert code == 0, (
+            f"an obligation-free corpus was refused outside a repository "
+            f"(spec {verb}): {err}"
+        )
+        if verb == "validate":
+            assert "spec: 1 document(s), 2 block(s), 1 reference(s) ok" in out, out
+        else:
+            assert json.loads(out)["status"] == "valid", out
+
+    # The explicit root stays validated eagerly: a BAD explicit root is a typed
+    # refusal immediately, even with no obligation to resolve against it.
+    code, out, err = run_auger(
+        "validate", str(outside), "--repo-root", str(tmp_path / "nope")
+    )
+    assert code == 2, f"a bad explicit --repo-root was silently ignored: {out!r}"
+    assert "unresolvable-repo-root" in err, err
 
 
 # ---------------------------------------------------------------- the arm
