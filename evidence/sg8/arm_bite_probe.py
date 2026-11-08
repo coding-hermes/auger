@@ -16,7 +16,6 @@ Usage:  .venv/bin/python evidence/sg8/arm_bite_probe.py
 from __future__ import annotations
 
 import importlib.util
-import sys
 from pathlib import Path
 
 WORKTREE = Path("/home/kara/proj-wt-auger-xml-hardening")
@@ -38,7 +37,9 @@ def load_module():
 def main() -> int:
     arm_text = ARM.read_text(encoding="utf-8")
     if REQUIRED not in arm_text:
-        print(f"PROBE-FAIL {REQUIRED} is not in the real arm — the probe premise is wrong")
+        print(
+            f"PROBE-FAIL {REQUIRED} is not in the real arm — the probe premise is wrong"
+        )
         return 1
     narrowed = arm_text.replace(f" {REQUIRED}", "", 1)
     if narrowed == arm_text:
@@ -78,7 +79,9 @@ def main() -> int:
     if failures:
         print(f"PROBE RESULT: {failures} expectation(s) UNMET")
         return 1
-    print("PROBE RESULT: the arm assertion bites on a narrowed arm and passes on the real one")
+    print(
+        "PROBE RESULT: the arm assertion bites on a narrowed arm and passes on the real one"
+    )
     return 0
 
 

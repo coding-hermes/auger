@@ -1,0 +1,116 @@
+============================= test session starts ==============================
+platform linux -- Python 3.11.15, pytest-9.1.1, pluggy-1.7.0 -- /home/kara/auger/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /home/kara/proj-wt-auger-verdict-hygiene
+configfile: pytest.ini
+collecting ... collected 5 items
+
+tests/test_verdict_hygiene.py::TestGitleaksLeftBoundary::test_rule_regex_has_no_lookbehind PASSED [ 20%]
+tests/test_verdict_hygiene.py::TestGitleaksLeftBoundary::test_error_code_literal_does_not_match FAILED [ 40%]
+tests/test_verdict_hygiene.py::TestGitleaksLeftBoundary::test_real_shaped_key_still_matches PASSED [ 60%]
+tests/test_verdict_hygiene.py::TestLintScopeMatchesTier1::test_gate_arm_names_verdict_hygiene FAILED [ 80%]
+tests/test_verdict_hygiene.py::TestLintScopeMatchesTier1::test_all_tracked_python_is_ruff_clean FAILED [100%]
+
+=================================== FAILURES ===================================
+_______ TestGitleaksLeftBoundary.test_error_code_literal_does_not_match ________
+
+self = <test_verdict_hygiene.TestGitleaksLeftBoundary object at 0x73d845e16950>
+
+    def test_error_code_literal_does_not_match(self):
+        rx = _sk_api_key_rule_regex()
+        # bare literal
+>       assert re.search(rx, ERROR_CODE_LITERAL) is None, (
+            "sk-api-key still fires inside the repo's own error-code literal"
+        )
+E       AssertionError: sk-api-key still fires inside the repo's own error-code literal
+E       assert <re.Match object; span=(2, 27), match='sk-invalid-acceptance-ref'> is None
+E        +  where <re.Match object; span=(2, 27), match='sk-invalid-acceptance-ref'> = <function search at 0x73d846b03420>('(?i)sk-[a-zA-Z0-9_-]{20,}', 'task-invalid-acceptance-ref')
+E        +    where <function search at 0x73d846b03420> = re.search
+
+tests/test_verdict_hygiene.py:61: AssertionError
+________ TestLintScopeMatchesTier1.test_gate_arm_names_verdict_hygiene _________
+
+self = <test_verdict_hygiene.TestLintScopeMatchesTier1 object at 0x73d845e17350>
+
+    def test_gate_arm_names_verdict_hygiene(self):
+        # The pytest arm list in tests/gate.sh is hand-maintained and re-narrows
+        # silently; this file is only enforced if the arm names it.
+>       assert "tests/test_verdict_hygiene.py" in GATE.read_text(encoding="utf-8"), (
+            "tests/gate.sh's pytest arm no longer names tests/test_verdict_hygiene.py"
+        )
+E       AssertionError: tests/gate.sh's pytest arm no longer names tests/test_verdict_hygiene.py
+E       assert 'tests/test_verdict_hygiene.py' in '#!/usr/bin/env bash\n# The repo\'s real quality gate. Verifies the module parses, lints, and that the\n# end-to-end smoke loop passes against a live throwaway DuckBrain namespace.\n#\n#   bash tests/gate.sh\n#\n# CI: `AUGER_CI=1` (set by .github/workflows/ci.yml) marks a GitHub-hosted runner with NO live\n# DuckBrain and NO JEV key. It is accepted only when GITHUB_ACTIONS or CI also identifies a real\n# runner. On a development host, a leaked AUGER_CI=1 fails before syntax/tests instead of silently\n# downgrading the gate. The arms that need live services then SKIP OUT LOUD — named here and\n# repeated in the closing summary — instead of failing the job. A green CI run therefore means\n# "syntax + lint + the tests that need no live API passed"; it never means the live arms passed.\n# Nothing is dropped silently: every skip prints a `SKIPPED [<arm>]: <why>` line.\nset -uo pipefail\nHERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"\ncd "$HERE"\n\nrunner_marker_present(){\n  if [ "${GITHUB_ACTIONS:-}" = "true" ]; then\n    return 0\n  fi\n  case "${CI:-}" in\n    1|true|TRUE|yes|YES) return 0 ;;\n  esac\n  return 1\n}\n\nselect_gate_mode(){\n  case "${AUGER_CI:-0}" in\n    1)...rdict now depends on WHICH arms were skipped, not just on the\n# ones that ran. A required arm that did not run means the change was never\n# tested, and the gate must not print PASS for that.\nif [ -n "$REQUIRED_SKIPPED" ]; then\n  if [ "${AUGER_ALLOW_SKIPPED_ARMS:-0}" = "1" ]; then\n    echo "GATE PASS (DEGRADED)"\n    echo "  required arms NOT run: $REQUIRED_SKIPPED"\n    echo "  AUGER_ALLOW_SKIPPED_ARMS=1 accepted this run. This is NOT proof the suite ran:"\n    echo "  re-run on a host with the tool(s) installed before trusting the verdict (AUG-130)."\n  else\n    echo "GATE FAIL: required arms did not run: $REQUIRED_SKIPPED" >&2\n    echo "  A host that cannot run these arms has not tested this change — install the tool and re-run," >&2\n    echo "  or set AUGER_ALLOW_SKIPPED_ARMS=1 to accept a DEGRADED pass that names every skipped arm (AUG-130)." >&2\n    exit 1\n  fi\nelse\n  echo "GATE PASS"\nfi\nif [ -n "$SKIPPED" ]; then\n  echo "arms SKIPPED (not passed): $SKIPPED"\n  if [ "$GATE_MODE" = "hosted-ci-skip" ]; then\n    echo "  AUGER_CI=1 accepted on a runner (GITHUB_ACTIONS/CI marker present): the live DuckBrain/JEV arms cannot run here. See tests/gate.sh."\n  fi\nfi\n'
+E        +  where '#!/usr/bin/env bash\n# The repo\'s real quality gate. Verifies the module parses, lints, and that the\n# end-to-end smoke loop passes against a live throwaway DuckBrain namespace.\n#\n#   bash tests/gate.sh\n#\n# CI: `AUGER_CI=1` (set by .github/workflows/ci.yml) marks a GitHub-hosted runner with NO live\n# DuckBrain and NO JEV key. It is accepted only when GITHUB_ACTIONS or CI also identifies a real\n# runner. On a development host, a leaked AUGER_CI=1 fails before syntax/tests instead of silently\n# downgrading the gate. The arms that need live services then SKIP OUT LOUD — named here and\n# repeated in the closing summary — instead of failing the job. A green CI run therefore means\n# "syntax + lint + the tests that need no live API passed"; it never means the live arms passed.\n# Nothing is dropped silently: every skip prints a `SKIPPED [<arm>]: <why>` line.\nset -uo pipefail\nHERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"\ncd "$HERE"\n\nrunner_marker_present(){\n  if [ "${GITHUB_ACTIONS:-}" = "true" ]; then\n    return 0\n  fi\n  case "${CI:-}" in\n    1|true|TRUE|yes|YES) return 0 ;;\n  esac\n  return 1\n}\n\nselect_gate_mode(){\n  case "${AUGER_CI:-0}" in\n    1)...rdict now depends on WHICH arms were skipped, not just on the\n# ones that ran. A required arm that did not run means the change was never\n# tested, and the gate must not print PASS for that.\nif [ -n "$REQUIRED_SKIPPED" ]; then\n  if [ "${AUGER_ALLOW_SKIPPED_ARMS:-0}" = "1" ]; then\n    echo "GATE PASS (DEGRADED)"\n    echo "  required arms NOT run: $REQUIRED_SKIPPED"\n    echo "  AUGER_ALLOW_SKIPPED_ARMS=1 accepted this run. This is NOT proof the suite ran:"\n    echo "  re-run on a host with the tool(s) installed before trusting the verdict (AUG-130)."\n  else\n    echo "GATE FAIL: required arms did not run: $REQUIRED_SKIPPED" >&2\n    echo "  A host that cannot run these arms has not tested this change — install the tool and re-run," >&2\n    echo "  or set AUGER_ALLOW_SKIPPED_ARMS=1 to accept a DEGRADED pass that names every skipped arm (AUG-130)." >&2\n    exit 1\n  fi\nelse\n  echo "GATE PASS"\nfi\nif [ -n "$SKIPPED" ]; then\n  echo "arms SKIPPED (not passed): $SKIPPED"\n  if [ "$GATE_MODE" = "hosted-ci-skip" ]; then\n    echo "  AUGER_CI=1 accepted on a runner (GITHUB_ACTIONS/CI marker present): the live DuckBrain/JEV arms cannot run here. See tests/gate.sh."\n  fi\nfi\n' = read_text(encoding='utf-8')
+E        +    where read_text = PosixPath('/home/kara/proj-wt-auger-verdict-hygiene/tests/gate.sh').read_text
+
+tests/test_verdict_hygiene.py:88: AssertionError
+_______ TestLintScopeMatchesTier1.test_all_tracked_python_is_ruff_clean ________
+
+self = <test_verdict_hygiene.TestLintScopeMatchesTier1 object at 0x73d845e178d0>
+
+    def test_all_tracked_python_is_ruff_clean(self):
+        ruff = shutil.which("ruff")
+        if ruff is None:
+            # ~/.local/bin may not be on PATH under every runner — try the pinned spot.
+            pinned = Path("/home/kara/.local/bin/ruff")
+            if pinned.exists():
+                ruff = str(pinned)
+        if ruff is None:
+            import pytest
+    
+            pytest.skip("ruff not found on PATH or ~/.local/bin — lint scope NOT checked")
+        tracked = subprocess.run(
+            ["git", "ls-files", "*.py"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
+        ).stdout.split()
+        assert tracked, "git ls-files returned no python files — run from a repo checkout"
+        proc = subprocess.run(
+            [ruff, "check", "--force-exclude", *tracked],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+        )
+>       assert proc.returncode == 0, (
+            "ruff over ALL tracked python is red (gitreins tier1 lints exactly this scope):\n"
+            f"{proc.stdout}\n{proc.stderr}"
+        )
+E       AssertionError: ruff over ALL tracked python is red (gitreins tier1 lints exactly this scope):
+E         F401 [*] `sys` imported but unused
+E           --> evidence/sg8/arm_bite_probe.py:19:8
+E            |
+E         18 | import importlib.util
+E         19 | import sys
+E            |        ^^^
+E         20 | from pathlib import Path
+E            |
+E         help: Remove unused import: `sys`
+E         
+E         Found 1 error.
+E         [*] 1 fixable with the `--fix` option.
+E         
+E         
+E       assert 1 == 0
+E        +  where 1 = CompletedProcess(args=['/home/kara/.local/bin/ruff', 'check', '--force-exclude', 'auger.py', 'evidence/auger-AUG-156/apply-backfill.py', 'evidence/auger-AUG-156/verify-surgical.py', 'evidence/sg8/adapter_probe.py', 'evidence/sg8/arm_bite_probe.py', 'scripts/audit_board_evidence.py', 'scripts/gen_openapi.py', 'scripts/gen_spec_view.py', 'scripts/gen_trace_artifact.py', 'scripts/replay_prd_proofs.py', 'tests/conftest.py', 'tests/test_api_service.py', 'tests/test_auger.py', 'tests/test_board_evidence_audit.py', 'tests/test_openapi_parity.py', 'tests/test_packaging.py', 'tests/test_packaging_wheel.py', 'tests/test_plan_approval.py', 'tests/test_prd_proofs.py', 'tests/test_spec_alignment_check.py', 'tests/test_spec_assembly_report.py', 'tests/test_spec_context.py', 'tests/test_spec_corpus_view.py', 'tests/test_spec_decision_ref.py', 'tests/test_spec_obligation_gate.py', 'tests/test_spec_render.py', 'tests/test_spec_repository_root.py', 'tests/test_spec_rollback.py', 'tests/test_spec_validate_obligations.py', 'tests/test_spec_validators_agree.py', 'tests/test_task_context.py', 'tests/test_task_packet.py', 'tests/test_teardown_resilience.py', 'tests/test_trace_artifact.py', 'tests/test_upgrade_path.py', 'tests/test_usage_skill.py', 'tests/test_verification_graph.py', 'tests/test_xml_specs.py', 'tests/test_xml_task_contract.py', 'tests/test_xsd_conformance.py'], returncode=1, stdout='F401 [*] `sys` imported but unused\n  --> evidence/sg8/arm_bite_probe.py:19:8\n   |\n18 | import importlib.util\n19 | import sys\n   |        ^^^\n20 | from pathlib import Path\n   |\nhelp: Remove unused import: `sys`\n\nFound 1 error.\n[*] 1 fixable with the `--fix` option.\n', stderr='').returncode
+
+tests/test_verdict_hygiene.py:113: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_verdict_hygiene.py::TestGitleaksLeftBoundary::test_error_code_literal_does_not_match
+FAILED tests/test_verdict_hygiene.py::TestLintScopeMatchesTier1::test_gate_arm_names_verdict_hygiene
+FAILED tests/test_verdict_hygiene.py::TestLintScopeMatchesTier1::test_all_tracked_python_is_ruff_clean
+========================= 3 failed, 2 passed in 0.04s ==========================
+pytest rc=1
+============================= test session starts ==============================
+platform linux -- Python 3.11.15, pytest-9.1.1, pluggy-1.7.0 -- /home/kara/auger/.venv/bin/python
+cachedir: .pytest_cache
+rootdir: /home/kara/proj-wt-auger-verdict-hygiene
+configfile: pytest.ini
+collecting ... collected 6 items
+
+tests/test_verdict_hygiene.py::TestGitleaksLeftBoundary::test_rule_regex_has_no_lookbehind PASSED [ 16%]
+tests/test_verdict_hygiene.py::TestGitleaksLeftBoundary::test_error_code_literal_does_not_match PASSED [ 33%]
+tests/test_verdict_hygiene.py::TestGitleaksLeftBoundary::test_real_shaped_key_still_matches PASSED [ 50%]
+tests/test_verdict_hygiene.py::TestGitleaksLeftBoundary::test_quoted_literal_is_allowlisted_but_key_is_not PASSED [ 66%]
+tests/test_verdict_hygiene.py::TestLintScopeMatchesTier1::test_gate_arm_names_verdict_hygiene PASSED [ 83%]
+tests/test_verdict_hygiene.py::TestLintScopeMatchesTier1::test_all_tracked_python_is_ruff_clean PASSED [100%]
+
+============================== 6 passed in 0.03s ===============================
+green-run rc=0

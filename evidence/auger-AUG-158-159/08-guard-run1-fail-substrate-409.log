@@ -1,0 +1,1551 @@
+GitReins guard run log — full output (the console summary is bounded)
+run_utc: 2026-11-08T03:18:34Z
+workdir: /home/kara/proj-wt-auger-verdict-hygiene
+test_mode: full
+test_targets: all (full mode)
+overall: FAIL
+guards: 3 (1 failed, 0 skipped)
+diagnostics:
+  first_failing_test: tests/test_auger.py::test_status_aggregates_exclude_the_pending_decision  (from tests (full))
+  secrets_scanners: clean (gitleaks + builtin cross-check)
+  scanner_nice: scanners: nice=nice -n 10
+
+==============================================================================
+[FAIL] tests (full)  passed=false  exit_code=1
+==============================================================================
+--- output (untruncated) ---
+scanners: nice=nice -n 10
+== gate mode: FULL gate ==
+== syntax ==
+== lint ==
+All checks passed!
+== pytest ==
+.EFF.........E.E.E.E.E.E...E.E.E.E.E.E.E.E.E.E.E.E.E.E.E.E.E.EF.E.E.E.E. [  5%]
+E.E..................................................................... [ 15%]
+........................................................................ [ 25%]
+.............................F.......................................... [ 35%]
+.........................................................s.............. [ 45%]
+....................................s................................... [ 55%]
+........................................................................ [ 65%]
+........................................................................ [ 75%]
+........................................................................ [ 85%]
+........................................................................ [ 95%]
+..............................                                           [100%]
+==================================== ERRORS ====================================
+____ ERROR at teardown of test_init_declares_every_table_the_module_defines ____
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-069b3786e070 was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-069b3786e070 returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-069b3786e070' (native sync lock held by pid 1418675 (since 2026-11-08T02:31:10.819Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-069b3786e070 is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-069b3786e070 INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-069b3786e070 so the registry mapping and the directory stay consistent
+_ ERROR at teardown of test_start_refuses_duplicate_project_name_before_writing _
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-44196141c4c5 was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-44196141c4c5 returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-44196141c4c5' (native sync lock held by pid 1418675 (since 2026-11-08T02:34:14.491Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-44196141c4c5 is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-44196141c4c5 INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-44196141c4c5 so the registry mapping and the directory stay consistent
+_ ERROR at teardown of test_no_flag_project_read_refuses_after_second_project __
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-e555e465287b was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-e555e465287b returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-e555e465287b' (native sync lock held by pid 1418675 (since 2026-11-08T02:35:05.594Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-e555e465287b is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-e555e465287b INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-e555e465287b so the registry mapping and the directory stay consistent
+__ ERROR at teardown of test_start_stores_the_project_row_and_embeds_the_seed __
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-4a4fe0a4bee5 was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-4a4fe0a4bee5 returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-4a4fe0a4bee5' (native sync lock held by pid 1418675 (since 2026-11-08T02:36:06.176Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-4a4fe0a4bee5 is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+----------------------------- Captured stderr call -----------------------------
+embedding query... (first recall in a process pays the provider round-trip, ~20s)
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-4a4fe0a4bee5 INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-4a4fe0a4bee5 so the registry mapping and the directory stay consistent
+_ ERROR at teardown of test_created_at_round_trips_for_every_declared_created_at_table _
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-37205b1f483a was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-37205b1f483a returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-37205b1f483a' (native sync lock held by pid 1418675 (since 2026-11-08T02:37:04.319Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-37205b1f483a is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-37205b1f483a INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-37205b1f483a so the registry mapping and the directory stay consistent
+_ ERROR at teardown of test_init_migrates_existing_timestamp_created_at_declarations _
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-b6913f571617 was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-b6913f571617 returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-b6913f571617' (native sync lock held by pid 1418675 (since 2026-11-08T02:38:22.221Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-b6913f571617 is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-b6913f571617 INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-b6913f571617 so the registry mapping and the directory stay consistent
+_ ERROR at teardown of test_created_at_desc_is_newest_first_for_projects_and_verdicts _
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-ebb16202a79b was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-ebb16202a79b returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-ebb16202a79b' (native sync lock held by pid 1418675 (since 2026-11-08T02:39:29.302Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-ebb16202a79b is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-ebb16202a79b INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-ebb16202a79b so the registry mapping and the directory stay consistent
+_ ERROR at teardown of test_answer_memory_failure_leaves_a_repairable_provisional _
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-28655f157c63 was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-28655f157c63 returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-28655f157c63' (native sync lock held by pid 1418675 (since 2026-11-08T02:40:29.496Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-28655f157c63 is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+----------------------------- Captured stderr call -----------------------------
+embedding query... (first recall in a process pays the provider round-trip, ~20s)
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-28655f157c63 INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-28655f157c63 so the registry mapping and the directory stay consistent
+_ ERROR at teardown of test_answer_retry_repairs_the_same_provisional_decision _
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-335eaef4f86e was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-335eaef4f86e returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-335eaef4f86e' (native sync lock held by pid 1418675 (since 2026-11-08T02:41:41.442Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-335eaef4f86e is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+----------------------------- Captured stderr call -----------------------------
+embedding query... (first recall in a process pays the provider round-trip, ~20s)
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-335eaef4f86e INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-335eaef4f86e so the registry mapping and the directory stay consistent
+___ ERROR at teardown of test_status_aggregates_exclude_the_pending_decision ___
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-f870a5ac81c9 was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-f870a5ac81c9 returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-f870a5ac81c9' (native sync lock held by pid 1418675 (since 2026-11-08T02:42:37.955Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-f870a5ac81c9 is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-f870a5ac81c9 INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-f870a5ac81c9 so the registry mapping and the directory stay consistent
+___ ERROR at teardown of test_answer_retry_with_changed_arguments_is_refused ___
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-b6a48500bb00 was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-b6a48500bb00 returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-b6a48500bb00' (native sync lock held by pid 1418675 (since 2026-11-08T02:43:43.277Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-b6a48500bb00 is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-b6a48500bb00 INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-b6a48500bb00 so the registry mapping and the directory stay consistent
+___ ERROR at teardown of test_answer_writes_every_decision_field_to_the_row ____
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-e1cb1a73a73d was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-e1cb1a73a73d returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-e1cb1a73a73d' (native sync lock held by pid 1418675 (since 2026-11-08T02:44:41.589Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-e1cb1a73a73d is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-e1cb1a73a73d INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-e1cb1a73a73d so the registry mapping and the directory stay consistent
+_ ERROR at teardown of test_answer_refuses_invalid_confidence_without_storing_rows[above-one] _
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-5bd6463f229c was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-5bd6463f229c returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-5bd6463f229c' (native sync lock held by pid 1418675 (since 2026-11-08T02:45:50.627Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-5bd6463f229c is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-5bd6463f229c INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-5bd6463f229c so the registry mapping and the directory stay consistent
+_ ERROR at teardown of test_answer_refuses_invalid_confidence_without_storing_rows[below-zero] _
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-4c3105a604d1 was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-4c3105a604d1 returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-4c3105a604d1' (native sync lock held by pid 1418675 (since 2026-11-08T02:46:05.835Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-4c3105a604d1 is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-4c3105a604d1 INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-4c3105a604d1 so the registry mapping and the directory stay consistent
+_ ERROR at teardown of test_answer_refuses_invalid_confidence_without_storing_rows[nan] _
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-c16f3e8f6113 was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-c16f3e8f6113 returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-c16f3e8f6113' (native sync lock held by pid 1418675 (since 2026-11-08T02:47:22.291Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-c16f3e8f6113 is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-c16f3e8f6113 INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-c16f3e8f6113 so the registry mapping and the directory stay consistent
+_ ERROR at teardown of test_answer_refuses_invalid_confidence_without_storing_rows[infinity] _
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-16a9caf17616 was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-16a9caf17616 returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-16a9caf17616' (native sync lock held by pid 1418675 (since 2026-11-08T02:47:22.291Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-16a9caf17616 is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-16a9caf17616 INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-16a9caf17616 so the registry mapping and the directory stay consistent
+_____ ERROR at teardown of test_answer_accepts_confidence_boundaries[0.0] ______
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-0f755dfb1f71 was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-0f755dfb1f71 returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-0f755dfb1f71' (native sync lock held by pid 1418675 (since 2026-11-08T02:49:56.156Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-0f755dfb1f71 is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-0f755dfb1f71 INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-0f755dfb1f71 so the registry mapping and the directory stay consistent
+_____ ERROR at teardown of test_answer_accepts_confidence_boundaries[1.0] ______
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-27839a792569 was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-27839a792569 returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-27839a792569' (native sync lock held by pid 1418675 (since 2026-11-08T02:50:11.488Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-27839a792569 is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-27839a792569 INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-27839a792569 so the registry mapping and the directory stay consistent
+_ ERROR at teardown of test_answer_makes_the_chosen_option_the_only_active_one _
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-1f707cfbc716 was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-1f707cfbc716 returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-1f707cfbc716' (native sync lock held by pid 1418675 (since 2026-11-08T02:51:12.869Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-1f707cfbc716 is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-1f707cfbc716 INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-1f707cfbc716 so the registry mapping and the directory stay consistent
+_ ERROR at teardown of test_answer_refuses_a_chosen_sentence_not_supplied_as_an_option _
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-642e8ff025ce was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-642e8ff025ce returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-642e8ff025ce' (native sync lock held by pid 1418675 (since 2026-11-08T02:52:52.905Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-642e8ff025ce is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-642e8ff025ce INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-642e8ff025ce so the registry mapping and the directory stay consistent
+_ ERROR at teardown of test_answer_resolves_option_token_and_dump_has_one_active_configuration _
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-a09db03cd304 was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-a09db03cd304 returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-a09db03cd304' (native sync lock held by pid 1418675 (since 2026-11-08T02:53:45.096Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-a09db03cd304 is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-a09db03cd304 INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-a09db03cd304 so the registry mapping and the directory stay consistent
+_ ERROR at teardown of test_answer_without_options_remains_valid_and_reports_zero_active _
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-e040b7706efa was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-e040b7706efa returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-e040b7706efa' (native sync lock held by pid 1418675 (since 2026-11-08T02:53:45.096Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-e040b7706efa is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-e040b7706efa INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-e040b7706efa so the registry mapping and the directory stay consistent
+____ ERROR at teardown of test_answer_tolerates_an_apostrophe_in_the_reason ____
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-120afa4b8887 was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-120afa4b8887 returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-120afa4b8887' (native sync lock held by pid 1418675 (since 2026-11-08T02:53:45.096Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-120afa4b8887 is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-120afa4b8887 INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-120afa4b8887 so the registry mapping and the directory stay consistent
+_ ERROR at teardown of test_answer_repeated_why_not_records_each_rejected_option_and_dump_renders_it _
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-d33c099bb298 was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-d33c099bb298 returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-d33c099bb298' (native sync lock held by pid 1418675 (since 2026-11-08T02:56:54.964Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-d33c099bb298 is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-d33c099bb298 INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-d33c099bb298 so the registry mapping and the directory stay consistent
+_ ERROR at teardown of test_answer_repeated_why_not_with_wrong_arity_is_refused _
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-476cd7e7a3b9 was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-476cd7e7a3b9 returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-476cd7e7a3b9' (native sync lock held by pid 1418675 (since 2026-11-08T02:56:54.964Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-476cd7e7a3b9 is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-476cd7e7a3b9 INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-476cd7e7a3b9 so the registry mapping and the directory stay consistent
+_ ERROR at teardown of test_init_declares_the_bundle_tables_and_the_scope_column _
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-0b76c9da0be7 was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-0b76c9da0be7 returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-0b76c9da0be7' (native sync lock held by pid 1418675 (since 2026-11-08T02:56:54.964Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-0b76c9da0be7 is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-0b76c9da0be7 INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-0b76c9da0be7 so the registry mapping and the directory stay consistent
+_ ERROR at teardown of test_bundle_rows_round_trip_with_their_closed_set_status _
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-afcea661576f was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-afcea661576f returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-afcea661576f' (native sync lock held by pid 1418675 (since 2026-11-08T02:56:54.964Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-afcea661576f is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-afcea661576f INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-afcea661576f so the registry mapping and the directory stay consistent
+_______ ERROR at teardown of test_bundle_add_cli_writes_the_named_bundle _______
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-44d04d5660c2 was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-44d04d5660c2 returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-44d04d5660c2' (native sync lock held by pid 1418675 (since 2026-11-08T03:02:18.990Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-44d04d5660c2 is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-44d04d5660c2 INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-44d04d5660c2 so the registry mapping and the directory stay consistent
+___ ERROR at teardown of test_bundle_member_cli_validates_scheduler_projects ___
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-ac94a7ce94b1 was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-ac94a7ce94b1 returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-ac94a7ce94b1' (native sync lock held by pid 1418675 (since 2026-11-08T03:02:44.801Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-ac94a7ce94b1 is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-ac94a7ce94b1 INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-ac94a7ce94b1 so the registry mapping and the directory stay consistent
+_ ERROR at teardown of test_bundle_member_cli_scratch_escape_warns_and_writes __
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-04b83b744e33 was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-04b83b744e33 returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-04b83b744e33' (native sync lock held by pid 1418675 (since 2026-11-08T03:04:12.078Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-04b83b744e33 is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-04b83b744e33 INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-04b83b744e33 so the registry mapping and the directory stay consistent
+_ ERROR at teardown of test_unknown_role_and_missing_bundle_are_refused_without_a_fleet_db _
+
+live_service = 'http://127.0.0.1:3000'
+
+    @pytest.fixture
+    def ns_created(live_service: str) -> str:
+        """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
+    
+        Depends on `live_service`, so the cross-process substrate lock is held for the whole
+        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
+        every call the fixture and the test make against the live substrate.
+        """
+        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
+        status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
+        if status not in (200, 201):
+            pytest.fail(f"could not create test namespace {ns} ({status}): {body}")
+        CREATED.append(ns)
+        try:
+            yield ns
+        finally:
+            problems = teardown_namespace(ns)
+            if problems:
+                if any("429" in p for p in problems):
+                    # The limiter beat even the transport's own budget on this one namespace.
+                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note — a
+                    # saturated limiter must not error a passing test, and the leak is stated,
+                    # never silent.
+                    time.sleep(1)
+                    problems = teardown_namespace(ns)
+                    if not problems:
+                        return
+                    print(
+                        f"auger: teardown of {ns} skipped after one 429 retry: "
+                        + "; ".join(problems),
+                        file=sys.stderr,
+                    )
+                else:
+                    # Raised in teardown, so a REAL teardown bug surfaces as an error, not as silence.
+>                   pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+E                   Failed: teardown of auger-pytest-bfa6d0d4-ff285a138cdc was incomplete: DELETE /api/namespaces/auger-pytest-bfa6d0d4-ff285a138cdc returned 409: {'error': "Push in flight for 'auger-pytest-bfa6d0d4-ff285a138cdc' (native sync lock held by pid 1418675 (since 2026-11-08T03:05:20.935Z)). Retry after it completes.", 'code': 'CONFLICT'}; namespace auger-pytest-bfa6d0d4-ff285a138cdc is still listed by /api/namespaces
+
+tests/conftest.py:631: Failed
+--------------------------- Captured stderr teardown ---------------------------
+auger: teardown of auger-pytest-bfa6d0d4-ff285a138cdc INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-ff285a138cdc so the registry mapping and the directory stay consistent
+=================================== FAILURES ===================================
+________________ test_init_creates_a_namespace_with_live_tables ________________
+
+live_service = 'http://127.0.0.1:3000'
+
+    def test_init_creates_a_namespace_with_live_tables(live_service: str):
+        """`init` creates what it is pointed at; the resource API, not the stale registry list, is authoritative."""
+        ns = ns_name()
+        assert ns not in api_namespaces()
+        try:
+            rc, out = run_cli(["-n", ns, "init"])
+            assert rc == 0
+            assert f"namespace {ns}: created" in out, out
+            status, body, _ = auger.db(f"/api/ns/{ns}/tables")
+            assert status == 200, body
+        finally:
+>           assert teardown_namespace(ns) == []
+E           assert ["DELETE /api...i/namespaces'] == []
+E             
+E             Left contains 2 more items, first extra item: 'DELETE /api/namespaces/auger-pytest-bfa6d0d4-9177c708c7ec returned 409: {\'error\': "Push in flight for \'auger-pytes...e sync lock held by pid 1418675 (since 2026-11-08T02:31:11.978Z)). Retry after it completes.", \'code\': \'CONFLICT\'}'
+E             Use -v to get more diff
+
+tests/test_auger.py:179: AssertionError
+----------------------------- Captured stderr call -----------------------------
+auger: teardown of auger-pytest-bfa6d0d4-9177c708c7ec INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-9177c708c7ec so the registry mapping and the directory stay consistent
+______________ test_init_tolerates_namespace_created_before_init _______________
+
+live_service = 'http://127.0.0.1:3000'
+
+    def test_init_tolerates_namespace_created_before_init(live_service: str):
+        """A namespace created before `init` is existing even when the list endpoint is stale."""
+        ns = new_bare_ns()
+        try:
+            rc, out = run_cli(["-n", ns, "init"])
+            assert rc == 0
+            assert f"namespace {ns}: existing" in out, out
+            assert "declared: 14/14 tables" in out, out
+        finally:
+>           assert teardown_namespace(ns) == []
+E           assert ["DELETE /api...i/namespaces'] == []
+E             
+E             Left contains 2 more items, first extra item: 'DELETE /api/namespaces/auger-pytest-bfa6d0d4-fbc2f806107e returned 409: {\'error\': "Push in flight for \'auger-pytes...e sync lock held by pid 1418675 (since 2026-11-08T02:31:11.978Z)). Retry after it completes.", \'code\': \'CONFLICT\'}'
+E             Use -v to get more diff
+
+tests/test_auger.py:191: AssertionError
+----------------------------- Captured stderr call -----------------------------
+auger: teardown of auger-pytest-bfa6d0d4-fbc2f806107e INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-fbc2f806107e so the registry mapping and the directory stay consistent
+___________________ test_answer_without_a_project_is_refused ___________________
+
+live_service = 'http://127.0.0.1:3000'
+
+    def test_answer_without_a_project_is_refused(live_service: str):
+        """With no project row the verb refuses explicitly instead of writing a dangling decision."""
+        ns = new_bare_ns()
+        try:
+            run_cli(["-n", ns, "init"])
+            code, msg, _ = run_cli_exit(
+                ["-n", ns, "answer", "--chosen", "x", "--confidence", "0.5"]
+            )
+            assert code != 0
+            assert "no project row" in msg, msg
+            assert rows(ns, "decision", "") == []
+        finally:
+>           assert teardown_namespace(ns) == []
+E           assert ["DELETE /api...i/namespaces'] == []
+E             
+E             Left contains 2 more items, first extra item: 'DELETE /api/namespaces/auger-pytest-bfa6d0d4-4ecb467416f4 returned 409: {\'error\': "Push in flight for \'auger-pytes...e sync lock held by pid 1418675 (since 2026-11-08T02:56:54.964Z)). Retry after it completes.", \'code\': \'CONFLICT\'}'
+E             Use -v to get more diff
+
+tests/test_auger.py:1118: AssertionError
+----------------------------- Captured stderr call -----------------------------
+auger: teardown of auger-pytest-bfa6d0d4-4ecb467416f4 INCOMPLETE — DELETE returned 409; directory KEPT at /home/kara/duckbrain/namespaces/auger-pytest-bfa6d0d4-4ecb467416f4 so the registry mapping and the directory stay consistent
+__________________ test_no_test_namespace_survives_the_suite ___________________
+
+live_service = 'http://127.0.0.1:3000'
+
+    def test_no_test_namespace_survives_the_suite(live_service: str):
+        """The leak audit. It runs in the gate, so a leaked namespace fails the gate, not a reader.
+    
+        Scoped to the namespaces THIS session created: another process can be running
+        the same suite concurrently in the same workdir (a gitreins judge re-runs it),
+        and its live in-flight namespace is not a leak of this run. The audit still
+        fails the gate for a real leak — it just cannot be fooled by a sibling's
+        correctly-managed one.
+        """
+        found = leftovers(scope=CREATED)
+>       assert found == {"api": [], "disk": []}, (
+            f"test namespaces were left behind: {found} (prefix {TEST_NS_PREFIX!r})"
+        )
+E       AssertionError: test namespaces were left behind: {'api': ['auger-pytest-bfa6d0d4-069b3786e070', 'auger-pytest-bfa6d0d4-44196141c4c5', 'auger-pytest-bfa6d0d4-e555e465287b', 'auger-pytest-bfa6d0d4-4a4fe0a4bee5', 'auger-pytest-bfa6d0d4-37205b1f483a', 'auger-pytest-bfa6d0d4-b6913f571617', 'auger-pytest-bfa6d0d4-ebb16202a79b', 'auger-pytest-bfa6d0d4-28655f157c63', 'auger-pytest-bfa6d0d4-335eaef4f86e', 'auger-pytest-bfa6d0d4-f870a5ac81c9', 'auger-pytest-bfa6d0d4-b6a48500bb00', 'auger-pytest-bfa6d0d4-e1cb1a73a73d', 'auger-pytest-bfa6d0d4-5bd6463f229c', 'auger-pytest-bfa6d0d4-4c3105a604d1', 'auger-pytest-bfa6d0d4-c16f3e8f6113', 'auger-pytest-bfa6d0d4-16a9caf17616', 'auger-pytest-bfa6d0d4-0f755dfb1f71', 'auger-pytest-bfa6d0d4-27839a792569', 'auger-pytest-bfa6d0d4-1f707cfbc716', 'auger-pytest-bfa6d0d4-642e8ff025ce', 'auger-pytest-bfa6d0d4-a09db03cd304', 'auger-pytest-bfa6d0d4-e040b7706efa', 'auger-pytest-bfa6d0d4-120afa4b8887', 'auger-pytest-bfa6d0d4-d33c099bb298', 'auger-pytest-bfa6d0d4-476cd7e7a3b9', 'auger-pytest-bfa6d0d4-0b76c9da0be7', 'auger-pytest-bfa6d0d4-afcea661576f', 'auger-pytest-bfa6d0d4-44d04d5660c2', 'auger-pytest-bfa6d0d4-ac94a7ce94b1', 'auger-pytest-bfa6d0d4-04b83b744e33', 'auger-pytest-bfa6d0d4-ff285a138cdc'], 'disk': ['auger-pytest-bfa6d0d4-04b83b744e33', 'auger-pytest-bfa6d0d4-069b3786e070', 'auger-pytest-bfa6d0d4-0b76c9da0be7', 'auger-pytest-bfa6d0d4-0f755dfb1f71', 'auger-pytest-bfa6d0d4-120afa4b8887', 'auger-pytest-bfa6d0d4-16a9caf17616', 'auger-pytest-bfa6d0d4-1f707cfbc716', 'auger-pytest-bfa6d0d4-27839a792569', 'auger-pytest-bfa6d0d4-28655f157c63', 'auger-pytest-bfa6d0d4-335eaef4f86e', 'auger-pytest-bfa6d0d4-37205b1f483a', 'auger-pytest-bfa6d0d4-44196141c4c5', 'auger-pytest-bfa6d0d4-44d04d5660c2', 'auger-pytest-bfa6d0d4-476cd7e7a3b9', 'auger-pytest-bfa6d0d4-4a4fe0a4bee5', 'auger-pytest-bfa6d0d4-4c3105a604d1', 'auger-pytest-bfa6d0d4-5bd6463f229c', 'auger-pytest-bfa6d0d4-642e8ff025ce', 'auger-pytest-bfa6d0d4-a09db03cd304', 'auger-pytest-bfa6d0d4-ac94a7ce94b1', 'auger-pytest-bfa6d0d4-afcea661576f', 'auger-pytest-bfa6d0d4-b6913f571617', 'auger-pytest-bfa6d0d4-b6a48500bb00', 'auger-pytest-bfa6d0d4-c16f3e8f6113', 'auger-pytest-bfa6d0d4-d33c099bb298', 'auger-pytest-bfa6d0d4-e040b7706efa', 'auger-pytest-bfa6d0d4-e1cb1a73a73d', 'auger-pytest-bfa6d0d4-e555e465287b', 'auger-pytest-bfa6d0d4-ebb16202a79b', 'auger-pytest-bfa6d0d4-f870a5ac81c9', 'auger-pytest-bfa6d0d4-ff285a138cdc']} (prefix 'auger-pytest-bfa6d0d4-')
+E       assert {'api': ['aug...f17616', ...]} == {'api': [], 'disk': []}
+E         
+E         Differing items:
+E         {'disk': ['auger-pytest-bfa6d0d4-04b83b744e33', 'auger-pytest-bfa6d0d4-069b3786e070', 'auger-pytest-bfa6d0d4-0b76c9da0...'auger-pytest-bfa6d0d4-0f755dfb1f71', 'auger-pytest-bfa6d0d4-120afa4b8887', 'auger-pytest-bfa6d0d4-16a9caf17616', ...]} != {'disk': []}
+E         {'api': ['auger-pytest-bfa6d0d4-069b3786e070', 'auger-pytest-bfa6d0d4-44196141c4c5', 'auger-pytest-bfa6d0d4-e555e46528...'auger-pytest-bfa6d0d4-4a4fe0a4bee5', 'auger-pytest-bfa6d0d4-37205b1f483a', 'auger-pytest-bfa6d0d4-b6913f571617', ...]} != {'api': []}
+E         Use -v to get more diff
+
+tests/test_auger.py:6377: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_auger.py::test_init_creates_a_namespace_with_live_tables - ...
+FAILED tests/test_auger.py::test_init_tolerates_namespace_created_before_init
+FAILED tests/test_auger.py::test_answer_without_a_project_is_refused - assert...
+FAILED tests/test_auger.py::test_no_test_namespace_survives_the_suite - Asser...
+ERROR tests/test_auger.py::test_init_declares_every_table_the_module_defines
+ERROR tests/test_auger.py::test_start_refuses_duplicate_project_name_before_writing
+ERROR tests/test_auger.py::test_no_flag_project_read_refuses_after_second_project
+ERROR tests/test_auger.py::test_start_stores_the_project_row_and_embeds_the_seed
+ERROR tests/test_auger.py::test_created_at_round_trips_for_every_declared_created_at_table
+ERROR tests/test_auger.py::test_init_migrates_existing_timestamp_created_at_declarations
+ERROR tests/test_auger.py::test_created_at_desc_is_newest_first_for_projects_and_verdicts
+ERROR tests/test_auger.py::test_answer_memory_failure_leaves_a_repairable_provisional
+ERROR tests/test_auger.py::test_answer_retry_repairs_the_same_provisional_decision
+ERROR tests/test_auger.py::test_status_aggregates_exclude_the_pending_decision
+ERROR tests/test_auger.py::test_answer_retry_with_changed_arguments_is_refused
+ERROR tests/test_auger.py::test_answer_writes_every_decision_field_to_the_row
+ERROR tests/test_auger.py::test_answer_refuses_invalid_confidence_without_storing_rows[above-one]
+ERROR tests/test_auger.py::test_answer_refuses_invalid_confidence_without_storing_rows[below-zero]
+ERROR tests/test_auger.py::test_answer_refuses_invalid_confidence_without_storing_rows[nan]
+ERROR tests/test_auger.py::test_answer_refuses_invalid_confidence_without_storing_rows[infinity]
+ERROR tests/test_auger.py::test_answer_accepts_confidence_boundaries[0.0] - F...
+ERROR tests/test_auger.py::test_answer_accepts_confidence_boundaries[1.0] - F...
+ERROR tests/test_auger.py::test_answer_makes_the_chosen_option_the_only_active_one
+ERROR tests/test_auger.py::test_answer_refuses_a_chosen_sentence_not_supplied_as_an_option
+ERROR tests/test_auger.py::test_answer_resolves_option_token_and_dump_has_one_active_configuration
+ERROR tests/test_auger.py::test_answer_without_options_remains_valid_and_reports_zero_active
+ERROR tests/test_auger.py::test_answer_tolerates_an_apostrophe_in_the_reason
+ERROR tests/test_auger.py::test_answer_repeated_why_not_records_each_rejected_option_and_dump_renders_it
+ERROR tests/test_auger.py::test_answer_repeated_why_not_with_wrong_arity_is_refused
+ERROR tests/test_auger.py::test_init_declares_the_bundle_tables_and_the_scope_column
+ERROR tests/test_auger.py::test_bundle_rows_round_trip_with_their_closed_set_status
+ERROR tests/test_auger.py::test_bundle_add_cli_writes_the_named_bundle - Fail...
+ERROR tests/test_auger.py::test_bundle_member_cli_validates_scheduler_projects
+ERROR tests/test_auger.py::test_bundle_member_cli_scratch_escape_warns_and_writes
+ERROR tests/test_auger.py::test_unknown_role_and_missing_bundle_are_refused_without_a_fleet_db
+4 failed, 713 passed, 2 skipped, 31 errors in 2904.42s (0:48:24)
+
+==============================================================================
+[PASS] secrets  passed=true  exit_code=n/a
+==============================================================================
+--- output (untruncated) ---
+gitleaks: clean
+
+==============================================================================
+[PASS] lint  passed=true  exit_code=0
+==============================================================================
+--- output (untruncated) ---
+All checks passed!
