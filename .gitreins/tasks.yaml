@@ -1027,3 +1027,54 @@ tasks:
   status: complete
   created_at: '2026-11-08T07:10:46.211854+00:00'
   completed_at: '2026-11-08T07:11:01.712613+00:00'
+- id: AUG-158
+  title: "AUG-158: tier1 lint arm clean \u2014 tracked-python ruff scope graded over\
+    \ the whole tree (valued on row AUG-158)"
+  criteria:
+  - 'No tracked python file carries a ruff finding. PROOF: cd /home/kara/auger &&
+    git ls-files ''*.py'' | xargs /home/kara/.local/bin/ruff check --force-exclude
+    FAILIF: the command exits non-zero, or its output contains an F-code diagnostic
+    (the pre-fix tree printed exactly one: evidence/sg8/arm_bite_probe.py:19:8 F401
+    ''sys'' imported but unused).'
+  - "The fix is a real correction, not a scope deletion. PROOF: cd /home/kara/auger\
+    \ && grep -c 'tool.ruff' pyproject.toml; grep -c '^import sys' evidence/sg8/arm_bite_probe.py\
+    \ FAILIF: either printed count is not 0 \u2014 the repo has no ruff exclude block\
+    \ (nothing was excluded to go green) and the unused sys import is gone rather\
+    \ than suppressed."
+  - 'The hygiene proof suite passes and pins the tracked-python scope. PROOF: cd /home/kara/auger
+    && /home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q
+    FAILIF: any test in that file fails, or the reported pass count is not 6 (test_all_tracked_python_is_ruff_clean
+    is the arm that would have caught the F401).'
+  - 'The gate''s pytest arm still names the hygiene file. PROOF: cd /home/kara/auger
+    && grep -c ''test_verdict_hygiene.py'' tests/gate.sh FAILIF: the printed count
+    is not at least 1.'
+  status: complete
+  created_at: '2026-11-08T07:38:40.086884+00:00'
+  completed_at: '2026-11-08T07:39:21.838463+00:00'
+- id: AUG-159
+  title: 'AUG-159: sk-api-key gitleaks rule carries a left boundary so the error-code
+    literal stops firing (valued on row AUG-159)'
+  criteria:
+  - 'gitleaks over the working tree reports ZERO findings. PROOF: cd /home/kara/auger
+    && gitleaks detect --no-git --redact --source . --report-format json --report-path
+    /tmp/aug159r-gl.json; python3 -c "import json;d=json.load(open(\"/tmp/aug159r-gl.json\"));print(\"findings\",len(d),sorted({f[\"RuleID\"]
+    for f in d}))" FAILIF: the printed findings count is not 0 (pre-fix this printed
+    5 findings [sk-api-key] from the literal task-invalid-acceptance-ref).'
+  - "The fix is a LEFT BOUNDARY on the rule, not a path allowlist and not a delete.\
+    \ PROOF: cd /home/kara/auger && grep -c -F \"(?:^|[^a-zA-Z0-9])sk-\" .gitleaks.toml\
+    \ FAILIF: the printed count is not 1 \u2014 the rule at .gitleaks.toml must carry\
+    \ the left boundary form (?:^|[^a-zA-Z0-9])sk-[a-zA-Z0-9_-]{20,} and no rule may\
+    \ be deleted or path-allowlisted to go green."
+  - 'The narrowed rule still CATCHES a real-shaped key. PROOF: cd /home/kara/auger
+    && /home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q
+    -k "real_shaped_key or error_code_literal or lookbehind" FAILIF: any selected
+    test fails, or the pass count is not 3 (test_real_shaped_key_still_matches pins
+    that a 32-char sk- literal still fires; test_error_code_literal_does_not_match
+    pins the false positive).'
+  - 'The rule stays RE2-loadable by the real binary, so zero findings is not vacuous.
+    PROOF: cd /home/kara/auger && gitleaks detect --no-git --redact --source . ; echo
+    "gitleaks-exit=$?" FAILIF: the run reports a config-parse error instead of scanning,
+    or the exit code is not 0 on a clean tree (a schema-invalid .gitleaks.toml would
+    make the zero-findings claim meaningless).'
+  status: pending
+  created_at: '2026-11-08T07:39:01.205325+00:00'
