@@ -1,0 +1,197 @@
+{
+  "task_id": "AUG-156",
+  "task_title": "AUG-156 verified: the board evidence audit resolves every complete row to its own verdict, and still refuses the pre-fix board",
+  "task_criteria": [
+    "Board evidence audit is green on the committed board: every status=complete row resolves to a verdict whose task_id equals the row id. PROOF: cd /home/kara/auger && /home/kara/auger/.venv/bin/python scripts/audit_board_evidence.py --board .coding-hermes/board/tasks.jsonl ; echo rc=$? FAILIF: rc is not 0, or the summary line does not carry unresolvable=0 missing=0, or label_defects is not 0, or bound + none_reason + unresolvable does not sum to complete_rows.",
+    "The pre-fix falsifier still refuses the pre-fix board, so the green run is not a vacuous pass. PROOF: cd /home/kara/auger && git show eb22795:.coding-hermes/board/tasks.jsonl > /tmp/aug156-prefix-board.jsonl && /home/kara/auger/.venv/bin/python scripts/audit_board_evidence.py --board /tmp/aug156-prefix-board.jsonl --history /home/kara/auger/.gitreins/history ; echo rc=$? FAILIF: rc is 0 instead of 1, or the summary line does not read complete_rows=201 bound=35 unresolvable=6 missing=160.",
+    "The audit contract is pinned by committed tests named in the gate pytest arm. PROOF: cd /home/kara/auger && /home/kara/auger/.venv/bin/python -m pytest tests/test_board_evidence_audit.py -q FAILIF: any test in that file fails or the reported pass count is not 17.",
+    "The board still validates after the evidence writes. PROOF: boardctl -C /home/kara/auger validate ; echo rc=$? FAILIF: rc is not 0, or the output does not print RESULT: OK."
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "675e056aef7a19433956b36086e2e33f813fb41d",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "50a7d656af7a3229c9459631ab17e8ebad19f897a50634e685a6a433e67711f3",
+  "working_tree_dirty_path_count": 2,
+  "items": [
+    {
+      "criterion": "Board evidence audit is green on the committed board: every status=complete row resolves to a verdict whose task_id equals the row id. PROOF: cd /home/kara/auger && /home/kara/auger/.venv/bin/python scripts/audit_board_evidence.py --board .coding-hermes/board/tasks.jsonl ; echo rc=$? FAILIF: rc is not 0, or the summary line does not carry unresolvable=0 missing=0, or label_defects is not 0, or bound + none_reason + unresolvable does not sum to complete_rows.",
+      "status": "PASS",
+      "detail": "Ran the exact proof command: rc=0, output 'complete_rows=204 bound=64 unresolvable=0 missing=0' / 'none_reason=140 sum=bound+none_reason+unresolvable=204 complete_rows=204' / 'bound_failed_verdict=17 bound_legacy_citation=0 label_defects=0' / 'RESULT: OK'. 64+140+0=204 == complete_rows. Every bound row's verdict task_id equals the row id by construction in scripts/audit_board_evidence.py classify() ('elif verdict.task_id != row_id: state=UNRESOLVABLE'), and an independent re-check of all 64 bound run ids against .gitreins/history/*/<run>/verdict.json found 0 mismatches and 0 missing files."
+    },
+    {
+      "criterion": "The pre-fix falsifier still refuses the pre-fix board, so the green run is not a vacuous pass. PROOF: cd /home/kara/auger && git show eb22795:.coding-hermes/board/tasks.jsonl > /tmp/aug156-prefix-board.jsonl && /home/kara/auger/.venv/bin/python scripts/audit_board_evidence.py --board /tmp/aug156-prefix-board.jsonl --history /home/kara/auger/.gitreins/history ; echo rc=$? FAILIF: rc is 0 instead of 1, or the summary line does not read complete_rows=201 bound=35 unresolvable=6 missing=160.",
+      "status": "PASS",
+      "detail": "Ran the exact proof command: rc=1, summary line reads exactly 'complete_rows=201 bound=35 unresolvable=6 missing=160', 'label_defects=11', 'RESULT: FAIL', with 11 LABEL defects and 160 MISSING rows enumerated. Matches the FAILIF requirement exactly."
+    },
+    {
+      "criterion": "The audit contract is pinned by committed tests named in the gate pytest arm. PROOF: cd /home/kara/auger && /home/kara/auger/.venv/bin/python -m pytest tests/test_board_evidence_audit.py -q FAILIF: any test in that file fails or the reported pass count is not 17.",
+      "status": "PASS",
+      "detail": "Ran the exact proof command: exit_code 0, output '.................' then '17 passed in 0.59s'. File tests/test_board_evidence_audit.py exists and is committed; tests/gate.sh:206 names it in the pytest arm's explicit file list."
+    },
+    {
+      "criterion": "The board still validates after the evidence writes. PROOF: boardctl -C /home/kara/auger validate ; echo rc=$? FAILIF: rc is not 0, or the output does not print RESULT: OK.",
+      "status": "PASS",
+      "detail": "Ran the exact proof command: rc=0, final line 'RESULT: OK (381 warning(s))'. The 381 warnings are pre-existing canon-drift/legacy-event warnings (e.g. 'key(s) {evidence_run_id} outside the declared canon'), not errors; exit code is 0 and RESULT: OK is printed."
+    },
+    {
+      "criterion": "The green run is not vacuous: the audit's ok flag is false whenever any complete row is missing/unresolvable or any label defect exists, and the committed board's 204 complete rows are all accounted for by real bindings or predicate-checked none:<reason> annotations (no row silently passes).",
+      "status": "PASS",
+      "detail": "scripts/audit_board_evidence.py audit() sets ok = missing==0 and unresolvable==0 and not label_defects and bound+none+unresolvable==len(complete); main() returns 1 when not ok. --json run shows ok=True, bound_without_run=0, legacy_bound=0, reasons {'none:cites-foreign-verdict-<run>-task-<task>[+...]': 5, 'none:no-verdict-artifact-for-task-id': 135}. check_none_reason() refuses a reason whose predicate is false (e.g. 'claims no verdict exists but .gitreins/history holds N verdict(s) for task X'), so annotations cannot be invented to force green. The same script on the pre-fix board yields ok=False/rc=1, proving the green run is discriminating.",
+      "derived": true
+    },
+    {
+      "criterion": "The audit is reachable from the repo's gate: tests/test_board_evidence_audit.py is collected by the gate's pytest arm (tests/gate.sh / .gitreins test_command), so the contract is enforced on every gate run rather than only by hand.",
+      "status": "PASS",
+      "detail": "tests/gate.sh:206 lists 'tests/test_board_evidence_audit.py' in the explicit pytest file list executed by run_pytest_arm, and .gitreins/config.yaml sets guards.test_command: bash tests/gate.sh, so the audit contract runs on every gate invocation.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "no_concerns_found",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": false,
+      "any_failed": true,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2717 tests: FAIL (tests/test_auger.py::test_no_test_namespace_survives_the_suite [first failing id])",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261105T170854.274025Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nscanners: nice=nice -n 10\n5:06PM INF scanned ~3291766 bytes (3.29 MB) in 1.69s\n5:06PM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 250 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261105T170854.274025Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": false,
+          "output": "scanners: nice=nice -n 10\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [ 10%]\n........................................................................ [ 20%]\n.............................................E.E.E.E.E.E...E.E.......... [ 28%]\n......F................................................................. [ 38%]\n..................................s..................................... [ 48%]\n.............s.......................................................... [ 58%]\n........................................................................ [ 68%]\n........................................................................ [ 78%]\n........................................................................ [ 89%]\n........................................................................ [ 99%]\n.......                                                                  [100%]\n==================================== ERRORS ====================================\n_ ERROR at teardown of test_propagate_links_a_question_the_gate_can_answer_after_its_parent_closes _\n\nlive_service = 'http://127.0.0.1:3000'\n\n    @pytest.fixture\n    def ns_created(live_service: str) -> str:\n        \"\"\"A fresh ephemeral namespace, removed in a finalizer even when the test fails.\n    \n        Depends on `live_service`, so the cross-process substrate lock is held for the whole\n        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to\n        every call the fixture and the test make against the live substrate.\n        \"\"\"\n        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]\n        status, body, _ = auger.db(\"/api/namespaces\", \"POST\", {\"name\": ns})\n        if status not in (200, 201):\n            pytest.fail(f\"could not create test namespace {ns} ({status}): {body}\")\n        CREATED.append(ns)\n        try:\n            yield ns\n        finally:\n            problems = teardown_namespace(ns)\n            if problems:\n                if any(\"429\" in p for p in problems):\n                    # The limiter beat even the transport's own budget on this one namespace.\n                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note \u2014 a\n\n\u2026 [22437 chars omitted \u2014 351 line(s)] \u2026\nE         \nE         Differing items:\nE         {'api': ['auger-pytest-8f64cb44-aff42eab2380', 'auger-pytest-8f64cb44-bd8f1bd38786', 'auger-pytest-8f64cb44-aeb6147276...'auger-pytest-8f64cb44-985083bc3d8f', 'auger-pytest-8f64cb44-cac0d4077658', 'auger-pytest-8f64cb44-596d001b4ccb', ...]} != {'api': []}\nE         {'disk': ['auger-pytest-8f64cb44-596d001b4ccb', 'auger-pytest-8f64cb44-985083bc3d8f', 'auger-pytest-8f64cb44-aeb614727...'auger-pytest-8f64cb44-aff42eab2380', 'auger-pytest-8f64cb44-bd8f1bd38786', 'auger-pytest-8f64cb44-cac0d4077658', ...]} != {'disk': []}\nE         Use -v to get more diff\n\ntests/test_auger.py:6377: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_auger.py::test_no_test_namespace_survives_the_suite - Asser...\nERROR tests/test_auger.py::test_propagate_links_a_question_the_gate_can_answer_after_its_parent_closes\nERROR tests/test_auger.py::test_answer_with_a_question_id_closes_that_question\nERROR tests/test_auger.py::test_answer_without_a_question_id_touches_no_question_row\nERROR tests/test_auger.py::test_answer_refuses_a_question_id_that_is_not_stored\nERROR tests/test_auger.py::test_status_reports_the_open_branches_and_their_depth\nERROR tests/test_auger.py::test_status_on_a_project_with_no_questions_adds_no_branch_line\nERROR tests/test_auger.py::test_a_successful_verb_exits_zero_in_a_subprocess\nERROR tests/test_auger.py::test_patch_reporting_zero_updates_is_a_loud_failure\n1 failed, 716 passed, 2 skipped, 8 errors in 1944.22s (0:32:24)\n",
+          "error": "",
+          "data": {
+            "exit_code": 1,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261105T170854.274025Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 Board evidence audit is green on the committed board: every status=complete row resolves to a verdict whose task_id equals the row id. PROOF: cd /home/kara/auger && /home/kara/auger/.venv/bin/python scripts/audit_board_evidence.py --board .coding-hermes/board/tasks.jsonl ; echo rc=$? FAILIF: rc is not 0, or the summary line does not carry unresolvable=0 missing=0, or label_defects is not 0, or bound + none_reason + unresolvable does not sum to complete_rows.: Ran the exact proof command: rc=0, output 'complete_rows=204 bound=64 unresolvable=0 missing=0' / 'none_reason=140 sum=bound+none_reason+unresolvable=204 complete_rows=204' / 'bound_failed_verdict=17 bound_legacy_citation=0 label_defects=0' / 'RESULT: OK'. 64+140+0=204 == complete_rows. Every bound row's verdict task_id equals the row id by construction in scripts/audit_board_evidence.py classify() ('elif verdict.task_id != row_id: state=UNRESOLVABLE'), and an independent re-check of all 64 bound run ids against .gitreins/history/*/<run>/verdict.json found 0 mismatches and 0 missing files.\n  \u2713 The pre-fix falsifier still refuses the pre-fix board, so the green run is not a vacuous pass. PROOF: cd /home/kara/auger && git show eb22795:.coding-hermes/board/tasks.jsonl > /tmp/aug156-prefix-board.jsonl && /home/kara/auger/.venv/bin/python scripts/audit_board_evidence.py --board /tmp/aug156-prefix-board.jsonl --history /home/kara/auger/.gitreins/history ; echo rc=$? FAILIF: rc is 0 instead of 1, or the summary line does not read complete_rows=201 bound=35 unresolvable=6 missing=160.: Ran the exact proof command: rc=1, summary line reads exactly 'complete_rows=201 bound=35 unresolvable=6 missing=160', 'label_defects=11', 'RESULT: FAIL', with 11 LABEL defects and 160 MISSING rows enumerated. Matches the FAILIF requirement exactly.\n  \u2713 The audit contract is pinned by committed tests named in the gate pytest arm. PROOF: cd /home/kara/auger && /home/kara/auger/.venv/bin/python -m pytest tests/test_board_evidence_audit.py -q FAILIF: any test in that file fails or the reported pass count is not 17.: Ran the exact proof command: exit_code 0, output '.................' then '17 passed in 0.59s'. File tests/test_board_evidence_audit.py exists and is committed; tests/gate.sh:206 names it in the pytest arm's explicit file list.\n  \u2713 The board still validates after the evidence writes. PROOF: boardctl -C /home/kara/auger validate ; echo rc=$? FAILIF: rc is not 0, or the output does not print RESULT: OK.: Ran the exact proof command: rc=0, final line 'RESULT: OK (381 warning(s))'. The 381 warnings are pre-existing canon-drift/legacy-event warnings (e.g. 'key(s) {evidence_run_id} outside the declared canon'), not errors; exit code is 0 and RESULT: OK is printed.\n  \u2713 The green run is not vacuous: the audit's ok flag is false whenever any complete row is missing/unresolvable or any label defect exists, and the committed board's 204 complete rows are all accounted for by real bindings or predicate-checked none:<reason> annotations (no row silently passes).: scripts/audit_board_evidence.py audit() sets ok = missing==0 and unresolvable==0 and not label_defects and bound+none+unresolvable==len(complete); main() returns 1 when not ok. --json run shows ok=True, bound_without_run=0, legacy_bound=0, reasons {'none:cites-foreign-verdict-<run>-task-<task>[+...]': 5, 'none:no-verdict-artifact-for-task-id': 135}. check_none_reason() refuses a reason whose predicate is false (e.g. 'claims no verdict exists but .gitreins/history holds N verdict(s) for task X'), so annotations cannot be invented to force green. The same script on the pre-fix board yields ok=False/rc=1, proving the green run is discriminating.\n  \u2713 The audit is reachable from the repo's gate: tests/test_board_evidence_audit.py is collected by the gate's pytest arm (tests/gate.sh / .gitreins test_command), so the contract is enforced on every gate run rather than only by hand.: tests/gate.sh:206 lists 'tests/test_board_evidence_audit.py' in the explicit pytest file list executed by run_pytest_arm, and .gitreins/config.yaml sets guards.test_command: bash tests/gate.sh, so the audit contract runs on every gate invocation.\nAll four given criteria and both derived criteria pass with fresh command output: the audit is green on the committed board (204/204 accounted, 0 unresolvable/missing/label defects), still refuses the pre-fix board (rc=1, 201/35/6/160), its 17 tests pass and are wired into the gate, and boardctl validate returns RESULT: OK.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 Board evidence audit is green on the committed board: every status=complete row resolves to a verdict whose task_id equals the row id. PROOF: cd /home/kara/auger && /home/kara/auger/.venv/bin/python scripts/audit_board_evidence.py --board .coding-hermes/board/tasks.jsonl ; echo rc=$? FAILIF: rc is not 0, or the summary line does not carry unresolvable=0 missing=0, or label_defects is not 0, or bound + none_reason + unresolvable does not sum to complete_rows.: Ran the exact proof command: rc=0, output 'complete_rows=204 bound=64 unresolvable=0 missing=0' / 'none_reason=140 sum=bound+none_reason+unresolvable=204 complete_rows=204' / 'bound_failed_verdict=17 bound_legacy_citation=0 label_defects=0' / 'RESULT: OK'. 64+140+0=204 == complete_rows. Every bound row's verdict task_id equals the row id by construction in scripts/audit_board_evidence.py classify() ('elif verdict.task_id != row_id: state=UNRESOLVABLE'), and an independent re-check of all 64 bound run ids against .gitreins/history/*/<run>/verdict.json found 0 mismatches and 0 missing files.\n  \u2713 The pre-fix falsifier still refuses the pre-fix board, so the green run is not a vacuous pass. PROOF: cd /home/kara/auger && git show eb22795:.coding-hermes/board/tasks.jsonl > /tmp/aug156-prefix-board.jsonl && /home/kara/auger/.venv/bin/python scripts/audit_board_evidence.py --board /tmp/aug156-prefix-board.jsonl --history /home/kara/auger/.gitreins/history ; echo rc=$? FAILIF: rc is 0 instead of 1, or the summary line does not read complete_rows=201 bound=35 unresolvable=6 missing=160.: Ran the exact proof command: rc=1, summary line reads exactly 'complete_rows=201 bound=35 unresolvable=6 missing=160', 'label_defects=11', 'RESULT: FAIL', with 11 LABEL defects and 160 MISSING rows enumerated. Matches the FAILIF requirement exactly.\n  \u2713 The audit contract is pinned by committed tests named in the gate pytest arm. PROOF: cd /home/kara/auger && /home/kara/auger/.venv/bin/python -m pytest tests/test_board_evidence_audit.py -q FAILIF: any test in that file fails or the reported pass count is not 17.: Ran the exact proof command: exit_code 0, output '.................' then '17 passed in 0.59s'. File tests/test_board_evidence_audit.py exists and is committed; tests/gate.sh:206 names it in the pytest arm's explicit file list.\n\n\u2026 [1388 chars omitted \u2014 2 line(s)] \u2026\n  \u2713 The audit is reachable from the repo's gate: tests/test_board_evidence_audit.py is collected by the gate's pytest arm (tests/gate.sh / .gitreins test_command), so the contract is enforced on every gate run rather than only by hand.: tests/gate.sh:206 lists 'tests/test_board_evidence_audit.py' in the explicit pytest file list executed by run_pytest_arm, and .gitreins/config.yaml sets guards.test_command: bash tests/gate.sh, so the audit contract runs on every gate invocation.\nAll four given criteria and both derived criteria pass with fresh command output: the audit is green on the committed board (204/204 accounted, 0 unresolvable/missing/label defects), still refuses the pre-fix board (rc=1, 201/35/6/160), its 17 tests pass and are wired into the gate, and boardctl validate returns RESULT: OK.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "Board evidence audit is green on the committed board: every status=complete row resolves to a verdict whose task_id equals the row id. PROOF: cd /home/kara/auger && /home/kara/auger/.venv/bin/python scripts/audit_board_evidence.py --board .coding-hermes/board/tasks.jsonl ; echo rc=$? FAILIF: rc is not 0, or the summary line does not carry unresolvable=0 missing=0, or label_defects is not 0, or bound + none_reason + unresolvable does not sum to complete_rows.",
+                "status": "PASS",
+                "detail": "Ran the exact proof command: rc=0, output 'complete_rows=204 bound=64 unresolvable=0 missing=0' / 'none_reason=140 sum=bound+none_reason+unresolvable=204 complete_rows=204' / 'bound_failed_verdict=17 bound_legacy_citation=0 label_defects=0' / 'RESULT: OK'. 64+140+0=204 == complete_rows. Every bound row's verdict task_id equals the row id by construction in scripts/audit_board_evidence.py classify() ('elif verdict.task_id != row_id: state=UNRESOLVABLE'), and an independent re-check of all 64 bound run ids against .gitreins/history/*/<run>/verdict.json found 0 mismatches and 0 missing files."
+              },
+              {
+                "criterion": "The pre-fix falsifier still refuses the pre-fix board, so the green run is not a vacuous pass. PROOF: cd /home/kara/auger && git show eb22795:.coding-hermes/board/tasks.jsonl > /tmp/aug156-prefix-board.jsonl && /home/kara/auger/.venv/bin/python scripts/audit_board_evidence.py --board /tmp/aug156-prefix-board.jsonl --history /home/kara/auger/.gitreins/history ; echo rc=$? FAILIF: rc is 0 instead of 1, or the summary line does not read complete_rows=201 bound=35 unresolvable=6 missing=160.",
+                "status": "PASS",
+                "detail": "Ran the exact proof command: rc=1, summary line reads exactly 'complete_rows=201 bound=35 unresolvable=6 missing=160', 'label_defects=11', 'RESULT: FAIL', with 11 LABEL defects and 160 MISSING rows enumerated. Matches the FAILIF requirement exactly."
+              },
+              {
+                "criterion": "The audit contract is pinned by committed tests named in the gate pytest arm. PROOF: cd /home/kara/auger && /home/kara/auger/.venv/bin/python -m pytest tests/test_board_evidence_audit.py -q FAILIF: any test in that file fails or the reported pass count is not 17.",
+                "status": "PASS",
+                "detail": "Ran the exact proof command: exit_code 0, output '.................' then '17 passed in 0.59s'. File tests/test_board_evidence_audit.py exists and is committed; tests/gate.sh:206 names it in the pytest arm's explicit file list."
+              },
+              {
+                "criterion": "The board still validates after the evidence writes. PROOF: boardctl -C /home/kara/auger validate ; echo rc=$? FAILIF: rc is not 0, or the output does not print RESULT: OK.",
+                "status": "PASS",
+                "detail": "Ran the exact proof command: rc=0, final line 'RESULT: OK (381 warning(s))'. The 381 warnings are pre-existing canon-drift/legacy-event warnings (e.g. 'key(s) {evidence_run_id} outside the declared canon'), not errors; exit code is 0 and RESULT: OK is printed."
+              },
+              {
+                "criterion": "The green run is not vacuous: the audit's ok flag is false whenever any complete row is missing/unresolvable or any label defect exists, and the committed board's 204 complete rows are all accounted for by real bindings or predicate-checked none:<reason> annotations (no row silently passes).",
+                "status": "PASS",
+                "detail": "scripts/audit_board_evidence.py audit() sets ok = missing==0 and unresolvable==0 and not label_defects and bound+none+unresolvable==len(complete); main() returns 1 when not ok. --json run shows ok=True, bound_without_run=0, legacy_bound=0, reasons {'none:cites-foreign-verdict-<run>-task-<task>[+...]': 5, 'none:no-verdict-artifact-for-task-id': 135}. check_none_reason() refuses a reason whose predicate is false (e.g. 'claims no verdict exists but .gitreins/history holds N verdict(s) for task X'), so annotations cannot be invented to force green. The same script on the pre-fix board yields ok=False/rc=1, proving the green run is discriminating.",
+                "derived": true
+              },
+              {
+                "criterion": "The audit is reachable from the repo's gate: tests/test_board_evidence_audit.py is collected by the gate's pytest arm (tests/gate.sh / .gitreins test_command), so the contract is enforced on every gate run rather than only by hand.",
+                "status": "PASS",
+                "detail": "tests/gate.sh:206 lists 'tests/test_board_evidence_audit.py' in the explicit pytest file list executed by run_pytest_arm, and .gitreins/config.yaml sets guards.test_command: bash tests/gate.sh, so the audit contract runs on every gate invocation.",
+                "derived": true
+              }
+            ],
+            "summary": "All four given criteria and both derived criteria pass with fresh command output: the audit is green on the committed board (204/204 accounted, 0 unresolvable/missing/label defects), still refuses the pre-fix board (rc=1, 201/35/6/160), its 17 tests pass and are wired into the gate, and boardctl validate returns RESULT: OK.",
+            "provenance": {
+              "model": "deepseek-v4-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "deepseek-v4-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY"
+    }
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "The diff only appends a new in_progress task record (AUG-156) to the tasks ledger with no code changes, so there is no logic, wiring, or test-path defect to evidence."
+  },
+  "summary": "Stage tier1: FAIL\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2717 tests: FAIL (tests/test_auger.py::test_no_test_namespace_survives_the_suite [first failing id])\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 Board evidence audit is green on the committed board: every status=complete row resolves to a verdict whose task_id equals the row id. PROOF: cd /home/kara/auger && /home/kara/auger/.venv/bin/python scripts/audit_board_evidence.py --board .coding-hermes/board/tasks.jsonl ; echo rc=$? FAILIF: rc is not 0, or the summary line does not carry unresolvable=0 missing=0, or label_defects is not 0, or bound + none_reason + unresolvable does not sum to complete_rows.: Ran the exact proof command: rc=0, output 'complete_rows=204 bound=64 unresolvable=0 missing=0' / 'none_reason=140 sum=bound+none_reason+unresolvable=204 complete_rows=204' / 'bound_failed_verdict=17 bound_legacy_citation=0 label_defects=0' / 'RESULT: OK'. 64+140+0=204 == complete_rows. Every bound row's verdict task_id equals the row id by construction in scripts/audit_board_evidence.py classify() ('elif verdict.task_id != row_id: state=UNRESOLVABLE'), and an independent re-check of all 64 bound run ids against .gitreins/history/*/<run>/verdict.json found 0 mismatches and 0 missing files.\n  \u2713 The pre-fix falsifier still refuses the pre-fix board, so the green run is not a vacuous pass. PROOF: cd /home/kara/auger && git show eb22795:.coding-hermes/board/tasks.jsonl > /tmp/aug156-prefix-board.jsonl && /home/kara/auger/.venv/bin/python scripts/audit_board_evidence.py --board /tmp/aug156-prefix-board.jsonl --history /home/kara/auger/.gitreins/history ; echo rc=$? FAILIF: rc is 0 instead of 1, or the summary line does not read complete_rows=201 bound=35 unresolvable=6 missing=160.: Ran the exact proof command: rc=1, summary line reads exactly 'complete_rows=201 bound=35 unresolvable=6 missing=160', 'label_defects=11', 'RESULT: FAIL', with 11 LABEL defects and 160 MISSING rows enumerated. Matches the FAILIF requirement exactly.\n  \u2713 The audit contract is pinned by committed tests named in the gate pytest arm. PROOF: cd /home/kara/auger && /home/kara/auger/.venv/bin/python -m pytest tests/test_board_evidence_audit.py -q FAILIF: any test in that file fails or the reported pass count is not 17.: Ran the exact proof command: exit_code 0, output '.................' then '17 passed in 0.59s'. File tests/test_board_evidence_audit.py exists and is committed; tests/gate.sh:206 names it in the pytest arm's explicit file list.\n  \u2713 The board still validates after the evidence writes. PROOF: boardctl -C /home/kara/auger validate ; echo rc=$? FAILIF: rc is not 0, or the output does not print RESULT: OK.: Ran the exact proof command: rc=0, final line 'RESULT: OK (381 warning(s))'. The 381 warnings are pre-existing canon-drift/legacy-event warnings (e.g. 'key(s) {evidence_run_id} outside the declared canon'), not errors; exit code is 0 and RESULT: OK is printed.\n  \u2713 The green run is not vacuous: the audit's ok flag is false whenever any complete row is missing/unresolvable or any label defect exists, and the committed board's 204 complete rows are all accounted for by real bindings or predicate-checked none:<reason> annotations (no row silently passes).: scripts/audit_board_evidence.py audit() sets ok = missing==0 and unresolvable==0 and not label_defects and bound+none+unresolvable==len(complete); main() returns 1 when not ok. --json run shows ok=True, bound_without_run=0, legacy_bound=0, reasons {'none:cites-foreign-verdict-<run>-task-<task>[+...]': 5, 'none:no-verdict-artifact-for-task-id': 135}. check_none_reason() refuses a reason whose predicate is false (e.g. 'claims no verdict exists but .gitreins/history holds N verdict(s) for task X'), so annotations cannot be invented to force green. The same script on the pre-fix board yields ok=False/rc=1, proving the green run is discriminating.\n  \u2713 The audit is reachable from the repo's gate: tests/test_board_evidence_audit.py is collected by the gate's pytest arm (tests/gate.sh / .gitreins test_command), so the contract is enforced on every gate run rather than only by hand.: tests/gate.sh:206 lists 'tests/test_board_evidence_audit.py' in the explicit pytest file list executed by run_pytest_arm, and .gitreins/config.yaml sets guards.test_command: bash tests/gate.sh, so the audit contract runs on every gate invocation.\nAll four given criteria and both derived criteria pass with fresh command output: the audit is green on the committed board (204/204 accounted, 0 unresolvable/missing/label defects), still refuses the pre-fix board (rc=1, 201/35/6/160), its 17 tests pass and are wired into the gate, and boardctl validate returns RESULT: OK.\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-11-08T22:39:24.094181",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-08T22:39:24.124557+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 164252,
+        "truncated": false,
+        "source": "git show 675e056aef7a"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 2029,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-156"
+  }
+}
