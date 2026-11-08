@@ -1,0 +1,271 @@
+{
+  "task_id": "AUG-159",
+  "task_title": "AUG-159: sk-api-key gitleaks rule carries a left boundary so the error-code literal stops firing (valued on row AUG-159)",
+  "task_criteria": [
+    "gitleaks over the working tree reports ZERO findings. PROOF: cd /home/kara/auger && gitleaks detect --no-git --redact --source . --report-format json --report-path /tmp/aug159r-gl.json; python3 -c \"import json;d=json.load(open(\\\"/tmp/aug159r-gl.json\\\"));print(\\\"findings\\\",len(d),sorted({f[\\\"RuleID\\\"] for f in d}))\" FAILIF: the printed findings count is not 0 (pre-fix this printed 5 findings [sk-api-key] from the literal task-invalid-acceptance-ref).",
+    "The fix is a LEFT BOUNDARY on the rule, not a path allowlist and not a delete. PROOF: cd /home/kara/auger && grep -c -F \"(?:^|[^a-zA-Z0-9])sk-\" .gitleaks.toml FAILIF: the printed count is not 1 \u2014 the rule at .gitleaks.toml must carry the left boundary form (?:^|[^a-zA-Z0-9])sk-[a-zA-Z0-9_-]{20,} and no rule may be deleted or path-allowlisted to go green.",
+    "The narrowed rule still CATCHES a real-shaped key. PROOF: cd /home/kara/auger && /home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q -k \"real_shaped_key or error_code_literal or lookbehind\" FAILIF: any selected test fails, or the pass count is not 3 (test_real_shaped_key_still_matches pins that a 32-char sk- literal still fires; test_error_code_literal_does_not_match pins the false positive).",
+    "The rule stays RE2-loadable by the real binary, so zero findings is not vacuous. PROOF: cd /home/kara/auger && gitleaks detect --no-git --redact --source . ; echo \"gitleaks-exit=$?\" FAILIF: the run reports a config-parse error instead of scanning, or the exit code is not 0 on a clean tree (a schema-invalid .gitleaks.toml would make the zero-findings claim meaningless)."
+  ],
+  "passed": true,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "195db532b69c84812a8d5323be66d275b8ddadc4",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "bc690731791d966c4f50a3d52110f7c6fa82fe5be89474dc04114f033ced1217",
+  "working_tree_dirty_path_count": 2710,
+  "items": [
+    {
+      "criterion": "gitleaks over the working tree reports ZERO findings. PROOF: cd /home/kara/auger && gitleaks detect --no-git --redact --source . --report-format json --report-path /tmp/aug159r-gl.json; python3 -c \"import json;d=json.load(open(\\\"/tmp/aug159r-gl.json\\\"));print(\\\"findings\\\",len(d),sorted({f[\\\"RuleID\\\"] for f in d}))\" FAILIF: the printed findings count is not 0 (pre-fix this printed 5 findings [sk-api-key] from the literal task-invalid-acceptance-ref).",
+      "status": "PASS",
+      "detail": "Ran the exact proof: gitleaks (/home/kara/.local/bin/gitleaks) printed `scanned ~3293573 bytes (3.29 MB) in 1.68s` / `no leaks found`, GL_EXIT=0; the report parse printed `findings 0 []`. Zero findings, zero RuleIDs."
+    },
+    {
+      "criterion": "The fix is a LEFT BOUNDARY on the rule, not a path allowlist and not a delete. PROOF: cd /home/kara/auger && grep -c -F \"(?:^|[^a-zA-Z0-9])sk-\" .gitleaks.toml FAILIF: the printed count is not 1 \u2014 the rule at .gitleaks.toml must carry the left boundary form (?:^|[^a-zA-Z0-9])sk-[a-zA-Z0-9_-]{20,} and no rule may be deleted or path-allowlisted to go green.",
+      "status": "PASS",
+      "detail": "`grep -c -F \"(?:^|[^a-zA-Z0-9])sk-\" .gitleaks.toml` -> 1 (GREP_EXIT=0). .gitleaks.toml:15-19 is `id = \"sk-api-key\"` / `regex = '''(?i)(?:^|[^a-zA-Z0-9])sk-[a-zA-Z0-9_-]{20,}'''`; the pre-fix rule (git show ff38170^:.gitleaks.toml:14) was `(?i)sk-[a-zA-Z0-9_-]{20,}`. All 4 rules survive (sk-api-key, gitreins-github-pat, gitreins-gitlab-pat, gitreins-gcp-api-key \u2014 `grep -n 'id = '`), so nothing was deleted. `git show ff38170 -- .gitleaks.toml` shows no change to [allowlist].paths (grep for paths/.coding-hermes/auger.py/test_verdict_hygiene/.gitreins//docs/ over the +/- lines -> exit 1, no hits); the paths list is the pre-existing set. The one allowlist addition is a VALUE regex `(?i)sk-invalid-acceptance-ref`, not a path \u2014 the task forbids a path allowlist, and the real-binary probe below proves it does not suppress a real-shaped key."
+    },
+    {
+      "criterion": "The narrowed rule still CATCHES a real-shaped key. PROOF: cd /home/kara/auger && /home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q -k \"real_shaped_key or error_code_literal or lookbehind\" FAILIF: any selected test fails, or the pass count is not 3 (test_real_shaped_key_still_matches pins that a 32-char sk- literal still fires; test_error_code_literal_does_not_match pins the false positive).",
+      "status": "PASS",
+      "detail": "`/home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q -k \"real_shaped_key or error_code_literal or lookbehind\"` -> `...  [100%]` / `3 passed, 3 deselected in 0.01s`, exit 0. tests/test_verdict_hygiene.py:63-75 (test_real_shaped_key_still_matches) asserts the 32-char `sk-A1b2...O5p6` matches at start-of-input, after `=`, and after whitespace; :52-61 (test_error_code_literal_does_not_match) asserts the bare literal and 3 embedded contexts do not match."
+    },
+    {
+      "criterion": "The rule stays RE2-loadable by the real binary, so zero findings is not vacuous. PROOF: cd /home/kara/auger && gitleaks detect --no-git --redact --source . ; echo \"gitleaks-exit=$?\" FAILIF: the run reports a config-parse error instead of scanning, or the exit code is not 0 on a clean tree (a schema-invalid .gitleaks.toml would make the zero-findings claim meaningless).",
+      "status": "PASS",
+      "detail": "`gitleaks detect --no-git --redact --source .` -> `scanned ~3293573 bytes (3.29 MB) in 1.78s` / `no leaks found`, `gitleaks-exit=0`. No config-parse error; the byte count proves the scan actually ran. tomllib parse confirms the regex `(?i)(?:^|[^a-zA-Z0-9])sk-[a-zA-Z0-9_-]{20,}` contains no `(?<`, `(?=`, `(?!` tokens (RE2-safe)."
+    },
+    {
+      "criterion": "The narrowed rule still catches a real-shaped key with the REAL gitleaks binary (not just the Python re simulation), so the zero-findings result is not vacuous.",
+      "status": "PASS",
+      "detail": "Scratch dir /tmp/aug159probe (outside the repo) with `OPENROUTER_API_KEY=sk-A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6`, `x = \"sk-invalid-acceptance-ref\"`, `code: task-invalid-acceptance-ref`; `gitleaks detect --config /home/kara/auger/.gitleaks.toml --no-git --source aug159probe` -> `leaks found: 1`, PROBE_EXIT=1, report `findings 1 [('sk-api-key', 'aug159probe/real_key.txt', '=sk-A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6')]`. The real key fires; both error-code-literal forms are suppressed. Scratch dir deleted afterwards; repo tree untouched (`git status --short .gitleaks.toml` empty).",
+      "derived": true
+    },
+    {
+      "criterion": "The fix does not dodge the scanner by path-allowlisting the affected files (auger.py, tests/test_xml_task_contract.py, .coding-hermes/board/tasks.jsonl) or by editing those source lines.",
+      "status": "PASS",
+      "detail": "`git show ff38170 -- .gitleaks.toml` contains no added/removed line touching [allowlist].paths or naming .coding-hermes/auger.py/test_verdict_hygiene/.gitreins//docs/ (grep exit 1, no hits); the paths list is unchanged from pre-fix. The source lines still carry the literal: auger.py:8617 `\"task-invalid-acceptance-ref\",` and tests/test_xml_task_contract.py:299 `assert \"task-invalid-acceptance-ref\" in err, err`; .coding-hermes/board/tasks.jsonl still has 2 occurrences. The suppression comes from the rule boundary plus a value regex scoped to the exact literal, which the real-binary probe proved does not cover a real-shaped key.",
+      "derived": true
+    },
+    {
+      "criterion": "The boundary proof is enforced by the repo gate, not only by a standalone test file.",
+      "status": "PASS",
+      "detail": "`/home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q` -> `......  [100%]` / `6 passed in 0.03s`, exit 0. tests/gate.sh:206 names `tests/test_verdict_hygiene.py` as an argument to the real `setsid timeout --kill-after=... python3 -m pytest ...` invocation (not a comment/echo), so the gate executes the boundary assertions.",
+      "derived": true
+    },
+    {
+      "criterion": "The false-positive carrier is the repo's own error-code literal rather than a credential, and the pre-fix rule demonstrably fired inside that word.",
+      "status": "PASS",
+      "detail": "Pre-fix rule `(?i)sk-[a-zA-Z0-9_-]{20,}` (git show ff38170^:.gitleaks.toml:14) has no left boundary, so it matches the `sk-invalid-acceptance-ref` tail inside `task-invalid-acceptance-ref` (sk- + 23 chars). The carriers are the repo's own refusal code: auger.py:8617 and tests/test_xml_task_contract.py:299, plus 2 occurrences in .coding-hermes/board/tasks.jsonl. Post-fix the rule requires a non-alphanumeric left boundary, so the in-word match is gone while the source lines are unchanged.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "no_concerns_found",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261105T170854.274025Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nscanners: nice=nice -n 10\n3:50AM INF scanned ~3293573 bytes (3.29 MB) in 1.38s\n3:50AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 251 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261105T170854.274025Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [ 10%]\n........................................................................ [ 20%]\n........................................................................ [ 30%]\n........................................................................ [ 40%]\n..........................s............................................. [ 50%]\n.....s.................................................................. [ 60%]\n........................................................................ [ 70%]\n........................................................................ [ 80%]\n........................................................................ [ 90%]\n.......................................................................  [100%]\n717 passed, 2 skipped in 840.19s (0:14:00)\n== wrapper regression (AUG-081) ==\ngate prerequisite preflight: PASS\nAUG-116: zombie pid 448514 classified dead (kill -0 alone would have said alive)\nAUG-081 wrapper regression: PASS\nAUG-130 skipped-arm policy: PASS\n== end-to-end smoke ==\nnamespace: auger-smoke-449028\nnamespace sweep: no stale auger-smoke-*/auger-eval-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n  PASS toggle changed the stored configuration\n\n\u2026 [472 chars omitted \u2014 12 line(s)] \u2026\n== spec corpus (AUG-136) ==\nspec: 3 document(s), 12 block(s), 7 reference(s) ok\n== prd proofs (AUG-137) ==\nprd proofs: 8 total \u00b7 3 required \u00b7 5 deferred \u2192 PASS\n   P1  deferred not-run   not-run (deferred to AUG-119): auger.py carries no board surface (grep -c boardctl auger.py -> 0): resolving a\n   P2  required pass      corpus=9249B bundle=8131B latency=16.0ms  2 generated view(s) verified byte-identical to the generator's output for specs/; one block edit propagated to\n   P3  deferred not-run   not-run (deferred to AUG-153): the checker half is reachable (`auger spec check --diff-file` reports `trace-mi\n   P4  deferred not-run   not-run (deferred to AUG-119): writing and reading back a canonical boardctl row is boardctl's surface, not au\n   P5  required pass      corpus=1084B bundle=462B latency=739.3ms  one query returned migration=tests/fixtures/xml/verification/migrations/001_add_marker.sql, fixture=tests/fixt\n   P6  deferred not-run   not-run (deferred to AUG-124): what counts as judge evidence \u2014 excluding the worker summary, refusing a PASS w\n   P7  required pass      corpus=9249B bundle=2944B latency=143.0ms  4/12 blocks selected by `applies-to auger.spec.select`; bundle is 31.8% of the corpus (2944 of 9249 bytes), fl\n   P8  deferred not-run   not-run (deferred to AUG-153): the flag and the process-liveness assertion live in the GitReins hook, which no\nprd-proofs: /home/kara/auger/docs/prd/evidence/AUG-137-prd-proofs.json agrees with this run\n== docs check ==\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261105T170854.274025Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 gitleaks over the working tree reports ZERO findings. PROOF: cd /home/kara/auger && gitleaks detect --no-git --redact --source . --report-format json --report-path /tmp/aug159r-gl.json; python3 -c \"import json;d=json.load(open(\\\"/tmp/aug159r-gl.json\\\"));print(\\\"findings\\\",len(d),sorted({f[\\\"RuleID\\\"] for f in d}))\" FAILIF: the printed findings count is not 0 (pre-fix this printed 5 findings [sk-api-key] from the literal task-invalid-acceptance-ref).: Ran the exact proof: gitleaks (/home/kara/.local/bin/gitleaks) printed `scanned ~3293573 bytes (3.29 MB) in 1.68s` / `no leaks found`, GL_EXIT=0; the report parse printed `findings 0 []`. Zero findings, zero RuleIDs.\n  \u2713 The fix is a LEFT BOUNDARY on the rule, not a path allowlist and not a delete. PROOF: cd /home/kara/auger && grep -c -F \"(?:^|[^a-zA-Z0-9])sk-\" .gitleaks.toml FAILIF: the printed count is not 1 \u2014 the rule at .gitleaks.toml must carry the left boundary form (?:^|[^a-zA-Z0-9])sk-[a-zA-Z0-9_-]{20,} and no rule may be deleted or path-allowlisted to go green.: `grep -c -F \"(?:^|[^a-zA-Z0-9])sk-\" .gitleaks.toml` -> 1 (GREP_EXIT=0). .gitleaks.toml:15-19 is `id = \"sk-api-key\"` / `regex = '''(?i)(?:^|[^a-zA-Z0-9])sk-[a-zA-Z0-9_-]{20,}'''`; the pre-fix rule (git show ff38170^:.gitleaks.toml:14) was `(?i)sk-[a-zA-Z0-9_-]{20,}`. All 4 rules survive (sk-api-key, gitreins-github-pat, gitreins-gitlab-pat, gitreins-gcp-api-key \u2014 `grep -n 'id = '`), so nothing was deleted. `git show ff38170 -- .gitleaks.toml` shows no change to [allowlist].paths (grep for paths/.coding-hermes/auger.py/test_verdict_hygiene/.gitreins//docs/ over the +/- lines -> exit 1, no hits); the paths list is the pre-existing set. The one allowlist addition is a VALUE regex `(?i)sk-invalid-acceptance-ref`, not a path \u2014 the task forbids a path allowlist, and the real-binary probe below proves it does not suppress a real-shaped key.\n  \u2713 The narrowed rule still CATCHES a real-shaped key. PROOF: cd /home/kara/auger && /home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q -k \"real_shaped_key or error_code_literal or lookbehind\" FAILIF: any selected test fails, or the pass count is not 3 (test_real_shaped_key_still_matches pins that a 32-char sk- literal still fires; test_error_code_literal_does_not_match pins the false positive).: `/home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q -k \"real_shaped_key or error_code_literal or lookbehind\"` -> `...  [100%]` / `3 passed, 3 deselected in 0.01s`, exit 0. tests/test_verdict_hygiene.py:63-75 (test_real_shaped_key_still_matches) asserts the 32-char `sk-A1b2...O5p6` matches at start-of-input, after `=`, and after whitespace; :52-61 (test_error_code_literal_does_not_match) asserts the bare literal and 3 embedded contexts do not match.\n  \u2713 The rule stays RE2-loadable by the real binary, so zero findings is not vacuous. PROOF: cd /home/kara/auger && gitleaks detect --no-git --redact --source . ; echo \"gitleaks-exit=$?\" FAILIF: the run reports a config-parse error instead of scanning, or the exit code is not 0 on a clean tree (a schema-invalid .gitleaks.toml would make the zero-findings claim meaningless).: `gitleaks detect --no-git --redact --source .` -> `scanned ~3293573 bytes (3.29 MB) in 1.78s` / `no leaks found`, `gitleaks-exit=0`. No config-parse error; the byte count proves the scan actually ran. tomllib parse confirms the regex `(?i)(?:^|[^a-zA-Z0-9])sk-[a-zA-Z0-9_-]{20,}` contains no `(?<`, `(?=`, `(?!` tokens (RE2-safe).\n  \u2713 The narrowed rule still catches a real-shaped key with the REAL gitleaks binary (not just the Python re simulation), so the zero-findings result is not vacuous.: Scratch dir /tmp/aug159probe (outside the repo) with `OPENROUTER_API_KEY=sk-A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6`, `x = \"sk-invalid-acceptance-ref\"`, `code: task-invalid-acceptance-ref`; `gitleaks detect --config /home/kara/auger/.gitleaks.toml --no-git --source aug159probe` -> `leaks found: 1`, PROBE_EXIT=1, report `findings 1 [('sk-api-key', 'aug159probe/real_key.txt', '=sk-A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6')]`. The real key fires; both error-code-literal forms are suppressed. Scratch dir deleted afterwards; repo tree untouched (`git status --short .gitleaks.toml` empty).\n  \u2713 The fix does not dodge the scanner by path-allowlisting the affected files (auger.py, tests/test_xml_task_contract.py, .coding-hermes/board/tasks.jsonl) or by editing those source lines.: `git show ff38170 -- .gitleaks.toml` contains no added/removed line touching [allowlist].paths or naming .coding-hermes/auger.py/test_verdict_hygiene/.gitreins//docs/ (grep exit 1, no hits); the paths list is unchanged from pre-fix. The source lines still carry the literal: auger.py:8617 `\"task-invalid-acceptance-ref\",` and tests/test_xml_task_contract.py:299 `assert \"task-invalid-acceptance-ref\" in err, err`; .coding-hermes/board/tasks.jsonl still has 2 occurrences. The suppression comes from the rule boundary plus a value regex scoped to the exact literal, which the real-binary probe proved does not cover a real-shaped key.\n  \u2713 The boundary proof is enforced by the repo gate, not only by a standalone test file.: `/home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q` -> `......  [100%]` / `6 passed in 0.03s`, exit 0. tests/gate.sh:206 names `tests/test_verdict_hygiene.py` as an argument to the real `setsid timeout --kill-after=... python3 -m pytest ...` invocation (not a comment/echo), so the gate executes the boundary assertions.\n  \u2713 The false-positive carrier is the repo's own error-code literal rather than a credential, and the pre-fix rule demonstrably fired inside that word.: Pre-fix rule `(?i)sk-[a-zA-Z0-9_-]{20,}` (git show ff38170^:.gitleaks.toml:14) has no left boundary, so it matches the `sk-invalid-acceptance-ref` tail inside `task-invalid-acceptance-ref` (sk- + 23 chars). The carriers are the repo's own refusal code: auger.py:8617 and tests/test_xml_task_contract.py:299, plus 2 occurrences in .coding-hermes/board/tasks.jsonl. Post-fix the rule requires a non-alphanumeric left boundary, so the in-word match is gone while the source lines are unchanged.\nAll four given criteria and four derived criteria pass on fresh command evidence: gitleaks reports 0 findings with exit 0 on a real 3.29 MB scan, the sk-api-key rule carries the RE2-safe left boundary `(?:^|[^a-zA-Z0-9])sk-[a-zA-Z0-9_-]{20,}` with no rule deleted and no path allowlisted, the real binary still fires on a real-shaped key in a scratch dir while suppressing the error-code literal, and the 3 selected hygiene tests (6/6 overall) pass and are executed by tests/gate.sh:206.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 gitleaks over the working tree reports ZERO findings. PROOF: cd /home/kara/auger && gitleaks detect --no-git --redact --source . --report-format json --report-path /tmp/aug159r-gl.json; python3 -c \"import json;d=json.load(open(\\\"/tmp/aug159r-gl.json\\\"));print(\\\"findings\\\",len(d),sorted({f[\\\"RuleID\\\"] for f in d}))\" FAILIF: the printed findings count is not 0 (pre-fix this printed 5 findings [sk-api-key] from the literal task-invalid-acceptance-ref).: Ran the exact proof: gitleaks (/home/kara/.local/bin/gitleaks) printed `scanned ~3293573 bytes (3.29 MB) in 1.68s` / `no leaks found`, GL_EXIT=0; the report parse printed `findings 0 []`. Zero findings, zero RuleIDs.\n  \u2713 The fix is a LEFT BOUNDARY on the rule, not a path allowlist and not a delete. PROOF: cd /home/kara/auger && grep -c -F \"(?:^|[^a-zA-Z0-9])sk-\" .gitleaks.toml FAILIF: the printed count is not 1 \u2014 the rule at .gitleaks.toml must carry the left boundary form (?:^|[^a-zA-Z0-9])sk-[a-zA-Z0-9_-]{20,} and no rule may be deleted or path-allowlisted to go green.: `grep -c -F \"(?:^|[^a-zA-Z0-9])sk-\" .gitleaks.toml` -> 1 (GREP_EXIT=0). .gitleaks.toml:15-19 is `id = \"sk-api-key\"` / `regex = '''(?i)(?:^|[^a-zA-Z0-9])sk-[a-zA-Z0-9_-]{20,}'''`; the pre-fix rule (git show ff38170^:.gitleaks.toml:14) was `(?i)sk-[a-zA-Z0-9_-]{20,}`. All 4 rules survive (sk-api-key, gitreins-github-pat, gitreins-gitlab-pat, gitreins-gcp-api-key \u2014 `grep -n 'id = '`), so nothing was deleted. `git show ff38170 -- .gitleaks.toml` shows no change to [allowlist].paths (grep for paths/.coding-hermes/auger.py/test_verdict_hygiene/.gitreins//docs/ over the +/- lines -> exit 1, no hits); the paths list is the pre-existing set. The one allowlist addition is a VALUE regex `(?i)sk-invalid-acceptance-ref`, not a path \u2014 the task forbids a path allowlist, and the real-binary probe below proves it does not suppress a real-shaped key.\n\n\u2026 [3619 chars omitted \u2014 5 line(s)] \u2026\n  \u2713 The false-positive carrier is the repo's own error-code literal rather than a credential, and the pre-fix rule demonstrably fired inside that word.: Pre-fix rule `(?i)sk-[a-zA-Z0-9_-]{20,}` (git show ff38170^:.gitleaks.toml:14) has no left boundary, so it matches the `sk-invalid-acceptance-ref` tail inside `task-invalid-acceptance-ref` (sk- + 23 chars). The carriers are the repo's own refusal code: auger.py:8617 and tests/test_xml_task_contract.py:299, plus 2 occurrences in .coding-hermes/board/tasks.jsonl. Post-fix the rule requires a non-alphanumeric left boundary, so the in-word match is gone while the source lines are unchanged.\nAll four given criteria and four derived criteria pass on fresh command evidence: gitleaks reports 0 findings with exit 0 on a real 3.29 MB scan, the sk-api-key rule carries the RE2-safe left boundary `(?:^|[^a-zA-Z0-9])sk-[a-zA-Z0-9_-]{20,}` with no rule deleted and no path allowlisted, the real binary still fires on a real-shaped key in a scratch dir while suppressing the error-code literal, and the 3 selected hygiene tests (6/6 overall) pass and are executed by tests/gate.sh:206.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "gitleaks over the working tree reports ZERO findings. PROOF: cd /home/kara/auger && gitleaks detect --no-git --redact --source . --report-format json --report-path /tmp/aug159r-gl.json; python3 -c \"import json;d=json.load(open(\\\"/tmp/aug159r-gl.json\\\"));print(\\\"findings\\\",len(d),sorted({f[\\\"RuleID\\\"] for f in d}))\" FAILIF: the printed findings count is not 0 (pre-fix this printed 5 findings [sk-api-key] from the literal task-invalid-acceptance-ref).",
+                "status": "PASS",
+                "detail": "Ran the exact proof: gitleaks (/home/kara/.local/bin/gitleaks) printed `scanned ~3293573 bytes (3.29 MB) in 1.68s` / `no leaks found`, GL_EXIT=0; the report parse printed `findings 0 []`. Zero findings, zero RuleIDs."
+              },
+              {
+                "criterion": "The fix is a LEFT BOUNDARY on the rule, not a path allowlist and not a delete. PROOF: cd /home/kara/auger && grep -c -F \"(?:^|[^a-zA-Z0-9])sk-\" .gitleaks.toml FAILIF: the printed count is not 1 \u2014 the rule at .gitleaks.toml must carry the left boundary form (?:^|[^a-zA-Z0-9])sk-[a-zA-Z0-9_-]{20,} and no rule may be deleted or path-allowlisted to go green.",
+                "status": "PASS",
+                "detail": "`grep -c -F \"(?:^|[^a-zA-Z0-9])sk-\" .gitleaks.toml` -> 1 (GREP_EXIT=0). .gitleaks.toml:15-19 is `id = \"sk-api-key\"` / `regex = '''(?i)(?:^|[^a-zA-Z0-9])sk-[a-zA-Z0-9_-]{20,}'''`; the pre-fix rule (git show ff38170^:.gitleaks.toml:14) was `(?i)sk-[a-zA-Z0-9_-]{20,}`. All 4 rules survive (sk-api-key, gitreins-github-pat, gitreins-gitlab-pat, gitreins-gcp-api-key \u2014 `grep -n 'id = '`), so nothing was deleted. `git show ff38170 -- .gitleaks.toml` shows no change to [allowlist].paths (grep for paths/.coding-hermes/auger.py/test_verdict_hygiene/.gitreins//docs/ over the +/- lines -> exit 1, no hits); the paths list is the pre-existing set. The one allowlist addition is a VALUE regex `(?i)sk-invalid-acceptance-ref`, not a path \u2014 the task forbids a path allowlist, and the real-binary probe below proves it does not suppress a real-shaped key."
+              },
+              {
+                "criterion": "The narrowed rule still CATCHES a real-shaped key. PROOF: cd /home/kara/auger && /home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q -k \"real_shaped_key or error_code_literal or lookbehind\" FAILIF: any selected test fails, or the pass count is not 3 (test_real_shaped_key_still_matches pins that a 32-char sk- literal still fires; test_error_code_literal_does_not_match pins the false positive).",
+                "status": "PASS",
+                "detail": "`/home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q -k \"real_shaped_key or error_code_literal or lookbehind\"` -> `...  [100%]` / `3 passed, 3 deselected in 0.01s`, exit 0. tests/test_verdict_hygiene.py:63-75 (test_real_shaped_key_still_matches) asserts the 32-char `sk-A1b2...O5p6` matches at start-of-input, after `=`, and after whitespace; :52-61 (test_error_code_literal_does_not_match) asserts the bare literal and 3 embedded contexts do not match."
+              },
+              {
+                "criterion": "The rule stays RE2-loadable by the real binary, so zero findings is not vacuous. PROOF: cd /home/kara/auger && gitleaks detect --no-git --redact --source . ; echo \"gitleaks-exit=$?\" FAILIF: the run reports a config-parse error instead of scanning, or the exit code is not 0 on a clean tree (a schema-invalid .gitleaks.toml would make the zero-findings claim meaningless).",
+                "status": "PASS",
+                "detail": "`gitleaks detect --no-git --redact --source .` -> `scanned ~3293573 bytes (3.29 MB) in 1.78s` / `no leaks found`, `gitleaks-exit=0`. No config-parse error; the byte count proves the scan actually ran. tomllib parse confirms the regex `(?i)(?:^|[^a-zA-Z0-9])sk-[a-zA-Z0-9_-]{20,}` contains no `(?<`, `(?=`, `(?!` tokens (RE2-safe)."
+              },
+              {
+                "criterion": "The narrowed rule still catches a real-shaped key with the REAL gitleaks binary (not just the Python re simulation), so the zero-findings result is not vacuous.",
+                "status": "PASS",
+                "detail": "Scratch dir /tmp/aug159probe (outside the repo) with `OPENROUTER_API_KEY=sk-A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6`, `x = \"sk-invalid-acceptance-ref\"`, `code: task-invalid-acceptance-ref`; `gitleaks detect --config /home/kara/auger/.gitleaks.toml --no-git --source aug159probe` -> `leaks found: 1`, PROBE_EXIT=1, report `findings 1 [('sk-api-key', 'aug159probe/real_key.txt', '=sk-A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6')]`. The real key fires; both error-code-literal forms are suppressed. Scratch dir deleted afterwards; repo tree untouched (`git status --short .gitleaks.toml` empty).",
+                "derived": true
+              },
+              {
+                "criterion": "The fix does not dodge the scanner by path-allowlisting the affected files (auger.py, tests/test_xml_task_contract.py, .coding-hermes/board/tasks.jsonl) or by editing those source lines.",
+                "status": "PASS",
+                "detail": "`git show ff38170 -- .gitleaks.toml` contains no added/removed line touching [allowlist].paths or naming .coding-hermes/auger.py/test_verdict_hygiene/.gitreins//docs/ (grep exit 1, no hits); the paths list is unchanged from pre-fix. The source lines still carry the literal: auger.py:8617 `\"task-invalid-acceptance-ref\",` and tests/test_xml_task_contract.py:299 `assert \"task-invalid-acceptance-ref\" in err, err`; .coding-hermes/board/tasks.jsonl still has 2 occurrences. The suppression comes from the rule boundary plus a value regex scoped to the exact literal, which the real-binary probe proved does not cover a real-shaped key.",
+                "derived": true
+              },
+              {
+                "criterion": "The boundary proof is enforced by the repo gate, not only by a standalone test file.",
+                "status": "PASS",
+                "detail": "`/home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q` -> `......  [100%]` / `6 passed in 0.03s`, exit 0. tests/gate.sh:206 names `tests/test_verdict_hygiene.py` as an argument to the real `setsid timeout --kill-after=... python3 -m pytest ...` invocation (not a comment/echo), so the gate executes the boundary assertions.",
+                "derived": true
+              },
+              {
+                "criterion": "The false-positive carrier is the repo's own error-code literal rather than a credential, and the pre-fix rule demonstrably fired inside that word.",
+                "status": "PASS",
+                "detail": "Pre-fix rule `(?i)sk-[a-zA-Z0-9_-]{20,}` (git show ff38170^:.gitleaks.toml:14) has no left boundary, so it matches the `sk-invalid-acceptance-ref` tail inside `task-invalid-acceptance-ref` (sk- + 23 chars). The carriers are the repo's own refusal code: auger.py:8617 and tests/test_xml_task_contract.py:299, plus 2 occurrences in .coding-hermes/board/tasks.jsonl. Post-fix the rule requires a non-alphanumeric left boundary, so the in-word match is gone while the source lines are unchanged.",
+                "derived": true
+              }
+            ],
+            "summary": "All four given criteria and four derived criteria pass on fresh command evidence: gitleaks reports 0 findings with exit 0 on a real 3.29 MB scan, the sk-api-key rule carries the RE2-safe left boundary `(?:^|[^a-zA-Z0-9])sk-[a-zA-Z0-9_-]{20,}` with no rule deleted and no path allowlisted, the real binary still fires on a real-shaped key in a scratch dir while suppressing the error-code literal, and the 3 selected hygiene tests (6/6 overall) pass and are executed by tests/gate.sh:206.",
+            "provenance": {
+              "model": "deepseek-v4-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "deepseek-v4-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY"
+    }
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [
+      {
+        "severity": "high",
+        "file": ".coding-hermes/board/tasks.jsonl",
+        "line": 252,
+        "detection": "board row marked status=complete cites an evidence run_id whose verdict.json task_id does not equal the row id",
+        "detail": "AUG-158 is set to \"status\": \"complete\" with detail.evidence[].run_id=cca14d17, but .gitreins/history/2026-11-08/cca14d17/verdict.json has \"task_id\": \"AUG-158-159-R1\", and the repo's own audit (quoted in .gitreins/history/2026-11-08/34c25b45/verdict.json tier1 output) reports 'UNRESOLVABLE AUG-158 foreign-citation: cites only verdicts for other tasks: b15d6edc->AUG-157, cca14d17->AUG-158-159-R1'."
+      },
+      {
+        "severity": "high",
+        "file": ".coding-hermes/board/tasks.jsonl",
+        "line": 253,
+        "detection": "board row marked status=complete cites an evidence run_id whose verdict.json task_id does not equal the row id",
+        "detail": "AUG-159 is set to \"status\": \"complete\" with detail.evidence[].run_id=cca14d17, whose verdict.json task_id is AUG-158-159-R1, and the same audit output reports 'UNRESOLVABLE AUG-159 foreign-citation: cites only verdicts for other tasks: b15d6edc->AUG-157, cca14d17->AUG-158-159-R1'."
+      },
+      {
+        "severity": "high",
+        "file": ".coding-hermes/board/tasks.jsonl",
+        "line": 252,
+        "detection": "complete board row carries no top-level evidence_run_id field required by the committed audit test",
+        "detail": "tests/test_board_evidence_audit.py::test_every_bound_row_resolves_to_its_own_task fails in this very commit's tier1 output with 'complete row AUG-158 carries no machine-resolvable evidence_run_id' \u2014 the new complete rows add evidence only under detail.evidence[], not the top-level field the audit reads."
+      },
+      {
+        "severity": "high",
+        "file": ".coding-hermes/board/tasks.jsonl",
+        "line": 252,
+        "detection": "change makes the repo's own committed test suite fail (tier1 tests arm red)",
+        "detail": "The tier1 tests step recorded in .gitreins/history/2026-11-08/34c25b45/verdict.json shows '2 failed, 715 passed, 2 skipped' with FAILED tests/test_board_evidence_audit.py::test_the_committed_board_audits_clean and ::test_every_bound_row_resolves_to_its_own_task, both caused by the AUG-158/AUG-159 rows this diff completes."
+      },
+      {
+        "severity": "medium",
+        "file": ".gitreins/tasks.yaml",
+        "line": 1079,
+        "detection": "task marked complete while its own verdict artifact records passed=false",
+        "detail": "The AUG-159 entry is flipped to 'status: complete' at the same time the commit's own verdict .gitreins/history/2026-11-08/34c25b45/verdict.json records \"passed\": false / \"Overall: FAIL\" for the AUG-158 evaluation, and the commit message itself states 'a passed=false verdict is not a closure' as the repo's rule."
+      },
+      {
+        "severity": "medium",
+        "file": ".gitreins/history/2026-11-08/34c25b45/verdict.json",
+        "line": 0,
+        "detection": "committed verdict artifact is a FAIL verdict for the very commit that contains it, contradicting the commit message's claim of a green verdict",
+        "detail": "The commit message asserts closure 'on fresh verdict cca14d17 ... 7/7 items PASS', but the verdict.json added by this same commit has \"passed\": false, tier1 \"passed\": false, and summary 'Overall: FAIL \u2717' \u2014 the artifact and the narrative disagree."
+      },
+      {
+        "severity": "low",
+        "file": ".gitreins/tasks.yaml",
+        "line": 1079,
+        "detection": "task-completion timestamp precedes the verdict that supposedly justifies it",
+        "detail": "AUG-159's completed_at is '2026-11-08T08:50:31' while the cited verdict cca14d17 has evaluated_at '2026-11-08T07:26:13' and the later 34c25b45 verdict (evaluated_at 07:57:23) is a FAIL, so the completion is not backed by any passing verdict at or after its timestamp."
+      }
+    ],
+    "summary": "The board rows AUG-158/AUG-159 are closed against a verdict whose task_id is AUG-158-159-R1 (a foreign citation the repo's own audit flags as UNRESOLVABLE), the new complete rows lack the top-level evidence_run_id the committed audit test requires, and the commit's own verdict artifact records Overall: FAIL \u2014 so this change turns the repo's tier1 tests arm red while claiming a green closure."
+  },
+  "summary": "Stage tier1: PASS\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 gitleaks over the working tree reports ZERO findings. PROOF: cd /home/kara/auger && gitleaks detect --no-git --redact --source . --report-format json --report-path /tmp/aug159r-gl.json; python3 -c \"import json;d=json.load(open(\\\"/tmp/aug159r-gl.json\\\"));print(\\\"findings\\\",len(d),sorted({f[\\\"RuleID\\\"] for f in d}))\" FAILIF: the printed findings count is not 0 (pre-fix this printed 5 findings [sk-api-key] from the literal task-invalid-acceptance-ref).: Ran the exact proof: gitleaks (/home/kara/.local/bin/gitleaks) printed `scanned ~3293573 bytes (3.29 MB) in 1.68s` / `no leaks found`, GL_EXIT=0; the report parse printed `findings 0 []`. Zero findings, zero RuleIDs.\n  \u2713 The fix is a LEFT BOUNDARY on the rule, not a path allowlist and not a delete. PROOF: cd /home/kara/auger && grep -c -F \"(?:^|[^a-zA-Z0-9])sk-\" .gitleaks.toml FAILIF: the printed count is not 1 \u2014 the rule at .gitleaks.toml must carry the left boundary form (?:^|[^a-zA-Z0-9])sk-[a-zA-Z0-9_-]{20,} and no rule may be deleted or path-allowlisted to go green.: `grep -c -F \"(?:^|[^a-zA-Z0-9])sk-\" .gitleaks.toml` -> 1 (GREP_EXIT=0). .gitleaks.toml:15-19 is `id = \"sk-api-key\"` / `regex = '''(?i)(?:^|[^a-zA-Z0-9])sk-[a-zA-Z0-9_-]{20,}'''`; the pre-fix rule (git show ff38170^:.gitleaks.toml:14) was `(?i)sk-[a-zA-Z0-9_-]{20,}`. All 4 rules survive (sk-api-key, gitreins-github-pat, gitreins-gitlab-pat, gitreins-gcp-api-key \u2014 `grep -n 'id = '`), so nothing was deleted. `git show ff38170 -- .gitleaks.toml` shows no change to [allowlist].paths (grep for paths/.coding-hermes/auger.py/test_verdict_hygiene/.gitreins//docs/ over the +/- lines -> exit 1, no hits); the paths list is the pre-existing set. The one allowlist addition is a VALUE regex `(?i)sk-invalid-acceptance-ref`, not a path \u2014 the task forbids a path allowlist, and the real-binary probe below proves it does not suppress a real-shaped key.\n  \u2713 The narrowed rule still CATCHES a real-shaped key. PROOF: cd /home/kara/auger && /home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q -k \"real_shaped_key or error_code_literal or lookbehind\" FAILIF: any selected test fails, or the pass count is not 3 (test_real_shaped_key_still_matches pins that a 32-char sk- literal still fires; test_error_code_literal_does_not_match pins the false positive).: `/home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q -k \"real_shaped_key or error_code_literal or lookbehind\"` -> `...  [100%]` / `3 passed, 3 deselected in 0.01s`, exit 0. tests/test_verdict_hygiene.py:63-75 (test_real_shaped_key_still_matches) asserts the 32-char `sk-A1b2...O5p6` matches at start-of-input, after `=`, and after whitespace; :52-61 (test_error_code_literal_does_not_match) asserts the bare literal and 3 embedded contexts do not match.\n  \u2713 The rule stays RE2-loadable by the real binary, so zero findings is not vacuous. PROOF: cd /home/kara/auger && gitleaks detect --no-git --redact --source . ; echo \"gitleaks-exit=$?\" FAILIF: the run reports a config-parse error instead of scanning, or the exit code is not 0 on a clean tree (a schema-invalid .gitleaks.toml would make the zero-findings claim meaningless).: `gitleaks detect --no-git --redact --source .` -> `scanned ~3293573 bytes (3.29 MB) in 1.78s` / `no leaks found`, `gitleaks-exit=0`. No config-parse error; the byte count proves the scan actually ran. tomllib parse confirms the regex `(?i)(?:^|[^a-zA-Z0-9])sk-[a-zA-Z0-9_-]{20,}` contains no `(?<`, `(?=`, `(?!` tokens (RE2-safe).\n  \u2713 The narrowed rule still catches a real-shaped key with the REAL gitleaks binary (not just the Python re simulation), so the zero-findings result is not vacuous.: Scratch dir /tmp/aug159probe (outside the repo) with `OPENROUTER_API_KEY=sk-A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6`, `x = \"sk-invalid-acceptance-ref\"`, `code: task-invalid-acceptance-ref`; `gitleaks detect --config /home/kara/auger/.gitleaks.toml --no-git --source aug159probe` -> `leaks found: 1`, PROBE_EXIT=1, report `findings 1 [('sk-api-key', 'aug159probe/real_key.txt', '=sk-A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6')]`. The real key fires; both error-code-literal forms are suppressed. Scratch dir deleted afterwards; repo tree untouched (`git status --short .gitleaks.toml` empty).\n  \u2713 The fix does not dodge the scanner by path-allowlisting the affected files (auger.py, tests/test_xml_task_contract.py, .coding-hermes/board/tasks.jsonl) or by editing those source lines.: `git show ff38170 -- .gitleaks.toml` contains no added/removed line touching [allowlist].paths or naming .coding-hermes/auger.py/test_verdict_hygiene/.gitreins//docs/ (grep exit 1, no hits); the paths list is unchanged from pre-fix. The source lines still carry the literal: auger.py:8617 `\"task-invalid-acceptance-ref\",` and tests/test_xml_task_contract.py:299 `assert \"task-invalid-acceptance-ref\" in err, err`; .coding-hermes/board/tasks.jsonl still has 2 occurrences. The suppression comes from the rule boundary plus a value regex scoped to the exact literal, which the real-binary probe proved does not cover a real-shaped key.\n  \u2713 The boundary proof is enforced by the repo gate, not only by a standalone test file.: `/home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q` -> `......  [100%]` / `6 passed in 0.03s`, exit 0. tests/gate.sh:206 names `tests/test_verdict_hygiene.py` as an argument to the real `setsid timeout --kill-after=... python3 -m pytest ...` invocation (not a comment/echo), so the gate executes the boundary assertions.\n  \u2713 The false-positive carrier is the repo's own error-code literal rather than a credential, and the pre-fix rule demonstrably fired inside that word.: Pre-fix rule `(?i)sk-[a-zA-Z0-9_-]{20,}` (git show ff38170^:.gitleaks.toml:14) has no left boundary, so it matches the `sk-invalid-acceptance-ref` tail inside `task-invalid-acceptance-ref` (sk- + 23 chars). The carriers are the repo's own refusal code: auger.py:8617 and tests/test_xml_task_contract.py:299, plus 2 occurrences in .coding-hermes/board/tasks.jsonl. Post-fix the rule requires a non-alphanumeric left boundary, so the in-word match is gone while the source lines are unchanged.\nAll four given criteria and four derived criteria pass on fresh command evidence: gitleaks reports 0 findings with exit 0 on a real 3.29 MB scan, the sk-api-key rule carries the RE2-safe left boundary `(?:^|[^a-zA-Z0-9])sk-[a-zA-Z0-9_-]{20,}` with no rule deleted and no path allowlisted, the real binary still fires on a real-shaped key in a scratch dir while suppressing the error-code literal, and the 3 selected hygiene tests (6/6 overall) pass and are executed by tests/gate.sh:206.\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-11-08T09:05:50.280304",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-08T09:05:50.312596+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 134525,
+        "truncated": false,
+        "source": "git show 195db532b69c"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 185882,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-159"
+  }
+}

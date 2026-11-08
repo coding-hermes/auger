@@ -1,0 +1,276 @@
+{
+  "task_id": "AUG-158",
+  "task_title": "AUG-158: tier1 lint arm clean \u2014 tracked-python ruff scope graded over the whole tree (valued on row AUG-158)",
+  "task_criteria": [
+    "No tracked python file carries a ruff finding. PROOF: cd /home/kara/auger && git ls-files '*.py' | xargs /home/kara/.local/bin/ruff check --force-exclude FAILIF: the command exits non-zero, or its output contains an F-code diagnostic (the pre-fix tree printed exactly one: evidence/sg8/arm_bite_probe.py:19:8 F401 'sys' imported but unused).",
+    "The fix is a real correction, not a scope deletion. PROOF: cd /home/kara/auger && grep -c 'tool.ruff' pyproject.toml; grep -c '^import sys' evidence/sg8/arm_bite_probe.py FAILIF: either printed count is not 0 \u2014 the repo has no ruff exclude block (nothing was excluded to go green) and the unused sys import is gone rather than suppressed.",
+    "The hygiene proof suite passes and pins the tracked-python scope. PROOF: cd /home/kara/auger && /home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q FAILIF: any test in that file fails, or the reported pass count is not 6 (test_all_tracked_python_is_ruff_clean is the arm that would have caught the F401).",
+    "The gate's pytest arm still names the hygiene file. PROOF: cd /home/kara/auger && grep -c 'test_verdict_hygiene.py' tests/gate.sh FAILIF: the printed count is not at least 1."
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "195db532b69c84812a8d5323be66d275b8ddadc4",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "03c5c16f8779fe81886ea1b7abbe0975f4cd3a52ea4312f11873893962e47d0b",
+  "working_tree_dirty_path_count": 2701,
+  "items": [
+    {
+      "criterion": "No tracked python file carries a ruff finding. PROOF: cd /home/kara/auger && git ls-files '*.py' | xargs /home/kara/.local/bin/ruff check --force-exclude FAILIF: the command exits non-zero, or its output contains an F-code diagnostic (the pre-fix tree printed exactly one: evidence/sg8/arm_bite_probe.py:19:8 F401 'sys' imported but unused).",
+      "status": "PASS",
+      "detail": "Ran the exact proof command: output `All checks passed!`, EXIT=0 \u2014 no F-code diagnostic. Scope is the whole tree: `git ls-files '*.py' | wc -l` -> 41 files. The pre-fix site is fixed: evidence/sg8/arm_bite_probe.py:18-19 now imports only `importlib.util` and `from pathlib import Path`."
+    },
+    {
+      "criterion": "The fix is a real correction, not a scope deletion. PROOF: cd /home/kara/auger && grep -c 'tool.ruff' pyproject.toml; grep -c '^import sys' evidence/sg8/arm_bite_probe.py FAILIF: either printed count is not 0 \u2014 the repo has no ruff exclude block (nothing was excluded to go green) and the unused sys import is gone rather than suppressed.",
+      "status": "PASS",
+      "detail": "`grep -c 'tool.ruff' pyproject.toml` -> 0 (grep_exit=1); `grep -c '^import sys' evidence/sg8/arm_bite_probe.py` -> 0 (grep_exit=1). Both counts are 0 as required. Corroborating: no ruff.toml/.ruff.toml/setup.cfg exists (`ls` -> No such file), `grep -rn 'tool\\.ruff' --include=*.toml .` -> nothing, and `grep -n 'noqa' evidence/sg8/arm_bite_probe.py` -> no hits (exit 1), so the import was deleted, not suppressed. git log confirms the removal landed in ff38170."
+    },
+    {
+      "criterion": "The hygiene proof suite passes and pins the tracked-python scope. PROOF: cd /home/kara/auger && /home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q FAILIF: any test in that file fails, or the reported pass count is not 6 (test_all_tracked_python_is_ruff_clean is the arm that would have caught the F401).",
+      "status": "PASS",
+      "detail": "`/home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q` -> `......  [100%]` / `6 passed in 0.03s`, exit 0. Pass count is exactly 6, no failures. The scope is genuinely pinned: tests/test_verdict_hygiene.py:120-152 (test_all_tracked_python_is_ruff_clean) runs `git ls-files '*.py'` then `ruff check --force-exclude <tracked>` and asserts returncode == 0."
+    },
+    {
+      "criterion": "The gate's pytest arm still names the hygiene file. PROOF: cd /home/kara/auger && grep -c 'test_verdict_hygiene.py' tests/gate.sh FAILIF: the printed count is not at least 1.",
+      "status": "PASS",
+      "detail": "`grep -c 'test_verdict_hygiene.py' tests/gate.sh` -> 1 (GATE_GREP_EXIT=0), which is at least 1. The sole hit is tests/gate.sh:206, an argument to the real `setsid timeout --kill-after=... python3 -m pytest ... tests/test_verdict_hygiene.py \"$@\"` invocation, not a comment or echo."
+    },
+    {
+      "criterion": "The hygiene test must actually bite: re-introducing the F401 must make test_all_tracked_python_is_ruff_clean fail (not silently skip or pass).",
+      "status": "PASS",
+      "detail": "Injected `import sys` back at evidence/sg8/arm_bite_probe.py:19: ruff over tracked python printed `F401 [*] `sys` imported but unused --> evidence/sg8/arm_bite_probe.py:19:8 ... Found 1 error.` with RUFF_EXIT=123, and pytest reported `FAILED tests/test_verdict_hygiene.py::TestLintScopeMatchesTier1::test_all_tracked_python_is_ruff_clean` / `1 failed, 5 passed`. The test does not skip \u2014 ruff resolves via shutil.which to /home/kara/.local/bin/ruff. File restored afterwards: git status clean, ruff `All checks passed!` EXIT=0.",
+      "derived": true
+    },
+    {
+      "criterion": "Removing the import must not break the probe: evidence/sg8/arm_bite_probe.py still runs its documented invocation after the edit.",
+      "status": "PASS",
+      "detail": "`grep -n 'sys\\.' evidence/sg8/arm_bite_probe.py` -> no hits (exit 1), confirming the import was genuinely unused. `py_compile` -> `compiles OK`. Documented invocation `.venv/bin/python evidence/sg8/arm_bite_probe.py` -> `PROBE-OK narrowed arm -> assertion FAILED ...`, `PROBE-OK unmodified arm -> assertion PASSED`, `PROBE RESULT: the arm assertion bites on a narrowed arm and passes on the real one`.",
+      "derived": true
+    },
+    {
+      "criterion": "The gate's own lint arm still passes after the edit (tests/gate.sh:219 `ruff check auger.py`).",
+      "status": "PASS",
+      "detail": "`PATH=$PWD/.venv/bin:$PATH bash -c 'command -v ruff && ruff check auger.py'` -> `/home/kara/.local/bin/ruff` / `All checks passed!` / LINT_ARM_RC=0. Also `pytest tests/test_spec_repository_root.py -q` -> `9 passed in 3.39s`.",
+      "derived": true
+    },
+    {
+      "criterion": "The value the hygiene test grades is the value the tier1 lint arm grades \u2014 the test's scope must match the whole-tree scope, not a narrower subset.",
+      "status": "PASS",
+      "detail": "tests/test_verdict_hygiene.py:130-141 builds the file list from `git ls-files '*.py'` (41 files) and passes it to `ruff check --force-exclude`, which is exactly the scope the tier1 lint arm grades (`git ls-files '*.py' | xargs ruff check --force-exclude`). The bite test above proves the seam is live: a single F401 anywhere in that list turns both the standalone command and the test red.",
+      "derived": true
+    },
+    {
+      "criterion": "The green result comes from the code, not from config suppression \u2014 no ruff exclude block, no per-file noqa, no alternate ruff config file.",
+      "status": "PASS",
+      "detail": "`grep -c 'tool.ruff' pyproject.toml` -> 0; `ls ruff.toml .ruff.toml setup.cfg` -> all three `No such file or directory`; `grep -rn 'tool\\.ruff' --include=*.toml .` -> no output; `grep -n 'noqa' evidence/sg8/arm_bite_probe.py` -> no hits (exit 1). Nothing was excluded or suppressed to go green.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "no_concerns_found",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": false,
+      "any_failed": true,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2717 tests: FAIL (tests/test_auger.py::test_no_test_namespace_survives_the_suite [first failing id])",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261105T170854.274025Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nscanners: nice=nice -n 10\n3:03AM INF scanned ~3293573 bytes (3.29 MB) in 1.55s\n3:03AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 251 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261105T170854.274025Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": false,
+          "output": "scanners: nice=nice -n 10\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [ 10%]\n........................................................................ [ 20%]\n.................................E.E.E.E.E.E.E.......................... [ 29%]\n.....F.................................................................. [ 39%]\n.................................s...................................... [ 49%]\n............s........................................................... [ 59%]\n........................................................................ [ 69%]\n........................................................................ [ 79%]\n........................................................................ [ 89%]\n........................................................................ [ 99%]\n......                                                                   [100%]\n==================================== ERRORS ====================================\n_ ERROR at teardown of test_ask_sends_the_six_exact_new_question_criteria_to_jev _\n\nlive_service = 'http://127.0.0.1:3000'\n\n    @pytest.fixture\n    def ns_created(live_service: str) -> str:\n        \"\"\"A fresh ephemeral namespace, removed in a finalizer even when the test fails.\n    \n        Depends on `live_service`, so the cross-process substrate lock is held for the whole\n        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to\n        every call the fixture and the test make against the live substrate.\n        \"\"\"\n        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]\n        status, body, _ = auger.db(\"/api/namespaces\", \"POST\", {\"name\": ns})\n        if status not in (200, 201):\n            pytest.fail(f\"could not create test namespace {ns} ({status}): {body}\")\n        CREATED.append(ns)\n        try:\n            yield ns\n        finally:\n            problems = teardown_namespace(ns)\n            if problems:\n                if any(\"429\" in p for p in problems):\n                    # The limiter beat even the transport's own budget on this one namespace.\n                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note \u2014 a\n\n\u2026 [20772 chars omitted \u2014 320 line(s)] \u2026\nE         \nE         Differing items:\nE         {'disk': ['auger-pytest-3b937600-2fafc0d91c5a', 'auger-pytest-3b937600-7914abb4fdc3', 'auger-pytest-3b937600-8d21d3e49...'auger-pytest-3b937600-96edd84afc77', 'auger-pytest-3b937600-d63754959a74', 'auger-pytest-3b937600-e552863308bc', ...]} != {'disk': []}\nE         {'api': ['auger-pytest-3b937600-d63754959a74', 'auger-pytest-3b937600-e92b0f0da084', 'auger-pytest-3b937600-2fafc0d91c...'auger-pytest-3b937600-7914abb4fdc3', 'auger-pytest-3b937600-8d21d3e49171', 'auger-pytest-3b937600-96edd84afc77', ...]} != {'api': []}\nE         Use -v to get more diff\n\ntests/test_auger.py:6377: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_auger.py::test_no_test_namespace_survives_the_suite - Asser...\nERROR tests/test_auger.py::test_ask_sends_the_six_exact_new_question_criteria_to_jev\nERROR tests/test_auger.py::test_ask_unknown_criterion_is_fail_closed_and_names_the_slug\nERROR tests/test_auger.py::test_ask_none_criterion_is_not_stored - Failed: te...\nERROR tests/test_auger.py::test_ask_does_not_store_the_same_question_twice - ...\nERROR tests/test_auger.py::test_ask_does_not_repropose_a_question_after_answer_closes_it\nERROR tests/test_auger.py::test_ask_stores_a_different_question_after_answer_closes_the_first\nERROR tests/test_auger.py::test_ask_stores_nothing_when_a_gate_refuses_the_proposal[_stub-JEV proposed no question]\n1 failed, 716 passed, 2 skipped, 7 errors in 1448.96s (0:24:08)\n",
+          "error": "",
+          "data": {
+            "exit_code": 1,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261105T170854.274025Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 No tracked python file carries a ruff finding. PROOF: cd /home/kara/auger && git ls-files '*.py' | xargs /home/kara/.local/bin/ruff check --force-exclude FAILIF: the command exits non-zero, or its output contains an F-code diagnostic (the pre-fix tree printed exactly one: evidence/sg8/arm_bite_probe.py:19:8 F401 'sys' imported but unused).: Ran the exact proof command: output `All checks passed!`, EXIT=0 \u2014 no F-code diagnostic. Scope is the whole tree: `git ls-files '*.py' | wc -l` -> 41 files. The pre-fix site is fixed: evidence/sg8/arm_bite_probe.py:18-19 now imports only `importlib.util` and `from pathlib import Path`.\n  \u2713 The fix is a real correction, not a scope deletion. PROOF: cd /home/kara/auger && grep -c 'tool.ruff' pyproject.toml; grep -c '^import sys' evidence/sg8/arm_bite_probe.py FAILIF: either printed count is not 0 \u2014 the repo has no ruff exclude block (nothing was excluded to go green) and the unused sys import is gone rather than suppressed.: `grep -c 'tool.ruff' pyproject.toml` -> 0 (grep_exit=1); `grep -c '^import sys' evidence/sg8/arm_bite_probe.py` -> 0 (grep_exit=1). Both counts are 0 as required. Corroborating: no ruff.toml/.ruff.toml/setup.cfg exists (`ls` -> No such file), `grep -rn 'tool\\.ruff' --include=*.toml .` -> nothing, and `grep -n 'noqa' evidence/sg8/arm_bite_probe.py` -> no hits (exit 1), so the import was deleted, not suppressed. git log confirms the removal landed in ff38170.\n  \u2713 The hygiene proof suite passes and pins the tracked-python scope. PROOF: cd /home/kara/auger && /home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q FAILIF: any test in that file fails, or the reported pass count is not 6 (test_all_tracked_python_is_ruff_clean is the arm that would have caught the F401).: `/home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q` -> `......  [100%]` / `6 passed in 0.03s`, exit 0. Pass count is exactly 6, no failures. The scope is genuinely pinned: tests/test_verdict_hygiene.py:120-152 (test_all_tracked_python_is_ruff_clean) runs `git ls-files '*.py'` then `ruff check --force-exclude <tracked>` and asserts returncode == 0.\n  \u2713 The gate's pytest arm still names the hygiene file. PROOF: cd /home/kara/auger && grep -c 'test_verdict_hygiene.py' tests/gate.sh FAILIF: the printed count is not at least 1.: `grep -c 'test_verdict_hygiene.py' tests/gate.sh` -> 1 (GATE_GREP_EXIT=0), which is at least 1. The sole hit is tests/gate.sh:206, an argument to the real `setsid timeout --kill-after=... python3 -m pytest ... tests/test_verdict_hygiene.py \"$@\"` invocation, not a comment or echo.\n  \u2713 The hygiene test must actually bite: re-introducing the F401 must make test_all_tracked_python_is_ruff_clean fail (not silently skip or pass).: Injected `import sys` back at evidence/sg8/arm_bite_probe.py:19: ruff over tracked python printed `F401 [*] `sys` imported but unused --> evidence/sg8/arm_bite_probe.py:19:8 ... Found 1 error.` with RUFF_EXIT=123, and pytest reported `FAILED tests/test_verdict_hygiene.py::TestLintScopeMatchesTier1::test_all_tracked_python_is_ruff_clean` / `1 failed, 5 passed`. The test does not skip \u2014 ruff resolves via shutil.which to /home/kara/.local/bin/ruff. File restored afterwards: git status clean, ruff `All checks passed!` EXIT=0.\n  \u2713 Removing the import must not break the probe: evidence/sg8/arm_bite_probe.py still runs its documented invocation after the edit.: `grep -n 'sys\\.' evidence/sg8/arm_bite_probe.py` -> no hits (exit 1), confirming the import was genuinely unused. `py_compile` -> `compiles OK`. Documented invocation `.venv/bin/python evidence/sg8/arm_bite_probe.py` -> `PROBE-OK narrowed arm -> assertion FAILED ...`, `PROBE-OK unmodified arm -> assertion PASSED`, `PROBE RESULT: the arm assertion bites on a narrowed arm and passes on the real one`.\n  \u2713 The gate's own lint arm still passes after the edit (tests/gate.sh:219 `ruff check auger.py`).: `PATH=$PWD/.venv/bin:$PATH bash -c 'command -v ruff && ruff check auger.py'` -> `/home/kara/.local/bin/ruff` / `All checks passed!` / LINT_ARM_RC=0. Also `pytest tests/test_spec_repository_root.py -q` -> `9 passed in 3.39s`.\n  \u2713 The value the hygiene test grades is the value the tier1 lint arm grades \u2014 the test's scope must match the whole-tree scope, not a narrower subset.: tests/test_verdict_hygiene.py:130-141 builds the file list from `git ls-files '*.py'` (41 files) and passes it to `ruff check --force-exclude`, which is exactly the scope the tier1 lint arm grades (`git ls-files '*.py' | xargs ruff check --force-exclude`). The bite test above proves the seam is live: a single F401 anywhere in that list turns both the standalone command and the test red.\n  \u2713 The green result comes from the code, not from config suppression \u2014 no ruff exclude block, no per-file noqa, no alternate ruff config file.: `grep -c 'tool.ruff' pyproject.toml` -> 0; `ls ruff.toml .ruff.toml setup.cfg` -> all three `No such file or directory`; `grep -rn 'tool\\.ruff' --include=*.toml .` -> no output; `grep -n 'noqa' evidence/sg8/arm_bite_probe.py` -> no hits (exit 1). Nothing was excluded or suppressed to go green.\nAll four given criteria and all five derived criteria pass on fresh command evidence: ruff over all 41 tracked python files is clean (rc 0, no F-code), the unused `import sys` was deleted rather than suppressed with no ruff exclude block or noqa anywhere, the hygiene suite passes 6/6 and provably bites when the F401 is re-injected, the probe still runs its documented invocation, and tests/gate.sh:206 actually executes that file so the full-tree scope is gate-enforced.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 No tracked python file carries a ruff finding. PROOF: cd /home/kara/auger && git ls-files '*.py' | xargs /home/kara/.local/bin/ruff check --force-exclude FAILIF: the command exits non-zero, or its output contains an F-code diagnostic (the pre-fix tree printed exactly one: evidence/sg8/arm_bite_probe.py:19:8 F401 'sys' imported but unused).: Ran the exact proof command: output `All checks passed!`, EXIT=0 \u2014 no F-code diagnostic. Scope is the whole tree: `git ls-files '*.py' | wc -l` -> 41 files. The pre-fix site is fixed: evidence/sg8/arm_bite_probe.py:18-19 now imports only `importlib.util` and `from pathlib import Path`.\n  \u2713 The fix is a real correction, not a scope deletion. PROOF: cd /home/kara/auger && grep -c 'tool.ruff' pyproject.toml; grep -c '^import sys' evidence/sg8/arm_bite_probe.py FAILIF: either printed count is not 0 \u2014 the repo has no ruff exclude block (nothing was excluded to go green) and the unused sys import is gone rather than suppressed.: `grep -c 'tool.ruff' pyproject.toml` -> 0 (grep_exit=1); `grep -c '^import sys' evidence/sg8/arm_bite_probe.py` -> 0 (grep_exit=1). Both counts are 0 as required. Corroborating: no ruff.toml/.ruff.toml/setup.cfg exists (`ls` -> No such file), `grep -rn 'tool\\.ruff' --include=*.toml .` -> nothing, and `grep -n 'noqa' evidence/sg8/arm_bite_probe.py` -> no hits (exit 1), so the import was deleted, not suppressed. git log confirms the removal landed in ff38170.\n  \u2713 The hygiene proof suite passes and pins the tracked-python scope. PROOF: cd /home/kara/auger && /home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q FAILIF: any test in that file fails, or the reported pass count is not 6 (test_all_tracked_python_is_ruff_clean is the arm that would have caught the F401).: `/home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q` -> `......  [100%]` / `6 passed in 0.03s`, exit 0. Pass count is exactly 6, no failures. The scope is genuinely pinned: tests/test_verdict_hygiene.py:120-152 (test_all_tracked_python_is_ruff_clean) runs `git ls-files '*.py'` then `ruff check --force-exclude <tracked>` and asserts returncode == 0.\n\n\u2026 [1999 chars omitted \u2014 4 line(s)] \u2026\n  \u2713 The value the hygiene test grades is the value the tier1 lint arm grades \u2014 the test's scope must match the whole-tree scope, not a narrower subset.: tests/test_verdict_hygiene.py:130-141 builds the file list from `git ls-files '*.py'` (41 files) and passes it to `ruff check --force-exclude`, which is exactly the scope the tier1 lint arm grades (`git ls-files '*.py' | xargs ruff check --force-exclude`). The bite test above proves the seam is live: a single F401 anywhere in that list turns both the standalone command and the test red.\n  \u2713 The green result comes from the code, not from config suppression \u2014 no ruff exclude block, no per-file noqa, no alternate ruff config file.: `grep -c 'tool.ruff' pyproject.toml` -> 0; `ls ruff.toml .ruff.toml setup.cfg` -> all three `No such file or directory`; `grep -rn 'tool\\.ruff' --include=*.toml .` -> no output; `grep -n 'noqa' evidence/sg8/arm_bite_probe.py` -> no hits (exit 1). Nothing was excluded or suppressed to go green.\nAll four given criteria and all five derived criteria pass on fresh command evidence: ruff over all 41 tracked python files is clean (rc 0, no F-code), the unused `import sys` was deleted rather than suppressed with no ruff exclude block or noqa anywhere, the hygiene suite passes 6/6 and provably bites when the F401 is re-injected, the probe still runs its documented invocation, and tests/gate.sh:206 actually executes that file so the full-tree scope is gate-enforced.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "No tracked python file carries a ruff finding. PROOF: cd /home/kara/auger && git ls-files '*.py' | xargs /home/kara/.local/bin/ruff check --force-exclude FAILIF: the command exits non-zero, or its output contains an F-code diagnostic (the pre-fix tree printed exactly one: evidence/sg8/arm_bite_probe.py:19:8 F401 'sys' imported but unused).",
+                "status": "PASS",
+                "detail": "Ran the exact proof command: output `All checks passed!`, EXIT=0 \u2014 no F-code diagnostic. Scope is the whole tree: `git ls-files '*.py' | wc -l` -> 41 files. The pre-fix site is fixed: evidence/sg8/arm_bite_probe.py:18-19 now imports only `importlib.util` and `from pathlib import Path`."
+              },
+              {
+                "criterion": "The fix is a real correction, not a scope deletion. PROOF: cd /home/kara/auger && grep -c 'tool.ruff' pyproject.toml; grep -c '^import sys' evidence/sg8/arm_bite_probe.py FAILIF: either printed count is not 0 \u2014 the repo has no ruff exclude block (nothing was excluded to go green) and the unused sys import is gone rather than suppressed.",
+                "status": "PASS",
+                "detail": "`grep -c 'tool.ruff' pyproject.toml` -> 0 (grep_exit=1); `grep -c '^import sys' evidence/sg8/arm_bite_probe.py` -> 0 (grep_exit=1). Both counts are 0 as required. Corroborating: no ruff.toml/.ruff.toml/setup.cfg exists (`ls` -> No such file), `grep -rn 'tool\\.ruff' --include=*.toml .` -> nothing, and `grep -n 'noqa' evidence/sg8/arm_bite_probe.py` -> no hits (exit 1), so the import was deleted, not suppressed. git log confirms the removal landed in ff38170."
+              },
+              {
+                "criterion": "The hygiene proof suite passes and pins the tracked-python scope. PROOF: cd /home/kara/auger && /home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q FAILIF: any test in that file fails, or the reported pass count is not 6 (test_all_tracked_python_is_ruff_clean is the arm that would have caught the F401).",
+                "status": "PASS",
+                "detail": "`/home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q` -> `......  [100%]` / `6 passed in 0.03s`, exit 0. Pass count is exactly 6, no failures. The scope is genuinely pinned: tests/test_verdict_hygiene.py:120-152 (test_all_tracked_python_is_ruff_clean) runs `git ls-files '*.py'` then `ruff check --force-exclude <tracked>` and asserts returncode == 0."
+              },
+              {
+                "criterion": "The gate's pytest arm still names the hygiene file. PROOF: cd /home/kara/auger && grep -c 'test_verdict_hygiene.py' tests/gate.sh FAILIF: the printed count is not at least 1.",
+                "status": "PASS",
+                "detail": "`grep -c 'test_verdict_hygiene.py' tests/gate.sh` -> 1 (GATE_GREP_EXIT=0), which is at least 1. The sole hit is tests/gate.sh:206, an argument to the real `setsid timeout --kill-after=... python3 -m pytest ... tests/test_verdict_hygiene.py \"$@\"` invocation, not a comment or echo."
+              },
+              {
+                "criterion": "The hygiene test must actually bite: re-introducing the F401 must make test_all_tracked_python_is_ruff_clean fail (not silently skip or pass).",
+                "status": "PASS",
+                "detail": "Injected `import sys` back at evidence/sg8/arm_bite_probe.py:19: ruff over tracked python printed `F401 [*] `sys` imported but unused --> evidence/sg8/arm_bite_probe.py:19:8 ... Found 1 error.` with RUFF_EXIT=123, and pytest reported `FAILED tests/test_verdict_hygiene.py::TestLintScopeMatchesTier1::test_all_tracked_python_is_ruff_clean` / `1 failed, 5 passed`. The test does not skip \u2014 ruff resolves via shutil.which to /home/kara/.local/bin/ruff. File restored afterwards: git status clean, ruff `All checks passed!` EXIT=0.",
+                "derived": true
+              },
+              {
+                "criterion": "Removing the import must not break the probe: evidence/sg8/arm_bite_probe.py still runs its documented invocation after the edit.",
+                "status": "PASS",
+                "detail": "`grep -n 'sys\\.' evidence/sg8/arm_bite_probe.py` -> no hits (exit 1), confirming the import was genuinely unused. `py_compile` -> `compiles OK`. Documented invocation `.venv/bin/python evidence/sg8/arm_bite_probe.py` -> `PROBE-OK narrowed arm -> assertion FAILED ...`, `PROBE-OK unmodified arm -> assertion PASSED`, `PROBE RESULT: the arm assertion bites on a narrowed arm and passes on the real one`.",
+                "derived": true
+              },
+              {
+                "criterion": "The gate's own lint arm still passes after the edit (tests/gate.sh:219 `ruff check auger.py`).",
+                "status": "PASS",
+                "detail": "`PATH=$PWD/.venv/bin:$PATH bash -c 'command -v ruff && ruff check auger.py'` -> `/home/kara/.local/bin/ruff` / `All checks passed!` / LINT_ARM_RC=0. Also `pytest tests/test_spec_repository_root.py -q` -> `9 passed in 3.39s`.",
+                "derived": true
+              },
+              {
+                "criterion": "The value the hygiene test grades is the value the tier1 lint arm grades \u2014 the test's scope must match the whole-tree scope, not a narrower subset.",
+                "status": "PASS",
+                "detail": "tests/test_verdict_hygiene.py:130-141 builds the file list from `git ls-files '*.py'` (41 files) and passes it to `ruff check --force-exclude`, which is exactly the scope the tier1 lint arm grades (`git ls-files '*.py' | xargs ruff check --force-exclude`). The bite test above proves the seam is live: a single F401 anywhere in that list turns both the standalone command and the test red.",
+                "derived": true
+              },
+              {
+                "criterion": "The green result comes from the code, not from config suppression \u2014 no ruff exclude block, no per-file noqa, no alternate ruff config file.",
+                "status": "PASS",
+                "detail": "`grep -c 'tool.ruff' pyproject.toml` -> 0; `ls ruff.toml .ruff.toml setup.cfg` -> all three `No such file or directory`; `grep -rn 'tool\\.ruff' --include=*.toml .` -> no output; `grep -n 'noqa' evidence/sg8/arm_bite_probe.py` -> no hits (exit 1). Nothing was excluded or suppressed to go green.",
+                "derived": true
+              }
+            ],
+            "summary": "All four given criteria and all five derived criteria pass on fresh command evidence: ruff over all 41 tracked python files is clean (rc 0, no F-code), the unused `import sys` was deleted rather than suppressed with no ruff exclude block or noqa anywhere, the hygiene suite passes 6/6 and provably bites when the F401 is re-injected, the probe still runs its documented invocation, and tests/gate.sh:206 actually executes that file so the full-tree scope is gate-enforced.",
+            "provenance": {
+              "model": "deepseek-v4-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "deepseek-v4-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY"
+    }
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [
+      {
+        "severity": "high",
+        "file": ".coding-hermes/board/tasks.jsonl",
+        "line": 252,
+        "detection": "board row marked status=complete cites an evidence run_id whose verdict.json task_id does not equal the row id",
+        "detail": "AUG-158 and AUG-159 are set to \"status\": \"complete\" with detail.evidence[].run_id=cca14d17, but .gitreins/history/2026-11-08/cca14d17/verdict.json has \"task_id\": \"AUG-158-159-R1\", so the audit reports 'LABEL AUG-158 detail.evidence[].run_id=cca14d17 resolves to task AUG-158-159-R1' and 'UNRESOLVABLE AUG-158 foreign-citation'."
+      },
+      {
+        "severity": "high",
+        "file": ".coding-hermes/board/tasks.jsonl",
+        "line": 252,
+        "detection": "a commit that closes board rows leaves the repo's own committed audit test failing",
+        "detail": "The same commit's own verdict (34c25b45) records tier1 tests FAIL with 'complete_rows=203 bound=61 unresolvable=2' and 'FAILED tests/test_board_evidence_audit.py::test_the_committed_board_audits_clean' plus 'test_every_bound_row_resolves_to_its_own_task' \u2014 'complete row AUG-158 carries no machine-resolvable evidence_run_id' \u2014 so the closure breaks the board audit it depends on."
+      },
+      {
+        "severity": "medium",
+        "file": ".coding-hermes/board/tasks.jsonl",
+        "line": 252,
+        "detection": "complete rows carry no top-level evidence_run_id field, only detail.evidence[]",
+        "detail": "tests/test_board_evidence_audit.py::test_every_bound_row_resolves_to_its_own_task asserts board_row.get(\"evidence_run_id\") is a non-empty str and fails with 'complete row AUG-158 carries no machine-resolvable evidence_run_id' (isinstance(None, str) is False), yet the new complete rows only add detail.evidence[].run_id."
+      },
+      {
+        "severity": "medium",
+        "file": ".coding-hermes/board/tasks.jsonl",
+        "line": 252,
+        "detection": "row closed as complete while its own acceptance criteria require a verdict bound to that row's task id",
+        "detail": "AUG-158's acceptance_criteria require 'a fresh GitReins verdict on the fixed tree reports tier1 lint PASS ... (quote the run id ...)' for that row, but the cited verdict cca14d17 is bound to task AUG-158-159-R1, not AUG-158, and the commit message itself states the verdict is 'task AUG-158-159-R1'."
+      },
+      {
+        "severity": "low",
+        "file": ".coding-hermes/board/tasks.jsonl",
+        "line": 252,
+        "detection": "closed row retains worker_status=in_progress and a stale commit_hash",
+        "detail": "The AUG-158/AUG-159 rows are flipped to \"status\": \"complete\" but keep \"worker_status\": \"in_progress\" and \"commit_hash\": \"ff381707...\" while the verdict they cite evaluates commit 7d4fd9684b2eb93bf0903612056cd141314a0332."
+      },
+      {
+        "severity": "low",
+        "file": ".gitreins/tasks.yaml",
+        "line": 1005,
+        "detection": "verdict task criteria are narrower than the board row's acceptance criteria they are used to close",
+        "detail": "AUG-158-159-R1's criteria cover only ruff scope, gitleaks zero findings, the boundary grep and the gate arm name, omitting the board row's required 'fresh GitReins verdict ... tier1 lint PASS' per-row binding and the 'file still runs' check, so the PASS cannot evidence the row's full acceptance_criteria."
+      }
+    ],
+    "summary": "The commit closes AUG-158/AUG-159 as complete on a verdict bound to a different task id (AUG-158-159-R1), which its own recorded verdict shows leaves the committed board audit failing with unresolvable=2 and missing evidence_run_id."
+  },
+  "summary": "Stage tier1: FAIL\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2717 tests: FAIL (tests/test_auger.py::test_no_test_namespace_survives_the_suite [first failing id])\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 No tracked python file carries a ruff finding. PROOF: cd /home/kara/auger && git ls-files '*.py' | xargs /home/kara/.local/bin/ruff check --force-exclude FAILIF: the command exits non-zero, or its output contains an F-code diagnostic (the pre-fix tree printed exactly one: evidence/sg8/arm_bite_probe.py:19:8 F401 'sys' imported but unused).: Ran the exact proof command: output `All checks passed!`, EXIT=0 \u2014 no F-code diagnostic. Scope is the whole tree: `git ls-files '*.py' | wc -l` -> 41 files. The pre-fix site is fixed: evidence/sg8/arm_bite_probe.py:18-19 now imports only `importlib.util` and `from pathlib import Path`.\n  \u2713 The fix is a real correction, not a scope deletion. PROOF: cd /home/kara/auger && grep -c 'tool.ruff' pyproject.toml; grep -c '^import sys' evidence/sg8/arm_bite_probe.py FAILIF: either printed count is not 0 \u2014 the repo has no ruff exclude block (nothing was excluded to go green) and the unused sys import is gone rather than suppressed.: `grep -c 'tool.ruff' pyproject.toml` -> 0 (grep_exit=1); `grep -c '^import sys' evidence/sg8/arm_bite_probe.py` -> 0 (grep_exit=1). Both counts are 0 as required. Corroborating: no ruff.toml/.ruff.toml/setup.cfg exists (`ls` -> No such file), `grep -rn 'tool\\.ruff' --include=*.toml .` -> nothing, and `grep -n 'noqa' evidence/sg8/arm_bite_probe.py` -> no hits (exit 1), so the import was deleted, not suppressed. git log confirms the removal landed in ff38170.\n  \u2713 The hygiene proof suite passes and pins the tracked-python scope. PROOF: cd /home/kara/auger && /home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q FAILIF: any test in that file fails, or the reported pass count is not 6 (test_all_tracked_python_is_ruff_clean is the arm that would have caught the F401).: `/home/kara/auger/.venv/bin/python -m pytest tests/test_verdict_hygiene.py -q` -> `......  [100%]` / `6 passed in 0.03s`, exit 0. Pass count is exactly 6, no failures. The scope is genuinely pinned: tests/test_verdict_hygiene.py:120-152 (test_all_tracked_python_is_ruff_clean) runs `git ls-files '*.py'` then `ruff check --force-exclude <tracked>` and asserts returncode == 0.\n  \u2713 The gate's pytest arm still names the hygiene file. PROOF: cd /home/kara/auger && grep -c 'test_verdict_hygiene.py' tests/gate.sh FAILIF: the printed count is not at least 1.: `grep -c 'test_verdict_hygiene.py' tests/gate.sh` -> 1 (GATE_GREP_EXIT=0), which is at least 1. The sole hit is tests/gate.sh:206, an argument to the real `setsid timeout --kill-after=... python3 -m pytest ... tests/test_verdict_hygiene.py \"$@\"` invocation, not a comment or echo.\n  \u2713 The hygiene test must actually bite: re-introducing the F401 must make test_all_tracked_python_is_ruff_clean fail (not silently skip or pass).: Injected `import sys` back at evidence/sg8/arm_bite_probe.py:19: ruff over tracked python printed `F401 [*] `sys` imported but unused --> evidence/sg8/arm_bite_probe.py:19:8 ... Found 1 error.` with RUFF_EXIT=123, and pytest reported `FAILED tests/test_verdict_hygiene.py::TestLintScopeMatchesTier1::test_all_tracked_python_is_ruff_clean` / `1 failed, 5 passed`. The test does not skip \u2014 ruff resolves via shutil.which to /home/kara/.local/bin/ruff. File restored afterwards: git status clean, ruff `All checks passed!` EXIT=0.\n  \u2713 Removing the import must not break the probe: evidence/sg8/arm_bite_probe.py still runs its documented invocation after the edit.: `grep -n 'sys\\.' evidence/sg8/arm_bite_probe.py` -> no hits (exit 1), confirming the import was genuinely unused. `py_compile` -> `compiles OK`. Documented invocation `.venv/bin/python evidence/sg8/arm_bite_probe.py` -> `PROBE-OK narrowed arm -> assertion FAILED ...`, `PROBE-OK unmodified arm -> assertion PASSED`, `PROBE RESULT: the arm assertion bites on a narrowed arm and passes on the real one`.\n  \u2713 The gate's own lint arm still passes after the edit (tests/gate.sh:219 `ruff check auger.py`).: `PATH=$PWD/.venv/bin:$PATH bash -c 'command -v ruff && ruff check auger.py'` -> `/home/kara/.local/bin/ruff` / `All checks passed!` / LINT_ARM_RC=0. Also `pytest tests/test_spec_repository_root.py -q` -> `9 passed in 3.39s`.\n  \u2713 The value the hygiene test grades is the value the tier1 lint arm grades \u2014 the test's scope must match the whole-tree scope, not a narrower subset.: tests/test_verdict_hygiene.py:130-141 builds the file list from `git ls-files '*.py'` (41 files) and passes it to `ruff check --force-exclude`, which is exactly the scope the tier1 lint arm grades (`git ls-files '*.py' | xargs ruff check --force-exclude`). The bite test above proves the seam is live: a single F401 anywhere in that list turns both the standalone command and the test red.\n  \u2713 The green result comes from the code, not from config suppression \u2014 no ruff exclude block, no per-file noqa, no alternate ruff config file.: `grep -c 'tool.ruff' pyproject.toml` -> 0; `ls ruff.toml .ruff.toml setup.cfg` -> all three `No such file or directory`; `grep -rn 'tool\\.ruff' --include=*.toml .` -> no output; `grep -n 'noqa' evidence/sg8/arm_bite_probe.py` -> no hits (exit 1). Nothing was excluded or suppressed to go green.\nAll four given criteria and all five derived criteria pass on fresh command evidence: ruff over all 41 tracked python files is clean (rc 0, no F-code), the unused `import sys` was deleted rather than suppressed with no ruff exclude block or noqa anywhere, the hygiene suite passes 6/6 and provably bites when the F401 is re-injected, the probe still runs its documented invocation, and tests/gate.sh:206 actually executes that file so the full-tree scope is gate-enforced.\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-11-08T08:28:46.340480",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-08T08:28:46.372022+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 134525,
+        "truncated": false,
+        "source": "git show 195db532b69c"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 185346,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-158"
+  }
+}
