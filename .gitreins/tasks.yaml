@@ -1238,3 +1238,39 @@ tasks:
   status: complete
   created_at: '2026-11-09T11:29:49.401577+00:00'
   completed_at: '2026-11-09T11:32:01.227378+00:00'
+- id: AUG-128
+  title: method="test" without type="test" bypassed the whole obligation check (fix
+    ff1549f; graded at the current merged head)
+  criteria:
+  - 'The method-only citation is an OBLIGATION: a corpus whose only verification is
+    the shipped migration shape with its path mutated to tests/does-not-exist.py is
+    REFUSED by spec check with rc 2 naming stale-test-ref, block TEST-MIG-1 and the
+    resolved path (pre-fix the same corpus answered status valid rc 0). FAILIF: rc
+    is 0 or the refusal is not the typed stale-test-ref. PROOF: cd /home/kara/auger
+    && T=$(mktemp -d); sed ''s#path="tests/test_xml_specs.py"#path="tests/does-not-exist.py"#''
+    tests/fixtures/xml/verification/migration.xml > $T/m.xml; .venv/bin/python auger.py
+    spec check --repo-root $PWD $T; echo rc=$?'
+  - 'The refusal is about the CITATION, not the shape: the SAME document unmutated
+    (method="test", no type attribute, real tracked path) is accepted, status valid
+    rc 0. FAILIF: the control corpus is refused, which would mean the check rejects
+    the shape instead of resolving the path. PROOF: cd /home/kara/auger && T=$(mktemp
+    -d); cp tests/fixtures/xml/verification/migration.xml $T/; .venv/bin/python auger.py
+    spec check --repo-root $PWD $T; echo rc=$?'
+  - 'Both verbs carry the fixed obligation check: spec validate on the same mutated
+    corpus also exits 2 with stale-test-ref naming TEST-MIG-1, so the fix is not behind
+    one verb (pre-fix both answered ok rc 0). FAILIF: validate exits 0 or prints ok
+    on the mutated corpus. PROOF: cd /home/kara/auger && T=$(mktemp -d); sed ''s#path="tests/test_xml_specs.py"#path="tests/does-not-exist.py"#''
+    tests/fixtures/xml/verification/migration.xml > $T/m.xml; .venv/bin/python auger.py
+    spec validate --repo-root $PWD $T; echo rc=$?'
+  - 'The two regression tests shipped by the fix pass: the method-only obligation
+    test and the non-test-method test (manual/analysis/inspection are NOT forced through
+    the test checks). FAILIF: either test fails or is deselected/absent. PROOF: cd
+    /home/kara/auger && PATH=$PWD/.venv/bin:$PATH python3 -m pytest -q tests/test_verification_graph.py
+    -k "method_test_is_an_obligation or non_test_methods_are_not_forced"'
+  - 'The shipped corpus and the gate arm are unchanged by the fix: auger spec validate
+    specs still exits 0 on the authored corpus, and tests/gate.sh still names tests/test_verification_graph.py
+    in its pytest arm. FAILIF: the corpus is refused, or the file is dropped from
+    the arm. PROOF: cd /home/kara/auger && PATH=$PWD/.venv/bin:$PATH python3 auger.py
+    spec validate specs; grep -c test_verification_graph.py tests/gate.sh'
+  status: in_progress
+  created_at: '2026-11-09T14:22:24.474754+00:00'
