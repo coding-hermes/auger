@@ -1,0 +1,57 @@
+diff --git a/.gitreins/tasks.yaml b/.gitreins/tasks.yaml
+index d2fd50b..8aca019 100644
+--- a/.gitreins/tasks.yaml
++++ b/.gitreins/tasks.yaml
+@@ -1274,3 +1274,52 @@ tasks:
+     spec validate specs; grep -c test_verification_graph.py tests/gate.sh'
+   status: in_progress
+   created_at: '2026-11-09T14:22:24.474754+00:00'
++- id: AUG-132
++  title: 'AUG-132: spec validate must refuse a corpus whose test citation names a
++    nonexistent path (fix 55a6725, graded at the current merged head)'
++  criteria:
++  - 'The shipped AUG-132 fixture is REFUSED by the verb that used to count-only: spec
++    validate on tests/fixtures/xml/invalid/stale-test-obligation exits 2 and stderr
++    names the typed class stale-test-ref, the document stale-test-obligation.xml,
++    the block AUG-VER-STALE-1 and the resolved path tests/does-not-exist.py. FAILIF:
++    rc is 0, or it prints ok, or the class is anything other than stale-test-ref (the
++    pre-fix measurement was "1 document(s), 2 block(s), 1 reference(s) ok" rc 0).
++    PROOF: cd /home/kara/auger && .venv/bin/python auger.py spec validate tests/fixtures/xml/invalid/stale-test-obligation;
++    echo rc=$?'
++  - 'Both verbs agree on that corpus: spec check on the same directory also exits
++    2 with the same stale-test-ref naming AUG-VER-STALE-1, so validate was not given
++    a verb-specific bypass and the two parsers still agree. FAILIF: rc is 0, or the
++    error class differs between the verbs (invalid-root here would be the AUG-134
++    split returning). PROOF: cd /home/kara/auger && .venv/bin/python auger.py spec
++    check tests/fixtures/xml/invalid/stale-test-obligation; echo rc=$?'
++  - 'The fix does not over-refuse: the shipped fixture corpus tests/fixtures/xml/specs
++    still exits 0 printing "spec: 3 document(s), 10 block(s), 6 reference(s) ok" and
++    the authored corpus specs/ still exits 0. FAILIF: either corpus is refused, or
++    the printed counts change. PROOF: cd /home/kara/auger && .venv/bin/python auger.py
++    spec validate tests/fixtures/xml/specs; echo fixtures_rc=$?; .venv/bin/python
++    auger.py spec validate specs; echo specs_rc=$?'
++  - 'The refusal follows the CITATION, not the committed fixture: a copy of a DIFFERENT
++    shipped document (tests/fixtures/xml/verification/migration.xml) placed in a temp
++    directory with only its path mutated to tests/does-not-exist.py is refused rc
++    2 with stale-test-ref naming TEST-MIG-1 and the resolved path, while the unmutated
++    copy of the same file in a sibling temp directory is accepted rc 0. FAILIF: the
++    mutant is accepted, or the control is refused. PROOF: cd /home/kara/auger && T=$(mktemp
++    -d) && mkdir $T/ok $T/mut && cp tests/fixtures/xml/verification/migration.xml
++    $T/ok/ && sed "s#path=\"tests/test_xml_specs.py\"#path=\"tests/does-not-exist.py\"#"
++    tests/fixtures/xml/verification/migration.xml > $T/mut/m.xml && .venv/bin/python
++    auger.py spec validate --repo-root $PWD $T/mut; echo mutant_rc=$?; .venv/bin/python
++    auger.py spec validate --repo-root $PWD $T/ok; echo control_rc=$?'
++  - 'The regression suites shipped with the fix pass on this tree: tests/test_spec_validate_obligations.py
++    and tests/test_spec_validators_agree.py collect and pass 31 tests. FAILIF: any
++    failure, error, or a collected count other than 31. PROOF: cd /home/kara/auger
++    && PATH=$PWD/.venv/bin:$PATH DUCKBRAIN_URL=http://127.0.0.1:3000 DUCKBRAIN_API_KEY=$(cat
++    ~/.duckbrain/foreman-status.token) python3 -m pytest -q tests/test_spec_validate_obligations.py
++    tests/test_spec_validators_agree.py'
++  - 'The fix cannot silently fall out of the gate: tests/gate.sh names both regression
++    files in its pytest arm (at least one occurrence each; 2 each measured today)
++    and the fix commit 55a6725 is an ancestor of the judged HEAD. FAILIF: either file
++    is absent from the arm, or the ancestry check exits non-zero. PROOF: cd /home/kara/auger
++    && grep -c "tests/test_spec_validate_obligations.py" tests/gate.sh; grep -c "tests/test_spec_validators_agree.py"
++    tests/gate.sh; git merge-base --is-ancestor 55a6725 HEAD; echo ancestor_rc=$?'
++  status: in_progress
++  created_at: '2026-11-09T17:39:54.174945+00:00'
