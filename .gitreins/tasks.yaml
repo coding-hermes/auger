@@ -1380,3 +1380,35 @@ tasks:
     echo bad_check_rc=${PIPESTATUS[0]}; rm -rf $T'
   status: in_progress
   created_at: '2026-11-09T20:11:34.485850+00:00'
+- id: AUG-131
+  title: 'Namespace teardown survives a recreated directory: bounded retry, residue
+    report, refused-DELETE invariant'
+  criteria:
+  - 'Whole file tests/test_teardown_resilience.py passes on the judged tree: 4 passed.
+    FAILIF: any test fails or errors, or fewer than 4 tests are collected. PROOF:
+    cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest
+    -q tests/test_teardown_resilience.py'
+  - 'A namespace directory recreated after DELETE is still removed by the bounded
+    retry: 1 passed. FAILIF: the test fails or errors. PROOF: cd /home/kara/auger
+    && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_teardown_resilience.py::test_directory_recreated_twice_is_still_removed'
+  - 'A tree that never disappears is reported as residue instead of being silently
+    passed: 1 passed. FAILIF: the test fails or the residue report is skipped. PROOF:
+    cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest
+    -q tests/test_teardown_resilience.py::test_directory_that_never_goes_away_is_reported'
+  - 'A refused DELETE (409/429/5xx) keeps BOTH the registry row and the directory
+    (AUG-117 invariant unchanged): 1 passed. FAILIF: the test fails or the row/directory
+    pairing is no longer asserted. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH
+    python3 -m pytest -q tests/test_teardown_resilience.py::test_refused_delete_keeps_the_directory_and_the_row'
+  - 'The retry budget is bounded: prints ''retry budget 1.85s attempts=5'' and exits
+    0 (sum of REMOVAL_BACKOFFS under 2s with at least 3 attempts). FAILIF: the printed
+    sum is >= 2.0s, fewer than 3 attempts, or rc != 0. PROOF: cd /home/kara/auger
+    && python3 -c ''import ast,sys;src=open("tests/conftest.py").read();m=[n for n
+    in ast.parse(src).body if isinstance(n,ast.Assign) and getattr(n.targets[0],"id","")=="REMOVAL_BACKOFFS"];s=sum(e.value
+    for e in m[0].value.elts);print(f"retry budget {s:.2f}s attempts={len(m[0].value.elts)}");sys.exit(0
+    if s<2.0 and len(m[0].value.elts)>=3 else 1)'''
+  - 'The gate arm names this file so the regression cannot hide: 2 matching lines
+    in tests/gate.sh. FAILIF: the count is not 2 (the file is no longer named in the
+    pytest arm or its comment). PROOF: cd /home/kara/auger && grep -c test_teardown_resilience.py
+    tests/gate.sh'
+  status: in_progress
+  created_at: '2026-11-09T22:40:10.619743+00:00'

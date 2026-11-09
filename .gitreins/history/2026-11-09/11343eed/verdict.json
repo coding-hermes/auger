@@ -1,0 +1,243 @@
+{
+  "task_id": "AUG-131",
+  "task_title": "Namespace teardown survives a recreated directory: bounded retry, residue report, refused-DELETE invariant",
+  "task_criteria": [
+    "Whole file tests/test_teardown_resilience.py passes on the judged tree: 4 passed. FAILIF: any test fails or errors, or fewer than 4 tests are collected. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_teardown_resilience.py",
+    "A namespace directory recreated after DELETE is still removed by the bounded retry: 1 passed. FAILIF: the test fails or errors. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_teardown_resilience.py::test_directory_recreated_twice_is_still_removed",
+    "A tree that never disappears is reported as residue instead of being silently passed: 1 passed. FAILIF: the test fails or the residue report is skipped. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_teardown_resilience.py::test_directory_that_never_goes_away_is_reported",
+    "A refused DELETE (409/429/5xx) keeps BOTH the registry row and the directory (AUG-117 invariant unchanged): 1 passed. FAILIF: the test fails or the row/directory pairing is no longer asserted. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_teardown_resilience.py::test_refused_delete_keeps_the_directory_and_the_row",
+    "The retry budget is bounded: prints 'retry budget 1.85s attempts=5' and exits 0 (sum of REMOVAL_BACKOFFS under 2s with at least 3 attempts). FAILIF: the printed sum is >= 2.0s, fewer than 3 attempts, or rc != 0. PROOF: cd /home/kara/auger && python3 -c 'import ast,sys;src=open(\"tests/conftest.py\").read();m=[n for n in ast.parse(src).body if isinstance(n,ast.Assign) and getattr(n.targets[0],\"id\",\"\")==\"REMOVAL_BACKOFFS\"];s=sum(e.value for e in m[0].value.elts);print(f\"retry budget {s:.2f}s attempts={len(m[0].value.elts)}\");sys.exit(0 if s<2.0 and len(m[0].value.elts)>=3 else 1)'",
+    "The gate arm names this file so the regression cannot hide: 2 matching lines in tests/gate.sh. FAILIF: the count is not 2 (the file is no longer named in the pytest arm or its comment). PROOF: cd /home/kara/auger && grep -c test_teardown_resilience.py tests/gate.sh"
+  ],
+  "passed": true,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "c7dc34e45d0e0c47cb10b8b4815540c1c7ac337e",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "6e121c9b567f896c4a0b7bf86724a2c8e84c7732a20b78c8aa6b6ca0f228851c",
+  "working_tree_dirty_path_count": 6,
+  "items": [
+    {
+      "criterion": "Whole file tests/test_teardown_resilience.py passes on the judged tree: 4 passed. FAILIF: any test fails or errors, or fewer than 4 tests are collected. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_teardown_resilience.py",
+      "status": "PASS",
+      "detail": "Ran the exact proof command: output `....  [100%]` / `4 passed in 2.21s`, rc=0. A `-v` run confirms `collected 4 items` and four PASSED lines (test_directory_recreated_twice_is_still_removed, test_directory_that_never_goes_away_is_reported, test_refused_delete_keeps_the_directory_and_the_row, test_teardown_refuses_a_real_namespace_name)."
+    },
+    {
+      "criterion": "A namespace directory recreated after DELETE is still removed by the bounded retry: 1 passed. FAILIF: the test fails or errors. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_teardown_resilience.py::test_directory_recreated_twice_is_still_removed",
+      "status": "PASS",
+      "detail": "Proof command output: `.  [100%]` / `1 passed in 0.36s`. The test (tests/test_teardown_resilience.py:33-72) patches cf.shutil.rmtree to recreate the tree on the first two calls, then asserts `problems == []`, `not path.exists()`, `calls['n'] >= 3` and `deletes['n'] >= 1` \u2014 i.e. the retry loop in tests/conftest.py:269-278 actually re-removes and re-issues the DELETE."
+    },
+    {
+      "criterion": "A tree that never disappears is reported as residue instead of being silently passed: 1 passed. FAILIF: the test fails or the residue report is skipped. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_teardown_resilience.py::test_directory_that_never_goes_away_is_reported",
+      "status": "PASS",
+      "detail": "Proof command output: `.  [100%]` / `1 passed in 1.86s`. The test (tests/test_teardown_resilience.py:75-98) asserts `any(\"still present\" in p for p in problems)` and `calls['n'] == len(cf.REMOVAL_BACKOFFS)`; the residue string is produced at tests/conftest.py:280-282 (`directory still present after {len(REMOVAL_BACKOFFS)} removal attempts`). The 1.86s runtime matches sum(REMOVAL_BACKOFFS)=1.85s, so the loop really ran to exhaustion."
+    },
+    {
+      "criterion": "A refused DELETE (409/429/5xx) keeps BOTH the registry row and the directory (AUG-117 invariant unchanged): 1 passed. FAILIF: the test fails or the row/directory pairing is no longer asserted. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_teardown_resilience.py::test_refused_delete_keeps_the_directory_and_the_row",
+      "status": "PASS",
+      "detail": "Proof command output: `.  [100%]` / `1 passed in 0.01s`. The test (tests/test_teardown_resilience.py:101-120) patches rmtree to `pytest.fail(\"rmtree must not run\")`, scripts DELETE -> (500, \"boom\"), and asserts `path.exists()` plus `any(\"500\" in p for p in problems)` \u2014 the row/directory pairing is asserted, not just the status. Backed by tests/conftest.py:284-296 where rmtree only runs inside `if deleted:`."
+    },
+    {
+      "criterion": "The retry budget is bounded: prints 'retry budget 1.85s attempts=5' and exits 0 (sum of REMOVAL_BACKOFFS under 2s with at least 3 attempts). FAILIF: the printed sum is >= 2.0s, fewer than 3 attempts, or rc != 0. PROOF: cd /home/kara/auger && python3 -c 'import ast,sys;src=open(\"tests/conftest.py\").read();m=[n for n in ast.parse(src).body if isinstance(n,ast.Assign) and getattr(n.targets[0],\"id\",\"\")==\"REMOVAL_BACKOFFS\"];s=sum(e.value for e in m[0].value.elts);print(f\"retry budget {s:.2f}s attempts={len(m[0].value.elts)}\");sys.exit(0 if s<2.0 and len(m[0].value.elts)>=3 else 1)'",
+      "status": "PASS",
+      "detail": "Proof command output exactly: `retry budget 1.85s attempts=5` followed by `RC=0`. Source: tests/conftest.py:206 `REMOVAL_BACKOFFS = (0.0, 0.1, 0.25, 0.5, 1.0)` \u2014 sum 1.85 < 2.0, 5 attempts >= 3."
+    },
+    {
+      "criterion": "The gate arm names this file so the regression cannot hide: 2 matching lines in tests/gate.sh. FAILIF: the count is not 2 (the file is no longer named in the pytest arm or its comment). PROOF: cd /home/kara/auger && grep -c test_teardown_resilience.py tests/gate.sh",
+      "status": "PASS",
+      "detail": "Proof command output: `2`. The two lines are tests/gate.sh:163 (the explanatory comment `# tests/test_teardown_resilience.py (AUG-131): the teardown retry contract ...`) and tests/gate.sh:206 (the actual `python3 -m pytest ... tests/test_teardown_resilience.py ...` arm), so the file is both named and executed."
+    },
+    {
+      "criterion": "The residue-report test must actually exercise the bounded loop (rmtree called exactly len(REMOVAL_BACKOFFS) times) and the recreated-directory test must assert the re-issued DELETE, so the tests cannot pass against a no-retry implementation.",
+      "status": "PASS",
+      "detail": "tests/test_teardown_resilience.py:96 asserts `calls['n'] == len(cf.REMOVAL_BACKOFFS)` (exactly 5) and :69-72 assert `calls['n'] >= 3` and `deletes['n'] >= 1`. A single-rmtree implementation would yield calls==1 and deletes==0, failing both tests \u2014 the assertions pin the retry, not just the outcome.",
+      "derived": true
+    },
+    {
+      "criterion": "The refused-DELETE path must not be weakened: rmtree must never run when DELETE is refused (409/429/5xx), and the directory must be kept so the registry row and directory stay paired.",
+      "status": "PASS",
+      "detail": "tests/conftest.py:284-296: `shutil.rmtree` appears only inside `if deleted:`; the else branch prints `directory KEPT at {path}` and only reports if the directory is already gone. The new test makes rmtree `pytest.fail` and passes, and the pre-existing AUG-117 test `tests/test_auger.py::test_teardown_keeps_the_directory_when_the_delete_is_refused` still passes (`13 passed, 322 deselected in 0.33s` for `-k \"teardown or leftover or audit\"`).",
+      "derived": true
+    },
+    {
+      "criterion": "The retry loop must terminate: it must not loop unboundedly, and the re-issued DELETE inside the loop must not itself consume the 61s TEARDOWN_CONFLICT_BACKOFFS budget (which would blow the ~2s bound).",
+      "status": "PASS",
+      "detail": "tests/conftest.py:269 `for wait in REMOVAL_BACKOFFS:` iterates a fixed 5-element tuple, so it terminates. The re-issued DELETE at :276 calls `auger.delete_namespace(ns)` with its default `TEARDOWN_RETRIES` (auger.py:957), not TEARDOWN_CONFLICT_BACKOFFS, so the 61s conflict budget is not consumed inside the loop. Empirically the never-goes-away test finishes in 1.86s, matching sum(REMOVAL_BACKOFFS)=1.85s.",
+      "derived": true
+    },
+    {
+      "criterion": "Back-compat: the existing teardown callers (fixture finalizer, leak audit) still receive problems and fail loudly; the new loop must not turn a real leak into a silent pass.",
+      "status": "PASS",
+      "detail": "tests/conftest.py:613-631 \u2014 the `ns_created` finalizer still calls `teardown_namespace(ns)` and `pytest.fail(...)` on non-429 problems; the new loop only appends to `problems` (:280-282) and never clears it. Regression run: `python3 -m pytest tests/test_auger.py -k \"teardown or leftover or audit\" -v` -> `13 passed, 322 deselected in 0.33s`, including `test_a_persistently_listed_leftover_namespace_still_fails_the_audit` and `test_teardown_keeps_the_directory_when_the_delete_is_refused`.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "no_concerns_found",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261105T170854.274025Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nscanners: nice=nice -n 10\n6:09PM INF scanned ~3304073 bytes (3.30 MB) in 1.98s\n6:09PM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 250 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261105T170854.274025Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [ 10%]\n........................................................................ [ 20%]\n........................................................................ [ 30%]\n........................................................................ [ 40%]\n..........................s............................................. [ 50%]\n.....s.................................................................. [ 60%]\n........................................................................ [ 70%]\n........................................................................ [ 80%]\n........................................................................ [ 90%]\n.......................................................................  [100%]\n717 passed, 2 skipped in 848.18s (0:14:08)\n== wrapper regression (AUG-081) ==\ngate prerequisite preflight: PASS\nAUG-116: zombie pid 318680 classified dead (kill -0 alone would have said alive)\nAUG-081 wrapper regression: PASS\nAUG-130 skipped-arm policy: PASS\n== end-to-end smoke ==\nnamespace: auger-smoke-320124\nnamespace sweep: no stale auger-smoke-*/auger-eval-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n  PASS toggle changed the stored configuration\n\n\u2026 [472 chars omitted \u2014 12 line(s)] \u2026\n== spec corpus (AUG-136) ==\nspec: 3 document(s), 12 block(s), 7 reference(s) ok\n== prd proofs (AUG-137) ==\nprd proofs: 8 total \u00b7 3 required \u00b7 5 deferred \u2192 PASS\n   P1  deferred not-run   not-run (deferred to AUG-119): auger.py carries no board surface (grep -c boardctl auger.py -> 0): resolving a\n   P2  required pass      corpus=9249B bundle=8131B latency=14.3ms  2 generated view(s) verified byte-identical to the generator's output for specs/; one block edit propagated to\n   P3  deferred not-run   not-run (deferred to AUG-153): the checker half is reachable (`auger spec check --diff-file` reports `trace-mi\n   P4  deferred not-run   not-run (deferred to AUG-119): writing and reading back a canonical boardctl row is boardctl's surface, not au\n   P5  required pass      corpus=1084B bundle=462B latency=643.3ms  one query returned migration=tests/fixtures/xml/verification/migrations/001_add_marker.sql, fixture=tests/fixt\n   P6  deferred not-run   not-run (deferred to AUG-124): what counts as judge evidence \u2014 excluding the worker summary, refusing a PASS w\n   P7  required pass      corpus=9249B bundle=2944B latency=122.4ms  4/12 blocks selected by `applies-to auger.spec.select`; bundle is 31.8% of the corpus (2944 of 9249 bytes), fl\n   P8  deferred not-run   not-run (deferred to AUG-153): the flag and the process-liveness assertion live in the GitReins hook, which no\nprd-proofs: /home/kara/auger/docs/prd/evidence/AUG-137-prd-proofs.json agrees with this run\n== docs check ==\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261105T170854.274025Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 Whole file tests/test_teardown_resilience.py passes on the judged tree: 4 passed. FAILIF: any test fails or errors, or fewer than 4 tests are collected. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_teardown_resilience.py: Ran the exact proof command: output `....  [100%]` / `4 passed in 2.21s`, rc=0. A `-v` run confirms `collected 4 items` and four PASSED lines (test_directory_recreated_twice_is_still_removed, test_directory_that_never_goes_away_is_reported, test_refused_delete_keeps_the_directory_and_the_row, test_teardown_refuses_a_real_namespace_name).\n  \u2713 A namespace directory recreated after DELETE is still removed by the bounded retry: 1 passed. FAILIF: the test fails or errors. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_teardown_resilience.py::test_directory_recreated_twice_is_still_removed: Proof command output: `.  [100%]` / `1 passed in 0.36s`. The test (tests/test_teardown_resilience.py:33-72) patches cf.shutil.rmtree to recreate the tree on the first two calls, then asserts `problems == []`, `not path.exists()`, `calls['n'] >= 3` and `deletes['n'] >= 1` \u2014 i.e. the retry loop in tests/conftest.py:269-278 actually re-removes and re-issues the DELETE.\n  \u2713 A tree that never disappears is reported as residue instead of being silently passed: 1 passed. FAILIF: the test fails or the residue report is skipped. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_teardown_resilience.py::test_directory_that_never_goes_away_is_reported: Proof command output: `.  [100%]` / `1 passed in 1.86s`. The test (tests/test_teardown_resilience.py:75-98) asserts `any(\"still present\" in p for p in problems)` and `calls['n'] == len(cf.REMOVAL_BACKOFFS)`; the residue string is produced at tests/conftest.py:280-282 (`directory still present after {len(REMOVAL_BACKOFFS)} removal attempts`). The 1.86s runtime matches sum(REMOVAL_BACKOFFS)=1.85s, so the loop really ran to exhaustion.\n  \u2713 A refused DELETE (409/429/5xx) keeps BOTH the registry row and the directory (AUG-117 invariant unchanged): 1 passed. FAILIF: the test fails or the row/directory pairing is no longer asserted. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_teardown_resilience.py::test_refused_delete_keeps_the_directory_and_the_row: Proof command output: `.  [100%]` / `1 passed in 0.01s`. The test (tests/test_teardown_resilience.py:101-120) patches rmtree to `pytest.fail(\"rmtree must not run\")`, scripts DELETE -> (500, \"boom\"), and asserts `path.exists()` plus `any(\"500\" in p for p in problems)` \u2014 the row/directory pairing is asserted, not just the status. Backed by tests/conftest.py:284-296 where rmtree only runs inside `if deleted:`.\n  \u2713 The retry budget is bounded: prints 'retry budget 1.85s attempts=5' and exits 0 (sum of REMOVAL_BACKOFFS under 2s with at least 3 attempts). FAILIF: the printed sum is >= 2.0s, fewer than 3 attempts, or rc != 0. PROOF: cd /home/kara/auger && python3 -c 'import ast,sys;src=open(\"tests/conftest.py\").read();m=[n for n in ast.parse(src).body if isinstance(n,ast.Assign) and getattr(n.targets[0],\"id\",\"\")==\"REMOVAL_BACKOFFS\"];s=sum(e.value for e in m[0].value.elts);print(f\"retry budget {s:.2f}s attempts={len(m[0].value.elts)}\");sys.exit(0 if s<2.0 and len(m[0].value.elts)>=3 else 1)': Proof command output exactly: `retry budget 1.85s attempts=5` followed by `RC=0`. Source: tests/conftest.py:206 `REMOVAL_BACKOFFS = (0.0, 0.1, 0.25, 0.5, 1.0)` \u2014 sum 1.85 < 2.0, 5 attempts >= 3.\n  \u2713 The gate arm names this file so the regression cannot hide: 2 matching lines in tests/gate.sh. FAILIF: the count is not 2 (the file is no longer named in the pytest arm or its comment). PROOF: cd /home/kara/auger && grep -c test_teardown_resilience.py tests/gate.sh: Proof command output: `2`. The two lines are tests/gate.sh:163 (the explanatory comment `# tests/test_teardown_resilience.py (AUG-131): the teardown retry contract ...`) and tests/gate.sh:206 (the actual `python3 -m pytest ... tests/test_teardown_resilience.py ...` arm), so the file is both named and executed.\n  \u2713 The residue-report test must actually exercise the bounded loop (rmtree called exactly len(REMOVAL_BACKOFFS) times) and the recreated-directory test must assert the re-issued DELETE, so the tests cannot pass against a no-retry implementation.: tests/test_teardown_resilience.py:96 asserts `calls['n'] == len(cf.REMOVAL_BACKOFFS)` (exactly 5) and :69-72 assert `calls['n'] >= 3` and `deletes['n'] >= 1`. A single-rmtree implementation would yield calls==1 and deletes==0, failing both tests \u2014 the assertions pin the retry, not just the outcome.\n  \u2713 The refused-DELETE path must not be weakened: rmtree must never run when DELETE is refused (409/429/5xx), and the directory must be kept so the registry row and directory stay paired.: tests/conftest.py:284-296: `shutil.rmtree` appears only inside `if deleted:`; the else branch prints `directory KEPT at {path}` and only reports if the directory is already gone. The new test makes rmtree `pytest.fail` and passes, and the pre-existing AUG-117 test `tests/test_auger.py::test_teardown_keeps_the_directory_when_the_delete_is_refused` still passes (`13 passed, 322 deselected in 0.33s` for `-k \"teardown or leftover or audit\"`).\n  \u2713 The retry loop must terminate: it must not loop unboundedly, and the re-issued DELETE inside the loop must not itself consume the 61s TEARDOWN_CONFLICT_BACKOFFS budget (which would blow the ~2s bound).: tests/conftest.py:269 `for wait in REMOVAL_BACKOFFS:` iterates a fixed 5-element tuple, so it terminates. The re-issued DELETE at :276 calls `auger.delete_namespace(ns)` with its default `TEARDOWN_RETRIES` (auger.py:957), not TEARDOWN_CONFLICT_BACKOFFS, so the 61s conflict budget is not consumed inside the loop. Empirically the never-goes-away test finishes in 1.86s, matching sum(REMOVAL_BACKOFFS)=1.85s.\n  \u2713 Back-compat: the existing teardown callers (fixture finalizer, leak audit) still receive problems and fail loudly; the new loop must not turn a real leak into a silent pass.: tests/conftest.py:613-631 \u2014 the `ns_created` finalizer still calls `teardown_namespace(ns)` and `pytest.fail(...)` on non-429 problems; the new loop only appends to `problems` (:280-282) and never clears it. Regression run: `python3 -m pytest tests/test_auger.py -k \"teardown or leftover or audit\" -v` -> `13 passed, 322 deselected in 0.33s`, including `test_a_persistently_listed_leftover_namespace_still_fails_the_audit` and `test_teardown_keeps_the_directory_when_the_delete_is_refused`.\nAll six given criteria and all four derived criteria pass with fresh command output: the 4-test file is green, the retry budget prints 1.85s/5 attempts with rc=0, the gate names the file twice, and the AUG-117 refused-DELETE invariant plus the pre-existing teardown/audit tests remain green.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 Whole file tests/test_teardown_resilience.py passes on the judged tree: 4 passed. FAILIF: any test fails or errors, or fewer than 4 tests are collected. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_teardown_resilience.py: Ran the exact proof command: output `....  [100%]` / `4 passed in 2.21s`, rc=0. A `-v` run confirms `collected 4 items` and four PASSED lines (test_directory_recreated_twice_is_still_removed, test_directory_that_never_goes_away_is_reported, test_refused_delete_keeps_the_directory_and_the_row, test_teardown_refuses_a_real_namespace_name).\n  \u2713 A namespace directory recreated after DELETE is still removed by the bounded retry: 1 passed. FAILIF: the test fails or errors. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_teardown_resilience.py::test_directory_recreated_twice_is_still_removed: Proof command output: `.  [100%]` / `1 passed in 0.36s`. The test (tests/test_teardown_resilience.py:33-72) patches cf.shutil.rmtree to recreate the tree on the first two calls, then asserts `problems == []`, `not path.exists()`, `calls['n'] >= 3` and `deletes['n'] >= 1` \u2014 i.e. the retry loop in tests/conftest.py:269-278 actually re-removes and re-issues the DELETE.\n  \u2713 A tree that never disappears is reported as residue instead of being silently passed: 1 passed. FAILIF: the test fails or the residue report is skipped. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_teardown_resilience.py::test_directory_that_never_goes_away_is_reported: Proof command output: `.  [100%]` / `1 passed in 1.86s`. The test (tests/test_teardown_resilience.py:75-98) asserts `any(\"still present\" in p for p in problems)` and `calls['n'] == len(cf.REMOVAL_BACKOFFS)`; the residue string is produced at tests/conftest.py:280-282 (`directory still present after {len(REMOVAL_BACKOFFS)} removal attempts`). The 1.86s runtime matches sum(REMOVAL_BACKOFFS)=1.85s, so the loop really ran to exhaustion.\n\n\u2026 [3947 chars omitted \u2014 6 line(s)] \u2026\n  \u2713 Back-compat: the existing teardown callers (fixture finalizer, leak audit) still receive problems and fail loudly; the new loop must not turn a real leak into a silent pass.: tests/conftest.py:613-631 \u2014 the `ns_created` finalizer still calls `teardown_namespace(ns)` and `pytest.fail(...)` on non-429 problems; the new loop only appends to `problems` (:280-282) and never clears it. Regression run: `python3 -m pytest tests/test_auger.py -k \"teardown or leftover or audit\" -v` -> `13 passed, 322 deselected in 0.33s`, including `test_a_persistently_listed_leftover_namespace_still_fails_the_audit` and `test_teardown_keeps_the_directory_when_the_delete_is_refused`.\nAll six given criteria and all four derived criteria pass with fresh command output: the 4-test file is green, the retry budget prints 1.85s/5 attempts with rc=0, the gate names the file twice, and the AUG-117 refused-DELETE invariant plus the pre-existing teardown/audit tests remain green.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "Whole file tests/test_teardown_resilience.py passes on the judged tree: 4 passed. FAILIF: any test fails or errors, or fewer than 4 tests are collected. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_teardown_resilience.py",
+                "status": "PASS",
+                "detail": "Ran the exact proof command: output `....  [100%]` / `4 passed in 2.21s`, rc=0. A `-v` run confirms `collected 4 items` and four PASSED lines (test_directory_recreated_twice_is_still_removed, test_directory_that_never_goes_away_is_reported, test_refused_delete_keeps_the_directory_and_the_row, test_teardown_refuses_a_real_namespace_name)."
+              },
+              {
+                "criterion": "A namespace directory recreated after DELETE is still removed by the bounded retry: 1 passed. FAILIF: the test fails or errors. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_teardown_resilience.py::test_directory_recreated_twice_is_still_removed",
+                "status": "PASS",
+                "detail": "Proof command output: `.  [100%]` / `1 passed in 0.36s`. The test (tests/test_teardown_resilience.py:33-72) patches cf.shutil.rmtree to recreate the tree on the first two calls, then asserts `problems == []`, `not path.exists()`, `calls['n'] >= 3` and `deletes['n'] >= 1` \u2014 i.e. the retry loop in tests/conftest.py:269-278 actually re-removes and re-issues the DELETE."
+              },
+              {
+                "criterion": "A tree that never disappears is reported as residue instead of being silently passed: 1 passed. FAILIF: the test fails or the residue report is skipped. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_teardown_resilience.py::test_directory_that_never_goes_away_is_reported",
+                "status": "PASS",
+                "detail": "Proof command output: `.  [100%]` / `1 passed in 1.86s`. The test (tests/test_teardown_resilience.py:75-98) asserts `any(\"still present\" in p for p in problems)` and `calls['n'] == len(cf.REMOVAL_BACKOFFS)`; the residue string is produced at tests/conftest.py:280-282 (`directory still present after {len(REMOVAL_BACKOFFS)} removal attempts`). The 1.86s runtime matches sum(REMOVAL_BACKOFFS)=1.85s, so the loop really ran to exhaustion."
+              },
+              {
+                "criterion": "A refused DELETE (409/429/5xx) keeps BOTH the registry row and the directory (AUG-117 invariant unchanged): 1 passed. FAILIF: the test fails or the row/directory pairing is no longer asserted. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_teardown_resilience.py::test_refused_delete_keeps_the_directory_and_the_row",
+                "status": "PASS",
+                "detail": "Proof command output: `.  [100%]` / `1 passed in 0.01s`. The test (tests/test_teardown_resilience.py:101-120) patches rmtree to `pytest.fail(\"rmtree must not run\")`, scripts DELETE -> (500, \"boom\"), and asserts `path.exists()` plus `any(\"500\" in p for p in problems)` \u2014 the row/directory pairing is asserted, not just the status. Backed by tests/conftest.py:284-296 where rmtree only runs inside `if deleted:`."
+              },
+              {
+                "criterion": "The retry budget is bounded: prints 'retry budget 1.85s attempts=5' and exits 0 (sum of REMOVAL_BACKOFFS under 2s with at least 3 attempts). FAILIF: the printed sum is >= 2.0s, fewer than 3 attempts, or rc != 0. PROOF: cd /home/kara/auger && python3 -c 'import ast,sys;src=open(\"tests/conftest.py\").read();m=[n for n in ast.parse(src).body if isinstance(n,ast.Assign) and getattr(n.targets[0],\"id\",\"\")==\"REMOVAL_BACKOFFS\"];s=sum(e.value for e in m[0].value.elts);print(f\"retry budget {s:.2f}s attempts={len(m[0].value.elts)}\");sys.exit(0 if s<2.0 and len(m[0].value.elts)>=3 else 1)'",
+                "status": "PASS",
+                "detail": "Proof command output exactly: `retry budget 1.85s attempts=5` followed by `RC=0`. Source: tests/conftest.py:206 `REMOVAL_BACKOFFS = (0.0, 0.1, 0.25, 0.5, 1.0)` \u2014 sum 1.85 < 2.0, 5 attempts >= 3."
+              },
+              {
+                "criterion": "The gate arm names this file so the regression cannot hide: 2 matching lines in tests/gate.sh. FAILIF: the count is not 2 (the file is no longer named in the pytest arm or its comment). PROOF: cd /home/kara/auger && grep -c test_teardown_resilience.py tests/gate.sh",
+                "status": "PASS",
+                "detail": "Proof command output: `2`. The two lines are tests/gate.sh:163 (the explanatory comment `# tests/test_teardown_resilience.py (AUG-131): the teardown retry contract ...`) and tests/gate.sh:206 (the actual `python3 -m pytest ... tests/test_teardown_resilience.py ...` arm), so the file is both named and executed."
+              },
+              {
+                "criterion": "The residue-report test must actually exercise the bounded loop (rmtree called exactly len(REMOVAL_BACKOFFS) times) and the recreated-directory test must assert the re-issued DELETE, so the tests cannot pass against a no-retry implementation.",
+                "status": "PASS",
+                "detail": "tests/test_teardown_resilience.py:96 asserts `calls['n'] == len(cf.REMOVAL_BACKOFFS)` (exactly 5) and :69-72 assert `calls['n'] >= 3` and `deletes['n'] >= 1`. A single-rmtree implementation would yield calls==1 and deletes==0, failing both tests \u2014 the assertions pin the retry, not just the outcome.",
+                "derived": true
+              },
+              {
+                "criterion": "The refused-DELETE path must not be weakened: rmtree must never run when DELETE is refused (409/429/5xx), and the directory must be kept so the registry row and directory stay paired.",
+                "status": "PASS",
+                "detail": "tests/conftest.py:284-296: `shutil.rmtree` appears only inside `if deleted:`; the else branch prints `directory KEPT at {path}` and only reports if the directory is already gone. The new test makes rmtree `pytest.fail` and passes, and the pre-existing AUG-117 test `tests/test_auger.py::test_teardown_keeps_the_directory_when_the_delete_is_refused` still passes (`13 passed, 322 deselected in 0.33s` for `-k \"teardown or leftover or audit\"`).",
+                "derived": true
+              },
+              {
+                "criterion": "The retry loop must terminate: it must not loop unboundedly, and the re-issued DELETE inside the loop must not itself consume the 61s TEARDOWN_CONFLICT_BACKOFFS budget (which would blow the ~2s bound).",
+                "status": "PASS",
+                "detail": "tests/conftest.py:269 `for wait in REMOVAL_BACKOFFS:` iterates a fixed 5-element tuple, so it terminates. The re-issued DELETE at :276 calls `auger.delete_namespace(ns)` with its default `TEARDOWN_RETRIES` (auger.py:957), not TEARDOWN_CONFLICT_BACKOFFS, so the 61s conflict budget is not consumed inside the loop. Empirically the never-goes-away test finishes in 1.86s, matching sum(REMOVAL_BACKOFFS)=1.85s.",
+                "derived": true
+              },
+              {
+                "criterion": "Back-compat: the existing teardown callers (fixture finalizer, leak audit) still receive problems and fail loudly; the new loop must not turn a real leak into a silent pass.",
+                "status": "PASS",
+                "detail": "tests/conftest.py:613-631 \u2014 the `ns_created` finalizer still calls `teardown_namespace(ns)` and `pytest.fail(...)` on non-429 problems; the new loop only appends to `problems` (:280-282) and never clears it. Regression run: `python3 -m pytest tests/test_auger.py -k \"teardown or leftover or audit\" -v` -> `13 passed, 322 deselected in 0.33s`, including `test_a_persistently_listed_leftover_namespace_still_fails_the_audit` and `test_teardown_keeps_the_directory_when_the_delete_is_refused`.",
+                "derived": true
+              }
+            ],
+            "summary": "All six given criteria and all four derived criteria pass with fresh command output: the 4-test file is green, the retry budget prints 1.85s/5 attempts with rc=0, the gate names the file twice, and the AUG-117 refused-DELETE invariant plus the pre-existing teardown/audit tests remain green.",
+            "provenance": {
+              "model": "deepseek-v4-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "deepseek-v4-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY"
+    }
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "The diff only appends a new task definition (AUG-131) to .gitreins/tasks.yaml with self-contained criteria and proof commands; no code, wiring, or logic is changed, so there is nothing to flag."
+  },
+  "summary": "Stage tier1: PASS\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 Whole file tests/test_teardown_resilience.py passes on the judged tree: 4 passed. FAILIF: any test fails or errors, or fewer than 4 tests are collected. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_teardown_resilience.py: Ran the exact proof command: output `....  [100%]` / `4 passed in 2.21s`, rc=0. A `-v` run confirms `collected 4 items` and four PASSED lines (test_directory_recreated_twice_is_still_removed, test_directory_that_never_goes_away_is_reported, test_refused_delete_keeps_the_directory_and_the_row, test_teardown_refuses_a_real_namespace_name).\n  \u2713 A namespace directory recreated after DELETE is still removed by the bounded retry: 1 passed. FAILIF: the test fails or errors. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_teardown_resilience.py::test_directory_recreated_twice_is_still_removed: Proof command output: `.  [100%]` / `1 passed in 0.36s`. The test (tests/test_teardown_resilience.py:33-72) patches cf.shutil.rmtree to recreate the tree on the first two calls, then asserts `problems == []`, `not path.exists()`, `calls['n'] >= 3` and `deletes['n'] >= 1` \u2014 i.e. the retry loop in tests/conftest.py:269-278 actually re-removes and re-issues the DELETE.\n  \u2713 A tree that never disappears is reported as residue instead of being silently passed: 1 passed. FAILIF: the test fails or the residue report is skipped. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_teardown_resilience.py::test_directory_that_never_goes_away_is_reported: Proof command output: `.  [100%]` / `1 passed in 1.86s`. The test (tests/test_teardown_resilience.py:75-98) asserts `any(\"still present\" in p for p in problems)` and `calls['n'] == len(cf.REMOVAL_BACKOFFS)`; the residue string is produced at tests/conftest.py:280-282 (`directory still present after {len(REMOVAL_BACKOFFS)} removal attempts`). The 1.86s runtime matches sum(REMOVAL_BACKOFFS)=1.85s, so the loop really ran to exhaustion.\n  \u2713 A refused DELETE (409/429/5xx) keeps BOTH the registry row and the directory (AUG-117 invariant unchanged): 1 passed. FAILIF: the test fails or the row/directory pairing is no longer asserted. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_teardown_resilience.py::test_refused_delete_keeps_the_directory_and_the_row: Proof command output: `.  [100%]` / `1 passed in 0.01s`. The test (tests/test_teardown_resilience.py:101-120) patches rmtree to `pytest.fail(\"rmtree must not run\")`, scripts DELETE -> (500, \"boom\"), and asserts `path.exists()` plus `any(\"500\" in p for p in problems)` \u2014 the row/directory pairing is asserted, not just the status. Backed by tests/conftest.py:284-296 where rmtree only runs inside `if deleted:`.\n  \u2713 The retry budget is bounded: prints 'retry budget 1.85s attempts=5' and exits 0 (sum of REMOVAL_BACKOFFS under 2s with at least 3 attempts). FAILIF: the printed sum is >= 2.0s, fewer than 3 attempts, or rc != 0. PROOF: cd /home/kara/auger && python3 -c 'import ast,sys;src=open(\"tests/conftest.py\").read();m=[n for n in ast.parse(src).body if isinstance(n,ast.Assign) and getattr(n.targets[0],\"id\",\"\")==\"REMOVAL_BACKOFFS\"];s=sum(e.value for e in m[0].value.elts);print(f\"retry budget {s:.2f}s attempts={len(m[0].value.elts)}\");sys.exit(0 if s<2.0 and len(m[0].value.elts)>=3 else 1)': Proof command output exactly: `retry budget 1.85s attempts=5` followed by `RC=0`. Source: tests/conftest.py:206 `REMOVAL_BACKOFFS = (0.0, 0.1, 0.25, 0.5, 1.0)` \u2014 sum 1.85 < 2.0, 5 attempts >= 3.\n  \u2713 The gate arm names this file so the regression cannot hide: 2 matching lines in tests/gate.sh. FAILIF: the count is not 2 (the file is no longer named in the pytest arm or its comment). PROOF: cd /home/kara/auger && grep -c test_teardown_resilience.py tests/gate.sh: Proof command output: `2`. The two lines are tests/gate.sh:163 (the explanatory comment `# tests/test_teardown_resilience.py (AUG-131): the teardown retry contract ...`) and tests/gate.sh:206 (the actual `python3 -m pytest ... tests/test_teardown_resilience.py ...` arm), so the file is both named and executed.\n  \u2713 The residue-report test must actually exercise the bounded loop (rmtree called exactly len(REMOVAL_BACKOFFS) times) and the recreated-directory test must assert the re-issued DELETE, so the tests cannot pass against a no-retry implementation.: tests/test_teardown_resilience.py:96 asserts `calls['n'] == len(cf.REMOVAL_BACKOFFS)` (exactly 5) and :69-72 assert `calls['n'] >= 3` and `deletes['n'] >= 1`. A single-rmtree implementation would yield calls==1 and deletes==0, failing both tests \u2014 the assertions pin the retry, not just the outcome.\n  \u2713 The refused-DELETE path must not be weakened: rmtree must never run when DELETE is refused (409/429/5xx), and the directory must be kept so the registry row and directory stay paired.: tests/conftest.py:284-296: `shutil.rmtree` appears only inside `if deleted:`; the else branch prints `directory KEPT at {path}` and only reports if the directory is already gone. The new test makes rmtree `pytest.fail` and passes, and the pre-existing AUG-117 test `tests/test_auger.py::test_teardown_keeps_the_directory_when_the_delete_is_refused` still passes (`13 passed, 322 deselected in 0.33s` for `-k \"teardown or leftover or audit\"`).\n  \u2713 The retry loop must terminate: it must not loop unboundedly, and the re-issued DELETE inside the loop must not itself consume the 61s TEARDOWN_CONFLICT_BACKOFFS budget (which would blow the ~2s bound).: tests/conftest.py:269 `for wait in REMOVAL_BACKOFFS:` iterates a fixed 5-element tuple, so it terminates. The re-issued DELETE at :276 calls `auger.delete_namespace(ns)` with its default `TEARDOWN_RETRIES` (auger.py:957), not TEARDOWN_CONFLICT_BACKOFFS, so the 61s conflict budget is not consumed inside the loop. Empirically the never-goes-away test finishes in 1.86s, matching sum(REMOVAL_BACKOFFS)=1.85s.\n  \u2713 Back-compat: the existing teardown callers (fixture finalizer, leak audit) still receive problems and fail loudly; the new loop must not turn a real leak into a silent pass.: tests/conftest.py:613-631 \u2014 the `ns_created` finalizer still calls `teardown_namespace(ns)` and `pytest.fail(...)` on non-429 problems; the new loop only appends to `problems` (:280-282) and never clears it. Regression run: `python3 -m pytest tests/test_auger.py -k \"teardown or leftover or audit\" -v` -> `13 passed, 322 deselected in 0.33s`, including `test_a_persistently_listed_leftover_namespace_still_fails_the_audit` and `test_teardown_keeps_the_directory_when_the_delete_is_refused`.\nAll six given criteria and all four derived criteria pass with fresh command output: the 4-test file is green, the retry budget prints 1.85s/5 attempts with rc=0, the gate names the file twice, and the AUG-117 refused-DELETE invariant plus the pre-existing teardown/audit tests remain green.\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-11-09T23:25:43.837386",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-09T23:25:43.873066+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 262176,
+        "truncated": true,
+        "source": "git show c7dc34e45d0e"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 2787,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-131"
+  }
+}
