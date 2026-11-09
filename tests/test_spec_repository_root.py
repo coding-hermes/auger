@@ -65,8 +65,12 @@ MARKER_TEST = '"""Consumer-repository test named by the spec corpus."""\n\n\ndef
 
 def run_auger(*argv: str, cwd: Path | None = None) -> tuple[int, str, str]:
     """Drive `auger spec ...` as a subprocess, the way a consumer repository would."""
+    # Absolute interpreter: a RELATIVE PATH entry makes sys.executable relative too, and every
+    # call runs with cwd set to a scratch consumer repo, so a relative argv[0] resolves against
+    # the wrong directory (FileNotFoundError) before any assertion executes.
+    interpreter = os.path.abspath(sys.executable)
     done = subprocess.run(
-        [sys.executable, str(AUGER), "spec", *argv],
+        [interpreter, str(AUGER), "spec", *argv],
         capture_output=True,
         text=True,
         cwd=str(cwd) if cwd is not None else None,
@@ -160,7 +164,12 @@ def test_a_consumer_repository_validates_and_bundles_its_own_test(
     obligation = bundle["verifications"][0]
     assert obligation["path"] == "tests/test_marker.py", obligation
     assert obligation["selector"] == "test_marker", obligation
-    assert obligation["runner"] == [sys.executable, "-m", "pytest"], obligation
+    # The registered runner vector is the interpreter INSIDE auger; compare it absolutely so a
+    # relative PATH entry (sys.executable == ".venv/bin/python3") does not read as a mismatch
+    # between two names for the same file.
+    assert obligation["runner"] == [os.path.abspath(sys.executable), "-m", "pytest"], (
+        obligation
+    )
     # No auger-internal path is involved in the RESOLVED obligation fields. `runner` is the
     # registered argv vector by contract — the interpreter inside auger that will run the
     # test — so it is compared as a vector above and excluded here, one field at a time.
