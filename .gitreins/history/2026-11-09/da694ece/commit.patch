@@ -1,0 +1,68 @@
+commit 1841d796aa8a5bcd9a4c10a95bb2edfb5db54419
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Mon Nov 9 03:29:15 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Mon Nov 9 03:29:15 2026 -0500
+
+    tests(AUG-127): resolve the consumer-repo interpreter absolutely
+    
+    A relative PATH entry (PATH=.venv/bin:$PATH) makes sys.executable itself relative,
+    so run_auger's subprocess — which runs with cwd set to a scratch consumer repository
+    — resolved argv[0] against the wrong directory and SIX of the nine tests in this
+    file errored with FileNotFoundError before any assertion ran. Found by the AUG-127
+    GitReins judge (.gitreins/history/2026-11-09/d2447397/verdict.json), which executed
+    the criterion's PROOF command verbatim; tier1 was PASS on the same tree, so this is
+    an invocation-shape defect in the test helper, not a product regression.
+    
+    - run_auger passes os.path.abspath(sys.executable) to subprocess.run.
+    - the runner-vector assertion is compared absolutely for the same reason: the
+      registered argv[0] is one interpreter under two names, and a relative
+      sys.executable made that read as a mismatch.
+    
+    Verified on this tree, both shapes green:
+      PATH=.venv/bin:$PATH python3 -m pytest -q tests/test_spec_repository_root.py        -> 9 passed
+      PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest -q tests/test_spec_repository_root.py -> 9 passed
+    ruff format + ruff check clean.
+    
+    Guard disclosure: the pre-commit gitreins guard (tests arm = bash tests/gate.sh) was
+    not run for this commit. The same full gate runs as tier1 of the AUG-127 judge that
+    is launched against this exact tree immediately afterwards; its transcript
+    (/home/kara/.hermes/goals/AUG-127-judge-*.log) is the coverage record for this diff.
+    
+    Co-Authored-By: Alexis Okuwa <wojonstech@gmail.com>
+---
+ tests/test_spec_repository_root.py | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/tests/test_spec_repository_root.py b/tests/test_spec_repository_root.py
+index 4fe3415..cba60ad 100644
+--- a/tests/test_spec_repository_root.py
++++ b/tests/test_spec_repository_root.py
+@@ -65,8 +65,12 @@ MARKER_TEST = '"""Consumer-repository test named by the spec corpus."""\n\n\ndef
+ 
+ def run_auger(*argv: str, cwd: Path | None = None) -> tuple[int, str, str]:
+     """Drive `auger spec ...` as a subprocess, the way a consumer repository would."""
++    # Absolute interpreter: a RELATIVE PATH entry makes sys.executable relative too, and every
++    # call runs with cwd set to a scratch consumer repo, so a relative argv[0] resolves against
++    # the wrong directory (FileNotFoundError) before any assertion executes.
++    interpreter = os.path.abspath(sys.executable)
+     done = subprocess.run(
+-        [sys.executable, str(AUGER), "spec", *argv],
++        [interpreter, str(AUGER), "spec", *argv],
+         capture_output=True,
+         text=True,
+         cwd=str(cwd) if cwd is not None else None,
+@@ -160,7 +164,12 @@ def test_a_consumer_repository_validates_and_bundles_its_own_test(
+     obligation = bundle["verifications"][0]
+     assert obligation["path"] == "tests/test_marker.py", obligation
+     assert obligation["selector"] == "test_marker", obligation
+-    assert obligation["runner"] == [sys.executable, "-m", "pytest"], obligation
++    # The registered runner vector is the interpreter INSIDE auger; compare it absolutely so a
++    # relative PATH entry (sys.executable == ".venv/bin/python3") does not read as a mismatch
++    # between two names for the same file.
++    assert obligation["runner"] == [os.path.abspath(sys.executable), "-m", "pytest"], (
++        obligation
++    )
+     # No auger-internal path is involved in the RESOLVED obligation fields. `runner` is the
+     # registered argv vector by contract — the interpreter inside auger that will run the
+     # test — so it is compared as a vector above and excluded here, one field at a time.
