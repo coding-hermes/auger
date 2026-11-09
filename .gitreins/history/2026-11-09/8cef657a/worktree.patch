@@ -1,0 +1,65 @@
+diff --git a/.gitreins/tasks.yaml b/.gitreins/tasks.yaml
+index 8aca019..b255204 100644
+--- a/.gitreins/tasks.yaml
++++ b/.gitreins/tasks.yaml
+@@ -1323,3 +1323,60 @@ tasks:
+     tests/gate.sh; git merge-base --is-ancestor 55a6725 HEAD; echo ancestor_rc=$?'
+   status: in_progress
+   created_at: '2026-11-09T17:39:54.174945+00:00'
++- id: AUG-134
++  title: "AUG-134: one root loader \u2014 spec validate and spec check reach the same\
++    \ verdict on every fixture corpus (fix 55a6725, graded at the current merged head)"
++  criteria:
++  - 'The two validators agree on the corpus that used to split them: spec validate
++    and spec check on tests/fixtures/xml/specs BOTH exit 0, and validate prints "spec:
++    3 document(s), 10 block(s), 6 reference(s) ok" while check prints a JSON object
++    whose status is "valid". FAILIF: either rc is non-zero, the printed counts differ,
++    or check reports any status other than valid (the pre-fix measurement was validate
++    rc 0 ok / check rc 2 invalid-root). PROOF: cd /home/kara/auger && .venv/bin/python
++    auger.py spec validate tests/fixtures/xml/specs; echo validate_rc=$?; .venv/bin/python
++    auger.py spec check tests/fixtures/xml/specs; echo check_rc=$?'
++  - 'Agreement holds on EVERY fixture directory, not just the one named in the row:
++    over all 7 directories under tests/fixtures/xml/ the two verbs return the SAME
++    exit code each time (measured today: 5 pairs rc 0/0 - context, methods, rollback,
++    specs, verification - and 2 pairs rc 2/2 - expected, invalid), so zero disagreements.
++    FAILIF: any directory whose two exit codes differ, or a total that is not 7 directories.
++    PROOF: cd /home/kara/auger && for d in tests/fixtures/xml/*/; do v=$(.venv/bin/python
++    auger.py spec validate "$d" >/dev/null 2>&1; echo $?); c=$(.venv/bin/python auger.py
++    spec check "$d" >/dev/null 2>&1; echo $?); printf "%s v=%s c=%s\n" "$(basename
++    $d)" "$v" "$c"; done'
++  - 'The divergence was REAL and the fix is code, not fixture: the PRE-FIX module
++    (git show 55a6725^:auger.py, the commit immediately before the fix) run against
++    the SAME fixture directory prints ok rc 0 for spec validate and refuses rc 2 "invalid-root
++    ... expected <spec>" for spec check. FAILIF: the pre-fix module agrees with itself,
++    or the refusal class is not invalid-root (that would mean the defect never existed
++    as recorded). PROOF: cd /home/kara/auger && git show 55a6725^:auger.py > /tmp/pre134-auger.py
++    && .venv/bin/python /tmp/pre134-auger.py spec validate tests/fixtures/xml/specs;
++    echo prefixed_validate_rc=$?; .venv/bin/python /tmp/pre134-auger.py spec check
++    tests/fixtures/xml/specs; echo prefixed_check_rc=$?'
++  - 'The regression suites shipped with the fix pass on this tree: tests/test_spec_validate_obligations.py
++    plus tests/test_spec_validators_agree.py collect and pass 31 tests (the agreement
++    suite drives both verbs over every fixture corpus and asserts the table covers
++    every directory). FAILIF: any failure, error, or a collected count other than
++    31. PROOF: cd /home/kara/auger && PATH=$PWD/.venv/bin:$PATH python3 -m pytest
++    -q tests/test_spec_validate_obligations.py tests/test_spec_validators_agree.py'
++  - 'The fix cannot silently fall out of the gate and is the tree that was graded:
++    tests/gate.sh names both regression files in its pytest arm (2 occurrences each
++    measured) and the fix commit 55a6725 is an ancestor of the judged HEAD. FAILIF:
++    either file is absent from the arm, or the ancestry check exits non-zero. PROOF:
++    cd /home/kara/auger && grep -c "tests/test_spec_validate_obligations.py" tests/gate.sh;
++    grep -c "tests/test_spec_validators_agree.py" tests/gate.sh; git merge-base --is-ancestor
++    55a6725 HEAD; echo ancestor_rc=$?'
++  - 'The agreement follows the CORPUS, not the checkout path: a temp copy of tests/fixtures/xml/specs
++    OUTSIDE the repository is accepted rc 0 by BOTH verbs under --repo-root $PWD,
++    and a temp copy of tests/fixtures/xml/invalid is refused rc 2 by BOTH with the
++    same first-line error class, so the single root loader reads whatever corpus it
++    is pointed at. FAILIF: the two verbs disagree on either copy, or the accepted
++    copy is refused. PROOF: cd /home/kara/auger && T=$(mktemp -d) && cp -r tests/fixtures/xml/specs
++    $T/specs && cp -r tests/fixtures/xml/invalid $T/invalid && .venv/bin/python auger.py
++    spec validate --repo-root $PWD $T/specs; echo ok_validate_rc=$?; .venv/bin/python
++    auger.py spec check --repo-root $PWD $T/specs; echo ok_check_rc=$?; .venv/bin/python
++    auger.py spec validate --repo-root $PWD $T/invalid 2>&1 | head -1; echo bad_validate_rc=${PIPESTATUS[0]};
++    .venv/bin/python auger.py spec check --repo-root $PWD $T/invalid 2>&1 | head -1;
++    echo bad_check_rc=${PIPESTATUS[0]}; rm -rf $T'
++  status: in_progress
++  created_at: '2026-11-09T20:11:34.485850+00:00'
