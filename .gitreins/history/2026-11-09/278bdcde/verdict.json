@@ -1,0 +1,221 @@
+{
+  "task_id": "AUG-130",
+  "task_title": "AUG-130 verified: a gate whose required arm did not run exits non-zero, the opt-in escape is loud, and a test drives gate.sh under a no-pytest shim",
+  "task_criteria": [
+    "Whole self-test passes on the judged tree: tests/test_gate_mode.sh exits 0 and prints both 'AUG-081 wrapper regression: PASS' and 'AUG-130 skipped-arm policy: PASS' (measured 17.5s). The file drives tests/gate.sh as a subprocess under a PATH shim whose python3 refuses `-c 'import pytest'`: the strict run must exit non-zero naming 'GATE FAIL: required arms did not run' and must never print 'GATE PASS'; the run with AUGER_ALLOW_SKIPPED_ARMS=1 must exit 0 printing 'GATE PASS (DEGRADED)', 'required arms NOT run: pytest' and 'NOT proof the suite ran'. FAILIF: the file exits non-zero, or either control line is missing from its output. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH bash tests/test_gate_mode.sh",
+    "The skipped-arm proof is reachable FROM THE GATE: tests/gate.sh invokes the self-test as its wrapper-regression arm, guarded by the AUGER_GATE_INNER=1 seam so an inner gate invocation does not recurse into its own harness. FAILIF: zero invocation lines, or more than one. PROOF: cd /home/kara/auger && grep -n 'bash tests/test_gate_mode.sh' tests/gate.sh   # expect exactly 1 match, on the elif arm that runs the wrapper regression",
+    "CI cannot silently skip the arm: the workflow installs pytest so the gate's pytest arm runs on the runner instead of being skipped (row acceptance criterion 2). FAILIF: no 'pip install ... pytest' line exists in the workflow file. PROOF: cd /home/kara/auger && grep -Eq 'pip install .*pytest' .github/workflows/ci.yml && echo CI-INSTALLS-PYTEST",
+    "The strict verdict lives in the gate SCRIPT, not only in its test: tests/gate.sh contains the required-skip failure string, the documented opt-in escape, the DEGRADED pass header and the 'required arms NOT run' summary line. FAILIF: any of those four literals is missing from tests/gate.sh. PROOF: cd /home/kara/auger && python3 -c \"import sys; s=open('tests/gate.sh').read(); ok=all(x in s for x in ['GATE FAIL: required arms did not run','AUGER_ALLOW_SKIPPED_ARMS=1','GATE PASS (DEGRADED)','required arms NOT run']); print('STRICT-POLICY-OK' if ok else 'STRICT-POLICY-MISSING'); sys.exit(0 if ok else 1)\""
+  ],
+  "passed": true,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "c4a7972f508cd8b387b11abe008e5fac1c4018b1",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "2ae27739123ee488a0035b45b1b5060d8aa493a8cc55a70033633b03c8d4fba6",
+  "working_tree_dirty_path_count": 2,
+  "items": [
+    {
+      "criterion": "Whole self-test passes on the judged tree: tests/test_gate_mode.sh exits 0 and prints both 'AUG-081 wrapper regression: PASS' and 'AUG-130 skipped-arm policy: PASS' (measured 17.5s). The file drives tests/gate.sh as a subprocess under a PATH shim whose python3 refuses `-c 'import pytest'`: the strict run must exit non-zero naming 'GATE FAIL: required arms did not run' and must never print 'GATE PASS'; the run with AUGER_ALLOW_SKIPPED_ARMS=1 must exit 0 printing 'GATE PASS (DEGRADED)', 'required arms NOT run: pytest' and 'NOT proof the suite ran'. FAILIF: the file exits non-zero, or either control line is missing from its output. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH bash tests/test_gate_mode.sh",
+      "status": "PASS",
+      "detail": "Ran the exact PROOF command: output 'gate prerequisite preflight: PASS / AUG-116: zombie pid ... classified dead / AUG-081 wrapper regression: PASS / AUG-130 skipped-arm policy: PASS', EXIT=0, ELAPSED=12s. The shim is built at tests/test_gate_mode.sh:396-405 (python3 exits 1 for `-c 'import pytest'`, delegates otherwise) and is proven non-vacuous at :406-409; the strict control (:441-455) asserts non-zero, 'GATE FAIL: required arms did not run', and no 'GATE PASS'; the opt-in control (:457-464) asserts exit 0 plus 'GATE PASS (DEGRADED)', 'required arms NOT run: pytest', 'NOT proof the suite ran'. I also reproduced both runs by hand: strict -> rc=1 with 'GATE FAIL: required arms did not run: pytest'; AUGER_ALLOW_SKIPPED_ARMS=1 -> rc=0 with 'GATE PASS (DEGRADED)' / 'required arms NOT run: pytest' / '... This is NOT proof the suite ran:'."
+    },
+    {
+      "criterion": "The skipped-arm proof is reachable FROM THE GATE: tests/gate.sh invokes the self-test as its wrapper-regression arm, guarded by the AUGER_GATE_INNER=1 seam so an inner gate invocation does not recurse into its own harness. FAILIF: zero invocation lines, or more than one. PROOF: cd /home/kara/auger && grep -n 'bash tests/test_gate_mode.sh' tests/gate.sh   # expect exactly 1 match, on the elif arm that runs the wrapper regression",
+      "status": "PASS",
+      "detail": "`grep -n 'bash tests/test_gate_mode.sh' tests/gate.sh` -> exactly one match: `251:elif bash tests/test_gate_mode.sh; then`, which is the elif arm of the guard `if [ \"${AUGER_GATE_INNER:-0}\" = \"1\" ]` at tests/gate.sh:243-250 (that branch calls skip_arm \"wrapper-regression\" instead of recursing). grep -c = 1."
+    },
+    {
+      "criterion": "CI cannot silently skip the arm: the workflow installs pytest so the gate's pytest arm runs on the runner instead of being skipped (row acceptance criterion 2). FAILIF: no 'pip install ... pytest' line exists in the workflow file. PROOF: cd /home/kara/auger && grep -Eq 'pip install .*pytest' .github/workflows/ci.yml && echo CI-INSTALLS-PYTEST",
+      "status": "PASS",
+      "detail": "PROOF command printed CI-INSTALLS-PYTEST; .github/workflows/ci.yml:82 `python3 -m pip install \"ruff==0.15.22\" pytest pyyaml \"lxml>=5\"`. The step is load-bearing: ci.yml:43 sets AUGER_CI=1 (hosted-ci-skip) and ci.yml:88 runs `bash tests/gate.sh`, so tests/gate.sh:226-231 takes the hosted-ci branch and calls run_pytest_arm (not skip_required_arm) because pytest is importable; ci.yml:83-87 documents this explicitly."
+    },
+    {
+      "criterion": "The strict verdict lives in the gate SCRIPT, not only in its test: tests/gate.sh contains the required-skip failure string, the documented opt-in escape, the DEGRADED pass header and the 'required arms NOT run' summary line. FAILIF: any of those four literals is missing from tests/gate.sh. PROOF: cd /home/kara/auger && python3 -c \"import sys; s=open('tests/gate.sh').read(); ok=all(x in s for x in ['GATE FAIL: required arms did not run','AUGER_ALLOW_SKIPPED_ARMS=1','GATE PASS (DEGRADED)','required arms NOT run']); print('STRICT-POLICY-OK' if ok else 'STRICT-POLICY-MISSING'); sys.exit(0 if ok else 1)\"",
+      "status": "PASS",
+      "detail": "PROOF command printed STRICT-POLICY-OK, rc=0. In source: tests/gate.sh:388 'GATE PASS (DEGRADED)', :389 'required arms NOT run: $REQUIRED_SKIPPED', :390 'AUGER_ALLOW_SKIPPED_ARMS=1 accepted this run. This is NOT proof the suite ran:', :395 'GATE FAIL: required arms did not run: $REQUIRED_SKIPPED' followed by exit 1 at :398; the required-skip recorder is skip_required_arm at :124 and is used for pytest at :228."
+    },
+    {
+      "criterion": "The AUGER_GATE_INNER=1 seam actually prevents recursion: an inner gate invocation (AUGER_GATE_INNER=1) must not invoke tests/test_gate_mode.sh, while the outer gate still runs it.",
+      "status": "PASS",
+      "detail": "Manual inner run (AUGER_GATE_INNER=1 AUGER_CI=1 GITHUB_ACTIONS=true under the no-pytest shim) printed `SKIPPED [wrapper-regression]: AUGER_GATE_INNER=1 \u2014 inner gate invocation from tests/test_gate_mode.sh; the outer gate runs this arm` (tests/gate.sh:243-250) and its output contained no 'AUG-081 wrapper regression: PASS', i.e. the harness was not re-entered. The outer gate does run it: full `AUGER_CI=1 GITHUB_ACTIONS=true bash tests/gate.sh` log shows '== wrapper regression (AUG-081) ==' then 'AUG-081 wrapper regression: PASS' and 'AUG-130 skipped-arm policy: PASS'.",
+      "derived": true
+    },
+    {
+      "criterion": "The strict failure path is non-vacuous: under the no-pytest shim the gate's pytest arm is genuinely skipped via skip_required_arm \"pytest\", and the non-zero exit is caused by that required skip rather than an unrelated arm failing.",
+      "status": "PASS",
+      "detail": "Manual strict run output: line 6 `SKIPPED [pytest]: pytest not importable by python3 (pip install pytest) \u2014 suite arm NOT run, NOT passed` (tests/gate.sh:228 skip_required_arm), line 29 `GATE FAIL: required arms did not run: pytest` \u2014 pytest is the ONLY entry in REQUIRED_SKIPPED, so the failure is attributable to it; STRICT_RC=1. The degraded run of the same tree exits 0 with `required arms NOT run: pytest`, confirming the skip is the sole cause.",
+      "derived": true
+    },
+    {
+      "criterion": "The opt-in escape is not silently inherited: the strict run unsets AUGER_ALLOW_SKIPPED_ARMS so an outer DEGRADED run cannot make the strict control pass, and the escape only applies when explicitly set to 1.",
+      "status": "PASS",
+      "detail": "tests/test_gate_mode.sh:426-437 run_inner_gate invokes `env -u AUGER_ALLOW_SKIPPED_ARMS ... \"$@\"`, and the degraded case passes AUGER_ALLOW_SKIPPED_ARMS=1 explicitly after the unset (:458). tests/gate.sh:387 accepts the escape only when `${AUGER_ALLOW_SKIPPED_ARMS:-0}` = \"1\". Verified by hand: with the variable unset the gate exits 1; with =1 it exits 0 printing GATE PASS (DEGRADED).",
+      "derived": true
+    },
+    {
+      "criterion": "The gate's own wrapper-regression arm still passes on the judged tree: bash tests/gate.sh reaches the arm and it succeeds (no regression from the new invocation).",
+      "status": "PASS",
+      "detail": "Full gate run `AUGER_CI=1 GITHUB_ACTIONS=true bash tests/gate.sh` completed: pytest '717 passed, 2 skipped in 881.19s', then log line 15 '== wrapper regression (AUG-081) ==', line 18 'AUG-081 wrapper regression: PASS', line 19 'AUG-130 skipped-arm policy: PASS', line 40 'GATE PASS' (only pytest-live and e2e-smoke skipped, both declared live arms).",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "no_concerns_found",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261105T170854.274025Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nscanners: nice=nice -n 10\n6:34AM INF scanned ~3298156 bytes (3.30 MB) in 1.5s\n6:34AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 250 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261105T170854.274025Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [ 10%]\n........................................................................ [ 20%]\n........................................................................ [ 30%]\n........................................................................ [ 40%]\n..........................s............................................. [ 50%]\n.....s.................................................................. [ 60%]\n........................................................................ [ 70%]\n........................................................................ [ 80%]\n........................................................................ [ 90%]\n.......................................................................  [100%]\n717 passed, 2 skipped in 867.27s (0:14:27)\n== wrapper regression (AUG-081) ==\ngate prerequisite preflight: PASS\nAUG-116: zombie pid 1395573 classified dead (kill -0 alone would have said alive)\nAUG-081 wrapper regression: PASS\nAUG-130 skipped-arm policy: PASS\n== end-to-end smoke ==\nnamespace: auger-smoke-1396124\nnamespace sweep: no stale auger-smoke-*/auger-eval-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n  PASS toggle changed the stored configuration\n\n\u2026 [473 chars omitted \u2014 12 line(s)] \u2026\n== spec corpus (AUG-136) ==\nspec: 3 document(s), 12 block(s), 7 reference(s) ok\n== prd proofs (AUG-137) ==\nprd proofs: 8 total \u00b7 3 required \u00b7 5 deferred \u2192 PASS\n   P1  deferred not-run   not-run (deferred to AUG-119): auger.py carries no board surface (grep -c boardctl auger.py -> 0): resolving a\n   P2  required pass      corpus=9249B bundle=8131B latency=16.5ms  2 generated view(s) verified byte-identical to the generator's output for specs/; one block edit propagated to\n   P3  deferred not-run   not-run (deferred to AUG-153): the checker half is reachable (`auger spec check --diff-file` reports `trace-mi\n   P4  deferred not-run   not-run (deferred to AUG-119): writing and reading back a canonical boardctl row is boardctl's surface, not au\n   P5  required pass      corpus=1084B bundle=462B latency=710.3ms  one query returned migration=tests/fixtures/xml/verification/migrations/001_add_marker.sql, fixture=tests/fixt\n   P6  deferred not-run   not-run (deferred to AUG-124): what counts as judge evidence \u2014 excluding the worker summary, refusing a PASS w\n   P7  required pass      corpus=9249B bundle=2944B latency=133.7ms  4/12 blocks selected by `applies-to auger.spec.select`; bundle is 31.8% of the corpus (2944 of 9249 bytes), fl\n   P8  deferred not-run   not-run (deferred to AUG-153): the flag and the process-liveness assertion live in the GitReins hook, which no\nprd-proofs: /home/kara/auger/docs/prd/evidence/AUG-137-prd-proofs.json agrees with this run\n== docs check ==\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261105T170854.274025Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 Whole self-test passes on the judged tree: tests/test_gate_mode.sh exits 0 and prints both 'AUG-081 wrapper regression: PASS' and 'AUG-130 skipped-arm policy: PASS' (measured 17.5s). The file drives tests/gate.sh as a subprocess under a PATH shim whose python3 refuses `-c 'import pytest'`: the strict run must exit non-zero naming 'GATE FAIL: required arms did not run' and must never print 'GATE PASS'; the run with AUGER_ALLOW_SKIPPED_ARMS=1 must exit 0 printing 'GATE PASS (DEGRADED)', 'required arms NOT run: pytest' and 'NOT proof the suite ran'. FAILIF: the file exits non-zero, or either control line is missing from its output. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH bash tests/test_gate_mode.sh: Ran the exact PROOF command: output 'gate prerequisite preflight: PASS / AUG-116: zombie pid ... classified dead / AUG-081 wrapper regression: PASS / AUG-130 skipped-arm policy: PASS', EXIT=0, ELAPSED=12s. The shim is built at tests/test_gate_mode.sh:396-405 (python3 exits 1 for `-c 'import pytest'`, delegates otherwise) and is proven non-vacuous at :406-409; the strict control (:441-455) asserts non-zero, 'GATE FAIL: required arms did not run', and no 'GATE PASS'; the opt-in control (:457-464) asserts exit 0 plus 'GATE PASS (DEGRADED)', 'required arms NOT run: pytest', 'NOT proof the suite ran'. I also reproduced both runs by hand: strict -> rc=1 with 'GATE FAIL: required arms did not run: pytest'; AUGER_ALLOW_SKIPPED_ARMS=1 -> rc=0 with 'GATE PASS (DEGRADED)' / 'required arms NOT run: pytest' / '... This is NOT proof the suite ran:'.\n  \u2713 The skipped-arm proof is reachable FROM THE GATE: tests/gate.sh invokes the self-test as its wrapper-regression arm, guarded by the AUGER_GATE_INNER=1 seam so an inner gate invocation does not recurse into its own harness. FAILIF: zero invocation lines, or more than one. PROOF: cd /home/kara/auger && grep -n 'bash tests/test_gate_mode.sh' tests/gate.sh   # expect exactly 1 match, on the elif arm that runs the wrapper regression: `grep -n 'bash tests/test_gate_mode.sh' tests/gate.sh` -> exactly one match: `251:elif bash tests/test_gate_mode.sh; then`, which is the elif arm of the guard `if [ \"${AUGER_GATE_INNER:-0}\" = \"1\" ]` at tests/gate.sh:243-250 (that branch calls skip_arm \"wrapper-regression\" instead of recursing). grep -c = 1.\n  \u2713 CI cannot silently skip the arm: the workflow installs pytest so the gate's pytest arm runs on the runner instead of being skipped (row acceptance criterion 2). FAILIF: no 'pip install ... pytest' line exists in the workflow file. PROOF: cd /home/kara/auger && grep -Eq 'pip install .*pytest' .github/workflows/ci.yml && echo CI-INSTALLS-PYTEST: PROOF command printed CI-INSTALLS-PYTEST; .github/workflows/ci.yml:82 `python3 -m pip install \"ruff==0.15.22\" pytest pyyaml \"lxml>=5\"`. The step is load-bearing: ci.yml:43 sets AUGER_CI=1 (hosted-ci-skip) and ci.yml:88 runs `bash tests/gate.sh`, so tests/gate.sh:226-231 takes the hosted-ci branch and calls run_pytest_arm (not skip_required_arm) because pytest is importable; ci.yml:83-87 documents this explicitly.\n  \u2713 The strict verdict lives in the gate SCRIPT, not only in its test: tests/gate.sh contains the required-skip failure string, the documented opt-in escape, the DEGRADED pass header and the 'required arms NOT run' summary line. FAILIF: any of those four literals is missing from tests/gate.sh. PROOF: cd /home/kara/auger && python3 -c \"import sys; s=open('tests/gate.sh').read(); ok=all(x in s for x in ['GATE FAIL: required arms did not run','AUGER_ALLOW_SKIPPED_ARMS=1','GATE PASS (DEGRADED)','required arms NOT run']); print('STRICT-POLICY-OK' if ok else 'STRICT-POLICY-MISSING'); sys.exit(0 if ok else 1)\": PROOF command printed STRICT-POLICY-OK, rc=0. In source: tests/gate.sh:388 'GATE PASS (DEGRADED)', :389 'required arms NOT run: $REQUIRED_SKIPPED', :390 'AUGER_ALLOW_SKIPPED_ARMS=1 accepted this run. This is NOT proof the suite ran:', :395 'GATE FAIL: required arms did not run: $REQUIRED_SKIPPED' followed by exit 1 at :398; the required-skip recorder is skip_required_arm at :124 and is used for pytest at :228.\n  \u2713 The AUGER_GATE_INNER=1 seam actually prevents recursion: an inner gate invocation (AUGER_GATE_INNER=1) must not invoke tests/test_gate_mode.sh, while the outer gate still runs it.: Manual inner run (AUGER_GATE_INNER=1 AUGER_CI=1 GITHUB_ACTIONS=true under the no-pytest shim) printed `SKIPPED [wrapper-regression]: AUGER_GATE_INNER=1 \u2014 inner gate invocation from tests/test_gate_mode.sh; the outer gate runs this arm` (tests/gate.sh:243-250) and its output contained no 'AUG-081 wrapper regression: PASS', i.e. the harness was not re-entered. The outer gate does run it: full `AUGER_CI=1 GITHUB_ACTIONS=true bash tests/gate.sh` log shows '== wrapper regression (AUG-081) ==' then 'AUG-081 wrapper regression: PASS' and 'AUG-130 skipped-arm policy: PASS'.\n  \u2713 The strict failure path is non-vacuous: under the no-pytest shim the gate's pytest arm is genuinely skipped via skip_required_arm \"pytest\", and the non-zero exit is caused by that required skip rather than an unrelated arm failing.: Manual strict run output: line 6 `SKIPPED [pytest]: pytest not importable by python3 (pip install pytest) \u2014 suite arm NOT run, NOT passed` (tests/gate.sh:228 skip_required_arm), line 29 `GATE FAIL: required arms did not run: pytest` \u2014 pytest is the ONLY entry in REQUIRED_SKIPPED, so the failure is attributable to it; STRICT_RC=1. The degraded run of the same tree exits 0 with `required arms NOT run: pytest`, confirming the skip is the sole cause.\n  \u2713 The opt-in escape is not silently inherited: the strict run unsets AUGER_ALLOW_SKIPPED_ARMS so an outer DEGRADED run cannot make the strict control pass, and the escape only applies when explicitly set to 1.: tests/test_gate_mode.sh:426-437 run_inner_gate invokes `env -u AUGER_ALLOW_SKIPPED_ARMS ... \"$@\"`, and the degraded case passes AUGER_ALLOW_SKIPPED_ARMS=1 explicitly after the unset (:458). tests/gate.sh:387 accepts the escape only when `${AUGER_ALLOW_SKIPPED_ARMS:-0}` = \"1\". Verified by hand: with the variable unset the gate exits 1; with =1 it exits 0 printing GATE PASS (DEGRADED).\n  \u2713 The gate's own wrapper-regression arm still passes on the judged tree: bash tests/gate.sh reaches the arm and it succeeds (no regression from the new invocation).: Full gate run `AUGER_CI=1 GITHUB_ACTIONS=true bash tests/gate.sh` completed: pytest '717 passed, 2 skipped in 881.19s', then log line 15 '== wrapper regression (AUG-081) ==', line 18 'AUG-081 wrapper regression: PASS', line 19 'AUG-130 skipped-arm policy: PASS', line 40 'GATE PASS' (only pytest-live and e2e-smoke skipped, both declared live arms).\nAll four given criteria and all four derived criteria pass: the self-test exits 0 printing both control lines, the gate invokes it exactly once behind the AUGER_GATE_INNER seam, CI installs pytest, the strict/DEGRADED policy literals live in tests/gate.sh, and the full gate is green (717 passed) with the new arm reached and passing.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 Whole self-test passes on the judged tree: tests/test_gate_mode.sh exits 0 and prints both 'AUG-081 wrapper regression: PASS' and 'AUG-130 skipped-arm policy: PASS' (measured 17.5s). The file drives tests/gate.sh as a subprocess under a PATH shim whose python3 refuses `-c 'import pytest'`: the strict run must exit non-zero naming 'GATE FAIL: required arms did not run' and must never print 'GATE PASS'; the run with AUGER_ALLOW_SKIPPED_ARMS=1 must exit 0 printing 'GATE PASS (DEGRADED)', 'required arms NOT run: pytest' and 'NOT proof the suite ran'. FAILIF: the file exits non-zero, or either control line is missing from its output. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH bash tests/test_gate_mode.sh: Ran the exact PROOF command: output 'gate prerequisite preflight: PASS / AUG-116: zombie pid ... classified dead / AUG-081 wrapper regression: PASS / AUG-130 skipped-arm policy: PASS', EXIT=0, ELAPSED=12s. The shim is built at tests/test_gate_mode.sh:396-405 (python3 exits 1 for `-c 'import pytest'`, delegates otherwise) and is proven non-vacuous at :406-409; the strict control (:441-455) asserts non-zero, 'GATE FAIL: required arms did not run', and no 'GATE PASS'; the opt-in control (:457-464) asserts exit 0 plus 'GATE PASS (DEGRADED)', 'required arms NOT run: pytest', 'NOT proof the suite ran'. I also reproduced both runs by hand: strict -> rc=1 with 'GATE FAIL: required arms did not run: pytest'; AUGER_ALLOW_SKIPPED_ARMS=1 -> rc=0 with 'GATE PASS (DEGRADED)' / 'required arms NOT run: pytest' / '... This is NOT proof the suite ran:'.\n\n\u2026 [3985 chars omitted \u2014 5 line(s)] \u2026\n  \u2713 The opt-in escape is not silently inherited: the strict run unsets AUGER_ALLOW_SKIPPED_ARMS so an outer DEGRADED run cannot make the strict control pass, and the escape only applies when explicitly set to 1.: tests/test_gate_mode.sh:426-437 run_inner_gate invokes `env -u AUGER_ALLOW_SKIPPED_ARMS ... \"$@\"`, and the degraded case passes AUGER_ALLOW_SKIPPED_ARMS=1 explicitly after the unset (:458). tests/gate.sh:387 accepts the escape only when `${AUGER_ALLOW_SKIPPED_ARMS:-0}` = \"1\". Verified by hand: with the variable unset the gate exits 1; with =1 it exits 0 printing GATE PASS (DEGRADED).\n  \u2713 The gate's own wrapper-regression arm still passes on the judged tree: bash tests/gate.sh reaches the arm and it succeeds (no regression from the new invocation).: Full gate run `AUGER_CI=1 GITHUB_ACTIONS=true bash tests/gate.sh` completed: pytest '717 passed, 2 skipped in 881.19s', then log line 15 '== wrapper regression (AUG-081) ==', line 18 'AUG-081 wrapper regression: PASS', line 19 'AUG-130 skipped-arm policy: PASS', line 40 'GATE PASS' (only pytest-live and e2e-smoke skipped, both declared live arms).\nAll four given criteria and all four derived criteria pass: the self-test exits 0 printing both control lines, the gate invokes it exactly once behind the AUGER_GATE_INNER seam, CI installs pytest, the strict/DEGRADED policy literals live in tests/gate.sh, and the full gate is green (717 passed) with the new arm reached and passing.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "Whole self-test passes on the judged tree: tests/test_gate_mode.sh exits 0 and prints both 'AUG-081 wrapper regression: PASS' and 'AUG-130 skipped-arm policy: PASS' (measured 17.5s). The file drives tests/gate.sh as a subprocess under a PATH shim whose python3 refuses `-c 'import pytest'`: the strict run must exit non-zero naming 'GATE FAIL: required arms did not run' and must never print 'GATE PASS'; the run with AUGER_ALLOW_SKIPPED_ARMS=1 must exit 0 printing 'GATE PASS (DEGRADED)', 'required arms NOT run: pytest' and 'NOT proof the suite ran'. FAILIF: the file exits non-zero, or either control line is missing from its output. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH bash tests/test_gate_mode.sh",
+                "status": "PASS",
+                "detail": "Ran the exact PROOF command: output 'gate prerequisite preflight: PASS / AUG-116: zombie pid ... classified dead / AUG-081 wrapper regression: PASS / AUG-130 skipped-arm policy: PASS', EXIT=0, ELAPSED=12s. The shim is built at tests/test_gate_mode.sh:396-405 (python3 exits 1 for `-c 'import pytest'`, delegates otherwise) and is proven non-vacuous at :406-409; the strict control (:441-455) asserts non-zero, 'GATE FAIL: required arms did not run', and no 'GATE PASS'; the opt-in control (:457-464) asserts exit 0 plus 'GATE PASS (DEGRADED)', 'required arms NOT run: pytest', 'NOT proof the suite ran'. I also reproduced both runs by hand: strict -> rc=1 with 'GATE FAIL: required arms did not run: pytest'; AUGER_ALLOW_SKIPPED_ARMS=1 -> rc=0 with 'GATE PASS (DEGRADED)' / 'required arms NOT run: pytest' / '... This is NOT proof the suite ran:'."
+              },
+              {
+                "criterion": "The skipped-arm proof is reachable FROM THE GATE: tests/gate.sh invokes the self-test as its wrapper-regression arm, guarded by the AUGER_GATE_INNER=1 seam so an inner gate invocation does not recurse into its own harness. FAILIF: zero invocation lines, or more than one. PROOF: cd /home/kara/auger && grep -n 'bash tests/test_gate_mode.sh' tests/gate.sh   # expect exactly 1 match, on the elif arm that runs the wrapper regression",
+                "status": "PASS",
+                "detail": "`grep -n 'bash tests/test_gate_mode.sh' tests/gate.sh` -> exactly one match: `251:elif bash tests/test_gate_mode.sh; then`, which is the elif arm of the guard `if [ \"${AUGER_GATE_INNER:-0}\" = \"1\" ]` at tests/gate.sh:243-250 (that branch calls skip_arm \"wrapper-regression\" instead of recursing). grep -c = 1."
+              },
+              {
+                "criterion": "CI cannot silently skip the arm: the workflow installs pytest so the gate's pytest arm runs on the runner instead of being skipped (row acceptance criterion 2). FAILIF: no 'pip install ... pytest' line exists in the workflow file. PROOF: cd /home/kara/auger && grep -Eq 'pip install .*pytest' .github/workflows/ci.yml && echo CI-INSTALLS-PYTEST",
+                "status": "PASS",
+                "detail": "PROOF command printed CI-INSTALLS-PYTEST; .github/workflows/ci.yml:82 `python3 -m pip install \"ruff==0.15.22\" pytest pyyaml \"lxml>=5\"`. The step is load-bearing: ci.yml:43 sets AUGER_CI=1 (hosted-ci-skip) and ci.yml:88 runs `bash tests/gate.sh`, so tests/gate.sh:226-231 takes the hosted-ci branch and calls run_pytest_arm (not skip_required_arm) because pytest is importable; ci.yml:83-87 documents this explicitly."
+              },
+              {
+                "criterion": "The strict verdict lives in the gate SCRIPT, not only in its test: tests/gate.sh contains the required-skip failure string, the documented opt-in escape, the DEGRADED pass header and the 'required arms NOT run' summary line. FAILIF: any of those four literals is missing from tests/gate.sh. PROOF: cd /home/kara/auger && python3 -c \"import sys; s=open('tests/gate.sh').read(); ok=all(x in s for x in ['GATE FAIL: required arms did not run','AUGER_ALLOW_SKIPPED_ARMS=1','GATE PASS (DEGRADED)','required arms NOT run']); print('STRICT-POLICY-OK' if ok else 'STRICT-POLICY-MISSING'); sys.exit(0 if ok else 1)\"",
+                "status": "PASS",
+                "detail": "PROOF command printed STRICT-POLICY-OK, rc=0. In source: tests/gate.sh:388 'GATE PASS (DEGRADED)', :389 'required arms NOT run: $REQUIRED_SKIPPED', :390 'AUGER_ALLOW_SKIPPED_ARMS=1 accepted this run. This is NOT proof the suite ran:', :395 'GATE FAIL: required arms did not run: $REQUIRED_SKIPPED' followed by exit 1 at :398; the required-skip recorder is skip_required_arm at :124 and is used for pytest at :228."
+              },
+              {
+                "criterion": "The AUGER_GATE_INNER=1 seam actually prevents recursion: an inner gate invocation (AUGER_GATE_INNER=1) must not invoke tests/test_gate_mode.sh, while the outer gate still runs it.",
+                "status": "PASS",
+                "detail": "Manual inner run (AUGER_GATE_INNER=1 AUGER_CI=1 GITHUB_ACTIONS=true under the no-pytest shim) printed `SKIPPED [wrapper-regression]: AUGER_GATE_INNER=1 \u2014 inner gate invocation from tests/test_gate_mode.sh; the outer gate runs this arm` (tests/gate.sh:243-250) and its output contained no 'AUG-081 wrapper regression: PASS', i.e. the harness was not re-entered. The outer gate does run it: full `AUGER_CI=1 GITHUB_ACTIONS=true bash tests/gate.sh` log shows '== wrapper regression (AUG-081) ==' then 'AUG-081 wrapper regression: PASS' and 'AUG-130 skipped-arm policy: PASS'.",
+                "derived": true
+              },
+              {
+                "criterion": "The strict failure path is non-vacuous: under the no-pytest shim the gate's pytest arm is genuinely skipped via skip_required_arm \"pytest\", and the non-zero exit is caused by that required skip rather than an unrelated arm failing.",
+                "status": "PASS",
+                "detail": "Manual strict run output: line 6 `SKIPPED [pytest]: pytest not importable by python3 (pip install pytest) \u2014 suite arm NOT run, NOT passed` (tests/gate.sh:228 skip_required_arm), line 29 `GATE FAIL: required arms did not run: pytest` \u2014 pytest is the ONLY entry in REQUIRED_SKIPPED, so the failure is attributable to it; STRICT_RC=1. The degraded run of the same tree exits 0 with `required arms NOT run: pytest`, confirming the skip is the sole cause.",
+                "derived": true
+              },
+              {
+                "criterion": "The opt-in escape is not silently inherited: the strict run unsets AUGER_ALLOW_SKIPPED_ARMS so an outer DEGRADED run cannot make the strict control pass, and the escape only applies when explicitly set to 1.",
+                "status": "PASS",
+                "detail": "tests/test_gate_mode.sh:426-437 run_inner_gate invokes `env -u AUGER_ALLOW_SKIPPED_ARMS ... \"$@\"`, and the degraded case passes AUGER_ALLOW_SKIPPED_ARMS=1 explicitly after the unset (:458). tests/gate.sh:387 accepts the escape only when `${AUGER_ALLOW_SKIPPED_ARMS:-0}` = \"1\". Verified by hand: with the variable unset the gate exits 1; with =1 it exits 0 printing GATE PASS (DEGRADED).",
+                "derived": true
+              },
+              {
+                "criterion": "The gate's own wrapper-regression arm still passes on the judged tree: bash tests/gate.sh reaches the arm and it succeeds (no regression from the new invocation).",
+                "status": "PASS",
+                "detail": "Full gate run `AUGER_CI=1 GITHUB_ACTIONS=true bash tests/gate.sh` completed: pytest '717 passed, 2 skipped in 881.19s', then log line 15 '== wrapper regression (AUG-081) ==', line 18 'AUG-081 wrapper regression: PASS', line 19 'AUG-130 skipped-arm policy: PASS', line 40 'GATE PASS' (only pytest-live and e2e-smoke skipped, both declared live arms).",
+                "derived": true
+              }
+            ],
+            "summary": "All four given criteria and all four derived criteria pass: the self-test exits 0 printing both control lines, the gate invokes it exactly once behind the AUGER_GATE_INNER seam, CI installs pytest, the strict/DEGRADED policy literals live in tests/gate.sh, and the full gate is green (717 passed) with the new arm reached and passing.",
+            "provenance": {
+              "model": "deepseek-v4-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "deepseek-v4-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY"
+    }
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "The diff only appends a completed task record to .gitreins/tasks.yaml with no executable code, so there is nothing to review for correctness, wiring, tests, or convention drift."
+  },
+  "summary": "Stage tier1: PASS\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 Whole self-test passes on the judged tree: tests/test_gate_mode.sh exits 0 and prints both 'AUG-081 wrapper regression: PASS' and 'AUG-130 skipped-arm policy: PASS' (measured 17.5s). The file drives tests/gate.sh as a subprocess under a PATH shim whose python3 refuses `-c 'import pytest'`: the strict run must exit non-zero naming 'GATE FAIL: required arms did not run' and must never print 'GATE PASS'; the run with AUGER_ALLOW_SKIPPED_ARMS=1 must exit 0 printing 'GATE PASS (DEGRADED)', 'required arms NOT run: pytest' and 'NOT proof the suite ran'. FAILIF: the file exits non-zero, or either control line is missing from its output. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH bash tests/test_gate_mode.sh: Ran the exact PROOF command: output 'gate prerequisite preflight: PASS / AUG-116: zombie pid ... classified dead / AUG-081 wrapper regression: PASS / AUG-130 skipped-arm policy: PASS', EXIT=0, ELAPSED=12s. The shim is built at tests/test_gate_mode.sh:396-405 (python3 exits 1 for `-c 'import pytest'`, delegates otherwise) and is proven non-vacuous at :406-409; the strict control (:441-455) asserts non-zero, 'GATE FAIL: required arms did not run', and no 'GATE PASS'; the opt-in control (:457-464) asserts exit 0 plus 'GATE PASS (DEGRADED)', 'required arms NOT run: pytest', 'NOT proof the suite ran'. I also reproduced both runs by hand: strict -> rc=1 with 'GATE FAIL: required arms did not run: pytest'; AUGER_ALLOW_SKIPPED_ARMS=1 -> rc=0 with 'GATE PASS (DEGRADED)' / 'required arms NOT run: pytest' / '... This is NOT proof the suite ran:'.\n  \u2713 The skipped-arm proof is reachable FROM THE GATE: tests/gate.sh invokes the self-test as its wrapper-regression arm, guarded by the AUGER_GATE_INNER=1 seam so an inner gate invocation does not recurse into its own harness. FAILIF: zero invocation lines, or more than one. PROOF: cd /home/kara/auger && grep -n 'bash tests/test_gate_mode.sh' tests/gate.sh   # expect exactly 1 match, on the elif arm that runs the wrapper regression: `grep -n 'bash tests/test_gate_mode.sh' tests/gate.sh` -> exactly one match: `251:elif bash tests/test_gate_mode.sh; then`, which is the elif arm of the guard `if [ \"${AUGER_GATE_INNER:-0}\" = \"1\" ]` at tests/gate.sh:243-250 (that branch calls skip_arm \"wrapper-regression\" instead of recursing). grep -c = 1.\n  \u2713 CI cannot silently skip the arm: the workflow installs pytest so the gate's pytest arm runs on the runner instead of being skipped (row acceptance criterion 2). FAILIF: no 'pip install ... pytest' line exists in the workflow file. PROOF: cd /home/kara/auger && grep -Eq 'pip install .*pytest' .github/workflows/ci.yml && echo CI-INSTALLS-PYTEST: PROOF command printed CI-INSTALLS-PYTEST; .github/workflows/ci.yml:82 `python3 -m pip install \"ruff==0.15.22\" pytest pyyaml \"lxml>=5\"`. The step is load-bearing: ci.yml:43 sets AUGER_CI=1 (hosted-ci-skip) and ci.yml:88 runs `bash tests/gate.sh`, so tests/gate.sh:226-231 takes the hosted-ci branch and calls run_pytest_arm (not skip_required_arm) because pytest is importable; ci.yml:83-87 documents this explicitly.\n  \u2713 The strict verdict lives in the gate SCRIPT, not only in its test: tests/gate.sh contains the required-skip failure string, the documented opt-in escape, the DEGRADED pass header and the 'required arms NOT run' summary line. FAILIF: any of those four literals is missing from tests/gate.sh. PROOF: cd /home/kara/auger && python3 -c \"import sys; s=open('tests/gate.sh').read(); ok=all(x in s for x in ['GATE FAIL: required arms did not run','AUGER_ALLOW_SKIPPED_ARMS=1','GATE PASS (DEGRADED)','required arms NOT run']); print('STRICT-POLICY-OK' if ok else 'STRICT-POLICY-MISSING'); sys.exit(0 if ok else 1)\": PROOF command printed STRICT-POLICY-OK, rc=0. In source: tests/gate.sh:388 'GATE PASS (DEGRADED)', :389 'required arms NOT run: $REQUIRED_SKIPPED', :390 'AUGER_ALLOW_SKIPPED_ARMS=1 accepted this run. This is NOT proof the suite ran:', :395 'GATE FAIL: required arms did not run: $REQUIRED_SKIPPED' followed by exit 1 at :398; the required-skip recorder is skip_required_arm at :124 and is used for pytest at :228.\n  \u2713 The AUGER_GATE_INNER=1 seam actually prevents recursion: an inner gate invocation (AUGER_GATE_INNER=1) must not invoke tests/test_gate_mode.sh, while the outer gate still runs it.: Manual inner run (AUGER_GATE_INNER=1 AUGER_CI=1 GITHUB_ACTIONS=true under the no-pytest shim) printed `SKIPPED [wrapper-regression]: AUGER_GATE_INNER=1 \u2014 inner gate invocation from tests/test_gate_mode.sh; the outer gate runs this arm` (tests/gate.sh:243-250) and its output contained no 'AUG-081 wrapper regression: PASS', i.e. the harness was not re-entered. The outer gate does run it: full `AUGER_CI=1 GITHUB_ACTIONS=true bash tests/gate.sh` log shows '== wrapper regression (AUG-081) ==' then 'AUG-081 wrapper regression: PASS' and 'AUG-130 skipped-arm policy: PASS'.\n  \u2713 The strict failure path is non-vacuous: under the no-pytest shim the gate's pytest arm is genuinely skipped via skip_required_arm \"pytest\", and the non-zero exit is caused by that required skip rather than an unrelated arm failing.: Manual strict run output: line 6 `SKIPPED [pytest]: pytest not importable by python3 (pip install pytest) \u2014 suite arm NOT run, NOT passed` (tests/gate.sh:228 skip_required_arm), line 29 `GATE FAIL: required arms did not run: pytest` \u2014 pytest is the ONLY entry in REQUIRED_SKIPPED, so the failure is attributable to it; STRICT_RC=1. The degraded run of the same tree exits 0 with `required arms NOT run: pytest`, confirming the skip is the sole cause.\n  \u2713 The opt-in escape is not silently inherited: the strict run unsets AUGER_ALLOW_SKIPPED_ARMS so an outer DEGRADED run cannot make the strict control pass, and the escape only applies when explicitly set to 1.: tests/test_gate_mode.sh:426-437 run_inner_gate invokes `env -u AUGER_ALLOW_SKIPPED_ARMS ... \"$@\"`, and the degraded case passes AUGER_ALLOW_SKIPPED_ARMS=1 explicitly after the unset (:458). tests/gate.sh:387 accepts the escape only when `${AUGER_ALLOW_SKIPPED_ARMS:-0}` = \"1\". Verified by hand: with the variable unset the gate exits 1; with =1 it exits 0 printing GATE PASS (DEGRADED).\n  \u2713 The gate's own wrapper-regression arm still passes on the judged tree: bash tests/gate.sh reaches the arm and it succeeds (no regression from the new invocation).: Full gate run `AUGER_CI=1 GITHUB_ACTIONS=true bash tests/gate.sh` completed: pytest '717 passed, 2 skipped in 881.19s', then log line 15 '== wrapper regression (AUG-081) ==', line 18 'AUG-081 wrapper regression: PASS', line 19 'AUG-130 skipped-arm policy: PASS', line 40 'GATE PASS' (only pytest-live and e2e-smoke skipped, both declared live arms).\nAll four given criteria and all four derived criteria pass: the self-test exits 0 printing both control lines, the gate invokes it exactly once behind the AUGER_GATE_INNER seam, CI installs pytest, the strict/DEGRADED policy literals live in tests/gate.sh, and the full gate is green (717 passed) with the new arm reached and passing.\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-11-09T12:05:10.552728",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-09T12:05:10.623117+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 262176,
+        "truncated": true,
+        "source": "git show c4a7972f508c"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 2918,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-130"
+  }
+}

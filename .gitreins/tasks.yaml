@@ -1202,3 +1202,39 @@ tasks:
   status: complete
   created_at: '2026-11-09T08:29:32.015159+00:00'
   completed_at: '2026-11-09T08:46:31.919179+00:00'
+- id: AUG-130
+  title: 'AUG-130 verified: a gate whose required arm did not run exits non-zero,
+    the opt-in escape is loud, and a test drives gate.sh under a no-pytest shim'
+  criteria:
+  - 'Whole self-test passes on the judged tree: tests/test_gate_mode.sh exits 0 and
+    prints both ''AUG-081 wrapper regression: PASS'' and ''AUG-130 skipped-arm policy:
+    PASS'' (measured 17.5s). The file drives tests/gate.sh as a subprocess under a
+    PATH shim whose python3 refuses `-c ''import pytest''`: the strict run must exit
+    non-zero naming ''GATE FAIL: required arms did not run'' and must never print
+    ''GATE PASS''; the run with AUGER_ALLOW_SKIPPED_ARMS=1 must exit 0 printing ''GATE
+    PASS (DEGRADED)'', ''required arms NOT run: pytest'' and ''NOT proof the suite
+    ran''. FAILIF: the file exits non-zero, or either control line is missing from
+    its output. PROOF: cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH
+    bash tests/test_gate_mode.sh'
+  - 'The skipped-arm proof is reachable FROM THE GATE: tests/gate.sh invokes the self-test
+    as its wrapper-regression arm, guarded by the AUGER_GATE_INNER=1 seam so an inner
+    gate invocation does not recurse into its own harness. FAILIF: zero invocation
+    lines, or more than one. PROOF: cd /home/kara/auger && grep -n ''bash tests/test_gate_mode.sh''
+    tests/gate.sh   # expect exactly 1 match, on the elif arm that runs the wrapper
+    regression'
+  - 'CI cannot silently skip the arm: the workflow installs pytest so the gate''s
+    pytest arm runs on the runner instead of being skipped (row acceptance criterion
+    2). FAILIF: no ''pip install ... pytest'' line exists in the workflow file. PROOF:
+    cd /home/kara/auger && grep -Eq ''pip install .*pytest'' .github/workflows/ci.yml
+    && echo CI-INSTALLS-PYTEST'
+  - 'The strict verdict lives in the gate SCRIPT, not only in its test: tests/gate.sh
+    contains the required-skip failure string, the documented opt-in escape, the DEGRADED
+    pass header and the ''required arms NOT run'' summary line. FAILIF: any of those
+    four literals is missing from tests/gate.sh. PROOF: cd /home/kara/auger && python3
+    -c "import sys; s=open(''tests/gate.sh'').read(); ok=all(x in s for x in [''GATE
+    FAIL: required arms did not run'',''AUGER_ALLOW_SKIPPED_ARMS=1'',''GATE PASS (DEGRADED)'',''required
+    arms NOT run'']); print(''STRICT-POLICY-OK'' if ok else ''STRICT-POLICY-MISSING'');
+    sys.exit(0 if ok else 1)"'
+  status: complete
+  created_at: '2026-11-09T11:29:49.401577+00:00'
+  completed_at: '2026-11-09T11:32:01.227378+00:00'
