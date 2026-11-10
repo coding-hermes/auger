@@ -1516,3 +1516,50 @@ tasks:
     gate_arm_runs_this_file; git merge-base --is-ancestor 4481afb HEAD; echo ancestor_rc=$?'
   status: in_progress
   created_at: '2026-11-10T05:21:13.934985+00:00'
+- id: AUG-162
+  title: "AUG-162: a JEV check stamp travels only with a verdict it actually produced\
+    \ \u2014 the -1 sentinel beside a real jev_checked_at is gone, the no-call path\
+    \ says so out loud, the outage path stays fail-closed, and the live arm can no\
+    \ longer red the whole gate on a transient miss (fix 6b77fc1, graded at the merged\
+    \ head; AC5 gate-green leg is graded by tier1 tests)"
+  criteria:
+  - "Board AC1: a question the gate never examined carries NO check stamp \u2014 with\
+    \ auger.recall forced to return no hits, `feedback --budget 1` stores the follow-up\
+    \ row with jev_checked_at == \"\" and jev_already_answered == -1.0, spends ZERO\
+    \ JEV calls, and prints the \"not gated ... no JEV verdict was produced\" line.\
+    \ FAILIF: the run stamps a real jev_checked_at beside -1, makes a JEV call, or\
+    \ prints no such line (this test is RED against the pre-fix auger.py at 425c846).\
+    \ PROOF: cd /home/kara/auger && .venv/bin/python -m pytest -q tests/test_auger.py\
+    \ -k no_evidence_could_answer"
+  - "Board AC2: a JEV outage stays fail-closed AND is classifiable as a loud skip\
+    \ \u2014 with the gate forced to return (None, \"\", \"\", \"all 6 JEV keys failed;\
+    \ last: HTTP 401 User not found\"), `feedback --budget 1` exits 1, stores no follow-up,\
+    \ prints \"WARNING gate unavailable\" naming the JEV failure, and live_unavailable_reason(out)\
+    \ returns a skip reason naming JEV+401 for that output and \"\" for an ordinary\
+    \ transcript. FAILIF: the outage path stores a row, exits 0, is not named as a\
+    \ skip, or the classifier skips an ordinary transcript. PROOF: cd /home/kara/auger\
+    \ && .venv/bin/python -m pytest -q tests/test_auger.py -k jev_unavailable"
+  - "Board AC3: the live arm requires the two gate columns to AGREE instead of requiring\
+    \ a model verdict \u2014 test_feedback_live_proposes_gates_and_asks_a_real_question\
+    \ asserts bool(jev_checked_at) == (jev_already_answered >= 0) and still asserts\
+    \ the row exists, is trackable (opens edge to D-002) and matches its status branch.\
+    \ FAILIF: the assertion is back to requiring a numeric verdict, or the row/trackability\
+    \ assertions were dropped. PROOF: cd /home/kara/auger && .venv/bin/python -m pytest\
+    \ -q -rs tests/test_auger.py -k feedback_live"
+  - "Board AC4: the answered path keeps its POSITIVE assertion in a distinct test\
+    \ \u2014 test_feedback_turns_a_thin_decision_into_a_named_followup still requires\
+    \ a numeric noul (0.10) together with a stamped check, and propagate no longer\
+    \ writes a sentinel verdict for a question it did not gate. FAILIF: the fix was\
+    \ \"delete the assertion\", or the answered path no longer requires both a numeric\
+    \ verdict and a stamp. PROOF: cd /home/kara/auger && .venv/bin/python -m pytest\
+    \ -q tests/test_auger.py -k \"feedback or jev or propagate\""
+  - 'Board AC5 + falsifier provenance: the graded head is the merged tree that CONTAINS
+    the fix and both new falsifiers, and that suite is inside the gate pytest arm
+    (so the proof cannot silently leave CI). FAILIF: 6b77fc1 is not an ancestor of
+    the judged HEAD, either falsifier test is missing, or tests/test_auger.py is absent
+    from tests/gate.sh. PROOF: cd /home/kara/auger && git merge-base --is-ancestor
+    6b77fc1 HEAD; echo ancestor_rc=$?; grep -c "def test_feedback_stamps_no_gate_check_when_no_evidence_could_answer"
+    tests/test_auger.py; grep -c "def test_jev_unavailable_fails_closed_and_classifies_as_a_loud_skip"
+    tests/test_auger.py; grep -c "tests/test_auger.py" tests/gate.sh'
+  status: in_progress
+  created_at: '2026-11-10T11:54:10.073348+00:00'
