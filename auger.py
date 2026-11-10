@@ -2893,6 +2893,13 @@ def propagate(
                 rep["ungated"] = pending[i:]
                 break
             checked_at = datetime.now(timezone.utc).isoformat()
+            # AUG-162: only a verdict is a gate record. A None verdict here can mean the model
+            # looked and did not know, but it ALSO covers the gate answering without spending a
+            # call (no stored evidence, or the AUG-063 cosine shortcut separating the pair). In
+            # both no-call cases the question has not been gated, so it is left ungated — stamp
+            # `jev_checked_at` and this walk would skip it forever on the next run.
+            if verdict is None:
+                continue
             # `patch_or_rewrite`: a question stored by `ask`/`insert_question` carries the
             # substrate-materialized nulls in proposed_by_model/scored_by_model/generation_cost,
             # and its merged-row validation refuses any partial PATCH of that row (GATE-RED-002).
@@ -2902,7 +2909,7 @@ def propagate(
                 "question",
                 child,
                 {
-                    "jev_already_answered": -1.0 if verdict is None else verdict,
+                    "jev_already_answered": verdict,
                     "jev_checked_at": checked_at,
                 },
             )
@@ -3557,7 +3564,20 @@ def feedback(ns: str, project_id: str, *, budget: int | None = None) -> dict:
                 "noul": verdict,
                 "dec_id": dec_id,
                 "src_project": src_project,
-                "checked_at": datetime.now(timezone.utc).isoformat(),
+                # AUG-162: `jev_checked_at` says THE GATE EXAMINED THIS and produced the verdict
+                # beside it. A None verdict here is not always a model verdict of "unknown": the
+                # gate answers None with NO model call at all when no stored evidence can answer
+                # the question (empty recall) or when the AUG-063 cosine triage separates them.
+                # Stamping a timestamp on that path wrote `-1` beside a real `jev_checked_at`, so
+                # "nobody looked" was indistinguishable from "the model looked and did not know" —
+                # and `propagate` then SKIPPED re-gating the question forever because it reads
+                # `jev_checked_at` as proof the gate already ran. The pair must agree: a stamp
+                # travels only with a verdict, and an unexamined question stays unexamined.
+                "checked_at": (
+                    datetime.now(timezone.utc).isoformat()
+                    if verdict is not None
+                    else ""
+                ),
             }
         )
     if not gated:
@@ -3696,6 +3716,16 @@ def cmd_feedback(a):
     )
     for qid, did, noul, text in rep["asked"]:
         print(f"  ASKED       {qid}  <- {did}  {text}")
+    # AUG-162: three different states used to print the same way. "the gate found nothing to gate
+    # against" (below) is NOT "the gate was down" (the WARNING further down) and NOT "the model
+    # judged it unanswered and recorded a noul" — an operator reading the transcript can now tell
+    # which one happened, and the row carries no verdict it did not get.
+    ungated = [qid for qid, _did, noul, _text in rep["asked"] if noul is None]
+    if ungated:
+        print(
+            f"  not gated   {len(ungated)} question(s) had no stored evidence to gate against — "
+            f"no JEV verdict was produced and none is claimed: {', '.join(ungated)}"
+        )
     for qid, did, _reason in rep["budget_thin"]:
         print(
             f"  BUDGET-THIN {qid}  <- {did}  recorded, NOT asked (ceiling {rep['ceiling']})"

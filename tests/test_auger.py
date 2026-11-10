@@ -8305,6 +8305,12 @@ def test_feedback_live_proposes_gates_and_asks_a_real_question(decided: dict):
     ns, pid = decided["ns"], decided["pid"]
 
     rc, out = run_cli(["-n", ns, "feedback", "--budget", "1"])
+    # AUG-162: this arm spends a REAL call on both model legs, so a third-party outage is an
+    # instrument condition, not a defect in the tree. Only the CLI's own outage diagnostic skips;
+    # every other non-zero exit still has to pass the assertions below.
+    unavailable = live_unavailable_reason(out)
+    if unavailable:
+        pytest.skip(unavailable)
     assert rc == 0, out
     assert "proposed: 1" in out, f"the live proposer produced no question: {out}"
     assert "D-002" in out, out
@@ -8318,7 +8324,12 @@ def test_feedback_live_proposes_gates_and_asks_a_real_question(decided: dict):
     q = stored[0]
     assert q["text"].strip() and "?" in q["text"], q
     assert q["status"] in ("open", "linked"), q
-    assert q["jev_checked_at"] and q["jev_already_answered"] >= 0, q
+    # AUG-162: the two columns must AGREE. Requiring `jev_already_answered >= 0` every run made
+    # this arm red whenever the gate legitimately answered WITHOUT spending a model call (no
+    # stored evidence could answer the proposal), because that path has no verdict to record.
+    # What must hold every time: a stamped check carries a numeric verdict, and a question
+    # nobody gated carries neither column — never a `-1` dressed up as a check.
+    assert bool(q["jev_checked_at"]) == (q["jev_already_answered"] >= 0), q
     assert opens_of(ns, q["id"]) == "D-002", (
         "the live question is not trackable back to the decision that raised it"
     )
@@ -8335,6 +8346,84 @@ def opens_of(ns: str, question_id: str) -> str:
         if e.get("src_kind") == "decision":
             return e["src_id"]
     return ""
+
+
+def live_unavailable_reason(out: str) -> str:
+    """The skip reason when the run SAID its own model legs were unavailable, else "".
+
+    AUG-162: a live arm that spends real model calls must not red the whole gate on a third-party
+    outage — but it may only skip on the CLI's OWN outage diagnostics, the fail-closed exits where
+    nothing was gated and nothing stored. A bare non-zero exit, or an assertion mismatch, is
+    still a defect and is never classified here.
+    """
+    for marker, who in (
+        ("WARNING gate unavailable", "the JEV gate"),
+        ("WARNING proposer unavailable", "the question proposer"),
+    ):
+        line = next(
+            (ln.strip() for ln in out.splitlines() if ln.strip().startswith(marker)), ""
+        )
+        if line:
+            return f"{who} was unreachable — {line}"
+    return ""
+
+
+def test_feedback_stamps_no_gate_check_when_no_evidence_could_answer(
+    decided: dict, monkeypatch
+):
+    """AUG-162 falsifier: a question the gate never examined must not carry a check timestamp.
+
+    `jev_checked_at` is read elsewhere as PROOF the gate already ran (`propagate` skips re-gating
+    on it), so stamping it beside the `-1` "nobody stated it" sentinel turned "no stored evidence
+    could answer this" into "the model looked and did not know" — permanently, and invisibly.
+    """
+    ns = decided["ns"]
+    monkeypatch.setattr(auger, "recall", lambda *a, **k: [])
+    monkeypatch.setattr(auger, "propose_question", proposer_stub([FOLLOWUP_Q], []))
+    calls: list = []
+    monkeypatch.setattr(auger, "jev", gate_stub(0.10, calls))
+
+    rc, out = run_cli(["-n", ns, "feedback", "--budget", "1"])
+    assert rc == 0, out
+    assert calls == [], (
+        f"the gate spent a model call on a question no stored evidence could answer: {calls}"
+    )
+    assert "not gated" in out and "no JEV verdict was produced" in out, out
+
+    q = row(ns, "question", "qclass=eq.follow_up")
+    assert q["status"] == "open", q
+    assert q["jev_checked_at"] == "", (
+        "a question the gate never examined carries a check timestamp — 'nobody looked' now "
+        "reads as 'the model looked and did not know', and propagate will never re-gate it"
+    )
+    assert q["jev_already_answered"] == -1.0, q
+
+
+def test_jev_unavailable_fails_closed_and_classifies_as_a_loud_skip(
+    decided: dict, monkeypatch
+):
+    """AUG-162: a JEV outage is a LOUD, classified skip — never a red and never a silent `-1`.
+
+    The CLI must keep failing closed (nothing gated, nothing stored, exit 1), name the outage,
+    and the live arm must be able to tell that signature apart from a real regression.
+    """
+    ns, pid = decided["ns"], decided["pid"]
+    err = "all 6 JEV keys failed; last: HTTP 401 User not found"
+    monkeypatch.setattr(auger, "recall", recall_hits(ns, pid, "D-001"))
+    monkeypatch.setattr(auger, "propose_question", proposer_stub([FOLLOWUP_Q], []))
+    monkeypatch.setattr(auger, "gate_question", lambda *_a, **_k: (None, "", "", err))
+
+    rc, out = run_cli(["-n", ns, "feedback", "--budget", "1"])
+    assert rc == 1, f"an unavailable gate must fail closed, not pretend it gated: {out}"
+    assert "WARNING gate unavailable" in out and err in out, out
+    assert rows(ns, "question", "qclass=eq.follow_up") == [], (
+        "a question was stored by a run that never gated it"
+    )
+    reason = live_unavailable_reason(out)
+    assert reason and "JEV" in reason and "401" in reason, reason
+    # The control: an ordinary run must NOT classify as unavailable, or the skip would hide
+    # every real regression behind a third-party excuse.
+    assert live_unavailable_reason("ceiling: 1   proposed: 1   asked: 1") == ""
 
 
 # ---------------------------------------------------------------- the proposer and the governor
