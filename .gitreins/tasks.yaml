@@ -1606,3 +1606,48 @@ tasks:
     -- expect ''11 passed'' and ancestor_rc=0.'
   status: in_progress
   created_at: '2026-11-10T14:58:55.074417+00:00'
+- id: AUG-137
+  title: 'AUG-137: one command replays the PRD''s 8 success-criteria proofs into a
+    checked-in artifact that fails when a required proof regresses (fix 22bc7aa, graded
+    at the current merged head)'
+  criteria:
+  - "Board AC1: one CI job replays all 8 proofs and records, per proof, pass/fail\
+    \ plus byte counts and wall-clock latency in a checked-in artifact. FAILIF: `scripts/replay_prd_proofs.py\
+    \ --check` exits non-zero, the run does not report 8 proofs, or docs/prd/evidence/AUG-137-prd-proofs.json\
+    \ is absent or untracked. PROOF: cd /home/kara/auger && .venv/bin/python scripts/replay_prd_proofs.py\
+    \ --check; echo check_rc=$?; git ls-files docs/prd/evidence/AUG-137-prd-proofs.json\
+    \ -- expect the summary line 'prd proofs: 8 total \xB7 3 required \xB7 5 deferred\
+    \ \u2192 PASS', check_rc=0, per-proof lines carrying corpus=<n>B bundle=<n>B latency=<n>ms,\
+    \ and the artifact path printed by git ls-files."
+  - 'Board AC2: a proof that cannot run is reported NOT RUN, never as a pass, and
+    the overall verdict fails when a REQUIRED proof did not run. FAILIF: an empty
+    corpus passed via --specs-root exits 0, or a required proof is recorded as not-run
+    while the run still reports PASS. PROOF: cd /home/kara/auger && .venv/bin/python
+    scripts/replay_prd_proofs.py --check --specs-root $(mktemp -d) > /tmp/empty.log
+    2>&1; echo empty_rc=$?; grep ''P7'' /tmp/empty.log -- expect empty_rc=1 and P7
+    recorded ''required not-run'' with the verdict failing.'
+  - 'Board AC3: the byte and latency numbers come from the run itself, not from prose,
+    and the selected bundle is materially smaller than the full corpus it was selected
+    from. FAILIF: the P7 proof line carries no measured corpus/bundle sizes, the bundle
+    size is greater than or equal to the corpus size, or --check accepts an artifact
+    whose recorded numbers disagree with a fresh run. PROOF: cd /home/kara/auger &&
+    .venv/bin/python scripts/replay_prd_proofs.py --check --artifact /tmp/absent.json
+    > /tmp/stale.log 2>&1; echo stale_rc=$? -- expect the live P7 line to read corpus=9249B
+    bundle=2944B and ''31.8% of the corpus (2944 of 9249 bytes)'', and stale_rc=1
+    for a missing artifact.'
+  - 'The replay is enforced by a LIVE gate arm, not a comment, and its unusable-prerequisite
+    path lands in the required-arm list instead of a silent skip. FAILIF: tests/gate.sh
+    contains no `replay_prd_proofs.py --check` invocation, or the arm''s fallback
+    does not call skip_required_arm with the name ''prd-proofs''. PROOF: cd /home/kara/auger
+    && grep -n ''replay_prd_proofs.py --check'' tests/gate.sh; grep -n ''skip_required_arm
+    "prd-proofs"'' tests/gate.sh -- expect both present (the invocation exits 1 on
+    failure and the skip path names prd-proofs).'
+  - 'The replay''s own suite is green and named in the gate''s pytest arm, and the
+    row''s landed fix is an ancestor of the judged tree. FAILIF: any test in tests/test_prd_proofs.py
+    fails, fewer than 18 tests are collected, the file is absent from the gate''s
+    pytest arm, or the ancestry check exits non-zero. PROOF: cd /home/kara/auger &&
+    .venv/bin/python -m pytest -q tests/test_prd_proofs.py; grep -c tests/test_prd_proofs.py
+    tests/gate.sh; git merge-base --is-ancestor 22bc7aa687eeced20b1ca79678fb4fafb6b37109
+    HEAD; echo ancestor_rc=$? -- expect ''18 passed'', count 1, ancestor_rc=0.'
+  status: in_progress
+  created_at: '2026-11-10T17:06:38.260865+00:00'
