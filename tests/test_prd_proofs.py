@@ -442,6 +442,100 @@ def test_check_mode_is_red_when_the_artifact_is_stale(tmp_path: Path) -> None:
     assert "disagrees with this run" in completed.stderr, completed.stderr
 
 
+def _checked(tmp_path: Path, artifact: Path) -> subprocess.CompletedProcess:
+    """Drive `--check` as a SUBPROCESS through the documented knobs, against a chosen artifact."""
+    return subprocess.run(
+        [
+            sys.executable,
+            str(RUNNER),
+            "--check",
+            "--specs-root",
+            str(REPO_ROOT / "specs"),
+            "--artifact",
+            str(artifact),
+        ],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env={
+            key: value
+            for key, value in os.environ.items()
+            if key not in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP")
+        },
+        timeout=900,
+    )
+
+
+def _edited_artifact(tmp_path: Path, mutate, name: str) -> Path:
+    """Copy the committed artifact through `mutate`, leaving the tree's real record untouched."""
+    payload = json.loads(ARTIFACT.read_text(encoding="utf-8"))
+    mutate(payload)
+    target = tmp_path / name
+    target.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    return target
+
+
+def test_the_check_signature_covers_recorded_byte_counts() -> None:
+    """The signature must carry the measured bytes, and must NOT carry the per-run timings."""
+    signature = runner._signature(_artifact())
+    assert signature["proofs"], "the signature carries no proofs"
+    for proof in signature["proofs"]:
+        assert "corpus_bytes" in proof and "bundle_bytes" in proof, (
+            "the check signature omits corpus_bytes/bundle_bytes, so a tampered or stale byte "
+            f"count is invisible to `--check`: {sorted(proof)}"
+        )
+        assert "latency_ms" not in proof, (
+            "latency_ms is a timing of one run; comparing it would make `--check` red on a "
+            "byte-identical tree"
+        )
+
+
+def test_check_mode_is_red_when_a_recorded_byte_count_drifts(tmp_path: Path) -> None:
+    """A tampered byte count on a still-`pass` proof is a disagreement, not a detail (AUG-137 AC3)."""
+
+    def tamper_numbers(payload: dict) -> None:
+        for proof in payload["proofs"]:
+            if proof["id"] == "P7":
+                assert proof["status"] == "pass", proof["status"]
+                proof["corpus_bytes"] = 1
+                proof["bundle_bytes"] = 99999
+                return
+        raise AssertionError("the artifact no longer records P7")
+
+    artifact = _edited_artifact(tmp_path, tamper_numbers, "numbers-drift.json")
+    completed = _checked(tmp_path, artifact)
+    assert completed.returncode != 0, (
+        "`--check` accepted an artifact whose recorded P7 byte counts were tampered to "
+        "corpus_bytes=1/bundle_bytes=99999 — the recorded numbers are never compared:\n"
+        + completed.stdout
+    )
+    assert "disagrees with this run" in completed.stderr, completed.stderr
+    assert "corpus_bytes" in completed.stderr, (
+        "the refusal must name the drifting field, so a reader can tell numbers from verdicts: "
+        + completed.stderr
+    )
+
+
+def test_check_mode_ignores_only_the_timings(tmp_path: Path) -> None:
+    """Control: a timing-only edit stays green, so the byte arm is not a proxy for comparing runs."""
+
+    def tamper_latency(payload: dict) -> None:
+        for proof in payload["proofs"]:
+            proof["latency_ms"] = 999999.9
+
+    artifact = _edited_artifact(tmp_path, tamper_latency, "latency-drift.json")
+    completed = _checked(tmp_path, artifact)
+    assert completed.returncode == 0, (
+        "a latency-only edit made `--check` red — timings are a snapshot of one run and must not "
+        "be compared, or the arm flakes on every byte-identical tree:\n"
+        + completed.stderr
+    )
+    assert "agrees with this run" in completed.stdout, completed.stdout
+
+
 def test_check_mode_refuses_a_missing_artifact(tmp_path: Path) -> None:
     """A gate arm that passes on a missing record proves nothing: rc 1, and the fix is named."""
     completed = subprocess.run(

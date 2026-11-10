@@ -390,6 +390,11 @@ def replay_p5(ctx: dict) -> dict:
     obligation = obligations[0]
     for field in ("migration", "fixture", "path", "selector", "runner", "assertions"):
         assert obligation.get(field), f"the bundle is missing `{field}`: {obligation}"
+    # auger.SPEC_RUNNERS carries `sys.executable`, so the bundle's raw size depends on which
+    # python NAME ran the replay (`python` and `python3` differ by exactly one byte). Record the
+    # size with that path normalized — the same normalization the recorded `command` applies —
+    # so the number is a fact about the tree, not about the interpreter that measured it.
+    bundle_text = queried.stdout.replace(sys.executable, "python3")
 
     copy = _copy_obligation_repo(ctx["workdir"])
     node = f"{obligation['path']}::{obligation['selector']}"
@@ -418,8 +423,11 @@ def replay_p5(ctx: dict) -> dict:
             "same after the named migration is replaced by a no-op"
         ),
         "corpus_bytes": _corpus_bytes(corpus),
-        "bundle_bytes": len(queried.stdout.encode("utf-8")),
-        "bytes_meaning": "corpus = the fixture corpus documents; bundle = the `spec bundle` JSON",
+        "bundle_bytes": len(bundle_text.encode("utf-8")),
+        "bytes_meaning": (
+            "corpus = the fixture corpus documents; bundle = the `spec bundle` JSON with the "
+            "runner's interpreter recorded as `python3`, so the size is host-independent"
+        ),
         "latency_ms": round(latency_ms, 1),
         "detail": (
             f"one query returned migration={obligation['migration']}, "
@@ -585,10 +593,12 @@ def build_report(rows: list, workdir: Path, prd_path: Path, specs_root: Path) ->
         "contract": (
             "corpus_bytes/bundle_bytes/latency_ms are null when a proof did not run; the reason is "
             "in its `detail`. `--check` compares this structure (verdict, counts, disposition, "
-            "status, command) with the committed artifact and ignores the timings, which are a "
-            "snapshot of the run that recorded them. A recorded `command` names its interpreter "
-            "as `python3` and uses repo-relative paths, so the same tree replayed under any "
-            "interpreter name on any host produces the same signature."
+            "status, command, corpus_bytes, bundle_bytes) with the committed artifact and ignores "
+            "only `latency_ms`, which is a timing snapshot of the run that recorded it. The byte "
+            "counts are measurements of the tree, not of the run, so a stale or edited number is "
+            "a disagreement. A recorded `command` names its interpreter as `python3` and uses "
+            "repo-relative paths, so the same tree replayed under any interpreter name on any "
+            "host produces the same signature."
         ),
         "verdict": "fail" if required_bad else "pass",
         "counts": counts,
@@ -609,6 +619,10 @@ def _signature(report: dict) -> dict:
                 "status": proof["status"],
                 "owner": proof["owner"],
                 "command": proof["command"],
+                # The byte counts are measurements of the tree, so they belong in the signature;
+                # `latency_ms` deliberately does not, because it is a timing of one run.
+                "corpus_bytes": proof.get("corpus_bytes"),
+                "bundle_bytes": proof.get("bundle_bytes"),
             }
             for proof in report["proofs"]
         ],
@@ -707,9 +721,9 @@ def main(argv: list = None) -> int:
             return 1
         if _signature(committed) != _signature(report):
             print(
-                f"prd-proofs: {artifact} disagrees with this run — a proof regressed or the "
-                "allowlist changed after the artifact was recorded. Re-record: "
-                "python3 scripts/replay_prd_proofs.py",
+                f"prd-proofs: {artifact} disagrees with this run — a proof regressed, a recorded "
+                "byte count is stale, or the allowlist changed after the artifact was recorded. "
+                "Re-record: python3 scripts/replay_prd_proofs.py",
                 file=sys.stderr,
             )
             print(
