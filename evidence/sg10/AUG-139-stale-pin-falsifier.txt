@@ -1,0 +1,67 @@
+AUG-139 load-bearing falsifier — 2026-11-12T12:02:33Z
+tree: /tmp/auger-aug139-falsifier (git worktree at /home/kara/auger HEAD)
+interpreter: /home/kara/auger/.venv/bin/python3
+head: 6e794eb4cf05ee41e7312529eaefd283031b1d0d
+
+=== the pin under test (cache the first rendered corpus, i.e. a stale body) ===
+diff --git a/auger.py b/auger.py
+index 648e2f3..fd1cf7a 100755
+--- a/auger.py
++++ b/auger.py
+@@ -9433,12 +9433,18 @@ def render_spec_view_document(
+     )
+ 
+ 
++_VIEW_CACHE: dict = {}
++
++
+ def render_spec_view_corpus(documents: dict, blocks: list) -> dict:
+     """Every shipped view, keyed by file name — one corpus read, rendered every way it ships."""
+-    return {
++    if _VIEW_CACHE:
++        return _VIEW_CACHE
++    _VIEW_CACHE.update({
+         SPEC_VIEW_FILENAMES[fmt]: render_spec_view_document(documents, blocks, fmt=fmt)
+         for fmt in SPEC_VIEW_FORMATS
+-    }
++    })
++    return _VIEW_CACHE
+ 
+ 
+ def render_spec_views(spec_root) -> dict:
+
+=== CONTROL: unpatched renderer, the mutation arm must PASS ===
+.............                                                            [100%]
+13 passed in 0.08s
+CONTROL_RC=0
+
+=== PINNED: same tree, cached body; the mutation arm must FAIL ===
+PATCH_APPLIED_RC=0
+F.                                                                       [100%]
+=================================== FAILURES ===================================
+________________ test_mutating_one_block_body_moves_both_views _________________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-4074/test_mutating_one_block_body_m0')
+
+    def test_mutating_one_block_body_moves_both_views(tmp_path: Path) -> None:
+        """AC-5: one source edit, BOTH views reflect it, and the pre-edit body is gone from both."""
+        corpus = copy_corpus(tmp_path)
+        before = render(corpus)
+        mutate_one_block_body(corpus)
+        after = render(corpus)
+    
+        for name, text in after.items():
+>           assert text != before[name], (
+                f"{name} did not change when the corpus body changed"
+            )
+E           AssertionError: SPEC-CORPUS-VIEW.md did not change when the corpus body changed
+E           assert '<!--\n  GENERATED FILE — do not edit by hand. `specs/*.xml` is the source; this view is rendered from it\n  by `auger...PEC-OBL-CONSUMER` | `verifies` | `SPEC-OBL-CONSUMER-V2` |\n| `SPEC-OBL-RUNNER` | `verifies` | `SPEC-OBL-RUNNER-V1` |\n' != '<!--\n  GENERATED FILE — do not edit by hand. `specs/*.xml` is the source; this view is rendered from it\n  by `auger...PEC-OBL-CONSUMER` | `verifies` | `SPEC-OBL-CONSUMER-V2` |\n| `SPEC-OBL-RUNNER` | `verifies` | `SPEC-OBL-RUNNER-V1` |\n'
+
+tests/test_spec_render.py:194: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_spec_render.py::test_mutating_one_block_body_moves_both_views
+1 failed, 1 passed, 11 deselected in 0.04s
+PINNED_RC=1
+
+=== restore the scratch tree (the pin was never in the real checkout) ===
+restored: 0 dirty paths
