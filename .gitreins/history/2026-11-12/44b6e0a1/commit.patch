@@ -1,0 +1,54 @@
+commit 9ec487d4fc0ea376013aef951dfed58b33ad8917
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Thu Nov 12 09:36:59 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Thu Nov 12 09:36:59 2026 -0500
+
+    lifecycle(AUG-140): create and start the measured-assembly-JSON judging run
+    
+    Guard bypass disclosed: this diff is .gitreins/tasks.yaml only (zero product files); the real gate runs inside tier1 minutes later in the judge. Seven bounded PROOF/FAILIF criteria over tests/test_spec_assembly_report.py, every command pre-validated verbatim first (12 passed; 2/2/1/2/2 passed; CLI --measure rc 0 with all seven measured keys; gate-arm grep 2).
+---
+ .gitreins/tasks.yaml | 33 +++++++++++++++++++++++++++++++++
+ 1 file changed, 33 insertions(+)
+
+diff --git a/.gitreins/tasks.yaml b/.gitreins/tasks.yaml
+index 621de74..a9a65f1 100644
+--- a/.gitreins/tasks.yaml
++++ b/.gitreins/tasks.yaml
+@@ -2029,3 +2029,36 @@ tasks:
+   status: complete
+   created_at: '2026-11-12T12:03:19.691073+00:00'
+   completed_at: '2026-11-12T12:03:41.569622+00:00'
++- id: AUG-140
++  title: 'AUG-140: measured assembly JSON (bytes, document/block counts, elapsed_ms)
++    on the spec assemble path'
++  criteria:
++  - 'PROOF: python3 -m pytest tests/test_spec_assembly_report.py -q run in /home/kara/auger
++    ends with the summary line ''12 passed''. FAILIF: any failed or errored test,
++    or the passed count differs from 12.'
++  - 'PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_the_measured_report_carries_the_ac14_keys
++    tests/test_spec_assembly_report.py::test_the_report_shape_is_documented -q prints
++    ''2 passed''. FAILIF: either node is absent or red, so the measured keys or their
++    documentation are missing.'
++  - "PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_output_bytes_is_the_serialized_length\
++    \ tests/test_spec_assembly_report.py::test_input_bytes_is_the_sum_of_the_documents_read\
++    \ -q prints '2 passed'. FAILIF: red \u2014 the byte counts are then not derived\
++    \ from the real serialized output and the real documents read."
++  - "PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_only_selected_blocks_have_their_body_materialized\
++    \ -q prints '1 passed'. FAILIF: red \u2014 laziness (blocks_parsed <= matched+closure)\
++    \ is unproven and a reintroduced full-corpus parse would go unnoticed."
++  - "PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_elapsed_ms_is_positive_on_a_real_corpus\
++    \ tests/test_spec_assembly_report.py::test_elapsed_ms_comes_from_the_clock_seam\
++    \ -q prints '2 passed'. FAILIF: red \u2014 elapsed_ms is a constant or not taken\
++    \ from the clock."
++  - 'PROOF: python3 auger.py spec assemble specs --applies-to auger.spec.select --format
++    json --measure --out /tmp/aug140-eval.json exits 0 and the written file carries
++    all seven measured keys with report_schema_version 1.1. FAILIF: non-zero exit,
++    or any of report_schema_version/input_bytes/output_bytes/documents_read/blocks_indexed/blocks_parsed/elapsed_ms
++    is missing.'
++  - 'PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_the_shipped_fixture_still_assembles_unchanged
++    tests/test_spec_assembly_report.py::test_the_default_json_is_still_byte_identical_across_runs
++    -q prints ''2 passed'', and grep -c test_spec_assembly_report tests/gate.sh prints
++    2. FAILIF: red, or the file is not named in the gate pytest arm.'
++  status: in_progress
++  created_at: '2026-11-12T14:36:51.936285+00:00'

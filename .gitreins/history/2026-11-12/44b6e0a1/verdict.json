@@ -1,0 +1,288 @@
+{
+  "task_id": "AUG-140",
+  "task_title": "AUG-140: measured assembly JSON (bytes, document/block counts, elapsed_ms) on the spec assemble path",
+  "task_criteria": [
+    "PROOF: python3 -m pytest tests/test_spec_assembly_report.py -q run in /home/kara/auger ends with the summary line '12 passed'. FAILIF: any failed or errored test, or the passed count differs from 12.",
+    "PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_the_measured_report_carries_the_ac14_keys tests/test_spec_assembly_report.py::test_the_report_shape_is_documented -q prints '2 passed'. FAILIF: either node is absent or red, so the measured keys or their documentation are missing.",
+    "PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_output_bytes_is_the_serialized_length tests/test_spec_assembly_report.py::test_input_bytes_is_the_sum_of_the_documents_read -q prints '2 passed'. FAILIF: red \u2014 the byte counts are then not derived from the real serialized output and the real documents read.",
+    "PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_only_selected_blocks_have_their_body_materialized -q prints '1 passed'. FAILIF: red \u2014 laziness (blocks_parsed <= matched+closure) is unproven and a reintroduced full-corpus parse would go unnoticed.",
+    "PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_elapsed_ms_is_positive_on_a_real_corpus tests/test_spec_assembly_report.py::test_elapsed_ms_comes_from_the_clock_seam -q prints '2 passed'. FAILIF: red \u2014 elapsed_ms is a constant or not taken from the clock.",
+    "PROOF: python3 auger.py spec assemble specs --applies-to auger.spec.select --format json --measure --out /tmp/aug140-eval.json exits 0 and the written file carries all seven measured keys with report_schema_version 1.1. FAILIF: non-zero exit, or any of report_schema_version/input_bytes/output_bytes/documents_read/blocks_indexed/blocks_parsed/elapsed_ms is missing.",
+    "PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_the_shipped_fixture_still_assembles_unchanged tests/test_spec_assembly_report.py::test_the_default_json_is_still_byte_identical_across_runs -q prints '2 passed', and grep -c test_spec_assembly_report tests/gate.sh prints 2. FAILIF: red, or the file is not named in the gate pytest arm."
+  ],
+  "passed": true,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "9ec487d4fc0ea376013aef951dfed58b33ad8917",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "f60dba9beb86c87c597d9d3e7dbfaffa0efc49218ed869c218cf4e4dac71f6c7",
+  "working_tree_dirty_path_count": 3,
+  "items": [
+    {
+      "criterion": "PROOF: python3 -m pytest tests/test_spec_assembly_report.py -q run in /home/kara/auger ends with the summary line '12 passed'. FAILIF: any failed or errored test, or the passed count differs from 12.",
+      "status": "PASS",
+      "detail": "Ran `python3 -m pytest tests/test_spec_assembly_report.py -q` in /home/kara/auger: output tail `............ [100%]` / `12 passed in 0.16s`, exit_code 0. No failures or errors."
+    },
+    {
+      "criterion": "PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_the_measured_report_carries_the_ac14_keys tests/test_spec_assembly_report.py::test_the_report_shape_is_documented -q prints '2 passed'. FAILIF: either node is absent or red, so the measured keys or their documentation are missing.",
+      "status": "PASS",
+      "detail": "Ran both nodes: `.. [100%]` / `2 passed in 0.16s`, exit 0. The keys are asserted at tests/test_spec_assembly_report.py:150-165 (REPORT_KEYS = input_bytes/output_bytes/documents_read/blocks_parsed/elapsed_ms plus report_schema_version == auger.SPEC_ASSEMBLY_REPORT_VERSION) and documented at docs/XML-SPEC-SCHEMA.md:144-150, with the flag named at :133 and :139."
+    },
+    {
+      "criterion": "PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_output_bytes_is_the_serialized_length tests/test_spec_assembly_report.py::test_input_bytes_is_the_sum_of_the_documents_read -q prints '2 passed'. FAILIF: red \u2014 the byte counts are then not derived from the real serialized output and the real documents read.",
+      "status": "PASS",
+      "detail": "Ran both nodes: `2 passed in 0.04s`, exit 0. Implementation is real: output_bytes = len(text.encode(\"utf-8\")) settled to a fixpoint at auger.py:12866-12899 (refuses `unstable-report` if it cannot settle); input_bytes = sum(path.stat().st_size for path in read_paths) at auger.py:8873-8877. Independently confirmed on the real corpus: /tmp/aug140-eval.json is 3118 bytes on disk and its output_bytes is 3118."
+    },
+    {
+      "criterion": "PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_only_selected_blocks_have_their_body_materialized -q prints '1 passed'. FAILIF: red \u2014 laziness (blocks_parsed <= matched+closure) is unproven and a reintroduced full-corpus parse would go unnoticed.",
+      "status": "PASS",
+      "detail": "Ran the node: `1 passed in 0.03s`, exit 0. Laziness is implemented, not asserted: load_spec_corpus_indexed calls _spec_collect(..., body=False) (auger.py:8848-8857), _spec_block returns `\"text\": _spec_text(element) if body else \"\"` (auger.py:8438), bodies are built only for selected records via materialize_spec_records (auger.py:8890-8909, called at auger.py:12852-12853), and blocks_parsed = bodies_materialized + len(records) (auger.py:12871). Live run on specs/: blocks_indexed 12 vs blocks_parsed 4."
+    },
+    {
+      "criterion": "PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_elapsed_ms_is_positive_on_a_real_corpus tests/test_spec_assembly_report.py::test_elapsed_ms_comes_from_the_clock_seam -q prints '2 passed'. FAILIF: red \u2014 elapsed_ms is a constant or not taken from the clock.",
+      "status": "PASS",
+      "detail": "Ran both nodes: `2 passed in 0.03s`, exit 0. elapsed_ms = round((_spec_clock() - started) * 1000, 3) at auger.py:12872, with `started = _spec_clock()` taken before the loader read (auger.py:12722) and _spec_clock() = time.perf_counter() (auger.py:8784-8791). The live CLI run reported elapsed_ms 11.466, not a constant."
+    },
+    {
+      "criterion": "PROOF: python3 auger.py spec assemble specs --applies-to auger.spec.select --format json --measure --out /tmp/aug140-eval.json exits 0 and the written file carries all seven measured keys with report_schema_version 1.1. FAILIF: non-zero exit, or any of report_schema_version/input_bytes/output_bytes/documents_read/blocks_indexed/blocks_parsed/elapsed_ms is missing.",
+      "status": "PASS",
+      "detail": "Ran the exact command: stdout `wrote 4 block(s) to /tmp/aug140-eval.json`, EXIT=0. Parsed the file: report_schema_version '1.1', input_bytes 9249, output_bytes 3118, documents_read 3, blocks_indexed 12, blocks_parsed 4, elapsed_ms 11.466 \u2014 all seven present. Flag registered at auger.py:14060-14067, report assembled at auger.py:12860-12899."
+    },
+    {
+      "criterion": "PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_the_shipped_fixture_still_assembles_unchanged tests/test_spec_assembly_report.py::test_the_default_json_is_still_byte_identical_across_runs -q prints '2 passed', and grep -c test_spec_assembly_report tests/gate.sh prints 2. FAILIF: red, or the file is not named in the gate pytest arm.",
+      "status": "PASS",
+      "detail": "Ran both nodes: `2 passed in 0.03s`, exit 0. `grep -c test_spec_assembly_report tests/gate.sh` printed 2 \u2014 line 197 (comment) and line 206, where tests/test_spec_assembly_report.py is listed inside the `python3 -m pytest ...` arm."
+    },
+    {
+      "criterion": "The measured report is reachable from the CLI entrypoint (auger.py spec assemble --measure) and the flag is registered/parsed, not dead code.",
+      "status": "PASS",
+      "detail": "--measure is registered on the assemble subparser at auger.py:14060-14067, read via `measure = bool(getattr(a, \"measure\", False))` at auger.py:12714, and consumed by the report branch at auger.py:12860. The live CLI invocation exited 0 and emitted the seven keys, proving the path is reachable end to end.",
+      "derived": true
+    },
+    {
+      "criterion": "The default (unmeasured) JSON document keeps its exact prior key set, so AC-4 byte-reproducibility is not broken by the instrumentation.",
+      "status": "PASS",
+      "detail": "`python3 auger.py spec assemble specs --applies-to auger.spec.select --format json` (no --measure) prints keys ['blocks','corpus','counts','schema_version','selection'] \u2014 no measured key leaked. Pinned by test_the_shipped_fixture_still_assembles_unchanged (tests/test_spec_assembly_report.py:262-280) and test_the_default_json_is_still_byte_identical_across_runs, both green.",
+      "derived": true
+    },
+    {
+      "criterion": "--measure with a non-JSON format refuses with a typed error and non-zero exit instead of silently emitting an unmeasured document.",
+      "status": "PASS",
+      "detail": "`python3 auger.py spec assemble specs --applies-to auger.spec.select --format markdown --measure` -> `spec error (measure-requires-json): --measure reports a JSON object; pass --format json ...`, EXIT=2. Guard at auger.py:12715-12721, with a second refusal in render_spec_assembly at auger.py:9052-9057; pinned by the green test_measure_without_json_refuses.",
+      "derived": true
+    },
+    {
+      "criterion": "The lazy indexed loader does not change behaviour of the other spec verbs (validate/check/bundle/list/render/context) \u2014 the existing spec suites stay green.",
+      "status": "PASS",
+      "detail": "Ran `python3 -m pytest tests/test_spec_assembly_report.py tests/test_xml_specs.py tests/test_spec_render.py tests/test_spec_context.py tests/test_spec_corpus_view.py tests/test_spec_validate_obligations.py tests/test_spec_obligation_gate.py tests/test_spec_decision_ref.py tests/test_spec_rollback.py tests/test_spec_alignment_check.py tests/test_spec_repository_root.py tests/test_xml_task_contract.py tests/test_verification_graph.py tests/test_spec_validators_agree.py -q` -> `215 passed in 20.08s`, exit 0. The indexed loader is scoped to `command in (\"list\", \"assemble\")` (auger.py:12708-12722); validate/check/bundle keep load_spec_corpus.",
+      "derived": true
+    },
+    {
+      "criterion": "output_bytes equals the bytes actually written to --out (the seam between the measured value and the consumer's file).",
+      "status": "PASS",
+      "detail": "/tmp/aug140-eval.json is 3118 bytes on disk and its output_bytes field is 3118 (match True). The fixpoint loop at auger.py:12879-12899 re-serializes until len(text.encode()) == report[\"output_bytes\"] and raises `unstable-report` otherwise, and _spec_write_atomic writes that same `text` (auger.py:12901-12903).",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "no_concerns_found",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261112T091941.670002Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nscanners: nice=nice -n 10\n9:40AM INF scanned ~3375553 bytes (3.38 MB) in 1.92s\n9:40AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 251 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261112T091941.670002Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [  9%]\n........................................................................ [ 19%]\n........................................................................ [ 29%]\n........................................................................ [ 39%]\n............................s........................................... [ 49%]\n.......s................................................................ [ 59%]\n........................................................................ [ 69%]\n........................................................................ [ 79%]\n........................................................................ [ 89%]\n........................................................................ [ 99%]\n....                                                                     [100%]\n722 passed, 2 skipped in 843.38s (0:14:03)\n== wrapper regression (AUG-081) ==\ngate prerequisite preflight: PASS\nAUG-116: zombie pid 830964 classified dead (kill -0 alone would have said alive)\nAUG-081 wrapper regression: PASS\nAUG-130 skipped-arm policy: PASS\n== end-to-end smoke ==\nnamespace: auger-smoke-831562\nnamespace sweep: no stale auger-smoke-*/auger-eval-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n\n\u2026 [528 chars omitted \u2014 13 line(s)] \u2026\n== spec corpus (AUG-136) ==\nspec: 3 document(s), 12 block(s), 7 reference(s) ok\n== prd proofs (AUG-137) ==\nprd proofs: 8 total \u00b7 3 required \u00b7 5 deferred \u2192 PASS\n   P1  deferred not-run   not-run (deferred to AUG-119): auger.py carries no board surface (grep -c boardctl auger.py -> 0): resolving a\n   P2  required pass      corpus=9249B bundle=8131B latency=16.6ms  2 generated view(s) verified byte-identical to the generator's output for specs/; one block edit propagated to\n   P3  deferred not-run   not-run (deferred to AUG-153): the checker half is reachable (`auger spec check --diff-file` reports `trace-mi\n   P4  deferred not-run   not-run (deferred to AUG-119): writing and reading back a canonical boardctl row is boardctl's surface, not au\n   P5  required pass      corpus=1084B bundle=435B latency=676.5ms  one query returned migration=tests/fixtures/xml/verification/migrations/001_add_marker.sql, fixture=tests/fixt\n   P6  deferred not-run   not-run (deferred to AUG-124): what counts as judge evidence \u2014 excluding the worker summary, refusing a PASS w\n   P7  required pass      corpus=9249B bundle=2944B latency=120.8ms  4/12 blocks selected by `applies-to auger.spec.select`; bundle is 31.8% of the corpus (2944 of 9249 bytes), fl\n   P8  deferred not-run   not-run (deferred to AUG-153): the flag and the process-liveness assertion live in the GitReins hook, which no\nprd-proofs: /home/kara/auger/docs/prd/evidence/AUG-137-prd-proofs.json agrees with this run\n== docs check ==\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261112T091941.670002Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 PROOF: python3 -m pytest tests/test_spec_assembly_report.py -q run in /home/kara/auger ends with the summary line '12 passed'. FAILIF: any failed or errored test, or the passed count differs from 12.: Ran `python3 -m pytest tests/test_spec_assembly_report.py -q` in /home/kara/auger: output tail `............ [100%]` / `12 passed in 0.16s`, exit_code 0. No failures or errors.\n  \u2713 PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_the_measured_report_carries_the_ac14_keys tests/test_spec_assembly_report.py::test_the_report_shape_is_documented -q prints '2 passed'. FAILIF: either node is absent or red, so the measured keys or their documentation are missing.: Ran both nodes: `.. [100%]` / `2 passed in 0.16s`, exit 0. The keys are asserted at tests/test_spec_assembly_report.py:150-165 (REPORT_KEYS = input_bytes/output_bytes/documents_read/blocks_parsed/elapsed_ms plus report_schema_version == auger.SPEC_ASSEMBLY_REPORT_VERSION) and documented at docs/XML-SPEC-SCHEMA.md:144-150, with the flag named at :133 and :139.\n  \u2713 PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_output_bytes_is_the_serialized_length tests/test_spec_assembly_report.py::test_input_bytes_is_the_sum_of_the_documents_read -q prints '2 passed'. FAILIF: red \u2014 the byte counts are then not derived from the real serialized output and the real documents read.: Ran both nodes: `2 passed in 0.04s`, exit 0. Implementation is real: output_bytes = len(text.encode(\"utf-8\")) settled to a fixpoint at auger.py:12866-12899 (refuses `unstable-report` if it cannot settle); input_bytes = sum(path.stat().st_size for path in read_paths) at auger.py:8873-8877. Independently confirmed on the real corpus: /tmp/aug140-eval.json is 3118 bytes on disk and its output_bytes is 3118.\n  \u2713 PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_only_selected_blocks_have_their_body_materialized -q prints '1 passed'. FAILIF: red \u2014 laziness (blocks_parsed <= matched+closure) is unproven and a reintroduced full-corpus parse would go unnoticed.: Ran the node: `1 passed in 0.03s`, exit 0. Laziness is implemented, not asserted: load_spec_corpus_indexed calls _spec_collect(..., body=False) (auger.py:8848-8857), _spec_block returns `\"text\": _spec_text(element) if body else \"\"` (auger.py:8438), bodies are built only for selected records via materialize_spec_records (auger.py:8890-8909, called at auger.py:12852-12853), and blocks_parsed = bodies_materialized + len(records) (auger.py:12871). Live run on specs/: blocks_indexed 12 vs blocks_parsed 4.\n  \u2713 PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_elapsed_ms_is_positive_on_a_real_corpus tests/test_spec_assembly_report.py::test_elapsed_ms_comes_from_the_clock_seam -q prints '2 passed'. FAILIF: red \u2014 elapsed_ms is a constant or not taken from the clock.: Ran both nodes: `2 passed in 0.03s`, exit 0. elapsed_ms = round((_spec_clock() - started) * 1000, 3) at auger.py:12872, with `started = _spec_clock()` taken before the loader read (auger.py:12722) and _spec_clock() = time.perf_counter() (auger.py:8784-8791). The live CLI run reported elapsed_ms 11.466, not a constant.\n  \u2713 PROOF: python3 auger.py spec assemble specs --applies-to auger.spec.select --format json --measure --out /tmp/aug140-eval.json exits 0 and the written file carries all seven measured keys with report_schema_version 1.1. FAILIF: non-zero exit, or any of report_schema_version/input_bytes/output_bytes/documents_read/blocks_indexed/blocks_parsed/elapsed_ms is missing.: Ran the exact command: stdout `wrote 4 block(s) to /tmp/aug140-eval.json`, EXIT=0. Parsed the file: report_schema_version '1.1', input_bytes 9249, output_bytes 3118, documents_read 3, blocks_indexed 12, blocks_parsed 4, elapsed_ms 11.466 \u2014 all seven present. Flag registered at auger.py:14060-14067, report assembled at auger.py:12860-12899.\n  \u2713 PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_the_shipped_fixture_still_assembles_unchanged tests/test_spec_assembly_report.py::test_the_default_json_is_still_byte_identical_across_runs -q prints '2 passed', and grep -c test_spec_assembly_report tests/gate.sh prints 2. FAILIF: red, or the file is not named in the gate pytest arm.: Ran both nodes: `2 passed in 0.03s`, exit 0. `grep -c test_spec_assembly_report tests/gate.sh` printed 2 \u2014 line 197 (comment) and line 206, where tests/test_spec_assembly_report.py is listed inside the `python3 -m pytest ...` arm.\n  \u2713 The measured report is reachable from the CLI entrypoint (auger.py spec assemble --measure) and the flag is registered/parsed, not dead code.: --measure is registered on the assemble subparser at auger.py:14060-14067, read via `measure = bool(getattr(a, \"measure\", False))` at auger.py:12714, and consumed by the report branch at auger.py:12860. The live CLI invocation exited 0 and emitted the seven keys, proving the path is reachable end to end.\n  \u2713 The default (unmeasured) JSON document keeps its exact prior key set, so AC-4 byte-reproducibility is not broken by the instrumentation.: `python3 auger.py spec assemble specs --applies-to auger.spec.select --format json` (no --measure) prints keys ['blocks','corpus','counts','schema_version','selection'] \u2014 no measured key leaked. Pinned by test_the_shipped_fixture_still_assembles_unchanged (tests/test_spec_assembly_report.py:262-280) and test_the_default_json_is_still_byte_identical_across_runs, both green.\n  \u2713 --measure with a non-JSON format refuses with a typed error and non-zero exit instead of silently emitting an unmeasured document.: `python3 auger.py spec assemble specs --applies-to auger.spec.select --format markdown --measure` -> `spec error (measure-requires-json): --measure reports a JSON object; pass --format json ...`, EXIT=2. Guard at auger.py:12715-12721, with a second refusal in render_spec_assembly at auger.py:9052-9057; pinned by the green test_measure_without_json_refuses.\n  \u2713 The lazy indexed loader does not change behaviour of the other spec verbs (validate/check/bundle/list/render/context) \u2014 the existing spec suites stay green.: Ran `python3 -m pytest tests/test_spec_assembly_report.py tests/test_xml_specs.py tests/test_spec_render.py tests/test_spec_context.py tests/test_spec_corpus_view.py tests/test_spec_validate_obligations.py tests/test_spec_obligation_gate.py tests/test_spec_decision_ref.py tests/test_spec_rollback.py tests/test_spec_alignment_check.py tests/test_spec_repository_root.py tests/test_xml_task_contract.py tests/test_verification_graph.py tests/test_spec_validators_agree.py -q` -> `215 passed in 20.08s`, exit 0. The indexed loader is scoped to `command in (\"list\", \"assemble\")` (auger.py:12708-12722); validate/check/bundle keep load_spec_corpus.\n  \u2713 output_bytes equals the bytes actually written to --out (the seam between the measured value and the consumer's file).: /tmp/aug140-eval.json is 3118 bytes on disk and its output_bytes field is 3118 (match True). The fixpoint loop at auger.py:12879-12899 re-serializes until len(text.encode()) == report[\"output_bytes\"] and raises `unstable-report` otherwise, and _spec_write_atomic writes that same `text` (auger.py:12901-12903).\nAll seven given criteria and all five derived criteria pass: the 12-test file is green, the measured keys are real (bytes from os.stat and the serialized fixpoint, blocks_parsed from actual body materialization, elapsed_ms from the _spec_clock seam), the CLI --measure path emits all seven keys with report_schema_version 1.1, the default JSON is unchanged, and the file is wired into tests/gate.sh.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 PROOF: python3 -m pytest tests/test_spec_assembly_report.py -q run in /home/kara/auger ends with the summary line '12 passed'. FAILIF: any failed or errored test, or the passed count differs from 12.: Ran `python3 -m pytest tests/test_spec_assembly_report.py -q` in /home/kara/auger: output tail `............ [100%]` / `12 passed in 0.16s`, exit_code 0. No failures or errors.\n  \u2713 PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_the_measured_report_carries_the_ac14_keys tests/test_spec_assembly_report.py::test_the_report_shape_is_documented -q prints '2 passed'. FAILIF: either node is absent or red, so the measured keys or their documentation are missing.: Ran both nodes: `.. [100%]` / `2 passed in 0.16s`, exit 0. The keys are asserted at tests/test_spec_assembly_report.py:150-165 (REPORT_KEYS = input_bytes/output_bytes/documents_read/blocks_parsed/elapsed_ms plus report_schema_version == auger.SPEC_ASSEMBLY_REPORT_VERSION) and documented at docs/XML-SPEC-SCHEMA.md:144-150, with the flag named at :133 and :139.\n  \u2713 PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_output_bytes_is_the_serialized_length tests/test_spec_assembly_report.py::test_input_bytes_is_the_sum_of_the_documents_read -q prints '2 passed'. FAILIF: red \u2014 the byte counts are then not derived from the real serialized output and the real documents read.: Ran both nodes: `2 passed in 0.04s`, exit 0. Implementation is real: output_bytes = len(text.encode(\"utf-8\")) settled to a fixpoint at auger.py:12866-12899 (refuses `unstable-report` if it cannot settle); input_bytes = sum(path.stat().st_size for path in read_paths) at auger.py:8873-8877. Independently confirmed on the real corpus: /tmp/aug140-eval.json is 3118 bytes on disk and its output_bytes is 3118.\n\n\u2026 [4951 chars omitted \u2014 8 line(s)] \u2026\n  \u2713 output_bytes equals the bytes actually written to --out (the seam between the measured value and the consumer's file).: /tmp/aug140-eval.json is 3118 bytes on disk and its output_bytes field is 3118 (match True). The fixpoint loop at auger.py:12879-12899 re-serializes until len(text.encode()) == report[\"output_bytes\"] and raises `unstable-report` otherwise, and _spec_write_atomic writes that same `text` (auger.py:12901-12903).\nAll seven given criteria and all five derived criteria pass: the 12-test file is green, the measured keys are real (bytes from os.stat and the serialized fixpoint, blocks_parsed from actual body materialization, elapsed_ms from the _spec_clock seam), the CLI --measure path emits all seven keys with report_schema_version 1.1, the default JSON is unchanged, and the file is wired into tests/gate.sh.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "PROOF: python3 -m pytest tests/test_spec_assembly_report.py -q run in /home/kara/auger ends with the summary line '12 passed'. FAILIF: any failed or errored test, or the passed count differs from 12.",
+                "status": "PASS",
+                "detail": "Ran `python3 -m pytest tests/test_spec_assembly_report.py -q` in /home/kara/auger: output tail `............ [100%]` / `12 passed in 0.16s`, exit_code 0. No failures or errors."
+              },
+              {
+                "criterion": "PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_the_measured_report_carries_the_ac14_keys tests/test_spec_assembly_report.py::test_the_report_shape_is_documented -q prints '2 passed'. FAILIF: either node is absent or red, so the measured keys or their documentation are missing.",
+                "status": "PASS",
+                "detail": "Ran both nodes: `.. [100%]` / `2 passed in 0.16s`, exit 0. The keys are asserted at tests/test_spec_assembly_report.py:150-165 (REPORT_KEYS = input_bytes/output_bytes/documents_read/blocks_parsed/elapsed_ms plus report_schema_version == auger.SPEC_ASSEMBLY_REPORT_VERSION) and documented at docs/XML-SPEC-SCHEMA.md:144-150, with the flag named at :133 and :139."
+              },
+              {
+                "criterion": "PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_output_bytes_is_the_serialized_length tests/test_spec_assembly_report.py::test_input_bytes_is_the_sum_of_the_documents_read -q prints '2 passed'. FAILIF: red \u2014 the byte counts are then not derived from the real serialized output and the real documents read.",
+                "status": "PASS",
+                "detail": "Ran both nodes: `2 passed in 0.04s`, exit 0. Implementation is real: output_bytes = len(text.encode(\"utf-8\")) settled to a fixpoint at auger.py:12866-12899 (refuses `unstable-report` if it cannot settle); input_bytes = sum(path.stat().st_size for path in read_paths) at auger.py:8873-8877. Independently confirmed on the real corpus: /tmp/aug140-eval.json is 3118 bytes on disk and its output_bytes is 3118."
+              },
+              {
+                "criterion": "PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_only_selected_blocks_have_their_body_materialized -q prints '1 passed'. FAILIF: red \u2014 laziness (blocks_parsed <= matched+closure) is unproven and a reintroduced full-corpus parse would go unnoticed.",
+                "status": "PASS",
+                "detail": "Ran the node: `1 passed in 0.03s`, exit 0. Laziness is implemented, not asserted: load_spec_corpus_indexed calls _spec_collect(..., body=False) (auger.py:8848-8857), _spec_block returns `\"text\": _spec_text(element) if body else \"\"` (auger.py:8438), bodies are built only for selected records via materialize_spec_records (auger.py:8890-8909, called at auger.py:12852-12853), and blocks_parsed = bodies_materialized + len(records) (auger.py:12871). Live run on specs/: blocks_indexed 12 vs blocks_parsed 4."
+              },
+              {
+                "criterion": "PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_elapsed_ms_is_positive_on_a_real_corpus tests/test_spec_assembly_report.py::test_elapsed_ms_comes_from_the_clock_seam -q prints '2 passed'. FAILIF: red \u2014 elapsed_ms is a constant or not taken from the clock.",
+                "status": "PASS",
+                "detail": "Ran both nodes: `2 passed in 0.03s`, exit 0. elapsed_ms = round((_spec_clock() - started) * 1000, 3) at auger.py:12872, with `started = _spec_clock()` taken before the loader read (auger.py:12722) and _spec_clock() = time.perf_counter() (auger.py:8784-8791). The live CLI run reported elapsed_ms 11.466, not a constant."
+              },
+              {
+                "criterion": "PROOF: python3 auger.py spec assemble specs --applies-to auger.spec.select --format json --measure --out /tmp/aug140-eval.json exits 0 and the written file carries all seven measured keys with report_schema_version 1.1. FAILIF: non-zero exit, or any of report_schema_version/input_bytes/output_bytes/documents_read/blocks_indexed/blocks_parsed/elapsed_ms is missing.",
+                "status": "PASS",
+                "detail": "Ran the exact command: stdout `wrote 4 block(s) to /tmp/aug140-eval.json`, EXIT=0. Parsed the file: report_schema_version '1.1', input_bytes 9249, output_bytes 3118, documents_read 3, blocks_indexed 12, blocks_parsed 4, elapsed_ms 11.466 \u2014 all seven present. Flag registered at auger.py:14060-14067, report assembled at auger.py:12860-12899."
+              },
+              {
+                "criterion": "PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_the_shipped_fixture_still_assembles_unchanged tests/test_spec_assembly_report.py::test_the_default_json_is_still_byte_identical_across_runs -q prints '2 passed', and grep -c test_spec_assembly_report tests/gate.sh prints 2. FAILIF: red, or the file is not named in the gate pytest arm.",
+                "status": "PASS",
+                "detail": "Ran both nodes: `2 passed in 0.03s`, exit 0. `grep -c test_spec_assembly_report tests/gate.sh` printed 2 \u2014 line 197 (comment) and line 206, where tests/test_spec_assembly_report.py is listed inside the `python3 -m pytest ...` arm."
+              },
+              {
+                "criterion": "The measured report is reachable from the CLI entrypoint (auger.py spec assemble --measure) and the flag is registered/parsed, not dead code.",
+                "status": "PASS",
+                "detail": "--measure is registered on the assemble subparser at auger.py:14060-14067, read via `measure = bool(getattr(a, \"measure\", False))` at auger.py:12714, and consumed by the report branch at auger.py:12860. The live CLI invocation exited 0 and emitted the seven keys, proving the path is reachable end to end.",
+                "derived": true
+              },
+              {
+                "criterion": "The default (unmeasured) JSON document keeps its exact prior key set, so AC-4 byte-reproducibility is not broken by the instrumentation.",
+                "status": "PASS",
+                "detail": "`python3 auger.py spec assemble specs --applies-to auger.spec.select --format json` (no --measure) prints keys ['blocks','corpus','counts','schema_version','selection'] \u2014 no measured key leaked. Pinned by test_the_shipped_fixture_still_assembles_unchanged (tests/test_spec_assembly_report.py:262-280) and test_the_default_json_is_still_byte_identical_across_runs, both green.",
+                "derived": true
+              },
+              {
+                "criterion": "--measure with a non-JSON format refuses with a typed error and non-zero exit instead of silently emitting an unmeasured document.",
+                "status": "PASS",
+                "detail": "`python3 auger.py spec assemble specs --applies-to auger.spec.select --format markdown --measure` -> `spec error (measure-requires-json): --measure reports a JSON object; pass --format json ...`, EXIT=2. Guard at auger.py:12715-12721, with a second refusal in render_spec_assembly at auger.py:9052-9057; pinned by the green test_measure_without_json_refuses.",
+                "derived": true
+              },
+              {
+                "criterion": "The lazy indexed loader does not change behaviour of the other spec verbs (validate/check/bundle/list/render/context) \u2014 the existing spec suites stay green.",
+                "status": "PASS",
+                "detail": "Ran `python3 -m pytest tests/test_spec_assembly_report.py tests/test_xml_specs.py tests/test_spec_render.py tests/test_spec_context.py tests/test_spec_corpus_view.py tests/test_spec_validate_obligations.py tests/test_spec_obligation_gate.py tests/test_spec_decision_ref.py tests/test_spec_rollback.py tests/test_spec_alignment_check.py tests/test_spec_repository_root.py tests/test_xml_task_contract.py tests/test_verification_graph.py tests/test_spec_validators_agree.py -q` -> `215 passed in 20.08s`, exit 0. The indexed loader is scoped to `command in (\"list\", \"assemble\")` (auger.py:12708-12722); validate/check/bundle keep load_spec_corpus.",
+                "derived": true
+              },
+              {
+                "criterion": "output_bytes equals the bytes actually written to --out (the seam between the measured value and the consumer's file).",
+                "status": "PASS",
+                "detail": "/tmp/aug140-eval.json is 3118 bytes on disk and its output_bytes field is 3118 (match True). The fixpoint loop at auger.py:12879-12899 re-serializes until len(text.encode()) == report[\"output_bytes\"] and raises `unstable-report` otherwise, and _spec_write_atomic writes that same `text` (auger.py:12901-12903).",
+                "derived": true
+              }
+            ],
+            "summary": "All seven given criteria and all five derived criteria pass: the 12-test file is green, the measured keys are real (bytes from os.stat and the serialized fixpoint, blocks_parsed from actual body materialization, elapsed_ms from the _spec_clock seam), the CLI --measure path emits all seven keys with report_schema_version 1.1, the default JSON is unchanged, and the file is wired into tests/gate.sh.",
+            "provenance": {
+              "model": "deepseek-v4-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "deepseek-v4-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY"
+    }
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [
+      {
+        "severity": "medium",
+        "file": ".coding-hermes/board/events.jsonl",
+        "line": 569,
+        "detection": "appended event ids are lower than the ids already present above them in the same append-only log",
+        "detail": "The file's last existing line is id 555, but the four appended task_created events carry ids 548-551, so the log is no longer monotonic in id and any consumer that tails by max(id) will skip these events."
+      },
+      {
+        "severity": "low",
+        "file": ".coding-hermes/board/events.jsonl",
+        "line": 569,
+        "detection": "appended events are timestamped earlier than events already preceding them in the log",
+        "detail": "The new events are stamped 2026-11-12 00:39:50-51 while the preceding lines are 2026-11-12 07:13-12:25, so the append breaks the file's chronological ordering."
+      },
+      {
+        "severity": "low",
+        "file": ".coding-hermes/board/tasks.jsonl",
+        "line": 262,
+        "detection": "new rows omit fields present on every existing row in the same file",
+        "detail": "Existing rows carry `ts`, `review_notes`, `foreman_note`, `capability_tags`, `depends_on`, `worker_status`, `commit_hash`, `guard_result`, `ci_result`, `worktree` and `branch`; the four REVIEW-AUGER rows include only some of these (e.g. no `ts`, no `review_notes`), a schema drift from the surrounding rows."
+      }
+    ],
+    "summary": "The change only appends board data, but the new event rows reuse already-used ids and out-of-order timestamps, and the new task rows drop fields the rest of the file carries."
+  },
+  "summary": "Stage tier1: PASS\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 PROOF: python3 -m pytest tests/test_spec_assembly_report.py -q run in /home/kara/auger ends with the summary line '12 passed'. FAILIF: any failed or errored test, or the passed count differs from 12.: Ran `python3 -m pytest tests/test_spec_assembly_report.py -q` in /home/kara/auger: output tail `............ [100%]` / `12 passed in 0.16s`, exit_code 0. No failures or errors.\n  \u2713 PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_the_measured_report_carries_the_ac14_keys tests/test_spec_assembly_report.py::test_the_report_shape_is_documented -q prints '2 passed'. FAILIF: either node is absent or red, so the measured keys or their documentation are missing.: Ran both nodes: `.. [100%]` / `2 passed in 0.16s`, exit 0. The keys are asserted at tests/test_spec_assembly_report.py:150-165 (REPORT_KEYS = input_bytes/output_bytes/documents_read/blocks_parsed/elapsed_ms plus report_schema_version == auger.SPEC_ASSEMBLY_REPORT_VERSION) and documented at docs/XML-SPEC-SCHEMA.md:144-150, with the flag named at :133 and :139.\n  \u2713 PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_output_bytes_is_the_serialized_length tests/test_spec_assembly_report.py::test_input_bytes_is_the_sum_of_the_documents_read -q prints '2 passed'. FAILIF: red \u2014 the byte counts are then not derived from the real serialized output and the real documents read.: Ran both nodes: `2 passed in 0.04s`, exit 0. Implementation is real: output_bytes = len(text.encode(\"utf-8\")) settled to a fixpoint at auger.py:12866-12899 (refuses `unstable-report` if it cannot settle); input_bytes = sum(path.stat().st_size for path in read_paths) at auger.py:8873-8877. Independently confirmed on the real corpus: /tmp/aug140-eval.json is 3118 bytes on disk and its output_bytes is 3118.\n  \u2713 PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_only_selected_blocks_have_their_body_materialized -q prints '1 passed'. FAILIF: red \u2014 laziness (blocks_parsed <= matched+closure) is unproven and a reintroduced full-corpus parse would go unnoticed.: Ran the node: `1 passed in 0.03s`, exit 0. Laziness is implemented, not asserted: load_spec_corpus_indexed calls _spec_collect(..., body=False) (auger.py:8848-8857), _spec_block returns `\"text\": _spec_text(element) if body else \"\"` (auger.py:8438), bodies are built only for selected records via materialize_spec_records (auger.py:8890-8909, called at auger.py:12852-12853), and blocks_parsed = bodies_materialized + len(records) (auger.py:12871). Live run on specs/: blocks_indexed 12 vs blocks_parsed 4.\n  \u2713 PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_elapsed_ms_is_positive_on_a_real_corpus tests/test_spec_assembly_report.py::test_elapsed_ms_comes_from_the_clock_seam -q prints '2 passed'. FAILIF: red \u2014 elapsed_ms is a constant or not taken from the clock.: Ran both nodes: `2 passed in 0.03s`, exit 0. elapsed_ms = round((_spec_clock() - started) * 1000, 3) at auger.py:12872, with `started = _spec_clock()` taken before the loader read (auger.py:12722) and _spec_clock() = time.perf_counter() (auger.py:8784-8791). The live CLI run reported elapsed_ms 11.466, not a constant.\n  \u2713 PROOF: python3 auger.py spec assemble specs --applies-to auger.spec.select --format json --measure --out /tmp/aug140-eval.json exits 0 and the written file carries all seven measured keys with report_schema_version 1.1. FAILIF: non-zero exit, or any of report_schema_version/input_bytes/output_bytes/documents_read/blocks_indexed/blocks_parsed/elapsed_ms is missing.: Ran the exact command: stdout `wrote 4 block(s) to /tmp/aug140-eval.json`, EXIT=0. Parsed the file: report_schema_version '1.1', input_bytes 9249, output_bytes 3118, documents_read 3, blocks_indexed 12, blocks_parsed 4, elapsed_ms 11.466 \u2014 all seven present. Flag registered at auger.py:14060-14067, report assembled at auger.py:12860-12899.\n  \u2713 PROOF: python3 -m pytest tests/test_spec_assembly_report.py::test_the_shipped_fixture_still_assembles_unchanged tests/test_spec_assembly_report.py::test_the_default_json_is_still_byte_identical_across_runs -q prints '2 passed', and grep -c test_spec_assembly_report tests/gate.sh prints 2. FAILIF: red, or the file is not named in the gate pytest arm.: Ran both nodes: `2 passed in 0.03s`, exit 0. `grep -c test_spec_assembly_report tests/gate.sh` printed 2 \u2014 line 197 (comment) and line 206, where tests/test_spec_assembly_report.py is listed inside the `python3 -m pytest ...` arm.\n  \u2713 The measured report is reachable from the CLI entrypoint (auger.py spec assemble --measure) and the flag is registered/parsed, not dead code.: --measure is registered on the assemble subparser at auger.py:14060-14067, read via `measure = bool(getattr(a, \"measure\", False))` at auger.py:12714, and consumed by the report branch at auger.py:12860. The live CLI invocation exited 0 and emitted the seven keys, proving the path is reachable end to end.\n  \u2713 The default (unmeasured) JSON document keeps its exact prior key set, so AC-4 byte-reproducibility is not broken by the instrumentation.: `python3 auger.py spec assemble specs --applies-to auger.spec.select --format json` (no --measure) prints keys ['blocks','corpus','counts','schema_version','selection'] \u2014 no measured key leaked. Pinned by test_the_shipped_fixture_still_assembles_unchanged (tests/test_spec_assembly_report.py:262-280) and test_the_default_json_is_still_byte_identical_across_runs, both green.\n  \u2713 --measure with a non-JSON format refuses with a typed error and non-zero exit instead of silently emitting an unmeasured document.: `python3 auger.py spec assemble specs --applies-to auger.spec.select --format markdown --measure` -> `spec error (measure-requires-json): --measure reports a JSON object; pass --format json ...`, EXIT=2. Guard at auger.py:12715-12721, with a second refusal in render_spec_assembly at auger.py:9052-9057; pinned by the green test_measure_without_json_refuses.\n  \u2713 The lazy indexed loader does not change behaviour of the other spec verbs (validate/check/bundle/list/render/context) \u2014 the existing spec suites stay green.: Ran `python3 -m pytest tests/test_spec_assembly_report.py tests/test_xml_specs.py tests/test_spec_render.py tests/test_spec_context.py tests/test_spec_corpus_view.py tests/test_spec_validate_obligations.py tests/test_spec_obligation_gate.py tests/test_spec_decision_ref.py tests/test_spec_rollback.py tests/test_spec_alignment_check.py tests/test_spec_repository_root.py tests/test_xml_task_contract.py tests/test_verification_graph.py tests/test_spec_validators_agree.py -q` -> `215 passed in 20.08s`, exit 0. The indexed loader is scoped to `command in (\"list\", \"assemble\")` (auger.py:12708-12722); validate/check/bundle keep load_spec_corpus.\n  \u2713 output_bytes equals the bytes actually written to --out (the seam between the measured value and the consumer's file).: /tmp/aug140-eval.json is 3118 bytes on disk and its output_bytes field is 3118 (match True). The fixpoint loop at auger.py:12879-12899 re-serializes until len(text.encode()) == report[\"output_bytes\"] and raises `unstable-report` otherwise, and _spec_write_atomic writes that same `text` (auger.py:12901-12903).\nAll seven given criteria and all five derived criteria pass: the 12-test file is green, the measured keys are real (bytes from os.stat and the serialized fixpoint, blocks_parsed from actual body materialization, elapsed_ms from the _spec_clock seam), the CLI --measure path emits all seven keys with report_schema_version 1.1, the default JSON is unchanged, and the file is wired into tests/gate.sh.\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-11-12T14:56:41.403380",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-12T14:56:41.430180+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 3619,
+        "truncated": false,
+        "source": "git show 9ec487d4fc0e"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 12140,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-140"
+  }
+}
