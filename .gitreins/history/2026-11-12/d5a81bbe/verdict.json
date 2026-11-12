@@ -1,0 +1,542 @@
+{
+  "task_id": "AUG-141",
+  "task_title": "AC-15 sample end-to-end trace artifact for a real repo task (docs/prd/evidence/AUG-136-trace.json)",
+  "task_criteria": [
+    "The artifact test file is green on this tree. PROOF: `python3 -m pytest tests/test_trace_artifact.py -q` prints 43 passed and exits 0. FAILIF: fewer than 43 passed, any failure or error, or a nonzero exit.",
+    "Regeneration is documented and byte-stable. PROOF: `python3 scripts/gen_trace_artifact.py --check` exits 0 and prints \"matches a fresh build\", and `grep -c gen_trace_artifact docs/prd/xml-spec-graph.md` prints 1. FAILIF: a nonzero exit, a regenerated artifact that differs from the committed bytes, or the command named in no doc (count 0).",
+    "The artifact test bites on rot. PROOF: `python3 -m pytest tests/test_trace_artifact.py -q -k \"edited_artifact or unresolvable_pointer\"` prints 10 passed and exits 0. FAILIF: those arms error, skip, or pass vacuously.",
+    "The trace artifact is wired into the gate. PROOF: `grep -c test_trace_artifact tests/gate.sh` prints 2. FAILIF: the count is below 2, i.e. the file runs in no gate arm.",
+    "The artifact names a real board row and a git-tracked test, not a fixture. PROOF: `jq -r .row docs/prd/evidence/AUG-136-trace.json` prints AUG-136, `grep -c \"AUG-136\" .coding-hermes/board/tasks.jsonl` prints at least 1, and `git ls-files --error-unmatch \"$(jq -r .test docs/prd/evidence/AUG-136-trace.json)\"` exits 0. FAILIF: the row is absent from the tracked board, the cited test path is untracked, or the artifact cites a fixture instead of a real row id.",
+    "Every chain pointer resolves or carries an explicit none-reason. PROOF: `python3 -m pytest tests/test_trace_artifact.py::test_every_pointer_resolves -q` prints 11 passed, and the committed artifact contains no bare \"none\" value. FAILIF: any pointer parametrization fails, or a field reads a bare none with no reason."
+  ],
+  "passed": true,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "3d1de3766c0ee62f94e4d0b0aca494e9736af4b1",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "89267fb89349cdb66da949b644ac89a7d6289ea6bd5f0a2cf85bb5e6e36c887e",
+  "working_tree_dirty_path_count": 2,
+  "items": [
+    {
+      "criterion": "The artifact test file is green on this tree. PROOF: `python3 -m pytest tests/test_trace_artifact.py -q` prints 43 passed and exits 0. FAILIF: fewer than 43 passed, any failure or error, or a nonzero exit.",
+      "status": "PASS",
+      "detail": "Ran in /home/kara/auger: `python3 -m pytest tests/test_trace_artifact.py -q` -> EXIT=0, output tail `43 passed in 4.64s`; `--co` confirms `43 tests collected`; `-rs` run shows no skips (`43 passed in 2.92s`)."
+    },
+    {
+      "criterion": "Regeneration is documented and byte-stable. PROOF: `python3 scripts/gen_trace_artifact.py --check` exits 0 and prints \"matches a fresh build\", and `grep -c gen_trace_artifact docs/prd/xml-spec-graph.md` prints 1. FAILIF: a nonzero exit, a regenerated artifact that differs from the committed bytes, or the command named in no doc (count 0).",
+      "status": "PASS",
+      "detail": "`python3 scripts/gen_trace_artifact.py --check` -> EXIT=0, stdout `trace artifact matches a fresh build: docs/prd/evidence/AUG-136-trace.json (1487 bytes)`. `grep -c gen_trace_artifact docs/prd/xml-spec-graph.md` -> 1 (line 293: `python3 scripts/gen_trace_artifact.py` writes `docs/prd/evidence/AUG-136-trace.json`). Byte stability independently confirmed: `python3 scripts/gen_trace_artifact.py --out /tmp/fresh.json` then `cmp /tmp/fresh.json docs/prd/evidence/AUG-136-trace.json` -> BYTE-IDENTICAL."
+    },
+    {
+      "criterion": "The artifact test bites on rot. PROOF: `python3 -m pytest tests/test_trace_artifact.py -q -k \"edited_artifact or unresolvable_pointer\"` prints 10 passed and exits 0. FAILIF: those arms error, skip, or pass vacuously.",
+      "status": "PASS",
+      "detail": "`-k \"edited_artifact or unresolvable_pointer\"` -> EXIT=0, `10 passed, 33 deselected in 1.07s`. `--collect-only` shows the 10 are real arms: test_check_mode_fails_on_an_edited_artifact plus 9 parametrizations of test_the_generator_refuses_an_unresolvable_pointer (--row AUG-999999, --spec unknown id, --spec stale file, --test missing file, --test bad selector, --doc, --evidence, --commit, --wave). Not vacuous: each asserts rc==2 and a typed `spec error (<code>)` in stderr (tests/test_trace_artifact.py:352-372), and I reproduced the behaviour by hand \u2014 `--row AUG-999999` -> rc=2 `spec error (unknown-trace-row)`."
+    },
+    {
+      "criterion": "The trace artifact is wired into the gate. PROOF: `grep -c test_trace_artifact tests/gate.sh` prints 2. FAILIF: the count is below 2, i.e. the file runs in no gate arm.",
+      "status": "PASS",
+      "detail": "`grep -c test_trace_artifact tests/gate.sh` -> 2: line 201 (comment naming the AUG-141 artifact) and line 206, the actual `python3 -m pytest ... tests/test_trace_artifact.py ...` arm. tests/test_trace_artifact.py:487-509 (test_gate_arm_runs_this_file) additionally asserts the file is in the gate's pytest arm and that every file named there exists."
+    },
+    {
+      "criterion": "The artifact names a real board row and a git-tracked test, not a fixture. PROOF: `jq -r .row docs/prd/evidence/AUG-136-trace.json` prints AUG-136, `grep -c \"AUG-136\" .coding-hermes/board/tasks.jsonl` prints at least 1, and `git ls-files --error-unmatch \"$(jq -r .test docs/prd/evidence/AUG-136-trace.json)\"` exits 0. FAILIF: the row is absent from the tracked board, the cited test path is untracked, or the artifact cites a fixture instead of a real row id.",
+      "status": "PASS",
+      "detail": "`jq -r .row` -> `AUG-136`; `grep -c \"AUG-136\" .coding-hermes/board/tasks.jsonl` -> 7 (line 230 is the real row `{\"status\": \"complete\", \"id\": \"AUG-136\", ...}`); `git ls-files --error-unmatch tests/test_spec_corpus_view.py` -> prints the path, EXIT=0. The cited test is a real suite file, not a fixture (tests/fixtures/ is a separate directory)."
+    },
+    {
+      "criterion": "Every chain pointer resolves or carries an explicit none-reason. PROOF: `python3 -m pytest tests/test_trace_artifact.py::test_every_pointer_resolves -q` prints 11 passed, and the committed artifact contains no bare \"none\" value. FAILIF: any pointer parametrization fails, or a field reads a bare none with no reason.",
+      "status": "PASS",
+      "detail": "`pytest tests/test_trace_artifact.py::test_every_pointer_resolves -q` -> EXIT=0, `11 passed in 0.20s`; verbose run shows all 11 params PASSED (row, spec, wave, test, doc, prompt, evidence, witness, verdict, commit, memory). Bare-none check: `jq -r 'to_entries[] | select(.value==\"none\") | .key'` and `jq -r '.marker[] | select(endswith(\"=none\"))'` both return nothing; every absence reads `none:<reason>` (e.g. wave=none:no-wave-record, verdict=none:no-gitreins-verdict). The generator also refuses a bare none: `--wave none` -> rc=2 `spec error (unexplained-absent-field): wave=none gives no reason`."
+    },
+    {
+      "criterion": "The generator's --check actually detects drift (a mutated artifact is refused with nonzero exit), not just prints \"matches\".",
+      "status": "PASS",
+      "detail": "Mutated a copy of the artifact (evidence -> docs/prd/xml-spec-graph-proofs.json) and ran `scripts/gen_trace_artifact.py --check --out /tmp/stale.json`: rc=1, stderr `stale trace artifact: stale.json differs from a fresh build` + `evidence: on disk 'docs/prd/xml-spec-graph-proofs.json' != fresh 'docs/SPEC-CORPUS-VIEW.md'` (scripts/gen_trace_artifact.py:390-410).",
+      "derived": true
+    },
+    {
+      "criterion": "The artifact's marker round-trips through the shipped parser (auger.parse_trace_marker) and covers all 11 SPEC_TRACE_FIELDS.",
+      "status": "PASS",
+      "detail": "Ran `auger.parse_trace_marker(\" \".join(artifact['marker']))`: `parsed keys: 11 expected: 11`, `set equal: True`, `values agree: True` (auger.py:11894 SPEC_TRACE_FIELDS, auger.py:9694 parse_trace_marker). Also covered by test_the_marker_parses_through_the_shipped_parser and test_the_shipped_checker_accepts_the_marker, both green in the 43-passed run.",
+      "derived": true
+    },
+    {
+      "criterion": "The generator refuses a bare `none` value and an unresolvable pointer with a typed error and writes no artifact.",
+      "status": "PASS",
+      "detail": "`--wave none --out /tmp/bad3.json` -> rc=2, `spec error (unexplained-absent-field): wave=none gives no reason \u2014 write wave=none:<reason>`, and `ls /tmp/bad3.json` -> No such file. `--row AUG-999999 --out /tmp/bad2.json` -> rc=2 `spec error (unknown-trace-row)` and no file. Refusal path returns before the write (scripts/gen_trace_artifact.py:381-386).",
+      "derived": true
+    },
+    {
+      "criterion": "The cited commit pointer is reachable from HEAD (ancestor), so the trace is followable from the published tip.",
+      "status": "PASS",
+      "detail": "`git cat-file -e 3f64a4e^{commit}` EXIT=0 and `git merge-base --is-ancestor 3f64a4e HEAD` EXIT=0; the artifact's resolution map records `commit: git-commit 3f64a4e (ancestor of HEAD)`. Enforced by test_the_commit_pointer_is_an_ancestor_of_head (green in the 43-passed run).",
+      "derived": true
+    },
+    {
+      "criterion": "The artifact is byte-identical to a fresh build (committed bytes == generator output), i.e. no hand-editing.",
+      "status": "PASS",
+      "detail": "`python3 scripts/gen_trace_artifact.py --out /tmp/fresh.json` (EXIT=0) then `cmp /tmp/fresh.json docs/prd/evidence/AUG-136-trace.json` -> BYTE-IDENTICAL; `--check --out /tmp/fresh.json` -> rc=0 `matches a fresh build ... (1487 bytes)`. Also asserted by test_a_double_build_is_byte_identical.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "no_concerns_found",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261112T091941.670002Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nscanners: nice=nice -n 10\n12:16PM INF scanned ~3376710 bytes (3.38 MB) in 1.86s\n12:16PM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 251 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261112T091941.670002Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [  9%]\n........................................................................ [ 19%]\n........................................................................ [ 29%]\n........................................................................ [ 39%]\n............................s........................................... [ 49%]\n.......s................................................................ [ 59%]\n........................................................................ [ 69%]\n........................................................................ [ 79%]\n........................................................................ [ 89%]\n........................................................................ [ 99%]\n....                                                                     [100%]\n722 passed, 2 skipped in 1405.88s (0:23:25)\n== wrapper regression (AUG-081) ==\ngate prerequisite preflight: PASS\nAUG-116: zombie pid 3172681 classified dead (kill -0 alone would have said alive)\nAUG-081 wrapper regression: PASS\nAUG-130 skipped-arm policy: PASS\n== end-to-end smoke ==\nnamespace: auger-smoke-3173494\nnamespace sweep: no stale auger-smoke-*/auger-eval-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n\n\u2026 [529 chars omitted \u2014 13 line(s)] \u2026\n== spec corpus (AUG-136) ==\nspec: 3 document(s), 12 block(s), 7 reference(s) ok\n== prd proofs (AUG-137) ==\nprd proofs: 8 total \u00b7 3 required \u00b7 5 deferred \u2192 PASS\n   P1  deferred not-run   not-run (deferred to AUG-119): auger.py carries no board surface (grep -c boardctl auger.py -> 0): resolving a\n   P2  required pass      corpus=9249B bundle=8131B latency=99.2ms  2 generated view(s) verified byte-identical to the generator's output for specs/; one block edit propagated to\n   P3  deferred not-run   not-run (deferred to AUG-153): the checker half is reachable (`auger spec check --diff-file` reports `trace-mi\n   P4  deferred not-run   not-run (deferred to AUG-119): writing and reading back a canonical boardctl row is boardctl's surface, not au\n   P5  required pass      corpus=1084B bundle=435B latency=2012.8ms  one query returned migration=tests/fixtures/xml/verification/migrations/001_add_marker.sql, fixture=tests/fixt\n   P6  deferred not-run   not-run (deferred to AUG-124): what counts as judge evidence \u2014 excluding the worker summary, refusing a PASS w\n   P7  required pass      corpus=9249B bundle=2944B latency=167.9ms  4/12 blocks selected by `applies-to auger.spec.select`; bundle is 31.8% of the corpus (2944 of 9249 bytes), fl\n   P8  deferred not-run   not-run (deferred to AUG-153): the flag and the process-liveness assertion live in the GitReins hook, which no\nprd-proofs: /home/kara/auger/docs/prd/evidence/AUG-137-prd-proofs.json agrees with this run\n== docs check ==\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261112T091941.670002Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 The artifact test file is green on this tree. PROOF: `python3 -m pytest tests/test_trace_artifact.py -q` prints 43 passed and exits 0. FAILIF: fewer than 43 passed, any failure or error, or a nonzero exit.: Ran in /home/kara/auger: `python3 -m pytest tests/test_trace_artifact.py -q` -> EXIT=0, output tail `43 passed in 4.64s`; `--co` confirms `43 tests collected`; `-rs` run shows no skips (`43 passed in 2.92s`).\n  \u2713 Regeneration is documented and byte-stable. PROOF: `python3 scripts/gen_trace_artifact.py --check` exits 0 and prints \"matches a fresh build\", and `grep -c gen_trace_artifact docs/prd/xml-spec-graph.md` prints 1. FAILIF: a nonzero exit, a regenerated artifact that differs from the committed bytes, or the command named in no doc (count 0).: `python3 scripts/gen_trace_artifact.py --check` -> EXIT=0, stdout `trace artifact matches a fresh build: docs/prd/evidence/AUG-136-trace.json (1487 bytes)`. `grep -c gen_trace_artifact docs/prd/xml-spec-graph.md` -> 1 (line 293: `python3 scripts/gen_trace_artifact.py` writes `docs/prd/evidence/AUG-136-trace.json`). Byte stability independently confirmed: `python3 scripts/gen_trace_artifact.py --out /tmp/fresh.json` then `cmp /tmp/fresh.json docs/prd/evidence/AUG-136-trace.json` -> BYTE-IDENTICAL.\n  \u2713 The artifact test bites on rot. PROOF: `python3 -m pytest tests/test_trace_artifact.py -q -k \"edited_artifact or unresolvable_pointer\"` prints 10 passed and exits 0. FAILIF: those arms error, skip, or pass vacuously.: `-k \"edited_artifact or unresolvable_pointer\"` -> EXIT=0, `10 passed, 33 deselected in 1.07s`. `--collect-only` shows the 10 are real arms: test_check_mode_fails_on_an_edited_artifact plus 9 parametrizations of test_the_generator_refuses_an_unresolvable_pointer (--row AUG-999999, --spec unknown id, --spec stale file, --test missing file, --test bad selector, --doc, --evidence, --commit, --wave). Not vacuous: each asserts rc==2 and a typed `spec error (<code>)` in stderr (tests/test_trace_artifact.py:352-372), and I reproduced the behaviour by hand \u2014 `--row AUG-999999` -> rc=2 `spec error (unknown-trace-row)`.\n  \u2713 The trace artifact is wired into the gate. PROOF: `grep -c test_trace_artifact tests/gate.sh` prints 2. FAILIF: the count is below 2, i.e. the file runs in no gate arm.: `grep -c test_trace_artifact tests/gate.sh` -> 2: line 201 (comment naming the AUG-141 artifact) and line 206, the actual `python3 -m pytest ... tests/test_trace_artifact.py ...` arm. tests/test_trace_artifact.py:487-509 (test_gate_arm_runs_this_file) additionally asserts the file is in the gate's pytest arm and that every file named there exists.\n  \u2713 The artifact names a real board row and a git-tracked test, not a fixture. PROOF: `jq -r .row docs/prd/evidence/AUG-136-trace.json` prints AUG-136, `grep -c \"AUG-136\" .coding-hermes/board/tasks.jsonl` prints at least 1, and `git ls-files --error-unmatch \"$(jq -r .test docs/prd/evidence/AUG-136-trace.json)\"` exits 0. FAILIF: the row is absent from the tracked board, the cited test path is untracked, or the artifact cites a fixture instead of a real row id.: `jq -r .row` -> `AUG-136`; `grep -c \"AUG-136\" .coding-hermes/board/tasks.jsonl` -> 7 (line 230 is the real row `{\"status\": \"complete\", \"id\": \"AUG-136\", ...}`); `git ls-files --error-unmatch tests/test_spec_corpus_view.py` -> prints the path, EXIT=0. The cited test is a real suite file, not a fixture (tests/fixtures/ is a separate directory).\n  \u2713 Every chain pointer resolves or carries an explicit none-reason. PROOF: `python3 -m pytest tests/test_trace_artifact.py::test_every_pointer_resolves -q` prints 11 passed, and the committed artifact contains no bare \"none\" value. FAILIF: any pointer parametrization fails, or a field reads a bare none with no reason.: `pytest tests/test_trace_artifact.py::test_every_pointer_resolves -q` -> EXIT=0, `11 passed in 0.20s`; verbose run shows all 11 params PASSED (row, spec, wave, test, doc, prompt, evidence, witness, verdict, commit, memory). Bare-none check: `jq -r 'to_entries[] | select(.value==\"none\") | .key'` and `jq -r '.marker[] | select(endswith(\"=none\"))'` both return nothing; every absence reads `none:<reason>` (e.g. wave=none:no-wave-record, verdict=none:no-gitreins-verdict). The generator also refuses a bare none: `--wave none` -> rc=2 `spec error (unexplained-absent-field): wave=none gives no reason`.\n  \u2713 The generator's --check actually detects drift (a mutated artifact is refused with nonzero exit), not just prints \"matches\".: Mutated a copy of the artifact (evidence -> docs/prd/xml-spec-graph-proofs.json) and ran `scripts/gen_trace_artifact.py --check --out /tmp/stale.json`: rc=1, stderr `stale trace artifact: stale.json differs from a fresh build` + `evidence: on disk 'docs/prd/xml-spec-graph-proofs.json' != fresh 'docs/SPEC-CORPUS-VIEW.md'` (scripts/gen_trace_artifact.py:390-410).\n  \u2713 The artifact's marker round-trips through the shipped parser (auger.parse_trace_marker) and covers all 11 SPEC_TRACE_FIELDS.: Ran `auger.parse_trace_marker(\" \".join(artifact['marker']))`: `parsed keys: 11 expected: 11`, `set equal: True`, `values agree: True` (auger.py:11894 SPEC_TRACE_FIELDS, auger.py:9694 parse_trace_marker). Also covered by test_the_marker_parses_through_the_shipped_parser and test_the_shipped_checker_accepts_the_marker, both green in the 43-passed run.\n  \u2713 The generator refuses a bare `none` value and an unresolvable pointer with a typed error and writes no artifact.: `--wave none --out /tmp/bad3.json` -> rc=2, `spec error (unexplained-absent-field): wave=none gives no reason \u2014 write wave=none:<reason>`, and `ls /tmp/bad3.json` -> No such file. `--row AUG-999999 --out /tmp/bad2.json` -> rc=2 `spec error (unknown-trace-row)` and no file. Refusal path returns before the write (scripts/gen_trace_artifact.py:381-386).\n  \u2713 The cited commit pointer is reachable from HEAD (ancestor), so the trace is followable from the published tip.: `git cat-file -e 3f64a4e^{commit}` EXIT=0 and `git merge-base --is-ancestor 3f64a4e HEAD` EXIT=0; the artifact's resolution map records `commit: git-commit 3f64a4e (ancestor of HEAD)`. Enforced by test_the_commit_pointer_is_an_ancestor_of_head (green in the 43-passed run).\n  \u2713 The artifact is byte-identical to a fresh build (committed bytes == generator output), i.e. no hand-editing.: `python3 scripts/gen_trace_artifact.py --out /tmp/fresh.json` (EXIT=0) then `cmp /tmp/fresh.json docs/prd/evidence/AUG-136-trace.json` -> BYTE-IDENTICAL; `--check --out /tmp/fresh.json` -> rc=0 `matches a fresh build ... (1487 bytes)`. Also asserted by test_a_double_build_is_byte_identical.\nAll six given criteria and all five derived criteria pass with fresh command output: 43/43 artifact tests green, --check byte-stable and drift-detecting, 10 rot arms and 11 pointer params green, gate wiring count 2, and the artifact cites real board row AUG-136 plus a git-tracked test with every absence carrying an explicit none:<reason>. [uncovered failure paths: failure mode 0 (The artifact's cited commit (3f64a4e) is a fixed historical SHA; if history is rewritten or the commit is dropped, the trace stops resolving from the tip): detected_by cites tests/test_trace_artifact.py::test_the_commit_pointer_is_an_ancestor_of_head but no tool result in this run shows it ran \u2014 uncovered failure path; failure mode 1 (The artifact is pinned to board row AUG-136 and test tests/test_spec_corpus_view.py; renaming that test or pruning the board row rots the sample): detected_by cites tests/test_trace_artifact.py::test_the_test_pointer_is_tracked_by_git but no tool result in this run shows it ran \u2014 uncovered failure path]",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 The artifact test file is green on this tree. PROOF: `python3 -m pytest tests/test_trace_artifact.py -q` prints 43 passed and exits 0. FAILIF: fewer than 43 passed, any failure or error, or a nonzero exit.: Ran in /home/kara/auger: `python3 -m pytest tests/test_trace_artifact.py -q` -> EXIT=0, output tail `43 passed in 4.64s`; `--co` confirms `43 tests collected`; `-rs` run shows no skips (`43 passed in 2.92s`).\n  \u2713 Regeneration is documented and byte-stable. PROOF: `python3 scripts/gen_trace_artifact.py --check` exits 0 and prints \"matches a fresh build\", and `grep -c gen_trace_artifact docs/prd/xml-spec-graph.md` prints 1. FAILIF: a nonzero exit, a regenerated artifact that differs from the committed bytes, or the command named in no doc (count 0).: `python3 scripts/gen_trace_artifact.py --check` -> EXIT=0, stdout `trace artifact matches a fresh build: docs/prd/evidence/AUG-136-trace.json (1487 bytes)`. `grep -c gen_trace_artifact docs/prd/xml-spec-graph.md` -> 1 (line 293: `python3 scripts/gen_trace_artifact.py` writes `docs/prd/evidence/AUG-136-trace.json`). Byte stability independently confirmed: `python3 scripts/gen_trace_artifact.py --out /tmp/fresh.json` then `cmp /tmp/fresh.json docs/prd/evidence/AUG-136-trace.json` -> BYTE-IDENTICAL.\n  \u2713 The artifact test bites on rot. PROOF: `python3 -m pytest tests/test_trace_artifact.py -q -k \"edited_artifact or unresolvable_pointer\"` prints 10 passed and exits 0. FAILIF: those arms error, skip, or pass vacuously.: `-k \"edited_artifact or unresolvable_pointer\"` -> EXIT=0, `10 passed, 33 deselected in 1.07s`. `--collect-only` shows the 10 are real arms: test_check_mode_fails_on_an_edited_artifact plus 9 parametrizations of test_the_generator_refuses_an_unresolvable_pointer (--row AUG-999999, --spec unknown id, --spec stale file, --test missing file, --test bad selector, --doc, --evidence, --commit, --wave). Not vacuous: each asserts rc==2 and a typed `spec error (<code>)` in stderr (tests/test_trace_artifact.py:352-372), and I reproduced the behaviour by hand \u2014 `--row AUG-999999` -> rc=2 `spec error (unknown-trace-row)`.\n\n\u2026 [4094 chars omitted \u2014 7 line(s)] \u2026\n  \u2713 The artifact is byte-identical to a fresh build (committed bytes == generator output), i.e. no hand-editing.: `python3 scripts/gen_trace_artifact.py --out /tmp/fresh.json` (EXIT=0) then `cmp /tmp/fresh.json docs/prd/evidence/AUG-136-trace.json` -> BYTE-IDENTICAL; `--check --out /tmp/fresh.json` -> rc=0 `matches a fresh build ... (1487 bytes)`. Also asserted by test_a_double_build_is_byte_identical.\nAll six given criteria and all five derived criteria pass with fresh command output: 43/43 artifact tests green, --check byte-stable and drift-detecting, 10 rot arms and 11 pointer params green, gate wiring count 2, and the artifact cites real board row AUG-136 plus a git-tracked test with every absence carrying an explicit none:<reason>. [uncovered failure paths: failure mode 0 (The artifact's cited commit (3f64a4e) is a fixed historical SHA; if history is rewritten or the commit is dropped, the trace stops resolving from the tip): detected_by cites tests/test_trace_artifact.py::test_the_commit_pointer_is_an_ancestor_of_head but no tool result in this run shows it ran \u2014 uncovered failure path; failure mode 1 (The artifact is pinned to board row AUG-136 and test tests/test_spec_corpus_view.py; renaming that test or pruning the board row rots the sample): detected_by cites tests/test_trace_artifact.py::test_the_test_pointer_is_tracked_by_git but no tool result in this run shows it ran \u2014 uncovered failure path]",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "The artifact test file is green on this tree. PROOF: `python3 -m pytest tests/test_trace_artifact.py -q` prints 43 passed and exits 0. FAILIF: fewer than 43 passed, any failure or error, or a nonzero exit.",
+                "status": "PASS",
+                "detail": "Ran in /home/kara/auger: `python3 -m pytest tests/test_trace_artifact.py -q` -> EXIT=0, output tail `43 passed in 4.64s`; `--co` confirms `43 tests collected`; `-rs` run shows no skips (`43 passed in 2.92s`)."
+              },
+              {
+                "criterion": "Regeneration is documented and byte-stable. PROOF: `python3 scripts/gen_trace_artifact.py --check` exits 0 and prints \"matches a fresh build\", and `grep -c gen_trace_artifact docs/prd/xml-spec-graph.md` prints 1. FAILIF: a nonzero exit, a regenerated artifact that differs from the committed bytes, or the command named in no doc (count 0).",
+                "status": "PASS",
+                "detail": "`python3 scripts/gen_trace_artifact.py --check` -> EXIT=0, stdout `trace artifact matches a fresh build: docs/prd/evidence/AUG-136-trace.json (1487 bytes)`. `grep -c gen_trace_artifact docs/prd/xml-spec-graph.md` -> 1 (line 293: `python3 scripts/gen_trace_artifact.py` writes `docs/prd/evidence/AUG-136-trace.json`). Byte stability independently confirmed: `python3 scripts/gen_trace_artifact.py --out /tmp/fresh.json` then `cmp /tmp/fresh.json docs/prd/evidence/AUG-136-trace.json` -> BYTE-IDENTICAL."
+              },
+              {
+                "criterion": "The artifact test bites on rot. PROOF: `python3 -m pytest tests/test_trace_artifact.py -q -k \"edited_artifact or unresolvable_pointer\"` prints 10 passed and exits 0. FAILIF: those arms error, skip, or pass vacuously.",
+                "status": "PASS",
+                "detail": "`-k \"edited_artifact or unresolvable_pointer\"` -> EXIT=0, `10 passed, 33 deselected in 1.07s`. `--collect-only` shows the 10 are real arms: test_check_mode_fails_on_an_edited_artifact plus 9 parametrizations of test_the_generator_refuses_an_unresolvable_pointer (--row AUG-999999, --spec unknown id, --spec stale file, --test missing file, --test bad selector, --doc, --evidence, --commit, --wave). Not vacuous: each asserts rc==2 and a typed `spec error (<code>)` in stderr (tests/test_trace_artifact.py:352-372), and I reproduced the behaviour by hand \u2014 `--row AUG-999999` -> rc=2 `spec error (unknown-trace-row)`."
+              },
+              {
+                "criterion": "The trace artifact is wired into the gate. PROOF: `grep -c test_trace_artifact tests/gate.sh` prints 2. FAILIF: the count is below 2, i.e. the file runs in no gate arm.",
+                "status": "PASS",
+                "detail": "`grep -c test_trace_artifact tests/gate.sh` -> 2: line 201 (comment naming the AUG-141 artifact) and line 206, the actual `python3 -m pytest ... tests/test_trace_artifact.py ...` arm. tests/test_trace_artifact.py:487-509 (test_gate_arm_runs_this_file) additionally asserts the file is in the gate's pytest arm and that every file named there exists."
+              },
+              {
+                "criterion": "The artifact names a real board row and a git-tracked test, not a fixture. PROOF: `jq -r .row docs/prd/evidence/AUG-136-trace.json` prints AUG-136, `grep -c \"AUG-136\" .coding-hermes/board/tasks.jsonl` prints at least 1, and `git ls-files --error-unmatch \"$(jq -r .test docs/prd/evidence/AUG-136-trace.json)\"` exits 0. FAILIF: the row is absent from the tracked board, the cited test path is untracked, or the artifact cites a fixture instead of a real row id.",
+                "status": "PASS",
+                "detail": "`jq -r .row` -> `AUG-136`; `grep -c \"AUG-136\" .coding-hermes/board/tasks.jsonl` -> 7 (line 230 is the real row `{\"status\": \"complete\", \"id\": \"AUG-136\", ...}`); `git ls-files --error-unmatch tests/test_spec_corpus_view.py` -> prints the path, EXIT=0. The cited test is a real suite file, not a fixture (tests/fixtures/ is a separate directory)."
+              },
+              {
+                "criterion": "Every chain pointer resolves or carries an explicit none-reason. PROOF: `python3 -m pytest tests/test_trace_artifact.py::test_every_pointer_resolves -q` prints 11 passed, and the committed artifact contains no bare \"none\" value. FAILIF: any pointer parametrization fails, or a field reads a bare none with no reason.",
+                "status": "PASS",
+                "detail": "`pytest tests/test_trace_artifact.py::test_every_pointer_resolves -q` -> EXIT=0, `11 passed in 0.20s`; verbose run shows all 11 params PASSED (row, spec, wave, test, doc, prompt, evidence, witness, verdict, commit, memory). Bare-none check: `jq -r 'to_entries[] | select(.value==\"none\") | .key'` and `jq -r '.marker[] | select(endswith(\"=none\"))'` both return nothing; every absence reads `none:<reason>` (e.g. wave=none:no-wave-record, verdict=none:no-gitreins-verdict). The generator also refuses a bare none: `--wave none` -> rc=2 `spec error (unexplained-absent-field): wave=none gives no reason`."
+              },
+              {
+                "criterion": "The generator's --check actually detects drift (a mutated artifact is refused with nonzero exit), not just prints \"matches\".",
+                "status": "PASS",
+                "detail": "Mutated a copy of the artifact (evidence -> docs/prd/xml-spec-graph-proofs.json) and ran `scripts/gen_trace_artifact.py --check --out /tmp/stale.json`: rc=1, stderr `stale trace artifact: stale.json differs from a fresh build` + `evidence: on disk 'docs/prd/xml-spec-graph-proofs.json' != fresh 'docs/SPEC-CORPUS-VIEW.md'` (scripts/gen_trace_artifact.py:390-410).",
+                "derived": true
+              },
+              {
+                "criterion": "The artifact's marker round-trips through the shipped parser (auger.parse_trace_marker) and covers all 11 SPEC_TRACE_FIELDS.",
+                "status": "PASS",
+                "detail": "Ran `auger.parse_trace_marker(\" \".join(artifact['marker']))`: `parsed keys: 11 expected: 11`, `set equal: True`, `values agree: True` (auger.py:11894 SPEC_TRACE_FIELDS, auger.py:9694 parse_trace_marker). Also covered by test_the_marker_parses_through_the_shipped_parser and test_the_shipped_checker_accepts_the_marker, both green in the 43-passed run.",
+                "derived": true
+              },
+              {
+                "criterion": "The generator refuses a bare `none` value and an unresolvable pointer with a typed error and writes no artifact.",
+                "status": "PASS",
+                "detail": "`--wave none --out /tmp/bad3.json` -> rc=2, `spec error (unexplained-absent-field): wave=none gives no reason \u2014 write wave=none:<reason>`, and `ls /tmp/bad3.json` -> No such file. `--row AUG-999999 --out /tmp/bad2.json` -> rc=2 `spec error (unknown-trace-row)` and no file. Refusal path returns before the write (scripts/gen_trace_artifact.py:381-386).",
+                "derived": true
+              },
+              {
+                "criterion": "The cited commit pointer is reachable from HEAD (ancestor), so the trace is followable from the published tip.",
+                "status": "PASS",
+                "detail": "`git cat-file -e 3f64a4e^{commit}` EXIT=0 and `git merge-base --is-ancestor 3f64a4e HEAD` EXIT=0; the artifact's resolution map records `commit: git-commit 3f64a4e (ancestor of HEAD)`. Enforced by test_the_commit_pointer_is_an_ancestor_of_head (green in the 43-passed run).",
+                "derived": true
+              },
+              {
+                "criterion": "The artifact is byte-identical to a fresh build (committed bytes == generator output), i.e. no hand-editing.",
+                "status": "PASS",
+                "detail": "`python3 scripts/gen_trace_artifact.py --out /tmp/fresh.json` (EXIT=0) then `cmp /tmp/fresh.json docs/prd/evidence/AUG-136-trace.json` -> BYTE-IDENTICAL; `--check --out /tmp/fresh.json` -> rc=0 `matches a fresh build ... (1487 bytes)`. Also asserted by test_a_double_build_is_byte_identical.",
+                "derived": true
+              }
+            ],
+            "summary": "All six given criteria and all five derived criteria pass with fresh command output: 43/43 artifact tests green, --check byte-stable and drift-detecting, 10 rot arms and 11 pointer params green, gate wiring count 2, and the artifact cites real board row AUG-136 plus a git-tracked test with every absence carrying an explicit none:<reason>. [uncovered failure paths: failure mode 0 (The artifact's cited commit (3f64a4e) is a fixed historical SHA; if history is rewritten or the commit is dropped, the trace stops resolving from the tip): detected_by cites tests/test_trace_artifact.py::test_the_commit_pointer_is_an_ancestor_of_head but no tool result in this run shows it ran \u2014 uncovered failure path; failure mode 1 (The artifact is pinned to board row AUG-136 and test tests/test_spec_corpus_view.py; renaming that test or pruning the board row rots the sample): detected_by cites tests/test_trace_artifact.py::test_the_test_pointer_is_tracked_by_git but no tool result in this run shows it ran \u2014 uncovered failure path]",
+            "provenance": {
+              "model": "deepseek-v4-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "deepseek-v4-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-141\"}",
+          "exit_code": 0,
+          "output_sha": "e2a7a195fe8dbab12a1aa01bbe4f63d6b890633d1dc6a17df04c02a18b301bef"
+        },
+        {
+          "tool": "run_command",
+          "command": "ls -la && cat .gitreins/config.yaml 2>/dev/null",
+          "exit_code": 0,
+          "output_sha": "21d71cdd79ecc04e266848fd54ec2378cb2a186c5a322a7e7481030d8f5812d6"
+        },
+        {
+          "tool": "run_command",
+          "command": "ls -la docs/prd/evidence/ 2>/dev/null; echo ---; ls -la scripts/; echo ---; ls -la tests/ | head -50",
+          "exit_code": 0,
+          "output_sha": "1b8d5971a22ae656088a3663d82f77e11bc1f5acc18935a5f6de6ce3b29bb745"
+        },
+        {
+          "tool": "run_command",
+          "command": "cat docs/prd/evidence/AUG-136-trace.json 2>/dev/null",
+          "exit_code": 0,
+          "output_sha": "55f73c3edc6a752d2c02e670c321402e5e8d343da4f18f139c52441c8ea0161e"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara 2>/dev/null; python3 -m pytest tests/test_trace_artifact.py -q 2>&1 | tail -20; echo \"EXIT=$?\"",
+          "exit_code": 0,
+          "output_sha": "a98c9732bdd5cf74206090b60154115e3cb288d926bbc609e8844b52db4dc840"
+        },
+        {
+          "tool": "run_command",
+          "command": "python3 scripts/gen_trace_artifact.py --check; echo \"EXIT=$?\"; echo ---; grep -c gen_trace_artifact docs/prd/xml-spec-graph.md",
+          "exit_code": 0,
+          "output_sha": "6062c6e71615f9c8c305cffe9fb2eeff138de5fc9a48aaec7d01a36fde5820dc"
+        },
+        {
+          "tool": "run_command",
+          "command": "pwd; python3 -m pytest tests/test_trace_artifact.py -q 2>&1 | tail -20; echo \"EXIT=${PIPESTATUS[0]}\"",
+          "exit_code": 2,
+          "output_sha": "42665470d5039a230225554fe4a2467951d2b780c4c7c5fcfc442e4780faceac"
+        },
+        {
+          "tool": "run_command",
+          "command": "python3 -m pytest tests/test_trace_artifact.py -q > /tmp/t1.txt 2>&1; echo \"EXIT=$?\"; tail -3 /tmp/t1.txt",
+          "exit_code": 0,
+          "output_sha": "162d375bc01e9e247724b5f1474e97407dad53334436d88b8eae9fbcdae08ea5"
+        },
+        {
+          "tool": "run_command",
+          "command": "python3 -m pytest tests/test_trace_artifact.py -q -k \"edited_artifact or unresolvable_pointer\" > /tmp/t2.txt 2>&1; echo \"EXIT=$?\"; tail -5 /tmp/t2.txt; echo ---; python3 -m pytest tests/test_trace_artifact.py::test_every_pointer_resolves -q > /tmp/t3.txt 2>&1; echo \"EXIT=$?\"; tail -5 /tmp/t3.txt",
+          "exit_code": 0,
+          "output_sha": "5869319e47c8f745c2ff7e7d77b458738feeeb96504d286f375444977af20c70"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `python3 -m pytest tests/test_trace_artifact.py -q` -> EXIT=0, \\\"43 passed in 4.64s\\\"\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "b00a0515eabb330428ea39f779b937b0242a971a3f4125fb9a2e3aa89a5bc78a"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `python3 scripts/gen_trace_artifact.py --check` -> EXIT=0, \\\"trace artifact matches a fresh build: docs/prd/evidence/AUG-136-trace.json (1487 bytes)\\\"; `grep -c gen_trace_artifact docs/prd/xml-spec-graph.md` -> 1\", \"key\": \"verified_1\"}",
+          "exit_code": 0,
+          "output_sha": "f873333bd123972013ae1bfc1785eb2711e1f8b34171856f698478d2f0189467"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `-k \\\"edited_artifact or unresolvable_pointer\\\"` -> EXIT=0, \\\"10 passed, 33 deselected in 3.36s\\\"\", \"key\": \"verified_2\"}",
+          "exit_code": 0,
+          "output_sha": "4db28edeae80f71f57eeb5f1dcdc91a29aa35d4d298f02c5fe74f26d229b79da"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `pytest tests/test_trace_artifact.py::test_every_pointer_resolves -q` -> EXIT=0, \\\"11 passed in 0.20s\\\"; artifact fields all carry \\\"none:<reason>\\\" form (wave=none:no-wave-record, prompt=none:no-committed-prompt, witness=none:no-independent-witness, verdict=none:no-gitreins-verdict, memory=none:no-memory-record)\", \"key\": \"verified_5\"}",
+          "exit_code": 0,
+          "output_sha": "b5f52663794bf57fb75117ce9a48eb3fe091dd51cc50a7000c25b4b4d22fd56f"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -c test_trace_artifact tests/gate.sh; echo ---; grep -n test_trace_artifact tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "f54d65ebbf2a1ea9ca21e645518478a9d4f0ccc185a899f2b4087bab3d87d48a"
+        },
+        {
+          "tool": "run_command",
+          "command": "jq -r .row docs/prd/evidence/AUG-136-trace.json; echo ---; grep -c \"AUG-136\" .coding-hermes/board/tasks.jsonl; echo ---; git ls-files --error-unmatch \"$(jq -r .test docs/prd/evidence/AUG-136-trace.json)\"; echo \"EXIT=$?\"",
+          "exit_code": 0,
+          "output_sha": "82f8ebc129abbbd06aaf8fcdd0942df2319ea48b54cf3c09f9b0b2654332905f"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `grep -c test_trace_artifact tests/gate.sh` -> 2 (line 201 comment, line 206 pytest invocation includes tests/test_trace_artifact.py)\", \"key\": \"verified_3\"}",
+          "exit_code": 0,
+          "output_sha": "e539e5abcb308ca8c7ddff82d131df3f4cfd4a8f5742a25cb1f4012ec9fd0381"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: jq -r .row -> AUG-136; grep -c \\\"AUG-136\\\" .coding-hermes/board/tasks.jsonl -> 7; git ls-files --error-unmatch tests/test_spec_corpus_view.py -> tracked, EXIT=0\", \"key\": \"verified_4\"}",
+          "exit_code": 0,
+          "output_sha": "5c0e5b22acbd89204bd467d92049f421c036780ed78e31e1ae3ddb227e92e7b6"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"tests/test_trace_artifact.py\"}",
+          "exit_code": 0,
+          "output_sha": "242c486ad4cb894a56bad0d3ccf3bed5dc9b13702d7b3afe0f921439b280fe8c"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 120, \"offset\": 400, \"path\": \"tests/test_trace_artifact.py\"}",
+          "exit_code": 0,
+          "output_sha": "caf7024094d1be735054fcdb79c2678f2fa53b9e4d99b9b95e0e7a990202104c"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"none\" docs/prd/evidence/AUG-136-trace.json; echo \"--- bare none check:\"; jq -r 'to_entries[] | select(.value==\"none\") | .key' docs/prd/evidence/AUG-136-trace.json; echo \"(end)\"; echo ---; jq -r '.marker[] | select(endswith(\"=none\"))' docs/prd/evidence/AUG-136-trace.json; echo \"(end marker)\"",
+          "exit_code": 0,
+          "output_sha": "e334c9ee19fe461cc5e28dd7c5011b7a2585fb7f227a2c3a4908e36d006fe810"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"gen_trace_artifact\" docs/prd/xml-spec-graph.md; echo ---; git status --porcelain; echo \"--- git log:\"; git log --oneline -3",
+          "exit_code": 0,
+          "output_sha": "44f53d9b39522577d0ee9fc018539dc8734be8343f5f3720eeb060ca20a91e68"
+        },
+        {
+          "tool": "run_command",
+          "command": "git log --oneline -8 -- docs/prd/evidence/AUG-136-trace.json scripts/gen_trace_artifact.py tests/test_trace_artifact.py; echo ---; git log --oneline -5 -- tests/gate.sh docs/prd/xml-spec-graph.md",
+          "exit_code": 0,
+          "output_sha": "90b68071bec1524b24efca70aa84c1441722af29a59453d958aa9adbd8c1583a"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"AUG-136\" .coding-hermes/board/tasks.jsonl | head -3 | cut -c1-400",
+          "exit_code": 0,
+          "output_sha": "b7757ec00a00feb55b56000e316ca796ab357091f0e83ed8aca5df5d93f79890"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show --stat 2269101 | head -30",
+          "exit_code": 0,
+          "output_sha": "25f9ec87912672c6213b43a4857af14a63fa91e7a532486cb3246c978b41f326"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n 280,310p docs/prd/xml-spec-graph.md",
+          "exit_code": 0,
+          "output_sha": "19175ed6741c6f815f67475354a2d2ffeaae19490717696a45d81344fb423a48"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"def main\\|--check\\|--out\\|--row\\|--spec\\|--test\\|--doc\\|--evidence\\|--commit\\|--wave\\|--witness\\|--memory\\|--verdict\\|--prompt\\|argparse\" scripts/gen_trace_artifact.py | head -60",
+          "exit_code": 0,
+          "output_sha": "9b68895de59782390fd6a265b602fefe8ef345160e6e5f666da9088b08d1fdf6"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 120, \"offset\": 320, \"path\": \"scripts/gen_trace_artifact.py\"}",
+          "exit_code": 0,
+          "output_sha": "3bde02390307c0baf5d4f3d959a1ca7a18a472c979d0c06d77d5b2c0f067eb02"
+        },
+        {
+          "tool": "run_command",
+          "command": "python3 scripts/gen_trace_artifact.py --out /tmp/fresh.json >/dev/null 2>&1; echo \"gen EXIT=$?\"; cmp /tmp/fresh.json docs/prd/evidence/AUG-136-trace.json && echo \"BYTE-IDENTICAL\"; echo ---; python3 scripts/gen_trace_artifact.py --check --out /tmp/fresh.json; echo \"check EXIT=$?\"",
+          "exit_code": 0,
+          "output_sha": "fdfe4cc8c353de17c75418338450655a65e388d028e9d77e73535ea61a5439a4"
+        },
+        {
+          "tool": "run_command",
+          "command": "python3 scripts/gen_trace_artifact.py --wave none --out /tmp/bad.json; echo \"EXIT=$?\"; ls /tmp/bad.json 2>&1; echo ---; python3 scripts/gen_trace_artifact.py --row AUG-999999 --out /tmp/bad2.json; echo \"EXIT=$?\"",
+          "exit_code": 0,
+          "output_sha": "8bd9222312127e06353339f88f11b16791efb4e9c4d154f6f1bfc6a410782c3b"
+        },
+        {
+          "tool": "run_command",
+          "command": "ls -la /tmp/bad.json; cat /tmp/bad.json; echo \"---\"; ls -la /tmp/bad2.json 2>&1",
+          "exit_code": 2,
+          "output_sha": "22796d3d97d9cc3187505d8b0ee4253b0a10aa28dcebe8a666523957282058fd"
+        },
+        {
+          "tool": "run_command",
+          "command": "rm -f /tmp/bad3.json; python3 scripts/gen_trace_artifact.py --wave none --out /tmp/bad3.json; echo \"EXIT=$?\"; ls -la /tmp/bad3.json 2>&1",
+          "exit_code": 2,
+          "output_sha": "9922994e4f4786e5892070d9be71a751c7a69ba9fb7de0472cd5fe8d8c7ceab4"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"SPEC_TRACE_FIELDS\" auger.py | head -5; echo ---; grep -n \"def parse_trace_marker\" -A 25 auger.py | head -40",
+          "exit_code": 0,
+          "output_sha": "7c30df8139e33f50be392a3525bfef38188b11969c87a8c202d40da45c3dad5f"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 20, \"offset\": 11890, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "47ffa09b9a7756d1cf5b52af54cc60f9e22465933aeb0a552de32ed7a45e135f"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Derived criteria:\\nd0: The generator's --check actually detects drift (a mutated artifact is refused with nonzero exit), not just prints \\\"matches\\\".\\nd1: The artifact's marker round-trips through the shipped parser (auger.parse_trace_marker) and covers all 11 SPEC_TRACE_FIELDS.\\nd2: The generator refuses a bare `none` value and an unresolvable pointer with a typed error and writes no artifact.\\nd3: The cited commit pointer is reachable from HEAD (ancestor), so the trace is followable from the published tip.\\nd4: The artifact is byte-identical to a fresh build (committed bytes == generator output), i.e. no hand-editing.\", \"key\": \"derived\"}",
+          "exit_code": 0,
+          "output_sha": "10bc58afd66f709df1451af30925a249265837ae3fe70f0767087ab6677821c2"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && python3 - <<'EOF'\nimport json, subprocess, sys\nart = json.load(open('docs/prd/evidence/AUG-136-trace.json'))\nart['evidence'] = 'docs/prd/xml-spec-graph-proofs.json'\nopen('/tmp/stale.json','w').write(json.dumps(art, indent=2, sort_keys=True)+\"\\n\")\nr = subprocess.run([sys.executable,'scripts/gen_trace_artifact.py','--check','--out','/tmp/stale.json'],capture_output=True,text=True)\nprint(\"rc=\",r.returncode); print(\"OUT:\",r.stdout); print(\"ERR:\",r.stderr)\nEOF",
+          "exit_code": 0,
+          "output_sha": "892803c809730380b8216c6b3d391f709c2b3d12aaa38c8a5c5bd3e79523565e"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && python3 - <<'EOF'\nimport json, sys\nsys.path.insert(0,'.')\nimport auger\nart = json.load(open('docs/prd/evidence/AUG-136-trace.json'))\nrendered = \" \".join(art['marker'])\nfields = auger.parse_trace_marker(rendered)\nprint(\"parsed keys:\", len(fields), \"expected:\", len(auger.SPEC_TRACE_FIELDS))\nprint(\"set equal:\", set(fields)==set(auger.SPEC_TRACE_FIELDS))\nprint(\"values agree:\", all(fields[k]==art[k] for k in auger.SPEC_TRACE_FIELDS))\nEOF\necho ---; git merge-base --is-ancestor 3f64a4e HEAD; echo \"ancestor EXIT=$?\"; git cat-file -e 3f64a4e^{commit}; echo \"cat-file EXIT=$?\"",
+          "exit_code": 0,
+          "output_sha": "ed4bce2cbae9315ef4750d8a1f80a4992518a23ef2e663fb5a3ebf56fdeab4da"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: mutated artifact (evidence field changed) -> `--check` rc=1, stderr \\\"stale trace artifact: stale.json differs from a fresh build / evidence: on disk 'docs/prd/xml-spec-graph-proofs.json' != fresh 'docs/SPEC-CORPUS-VIEW.md'\\\"\", \"key\": \"verified_derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "9cb03e050e24398c8263cc79429bf22b4e39f5dd8aea4f0327abd48ebdfb2788"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: auger.parse_trace_marker(\\\" \\\".join(marker)) -> 11 keys, set equal True, values agree True (auger.py:11894 SPEC_TRACE_FIELDS, auger.py:9694 parse_trace_marker)\", \"key\": \"verified_derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "275f79de21b1e9bf687b698d485f98a82d36911e84e51c2767c5bd9c12c0f5a2"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `--wave none` -> rc=2 \\\"spec error (unexplained-absent-field): wave=none gives no reason\\\"; `--row AUG-999999` -> rc=2 \\\"spec error (unknown-trace-row)\\\"; no output file written in either case (ls: No such file)\", \"key\": \"verified_derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "9586628db75a3dd11ca02d6e08203d72544bd3eb8ca612d06c343fba9ea390ef"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `git merge-base --is-ancestor 3f64a4e HEAD` EXIT=0; `git cat-file -e 3f64a4e^{commit}` EXIT=0\", \"key\": \"verified_derived_3\"}",
+          "exit_code": 0,
+          "output_sha": "1dfac02b39d416a97d19c1600c4294bdb9a9c50936c9a9fa5bb10dbff5f1d9fe"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `python3 scripts/gen_trace_artifact.py --out /tmp/fresh.json` then `cmp /tmp/fresh.json docs/prd/evidence/AUG-136-trace.json` -> BYTE-IDENTICAL; `--check --out /tmp/fresh.json` rc=0 \\\"matches a fresh build ... (1487 bytes)\\\"\", \"key\": \"verified_derived_4\"}",
+          "exit_code": 0,
+          "output_sha": "cadd205669e3cdc343287bbeb30dd42421f8116b223c4d6d47438519e65c85c6"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && python3 -m pytest tests/test_trace_artifact.py -q -k \"edited_artifact or unresolvable_pointer\" -v 2>&1 | tail -15",
+          "exit_code": 0,
+          "output_sha": "24a376db3ca4bacd84648b7b87525afb6627f4431eb2f4c4928190a629d5f97d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && python3 -m pytest tests/test_trace_artifact.py::test_every_pointer_resolves -v 2>&1 | tail -16",
+          "exit_code": 0,
+          "output_sha": "b9a67b7c32706f3623c124f442c9d5141a5956def5d2813d4b742e1f80240903"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && python3 -m pytest tests/test_trace_artifact.py -q -k \"edited_artifact or unresolvable_pointer\" --collect-only 2>&1 | head -15",
+          "exit_code": 0,
+          "output_sha": "8101cfa0ca3fe72bc83078a814462fb87d0e9bd7a25ee466d10542935d5480c3"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && python3 -m pytest tests/test_trace_artifact.py -q -rs 2>&1 | tail -5; echo ---; python3 -m pytest tests/test_trace_artifact.py -q --co 2>&1 | tail -3",
+          "exit_code": 0,
+          "output_sha": "874245671bb101ba075fd627563fcb99385e75720c2d51467590d43704bddd0e"
+        }
+      ]
+    }
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [
+      {
+        "severity": "high",
+        "file": ".coding-hermes/board/events.jsonl",
+        "line": 569,
+        "detection": "appended event ids are lower than ids already present in the file, breaking monotonic id ordering",
+        "detail": "The four new task_created events carry ids 548-551 but are appended after existing events with ids 553, 554, 555, so the file's id sequence is no longer monotonic and any consumer that assumes append-order == id-order (or derives next id from last line) will misbehave."
+      },
+      {
+        "severity": "medium",
+        "file": ".coding-hermes/board/events.jsonl",
+        "line": 569,
+        "detection": "event timestamps are out of order relative to surrounding lines",
+        "detail": "The new events are timestamped 2026-11-12 00:39:50-51 but are inserted after events timestamped 07:13, 09:53 and 12:25, so the log is no longer chronologically ordered."
+      }
+    ],
+    "summary": "The change only appends board rows, but the new events.jsonl entries are inserted with ids (548-551) and timestamps that precede the lines above them, breaking the file's monotonic id and chronological ordering."
+  },
+  "summary": "Stage tier1: PASS\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 The artifact test file is green on this tree. PROOF: `python3 -m pytest tests/test_trace_artifact.py -q` prints 43 passed and exits 0. FAILIF: fewer than 43 passed, any failure or error, or a nonzero exit.: Ran in /home/kara/auger: `python3 -m pytest tests/test_trace_artifact.py -q` -> EXIT=0, output tail `43 passed in 4.64s`; `--co` confirms `43 tests collected`; `-rs` run shows no skips (`43 passed in 2.92s`).\n  \u2713 Regeneration is documented and byte-stable. PROOF: `python3 scripts/gen_trace_artifact.py --check` exits 0 and prints \"matches a fresh build\", and `grep -c gen_trace_artifact docs/prd/xml-spec-graph.md` prints 1. FAILIF: a nonzero exit, a regenerated artifact that differs from the committed bytes, or the command named in no doc (count 0).: `python3 scripts/gen_trace_artifact.py --check` -> EXIT=0, stdout `trace artifact matches a fresh build: docs/prd/evidence/AUG-136-trace.json (1487 bytes)`. `grep -c gen_trace_artifact docs/prd/xml-spec-graph.md` -> 1 (line 293: `python3 scripts/gen_trace_artifact.py` writes `docs/prd/evidence/AUG-136-trace.json`). Byte stability independently confirmed: `python3 scripts/gen_trace_artifact.py --out /tmp/fresh.json` then `cmp /tmp/fresh.json docs/prd/evidence/AUG-136-trace.json` -> BYTE-IDENTICAL.\n  \u2713 The artifact test bites on rot. PROOF: `python3 -m pytest tests/test_trace_artifact.py -q -k \"edited_artifact or unresolvable_pointer\"` prints 10 passed and exits 0. FAILIF: those arms error, skip, or pass vacuously.: `-k \"edited_artifact or unresolvable_pointer\"` -> EXIT=0, `10 passed, 33 deselected in 1.07s`. `--collect-only` shows the 10 are real arms: test_check_mode_fails_on_an_edited_artifact plus 9 parametrizations of test_the_generator_refuses_an_unresolvable_pointer (--row AUG-999999, --spec unknown id, --spec stale file, --test missing file, --test bad selector, --doc, --evidence, --commit, --wave). Not vacuous: each asserts rc==2 and a typed `spec error (<code>)` in stderr (tests/test_trace_artifact.py:352-372), and I reproduced the behaviour by hand \u2014 `--row AUG-999999` -> rc=2 `spec error (unknown-trace-row)`.\n  \u2713 The trace artifact is wired into the gate. PROOF: `grep -c test_trace_artifact tests/gate.sh` prints 2. FAILIF: the count is below 2, i.e. the file runs in no gate arm.: `grep -c test_trace_artifact tests/gate.sh` -> 2: line 201 (comment naming the AUG-141 artifact) and line 206, the actual `python3 -m pytest ... tests/test_trace_artifact.py ...` arm. tests/test_trace_artifact.py:487-509 (test_gate_arm_runs_this_file) additionally asserts the file is in the gate's pytest arm and that every file named there exists.\n  \u2713 The artifact names a real board row and a git-tracked test, not a fixture. PROOF: `jq -r .row docs/prd/evidence/AUG-136-trace.json` prints AUG-136, `grep -c \"AUG-136\" .coding-hermes/board/tasks.jsonl` prints at least 1, and `git ls-files --error-unmatch \"$(jq -r .test docs/prd/evidence/AUG-136-trace.json)\"` exits 0. FAILIF: the row is absent from the tracked board, the cited test path is untracked, or the artifact cites a fixture instead of a real row id.: `jq -r .row` -> `AUG-136`; `grep -c \"AUG-136\" .coding-hermes/board/tasks.jsonl` -> 7 (line 230 is the real row `{\"status\": \"complete\", \"id\": \"AUG-136\", ...}`); `git ls-files --error-unmatch tests/test_spec_corpus_view.py` -> prints the path, EXIT=0. The cited test is a real suite file, not a fixture (tests/fixtures/ is a separate directory).\n  \u2713 Every chain pointer resolves or carries an explicit none-reason. PROOF: `python3 -m pytest tests/test_trace_artifact.py::test_every_pointer_resolves -q` prints 11 passed, and the committed artifact contains no bare \"none\" value. FAILIF: any pointer parametrization fails, or a field reads a bare none with no reason.: `pytest tests/test_trace_artifact.py::test_every_pointer_resolves -q` -> EXIT=0, `11 passed in 0.20s`; verbose run shows all 11 params PASSED (row, spec, wave, test, doc, prompt, evidence, witness, verdict, commit, memory). Bare-none check: `jq -r 'to_entries[] | select(.value==\"none\") | .key'` and `jq -r '.marker[] | select(endswith(\"=none\"))'` both return nothing; every absence reads `none:<reason>` (e.g. wave=none:no-wave-record, verdict=none:no-gitreins-verdict). The generator also refuses a bare none: `--wave none` -> rc=2 `spec error (unexplained-absent-field): wave=none gives no reason`.\n  \u2713 The generator's --check actually detects drift (a mutated artifact is refused with nonzero exit), not just prints \"matches\".: Mutated a copy of the artifact (evidence -> docs/prd/xml-spec-graph-proofs.json) and ran `scripts/gen_trace_artifact.py --check --out /tmp/stale.json`: rc=1, stderr `stale trace artifact: stale.json differs from a fresh build` + `evidence: on disk 'docs/prd/xml-spec-graph-proofs.json' != fresh 'docs/SPEC-CORPUS-VIEW.md'` (scripts/gen_trace_artifact.py:390-410).\n  \u2713 The artifact's marker round-trips through the shipped parser (auger.parse_trace_marker) and covers all 11 SPEC_TRACE_FIELDS.: Ran `auger.parse_trace_marker(\" \".join(artifact['marker']))`: `parsed keys: 11 expected: 11`, `set equal: True`, `values agree: True` (auger.py:11894 SPEC_TRACE_FIELDS, auger.py:9694 parse_trace_marker). Also covered by test_the_marker_parses_through_the_shipped_parser and test_the_shipped_checker_accepts_the_marker, both green in the 43-passed run.\n  \u2713 The generator refuses a bare `none` value and an unresolvable pointer with a typed error and writes no artifact.: `--wave none --out /tmp/bad3.json` -> rc=2, `spec error (unexplained-absent-field): wave=none gives no reason \u2014 write wave=none:<reason>`, and `ls /tmp/bad3.json` -> No such file. `--row AUG-999999 --out /tmp/bad2.json` -> rc=2 `spec error (unknown-trace-row)` and no file. Refusal path returns before the write (scripts/gen_trace_artifact.py:381-386).\n  \u2713 The cited commit pointer is reachable from HEAD (ancestor), so the trace is followable from the published tip.: `git cat-file -e 3f64a4e^{commit}` EXIT=0 and `git merge-base --is-ancestor 3f64a4e HEAD` EXIT=0; the artifact's resolution map records `commit: git-commit 3f64a4e (ancestor of HEAD)`. Enforced by test_the_commit_pointer_is_an_ancestor_of_head (green in the 43-passed run).\n  \u2713 The artifact is byte-identical to a fresh build (committed bytes == generator output), i.e. no hand-editing.: `python3 scripts/gen_trace_artifact.py --out /tmp/fresh.json` (EXIT=0) then `cmp /tmp/fresh.json docs/prd/evidence/AUG-136-trace.json` -> BYTE-IDENTICAL; `--check --out /tmp/fresh.json` -> rc=0 `matches a fresh build ... (1487 bytes)`. Also asserted by test_a_double_build_is_byte_identical.\nAll six given criteria and all five derived criteria pass with fresh command output: 43/43 artifact tests green, --check byte-stable and drift-detecting, 10 rot arms and 11 pointer params green, gate wiring count 2, and the artifact cites real board row AUG-136 plus a git-tracked test with every absence carrying an explicit none:<reason>. [uncovered failure paths: failure mode 0 (The artifact's cited commit (3f64a4e) is a fixed historical SHA; if history is rewritten or the commit is dropped, the trace stops resolving from the tip): detected_by cites tests/test_trace_artifact.py::test_the_commit_pointer_is_an_ancestor_of_head but no tool result in this run shows it ran \u2014 uncovered failure path; failure mode 1 (The artifact is pinned to board row AUG-136 and test tests/test_spec_corpus_view.py; renaming that test or pruning the board row rots the sample): detected_by cites tests/test_trace_artifact.py::test_the_test_pointer_is_tracked_by_git but no tool result in this run shows it ran \u2014 uncovered failure path]\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-11-12T17:42:26.148291",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-12T17:42:26.176246+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 3471,
+        "truncated": false,
+        "source": "git show 3d1de3766c0e"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 12310,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-141"
+  }
+}
