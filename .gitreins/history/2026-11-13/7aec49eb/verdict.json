@@ -1,0 +1,662 @@
+{
+  "task_id": "AUG-146",
+  "task_title": "selection verbs skip an unparseable unrelated document and count it (row: one malformed file must not take the corpus offline)",
+  "task_criteria": [
+    "PROOF: `PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py::test_selection_skips_a_malformed_unrelated_document -q` prints `1 passed`. FAILIF: any other pass count, a failure, or a collection error.",
+    "PROOF: `PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py::test_corpus_wide_verbs_still_refuse_a_malformed_document -q` prints `1 passed`. FAILIF: any other pass count, a failure, or a collection error.",
+    "PROOF: `bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; d=/tmp/aug146-c3; rm -rf $d; mkdir -p $d; cp tests/fixtures/xml/specs/*.xml $d; printf \"<spec xmlns=\\\"urn:auger:spec:1\\\"><requirement id=\\\"B\\\">\" > $d/zz-broken.xml; python3 auger.py spec list $d --id AUG-REQ-030 >/tmp/aug146-c3.out 2>/tmp/aug146-c3.err; echo rc=$?; wc -l < /tmp/aug146-c3.out; grep -c unreadable /tmp/aug146-c3.err; python3 auger.py spec validate $d >/dev/null 2>&1; echo validate-rc=$?'` prints rc=0, then 1, then 1, then validate-rc=2. FAILIF: a nonzero list rc, zero or two selected rows, no 'unreadable' line on stderr, or a validate rc other than 2 (the defect must stay visible).",
+    "PROOF: `grep -c \"Corpus-wide vs selection-scoped\" docs/VERBS.md` prints 1. FAILIF: 0 \u2014 the selection-scoped vs corpus-wide rule is undocumented again.",
+    "PROOF: `bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --measure >/tmp/aug146-c4.json; echo rc=$?; grep -c documents_unreadable /tmp/aug146-c4.json'` prints rc=0 then 1. FAILIF: nonzero rc or no documents_unreadable counter in the measured report.",
+    "PROOF: `grep -c \"tests/test_xml_specs.py\" tests/gate.sh` prints 2. FAILIF: 0 or 1 \u2014 the pinning suite dropped out of the gate pytest arm.",
+    "PROOF: bash -c \"git merge-base --is-ancestor dd9e4aee668a071de7eb48374111f179d5a621e2 HEAD; echo rc=$?\" prints rc=0. FAILIF: any nonzero rc \u2014 the cited fix commit is absent from the graded history."
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "2aca2d4bcab01565a45885da358a7462ad6812fd",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "95773e9ae7da31bcb4bce77c5c03907f87705a21947c5aef6f8c8ce08bb40972",
+  "working_tree_dirty_path_count": 2,
+  "items": [
+    {
+      "criterion": "PROOF: `PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py::test_selection_skips_a_malformed_unrelated_document -q` prints `1 passed`. FAILIF: any other pass count, a failure, or a collection error.",
+      "status": "PASS",
+      "detail": "Ran the exact command: exit_code 0, output `.  [100%]` / `1 passed in 0.15s`. The test (tests/test_xml_specs.py:1095-1136) asserts `spec list --id W-REQ-1` exits 0 with exactly one row, stderr contains \"skipped 1 unreadable document(s)\" and \"zz-broken.xml\", `assemble --format json` carries corpus == {documents_discovered:3, documents_parsed:2, documents_unreadable:1, documents_selected:1}, and the strict API default `auger.load_spec_corpus(corpus)` still raises `invalid-xml`."
+    },
+    {
+      "criterion": "PROOF: `PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py::test_corpus_wide_verbs_still_refuse_a_malformed_document -q` prints `1 passed`. FAILIF: any other pass count, a failure, or a collection error.",
+      "status": "PASS",
+      "detail": "Ran the exact command: exit_code 0, output `.  [100%]` / `1 passed in 0.05s`. The test (tests/test_xml_specs.py:1139-1196) asserts `spec list` exits 2 with `spec error (<code>)` for a malformed document, an unsupported-schema-version document and a DOCTYPE/ENTITY document."
+    },
+    {
+      "criterion": "PROOF: `bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; d=/tmp/aug146-c3; ...'` prints rc=0, then 1, then 1, then validate-rc=2. FAILIF: a nonzero list rc, zero or two selected rows, no 'unreadable' line on stderr, or a validate rc other than 2 (the defect must stay visible).",
+      "status": "PASS",
+      "detail": "Ran the exact command verbatim: output `rc=0` / `1` / `1` / `validate-rc=2`. /tmp/aug146-c3.out holds exactly one row (`AUG-REQ-030\\trequirement\\tactive\\t2.0.0\\tassembly.xml#AUG-REQ-030\\tauger.spec`); /tmp/aug146-c3.err holds `spec: skipped 1 unreadable document(s) \u2014 this verb is selection-scoped; `auger spec validate` refuses the corpus` plus `spec:   zz-broken.xml: no element found: line 1, column 51 [invalid-xml]`."
+    },
+    {
+      "criterion": "PROOF: `grep -c \"Corpus-wide vs selection-scoped\" docs/VERBS.md` prints 1. FAILIF: 0 \u2014 the selection-scoped vs corpus-wide rule is undocumented again.",
+      "status": "PASS",
+      "detail": "`grep -c` -> `1`. The paragraph lives at docs/VERBS.md:692-703 and states which verbs are corpus-wide (validate/check/bundle) vs selection-scoped (list/assemble), the stderr count, the four `corpus.*` counters, and that the tolerance is exactly one code wide."
+    },
+    {
+      "criterion": "PROOF: `bash -c 'export PATH=...; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --measure >/tmp/aug146-c4.json; echo rc=$?; grep -c documents_unreadable /tmp/aug146-c4.json'` prints rc=0 then 1. FAILIF: nonzero rc or no documents_unreadable counter in the measured report.",
+      "status": "PASS",
+      "detail": "Ran the exact command: output `rc=0` then `1`. The counter is emitted by `_spec_corpus_counts` (auger.py:12647-12658, `\"documents_unreadable\": len(unreadable)`) and called at auger.py:12856 for every assemble, measured or not."
+    },
+    {
+      "criterion": "PROOF: `grep -c \"tests/test_xml_specs.py\" tests/gate.sh` prints 2. FAILIF: 0 or 1 \u2014 the pinning suite dropped out of the gate pytest arm.",
+      "status": "PASS",
+      "detail": "`grep -c` -> `2`: tests/gate.sh:157 (the comment naming the suite) and tests/gate.sh:206 (the pytest arm that actually runs `tests/test_xml_specs.py`)."
+    },
+    {
+      "criterion": "PROOF: bash -c \"git merge-base --is-ancestor dd9e4aee668a071de7eb48374111f179d5a621e2 HEAD; echo rc=$?\" prints rc=0. FAILIF: any nonzero rc \u2014 the cited fix commit is absent from the graded history.",
+      "status": "PASS",
+      "detail": "Ran it: `rc=0`; `git log -1 dd9e4ae` -> `dd9e4ae fix(spec): selection verbs skip an unparseable document and count it (AUG-146)`. `git show --stat dd9e4ae` touches auger.py (+137), docs/VERBS.md (+13), tests/test_xml_specs.py (+152)."
+    },
+    {
+      "criterion": "Corpus-wide verbs (validate, check, bundle, render) still refuse a malformed document with exit 2 and name the file, so the tolerance did not leak into the corpus-wide path.",
+      "status": "PASS",
+      "detail": "On a corpus of tests/fixtures/xml/specs/*.xml plus a truncated zz-broken.xml: `spec check` -> check-rc=2, `spec bundle` -> bundle-rc=2, `spec render` -> render-rc=2, `spec validate` -> validate-rc=2, each printing `spec error (invalid-xml): zz-broken.xml: no element found: line 1, column 51`. Code: `selection_scoped = command in (\"list\", \"assemble\")` (auger.py:12719) is the only place `tolerate_unreadable=True` is passed (auger.py:12725-12727); the else branch calls the strict `load_spec_corpus(a.root)` (auger.py:12734).",
+      "derived": true
+    },
+    {
+      "criterion": "The tolerance is exactly one code wide: only `invalid-xml` is skipped; wrong namespace/root, unsupported schema-version, DOCTYPE/ENTITY and include failures still refuse on the selection verbs too.",
+      "status": "PASS",
+      "detail": "auger.py:7883 `SPEC_TOLERATED_UNREADABLE = (\"invalid-xml\",)`; auger.py:8053 `if not (tolerate_unreadable and exc.code in SPEC_TOLERATED_UNREADABLE): raise`. `_spec_read_document` (auger.py:7938-7979) raises external-entity-forbidden / unsupported-namespace / invalid-root / unsupported-schema-version / missing-document-metadata, none tolerated; `_spec_include_target` (auger.py:8222-8244) and `_spec_collect` (auger.py:8467-8470) still raise unresolved-include. tests/test_xml_specs.py:1168-1196 pins the schema-version and DOCTYPE cases on `list` (ran: 1 passed).",
+      "derived": true
+    },
+    {
+      "criterion": "The skip is reported, not silent: both selection verbs print the count and the offending file on stderr while stdout stays parseable, and the JSON `corpus` counters agree with what was actually read.",
+      "status": "PASS",
+      "detail": "`spec list --id AUG-REQ-014` -> list-rc=0 with stderr `spec: skipped 1 unreadable document(s) \u2014 this verb is selection-scoped; ...` + `spec:   zz-broken.xml: no element found: line 1, column 51 [invalid-xml]`; `spec assemble --id AUG-REQ-014 --format json` -> asm-rc=0, same two stderr lines, stdout still `json.loads`-able with corpus {'documents_discovered': 4, 'documents_parsed': 3, 'documents_selected': 2, 'documents_unreadable': 1}. Emitters: `_spec_report_unreadable` (auger.py:12629-12644, called at auger.py:12735) and `_spec_corpus_counts` (auger.py:12647-12658).",
+      "derived": true
+    },
+    {
+      "criterion": "The measured assembly report keeps its documented shape when a document is skipped (all `--measure` keys plus the `corpus` block present, rc=0).",
+      "status": "PASS",
+      "detail": "`spec assemble <corpus-with-zz-broken.xml> --id AUG-REQ-014 --format json --measure` -> asm-measure-rc=0; keys ['blocks','blocks_indexed','blocks_parsed','corpus','counts','documents_read','elapsed_ms','input_bytes','output_bytes','report_schema_version','schema_version','selection'], corpus={'documents_discovered':4,'documents_parsed':3,'documents_selected':2,'documents_unreadable':1}. Regression surface green: `pytest tests/test_xml_specs.py -q` -> `58 passed in 1.16s`; `pytest tests/test_xml_specs.py tests/test_xsd_conformance.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_spec_assembly_report.py tests/test_spec_corpus_view.py tests/test_spec_context.py tests/test_spec_render.py -q` -> `147 passed in 9.16s`.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "needs_review",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261112T091941.670002Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nscanners: nice=nice -n 10\n10:32PM INF scanned ~3379617 bytes (3.38 MB) in 1.41s\n10:32PM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 251 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261112T091941.670002Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [  9%]\n........................................................................ [ 19%]\n........................................................................ [ 29%]\n........................................................................ [ 39%]\n............................s........................................... [ 49%]\n.......s................................................................ [ 59%]\n........................................................................ [ 69%]\n........................................................................ [ 79%]\n........................................................................ [ 89%]\n........................................................................ [ 99%]\n....                                                                     [100%]\n722 passed, 2 skipped in 839.17s (0:13:59)\n== wrapper regression (AUG-081) ==\ngate prerequisite preflight: PASS\nAUG-116: zombie pid 1833623 classified dead (kill -0 alone would have said alive)\nAUG-081 wrapper regression: PASS\nAUG-130 skipped-arm policy: PASS\n== end-to-end smoke ==\nnamespace: auger-smoke-1834592\nnamespace sweep: no stale auger-smoke-*/auger-eval-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n\n\u2026 [529 chars omitted \u2014 13 line(s)] \u2026\n== spec corpus (AUG-136) ==\nspec: 3 document(s), 12 block(s), 7 reference(s) ok\n== prd proofs (AUG-137) ==\nprd proofs: 8 total \u00b7 3 required \u00b7 5 deferred \u2192 PASS\n   P1  deferred not-run   not-run (deferred to AUG-119): auger.py carries no board surface (grep -c boardctl auger.py -> 0): resolving a\n   P2  required pass      corpus=9249B bundle=8131B latency=15.8ms  2 generated view(s) verified byte-identical to the generator's output for specs/; one block edit propagated to\n   P3  deferred not-run   not-run (deferred to AUG-153): the checker half is reachable (`auger spec check --diff-file` reports `trace-mi\n   P4  deferred not-run   not-run (deferred to AUG-119): writing and reading back a canonical boardctl row is boardctl's surface, not au\n   P5  required pass      corpus=1084B bundle=435B latency=675.8ms  one query returned migration=tests/fixtures/xml/verification/migrations/001_add_marker.sql, fixture=tests/fixt\n   P6  deferred not-run   not-run (deferred to AUG-124): what counts as judge evidence \u2014 excluding the worker summary, refusing a PASS w\n   P7  required pass      corpus=9249B bundle=2944B latency=145.4ms  4/12 blocks selected by `applies-to auger.spec.select`; bundle is 31.8% of the corpus (2944 of 9249 bytes), fl\n   P8  deferred not-run   not-run (deferred to AUG-153): the flag and the process-liveness assertion live in the GitReins hook, which no\nprd-proofs: /home/kara/auger/docs/prd/evidence/AUG-137-prd-proofs.json agrees with this run\n== docs check ==\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261112T091941.670002Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": false,
+      "any_failed": true,
+      "summary": "COMPLETE\n  \u2713 PROOF: `PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py::test_selection_skips_a_malformed_unrelated_document -q` prints `1 passed`. FAILIF: any other pass count, a failure, or a collection error.: Ran the exact command: exit_code 0, output `.  [100%]` / `1 passed in 0.15s`. The test (tests/test_xml_specs.py:1095-1136) asserts `spec list --id W-REQ-1` exits 0 with exactly one row, stderr contains \"skipped 1 unreadable document(s)\" and \"zz-broken.xml\", `assemble --format json` carries corpus == {documents_discovered:3, documents_parsed:2, documents_unreadable:1, documents_selected:1}, and the strict API default `auger.load_spec_corpus(corpus)` still raises `invalid-xml`.\n  \u2713 PROOF: `PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py::test_corpus_wide_verbs_still_refuse_a_malformed_document -q` prints `1 passed`. FAILIF: any other pass count, a failure, or a collection error.: Ran the exact command: exit_code 0, output `.  [100%]` / `1 passed in 0.05s`. The test (tests/test_xml_specs.py:1139-1196) asserts `spec list` exits 2 with `spec error (<code>)` for a malformed document, an unsupported-schema-version document and a DOCTYPE/ENTITY document.\n  \u2713 PROOF: `bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; d=/tmp/aug146-c3; ...'` prints rc=0, then 1, then 1, then validate-rc=2. FAILIF: a nonzero list rc, zero or two selected rows, no 'unreadable' line on stderr, or a validate rc other than 2 (the defect must stay visible).: Ran the exact command verbatim: output `rc=0` / `1` / `1` / `validate-rc=2`. /tmp/aug146-c3.out holds exactly one row (`AUG-REQ-030\\trequirement\\tactive\\t2.0.0\\tassembly.xml#AUG-REQ-030\\tauger.spec`); /tmp/aug146-c3.err holds `spec: skipped 1 unreadable document(s) \u2014 this verb is selection-scoped; `auger spec validate` refuses the corpus` plus `spec:   zz-broken.xml: no element found: line 1, column 51 [invalid-xml]`.\n  \u2713 PROOF: `grep -c \"Corpus-wide vs selection-scoped\" docs/VERBS.md` prints 1. FAILIF: 0 \u2014 the selection-scoped vs corpus-wide rule is undocumented again.: `grep -c` -> `1`. The paragraph lives at docs/VERBS.md:692-703 and states which verbs are corpus-wide (validate/check/bundle) vs selection-scoped (list/assemble), the stderr count, the four `corpus.*` counters, and that the tolerance is exactly one code wide.\n  \u2713 PROOF: `bash -c 'export PATH=...; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --measure >/tmp/aug146-c4.json; echo rc=$?; grep -c documents_unreadable /tmp/aug146-c4.json'` prints rc=0 then 1. FAILIF: nonzero rc or no documents_unreadable counter in the measured report.: Ran the exact command: output `rc=0` then `1`. The counter is emitted by `_spec_corpus_counts` (auger.py:12647-12658, `\"documents_unreadable\": len(unreadable)`) and called at auger.py:12856 for every assemble, measured or not.\n  \u2713 PROOF: `grep -c \"tests/test_xml_specs.py\" tests/gate.sh` prints 2. FAILIF: 0 or 1 \u2014 the pinning suite dropped out of the gate pytest arm.: `grep -c` -> `2`: tests/gate.sh:157 (the comment naming the suite) and tests/gate.sh:206 (the pytest arm that actually runs `tests/test_xml_specs.py`).\n  \u2713 PROOF: bash -c \"git merge-base --is-ancestor dd9e4aee668a071de7eb48374111f179d5a621e2 HEAD; echo rc=$?\" prints rc=0. FAILIF: any nonzero rc \u2014 the cited fix commit is absent from the graded history.: Ran it: `rc=0`; `git log -1 dd9e4ae` -> `dd9e4ae fix(spec): selection verbs skip an unparseable document and count it (AUG-146)`. `git show --stat dd9e4ae` touches auger.py (+137), docs/VERBS.md (+13), tests/test_xml_specs.py (+152).\n  \u2713 Corpus-wide verbs (validate, check, bundle, render) still refuse a malformed document with exit 2 and name the file, so the tolerance did not leak into the corpus-wide path.: On a corpus of tests/fixtures/xml/specs/*.xml plus a truncated zz-broken.xml: `spec check` -> check-rc=2, `spec bundle` -> bundle-rc=2, `spec render` -> render-rc=2, `spec validate` -> validate-rc=2, each printing `spec error (invalid-xml): zz-broken.xml: no element found: line 1, column 51`. Code: `selection_scoped = command in (\"list\", \"assemble\")` (auger.py:12719) is the only place `tolerate_unreadable=True` is passed (auger.py:12725-12727); the else branch calls the strict `load_spec_corpus(a.root)` (auger.py:12734).\n  \u2713 The tolerance is exactly one code wide: only `invalid-xml` is skipped; wrong namespace/root, unsupported schema-version, DOCTYPE/ENTITY and include failures still refuse on the selection verbs too.: auger.py:7883 `SPEC_TOLERATED_UNREADABLE = (\"invalid-xml\",)`; auger.py:8053 `if not (tolerate_unreadable and exc.code in SPEC_TOLERATED_UNREADABLE): raise`. `_spec_read_document` (auger.py:7938-7979) raises external-entity-forbidden / unsupported-namespace / invalid-root / unsupported-schema-version / missing-document-metadata, none tolerated; `_spec_include_target` (auger.py:8222-8244) and `_spec_collect` (auger.py:8467-8470) still raise unresolved-include. tests/test_xml_specs.py:1168-1196 pins the schema-version and DOCTYPE cases on `list` (ran: 1 passed).\n  \u2713 The skip is reported, not silent: both selection verbs print the count and the offending file on stderr while stdout stays parseable, and the JSON `corpus` counters agree with what was actually read.: `spec list --id AUG-REQ-014` -> list-rc=0 with stderr `spec: skipped 1 unreadable document(s) \u2014 this verb is selection-scoped; ...` + `spec:   zz-broken.xml: no element found: line 1, column 51 [invalid-xml]`; `spec assemble --id AUG-REQ-014 --format json` -> asm-rc=0, same two stderr lines, stdout still `json.loads`-able with corpus {'documents_discovered': 4, 'documents_parsed': 3, 'documents_selected': 2, 'documents_unreadable': 1}. Emitters: `_spec_report_unreadable` (auger.py:12629-12644, called at auger.py:12735) and `_spec_corpus_counts` (auger.py:12647-12658).\n  \u2713 The measured assembly report keeps its documented shape when a document is skipped (all `--measure` keys plus the `corpus` block present, rc=0).: `spec assemble <corpus-with-zz-broken.xml> --id AUG-REQ-014 --format json --measure` -> asm-measure-rc=0; keys ['blocks','blocks_indexed','blocks_parsed','corpus','counts','documents_read','elapsed_ms','input_bytes','output_bytes','report_schema_version','schema_version','selection'], corpus={'documents_discovered':4,'documents_parsed':3,'documents_selected':2,'documents_unreadable':1}. Regression surface green: `pytest tests/test_xml_specs.py -q` -> `58 passed in 1.16s`; `pytest tests/test_xml_specs.py tests/test_xsd_conformance.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_spec_assembly_report.py tests/test_spec_corpus_view.py tests/test_spec_context.py tests/test_spec_render.py -q` -> `147 passed in 9.16s`.\n  \u2717 Coverage FAILED \u2014 ungraded: PROOF: `bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; d=/tmp/aug146-c3; rm -rf $d; mkdir -p $d; cp tests/fixtures/xml/specs/*.xml $d; printf \"<spec xmlns=\\\"urn:auger:spec:1\\\"><requirement id=\\\"B\\\">\" > $d/zz-broken.xml; python3 auger.py spec list $d --id AUG-REQ-030 >/tmp/aug146-c3.out 2>/tmp/aug146-c3.err; echo rc=$?; wc -l < /tmp/aug146-c3.out; grep -c unreadable /tmp/aug146-c3.err; python3 auger.py spec validate $d >/dev/null 2>&1; echo validate-rc=$?'` prints rc=0, then 1, then 1, then validate-rc=2. FAILIF: a nonzero list rc, zero or two selected rows, no 'unreadable' line on stderr, or a validate rc other than 2 (the defect must stay visible).; PROOF: `bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --measure >/tmp/aug146-c4.json; echo rc=$?; grep -c documents_unreadable /tmp/aug146-c4.json'` prints rc=0 then 1. FAILIF: nonzero rc or no documents_unreadable counter in the measured report.\nAll seven given criteria and all five derived criteria pass with fresh command output: the two pinning tests pass, the CLI reproduces rc=0/1/1/validate-rc=2 exactly, the docs paragraph and gate arm are present, the fix commit dd9e4ae is in history, and the corpus-wide verbs (validate/check/bundle/render) still refuse the malformed file with exit 2 while list/assemble skip and count it. [uncovered failure paths: failure mode 0 (A reference or include edge pointing INTO a skipped document is not detected as such: `_spec_include_map`/`_spec_collect` only see parsed documents, so an `<include src>` into a malformed file surfaces as `unresolved-include` (\"was not indexed\") rather than a message naming the unreadable file, and a `depends-on`/`verifies` edge into a skipped document surfaces as `unresolved-reference` (\"no block with that id\"). The refusal still happens (exit 2), so the documented invariant holds, but the diagnostic misattributes the cause.): detected_by is empty \u2014 uncovered failure path; failure mode 1 (`spec context` (auger.py:11646-11648) passes `tolerate_unreadable=True, skipped=[]` and discards the list, so a malformed neighbour is skipped with no count and no stderr notice \u2014 the opposite of the 'never silent' rule this row establishes for the other selection verbs.): detected_by is empty \u2014 uncovered failure path]",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": false,
+          "output": "COMPLETE\n  \u2713 PROOF: `PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py::test_selection_skips_a_malformed_unrelated_document -q` prints `1 passed`. FAILIF: any other pass count, a failure, or a collection error.: Ran the exact command: exit_code 0, output `.  [100%]` / `1 passed in 0.15s`. The test (tests/test_xml_specs.py:1095-1136) asserts `spec list --id W-REQ-1` exits 0 with exactly one row, stderr contains \"skipped 1 unreadable document(s)\" and \"zz-broken.xml\", `assemble --format json` carries corpus == {documents_discovered:3, documents_parsed:2, documents_unreadable:1, documents_selected:1}, and the strict API default `auger.load_spec_corpus(corpus)` still raises `invalid-xml`.\n  \u2713 PROOF: `PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py::test_corpus_wide_verbs_still_refuse_a_malformed_document -q` prints `1 passed`. FAILIF: any other pass count, a failure, or a collection error.: Ran the exact command: exit_code 0, output `.  [100%]` / `1 passed in 0.05s`. The test (tests/test_xml_specs.py:1139-1196) asserts `spec list` exits 2 with `spec error (<code>)` for a malformed document, an unsupported-schema-version document and a DOCTYPE/ENTITY document.\n  \u2713 PROOF: `bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; d=/tmp/aug146-c3; ...'` prints rc=0, then 1, then 1, then validate-rc=2. FAILIF: a nonzero list rc, zero or two selected rows, no 'unreadable' line on stderr, or a validate rc other than 2 (the defect must stay visible).: Ran the exact command verbatim: output `rc=0` / `1` / `1` / `validate-rc=2`. /tmp/aug146-c3.out holds exactly one row (`AUG-REQ-030\\trequirement\\tactive\\t2.0.0\\tassembly.xml#AUG-REQ-030\\tauger.spec`); /tmp/aug146-c3.err holds `spec: skipped 1 unreadable document(s) \u2014 this verb is selection-scoped; `auger spec validate` refuses the corpus` plus `spec:   zz-broken.xml: no element found: line 1, column 51 [invalid-xml]`.\n\n\u2026 [5915 chars omitted \u2014 9 line(s)] \u2026\nAll seven given criteria and all five derived criteria pass with fresh command output: the two pinning tests pass, the CLI reproduces rc=0/1/1/validate-rc=2 exactly, the docs paragraph and gate arm are present, the fix commit dd9e4ae is in history, and the corpus-wide verbs (validate/check/bundle/render) still refuse the malformed file with exit 2 while list/assemble skip and count it. [uncovered failure paths: failure mode 0 (A reference or include edge pointing INTO a skipped document is not detected as such: `_spec_include_map`/`_spec_collect` only see parsed documents, so an `<include src>` into a malformed file surfaces as `unresolved-include` (\"was not indexed\") rather than a message naming the unreadable file, and a `depends-on`/`verifies` edge into a skipped document surfaces as `unresolved-reference` (\"no block with that id\"). The refusal still happens (exit 2), so the documented invariant holds, but the diagnostic misattributes the cause.): detected_by is empty \u2014 uncovered failure path; failure mode 1 (`spec context` (auger.py:11646-11648) passes `tolerate_unreadable=True, skipped=[]` and discards the list, so a malformed neighbour is skipped with no count and no stderr notice \u2014 the opposite of the 'never silent' rule this row establishes for the other selection verbs.): detected_by is empty \u2014 uncovered failure path]",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "PROOF: `PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py::test_selection_skips_a_malformed_unrelated_document -q` prints `1 passed`. FAILIF: any other pass count, a failure, or a collection error.",
+                "status": "PASS",
+                "detail": "Ran the exact command: exit_code 0, output `.  [100%]` / `1 passed in 0.15s`. The test (tests/test_xml_specs.py:1095-1136) asserts `spec list --id W-REQ-1` exits 0 with exactly one row, stderr contains \"skipped 1 unreadable document(s)\" and \"zz-broken.xml\", `assemble --format json` carries corpus == {documents_discovered:3, documents_parsed:2, documents_unreadable:1, documents_selected:1}, and the strict API default `auger.load_spec_corpus(corpus)` still raises `invalid-xml`."
+              },
+              {
+                "criterion": "PROOF: `PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py::test_corpus_wide_verbs_still_refuse_a_malformed_document -q` prints `1 passed`. FAILIF: any other pass count, a failure, or a collection error.",
+                "status": "PASS",
+                "detail": "Ran the exact command: exit_code 0, output `.  [100%]` / `1 passed in 0.05s`. The test (tests/test_xml_specs.py:1139-1196) asserts `spec list` exits 2 with `spec error (<code>)` for a malformed document, an unsupported-schema-version document and a DOCTYPE/ENTITY document."
+              },
+              {
+                "criterion": "PROOF: `bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; d=/tmp/aug146-c3; ...'` prints rc=0, then 1, then 1, then validate-rc=2. FAILIF: a nonzero list rc, zero or two selected rows, no 'unreadable' line on stderr, or a validate rc other than 2 (the defect must stay visible).",
+                "status": "PASS",
+                "detail": "Ran the exact command verbatim: output `rc=0` / `1` / `1` / `validate-rc=2`. /tmp/aug146-c3.out holds exactly one row (`AUG-REQ-030\\trequirement\\tactive\\t2.0.0\\tassembly.xml#AUG-REQ-030\\tauger.spec`); /tmp/aug146-c3.err holds `spec: skipped 1 unreadable document(s) \u2014 this verb is selection-scoped; `auger spec validate` refuses the corpus` plus `spec:   zz-broken.xml: no element found: line 1, column 51 [invalid-xml]`."
+              },
+              {
+                "criterion": "PROOF: `grep -c \"Corpus-wide vs selection-scoped\" docs/VERBS.md` prints 1. FAILIF: 0 \u2014 the selection-scoped vs corpus-wide rule is undocumented again.",
+                "status": "PASS",
+                "detail": "`grep -c` -> `1`. The paragraph lives at docs/VERBS.md:692-703 and states which verbs are corpus-wide (validate/check/bundle) vs selection-scoped (list/assemble), the stderr count, the four `corpus.*` counters, and that the tolerance is exactly one code wide."
+              },
+              {
+                "criterion": "PROOF: `bash -c 'export PATH=...; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --measure >/tmp/aug146-c4.json; echo rc=$?; grep -c documents_unreadable /tmp/aug146-c4.json'` prints rc=0 then 1. FAILIF: nonzero rc or no documents_unreadable counter in the measured report.",
+                "status": "PASS",
+                "detail": "Ran the exact command: output `rc=0` then `1`. The counter is emitted by `_spec_corpus_counts` (auger.py:12647-12658, `\"documents_unreadable\": len(unreadable)`) and called at auger.py:12856 for every assemble, measured or not."
+              },
+              {
+                "criterion": "PROOF: `grep -c \"tests/test_xml_specs.py\" tests/gate.sh` prints 2. FAILIF: 0 or 1 \u2014 the pinning suite dropped out of the gate pytest arm.",
+                "status": "PASS",
+                "detail": "`grep -c` -> `2`: tests/gate.sh:157 (the comment naming the suite) and tests/gate.sh:206 (the pytest arm that actually runs `tests/test_xml_specs.py`)."
+              },
+              {
+                "criterion": "PROOF: bash -c \"git merge-base --is-ancestor dd9e4aee668a071de7eb48374111f179d5a621e2 HEAD; echo rc=$?\" prints rc=0. FAILIF: any nonzero rc \u2014 the cited fix commit is absent from the graded history.",
+                "status": "PASS",
+                "detail": "Ran it: `rc=0`; `git log -1 dd9e4ae` -> `dd9e4ae fix(spec): selection verbs skip an unparseable document and count it (AUG-146)`. `git show --stat dd9e4ae` touches auger.py (+137), docs/VERBS.md (+13), tests/test_xml_specs.py (+152)."
+              },
+              {
+                "criterion": "Corpus-wide verbs (validate, check, bundle, render) still refuse a malformed document with exit 2 and name the file, so the tolerance did not leak into the corpus-wide path.",
+                "status": "PASS",
+                "detail": "On a corpus of tests/fixtures/xml/specs/*.xml plus a truncated zz-broken.xml: `spec check` -> check-rc=2, `spec bundle` -> bundle-rc=2, `spec render` -> render-rc=2, `spec validate` -> validate-rc=2, each printing `spec error (invalid-xml): zz-broken.xml: no element found: line 1, column 51`. Code: `selection_scoped = command in (\"list\", \"assemble\")` (auger.py:12719) is the only place `tolerate_unreadable=True` is passed (auger.py:12725-12727); the else branch calls the strict `load_spec_corpus(a.root)` (auger.py:12734).",
+                "derived": true
+              },
+              {
+                "criterion": "The tolerance is exactly one code wide: only `invalid-xml` is skipped; wrong namespace/root, unsupported schema-version, DOCTYPE/ENTITY and include failures still refuse on the selection verbs too.",
+                "status": "PASS",
+                "detail": "auger.py:7883 `SPEC_TOLERATED_UNREADABLE = (\"invalid-xml\",)`; auger.py:8053 `if not (tolerate_unreadable and exc.code in SPEC_TOLERATED_UNREADABLE): raise`. `_spec_read_document` (auger.py:7938-7979) raises external-entity-forbidden / unsupported-namespace / invalid-root / unsupported-schema-version / missing-document-metadata, none tolerated; `_spec_include_target` (auger.py:8222-8244) and `_spec_collect` (auger.py:8467-8470) still raise unresolved-include. tests/test_xml_specs.py:1168-1196 pins the schema-version and DOCTYPE cases on `list` (ran: 1 passed).",
+                "derived": true
+              },
+              {
+                "criterion": "The skip is reported, not silent: both selection verbs print the count and the offending file on stderr while stdout stays parseable, and the JSON `corpus` counters agree with what was actually read.",
+                "status": "PASS",
+                "detail": "`spec list --id AUG-REQ-014` -> list-rc=0 with stderr `spec: skipped 1 unreadable document(s) \u2014 this verb is selection-scoped; ...` + `spec:   zz-broken.xml: no element found: line 1, column 51 [invalid-xml]`; `spec assemble --id AUG-REQ-014 --format json` -> asm-rc=0, same two stderr lines, stdout still `json.loads`-able with corpus {'documents_discovered': 4, 'documents_parsed': 3, 'documents_selected': 2, 'documents_unreadable': 1}. Emitters: `_spec_report_unreadable` (auger.py:12629-12644, called at auger.py:12735) and `_spec_corpus_counts` (auger.py:12647-12658).",
+                "derived": true
+              },
+              {
+                "criterion": "The measured assembly report keeps its documented shape when a document is skipped (all `--measure` keys plus the `corpus` block present, rc=0).",
+                "status": "PASS",
+                "detail": "`spec assemble <corpus-with-zz-broken.xml> --id AUG-REQ-014 --format json --measure` -> asm-measure-rc=0; keys ['blocks','blocks_indexed','blocks_parsed','corpus','counts','documents_read','elapsed_ms','input_bytes','output_bytes','report_schema_version','schema_version','selection'], corpus={'documents_discovered':4,'documents_parsed':3,'documents_selected':2,'documents_unreadable':1}. Regression surface green: `pytest tests/test_xml_specs.py -q` -> `58 passed in 1.16s`; `pytest tests/test_xml_specs.py tests/test_xsd_conformance.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_spec_assembly_report.py tests/test_spec_corpus_view.py tests/test_spec_context.py tests/test_spec_render.py -q` -> `147 passed in 9.16s`.",
+                "derived": true
+              }
+            ],
+            "summary": "All seven given criteria and all five derived criteria pass with fresh command output: the two pinning tests pass, the CLI reproduces rc=0/1/1/validate-rc=2 exactly, the docs paragraph and gate arm are present, the fix commit dd9e4ae is in history, and the corpus-wide verbs (validate/check/bundle/render) still refuse the malformed file with exit 2 while list/assemble skip and count it. [uncovered failure paths: failure mode 0 (A reference or include edge pointing INTO a skipped document is not detected as such: `_spec_include_map`/`_spec_collect` only see parsed documents, so an `<include src>` into a malformed file surfaces as `unresolved-include` (\"was not indexed\") rather than a message naming the unreadable file, and a `depends-on`/`verifies` edge into a skipped document surfaces as `unresolved-reference` (\"no block with that id\"). The refusal still happens (exit 2), so the documented invariant holds, but the diagnostic misattributes the cause.): detected_by is empty \u2014 uncovered failure path; failure mode 1 (`spec context` (auger.py:11646-11648) passes `tolerate_unreadable=True, skipped=[]` and discards the list, so a malformed neighbour is skipped with no count and no stderr notice \u2014 the opposite of the 'never silent' rule this row establishes for the other selection verbs.): detected_by is empty \u2014 uncovered failure path]",
+            "ungraded_criteria": [
+              "PROOF: `bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; d=/tmp/aug146-c3; rm -rf $d; mkdir -p $d; cp tests/fixtures/xml/specs/*.xml $d; printf \"<spec xmlns=\\\"urn:auger:spec:1\\\"><requirement id=\\\"B\\\">\" > $d/zz-broken.xml; python3 auger.py spec list $d --id AUG-REQ-030 >/tmp/aug146-c3.out 2>/tmp/aug146-c3.err; echo rc=$?; wc -l < /tmp/aug146-c3.out; grep -c unreadable /tmp/aug146-c3.err; python3 auger.py spec validate $d >/dev/null 2>&1; echo validate-rc=$?'` prints rc=0, then 1, then 1, then validate-rc=2. FAILIF: a nonzero list rc, zero or two selected rows, no 'unreadable' line on stderr, or a validate rc other than 2 (the defect must stay visible).",
+              "PROOF: `bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --measure >/tmp/aug146-c4.json; echo rc=$?; grep -c documents_unreadable /tmp/aug146-c4.json'` prints rc=0 then 1. FAILIF: nonzero rc or no documents_unreadable counter in the measured report."
+            ],
+            "provenance": {
+              "model": "deepseek-v4-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "deepseek-v4-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "ungraded_criteria": [
+        "PROOF: `bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; d=/tmp/aug146-c3; rm -rf $d; mkdir -p $d; cp tests/fixtures/xml/specs/*.xml $d; printf \"<spec xmlns=\\\"urn:auger:spec:1\\\"><requirement id=\\\"B\\\">\" > $d/zz-broken.xml; python3 auger.py spec list $d --id AUG-REQ-030 >/tmp/aug146-c3.out 2>/tmp/aug146-c3.err; echo rc=$?; wc -l < /tmp/aug146-c3.out; grep -c unreadable /tmp/aug146-c3.err; python3 auger.py spec validate $d >/dev/null 2>&1; echo validate-rc=$?'` prints rc=0, then 1, then 1, then validate-rc=2. FAILIF: a nonzero list rc, zero or two selected rows, no 'unreadable' line on stderr, or a validate rc other than 2 (the defect must stay visible).",
+        "PROOF: `bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --measure >/tmp/aug146-c4.json; echo rc=$?; grep -c documents_unreadable /tmp/aug146-c4.json'` prints rc=0 then 1. FAILIF: nonzero rc or no documents_unreadable counter in the measured report."
+      ],
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-146\"}",
+          "exit_code": 0,
+          "output_sha": "be06d1c9448a34d8853306ec1111bc0d3e6cf2aca616e43c6de01707f96a62a5"
+        },
+        {
+          "tool": "run_command",
+          "command": "pwd && ls && git log --oneline -5",
+          "exit_code": 0,
+          "output_sha": "62e64fa11b86e3307d3a255604d8a781abbd321181f95d847ff349ab3eab3d9c"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git status --short && ls tests/ && ls tests/fixtures/xml/specs/ 2>/dev/null | head -30",
+          "exit_code": 0,
+          "output_sha": "54464092d5f8052e337fc01810b316f147f49f48610d871b5c0e28df6568e6a2"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git merge-base --is-ancestor dd9e4aee668a071de7eb48374111f179d5a621e2 HEAD; echo rc=$?; git log --oneline -1 dd9e4aee668a071de7eb48374111f179d5a621e2 2>&1",
+          "exit_code": 0,
+          "output_sha": "a91ca480dcb56d9d81f5a2466b16083d608f1d49abc1ac25ed609efe87193906"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `git merge-base --is-ancestor dd9e4aee... HEAD; echo rc=$?` -> rc=0; commit dd9e4ae \\\"fix(spec): selection verbs skip an unparseable document and count it (AUG-146)\\\" is in history.\", \"key\": \"verified_6\"}",
+          "exit_code": 0,
+          "output_sha": "b02332dd5cdfb9b5b34fbcc935e2ce54945354c41b55ac870efe4aca12c05d9c"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py::test_selection_skips_a_malformed_unrelated_document -q 2>&1 | tail -20",
+          "exit_code": 0,
+          "output_sha": "94d616f74c67b11fffc5656bc44d655486c8a10b3fa2a266e748c921a7d50d3c"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py::test_corpus_wide_verbs_still_refuse_a_malformed_document -q 2>&1 | tail -20",
+          "exit_code": 0,
+          "output_sha": "777035576371175c4c31230a64ac87af5a9b54cd6a305d2404d0256c34290ca8"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"test_selection_skips_a_malformed_unrelated_document\\|test_corpus_wide_verbs_still_refuse_a_malformed_document\" -A 60 tests/test_xml_specs.py | head -160",
+          "exit_code": 0,
+          "output_sha": "9c25f3be299ac7d09a88891a76b0d6406f52b9a4a2f02c2c3baabad9f14f3cfb"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: pytest tests/test_xml_specs.py::test_selection_skips_a_malformed_unrelated_document -q -> \\\"1 passed in 0.15s\\\", exit 0. Test at tests/test_xml_specs.py:1095 asserts list rc=0, one row, \\\"skipped 1 unreadable document(s)\\\" on stderr, assemble corpus counters {discovered:3, parsed:2, unreadable:1, selected:1}, and strict API default raises invalid-xml.\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "82d592005a7cb2eda9a43759fe956868a337b5da50e0ce598f761609c4327582"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: pytest tests/test_xml_specs.py::test_corpus_wide_verbs_still_refuse_a_malformed_document -q -> \\\"1 passed in 0.05s\\\", exit 0. Test at tests/test_xml_specs.py:1139 asserts corpus-wide verbs still exit 2 with spec error for malformed / unsupported-schema-version / external-entity documents.\", \"key\": \"verified_1\"}",
+          "exit_code": 0,
+          "output_sha": "d447938c070f7699aef24c04fc9cf8c28af4eeaef7f4206dbcf7865876377e0f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; d=/tmp/aug146-c3; rm -rf $d; mkdir -p $d; cp tests/fixtures/xml/specs/*.xml $d; printf \"<spec xmlns=\\\"urn:auger:spec:1\\\"><requirement id=\\\"B\\\">\" > $d/zz-broken.xml; python3 auger.py spec list $d --id AUG-REQ-030 >/tmp/aug146-c3.out 2>/tmp/aug146-c3.err; echo rc=$?; wc -l < /tmp/aug146-c3.out; grep -c unreadable /tmp/aug146-c3.err; python3 auger.py spec validate $d >/dev/null 2>&1; echo validate-rc=$?'",
+          "exit_code": 0,
+          "output_sha": "b715f5874a897386b43e3ce7378b09c554f14d4083282221bf746cc46f66ad87"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -c \"Corpus-wide vs selection-scoped\" docs/VERBS.md; grep -c \"tests/test_xml_specs.py\" tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "c4cd4011b7b371f7ef5b661ccaafdbe83a919a4b04da37a6b2e9898295583ad8"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --measure >/tmp/aug146-c4.json; echo rc=$?; grep -c documents_unreadable /tmp/aug146-c4.json'; echo ---; cat /tmp/aug146-c3.err; echo ---; cat /tmp/aug146-c3.out",
+          "exit_code": 0,
+          "output_sha": "0c9043aac1e71a649de8b3477ff53445b52e9e653ff7a4b85aac4552e6e2c8ab"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"Corpus-wide vs selection-scoped\" -B 10 -A 30 docs/VERBS.md",
+          "exit_code": 0,
+          "output_sha": "55585dddeb44b4ba0f9fb4bdfd19b75a98efa74ef289fdad319a86fd3123c42e"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: ran the exact bash -c command -> output \\\"rc=0 / 1 / 1 / validate-rc=2\\\". stderr: \\\"spec: skipped 1 unreadable document(s) \\u2014 this verb is selection-scoped; `auger spec validate` refuses the corpus\\\" + \\\"spec:   zz-broken.xml: no element found: line 1, column 51 [invalid-xml]\\\". stdout one row AUG-REQ-030. validate still exits 2.\", \"key\": \"verified_2\"}",
+          "exit_code": 0,
+          "output_sha": "a4acd66be28c0db170aed1ee10958f2018e7fb24160335101624c144440f6011"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `grep -c \\\"Corpus-wide vs selection-scoped\\\" docs/VERBS.md` -> 1. Section at docs/VERBS.md:692-703 documents corpus-wide (validate/check/bundle) vs selection-scoped (list/assemble), the counters, and the one-code-wide tolerance.\", \"key\": \"verified_3\"}",
+          "exit_code": 0,
+          "output_sha": "3a43dc1c8fc51ab7679aab7138da7f327bbf9b11d4d6574fe4a8c52051a57f2d"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --measure` -> rc=0; `grep -c documents_unreadable /tmp/aug146-c4.json` -> 1.\", \"key\": \"verified_4\"}",
+          "exit_code": 0,
+          "output_sha": "5538662093d840894989756084fafe4f9b6a83b733a2f8b7e45786154ba34f32"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `grep -c \\\"tests/test_xml_specs.py\\\" tests/gate.sh` -> 2.\", \"key\": \"verified_5\"}",
+          "exit_code": 0,
+          "output_sha": "3d669809285122bc6755b9d8ac678f5f8f3501376808e34fc88c3ef94de27883"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show --stat dd9e4ae | head -40",
+          "exit_code": 0,
+          "output_sha": "8d484d8f422d81d95a9f071b1ce09c214582c71652dfe7084681cac1ca214674"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"documents_unreadable\\|unreadable\" auger.py | head -60",
+          "exit_code": 0,
+          "output_sha": "51d99c2f077e71cfdc9f750fe682d74ad708c7b721dfb6f0c90b172572754ee8"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 200, \"offset\": 8690, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "3cfe5c9c0914bd50a4cc893a2b4abe017fb9e6c79e37a5a76cdb163a71df22c7"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 80, \"offset\": 8030, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "c27f32f92a0629b14c1571d1b7523eff62492c6aafb1c357b69c7dcc2afa10c3"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 120, \"offset\": 12620, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "147c0bab761042bea82c64d6fcfdb8eb6bd8a3b18c89774bef672e12afc37389"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"SPEC_TOLERATED_UNREADABLE\" auger.py",
+          "exit_code": 0,
+          "output_sha": "c21be9c37550f8d4975df55c7a590efd4f3d47adba2cbca8b39c0ace739a1977"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"tolerate_unreadable\\|load_spec_corpus_indexed\\|load_spec_corpus(\" auger.py | head -40",
+          "exit_code": 0,
+          "output_sha": "7c4884b41890825bce5c7977af60af0d27c81adda931f2ba5072f690ce18b9dd"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 40, \"offset\": 11630, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "d09b5858ec17280cfc5eb5bf83ca7c2992aede9ff2fa09817d3a705eed28d023"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && sed -n '7870,7900p' auger.py",
+          "exit_code": 0,
+          "output_sha": "3c582d61018af250821e3b27cd9a1e6d3768045b06839442f21a0285080236ec"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"def _spec_read_document\" -A 60 auger.py | head -80",
+          "exit_code": 0,
+          "output_sha": "cc2b704ddc861c829526fc1580479b8094d7cc7043b6a821ec7b64389e446f90"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"def _spec_include_map\" -A 45 auger.py | head -60",
+          "exit_code": 0,
+          "output_sha": "9e37c719c675741146e375403801e1eaa62e7cffcb937295e59c6e631dead099"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"def _spec_collect\" -A 70 auger.py | head -90",
+          "exit_code": 0,
+          "output_sha": "5c29af3f1729938d3790fd841692e83ef54d031a1197432d4ba980470bf9d559"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"def _spec_include_target\" -A 40 auger.py | head -50",
+          "exit_code": 0,
+          "output_sha": "77d22f832b4591f8c5a61354e52d2cdb08c43ac404040c02a16fd45a4d4c5a32"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"def _spec_validate_blocks\" -A 60 auger.py | head -70",
+          "exit_code": 0,
+          "output_sha": "bc368d3d7284cf36b4e4f9b981d53dbf3d2d758061472b6f34dc1553ecd48bfd"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"def _spec_assert_schema_conformance\" -A 45 auger.py | head -55",
+          "exit_code": 0,
+          "output_sha": "6617ee0391abb2b5b7f68e3cf3969530c73c1e88f1eb47deb32dd6e77666a9d6"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"def _spec_discover_documents\" -A 55 auger.py | sed -n '1,70p'",
+          "exit_code": 0,
+          "output_sha": "c35c41b15b537c659f299eccd6239caca2422b72c3a3156076bb03e3851da951"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"def _spec_schema_violations\" -A 40 auger.py | head -50",
+          "exit_code": 0,
+          "output_sha": "a8191ddfc6e90cc17cb0a238678d18fe2c9d9e6ae806dbdf24aa11faeb75f165"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"def _spec_load_schema\" -A 40 auger.py | head -50",
+          "exit_code": 0,
+          "output_sha": "9f14f32de0ee6f8a442dc5b989668e9394fe882c47bcda0b326c665d353b7846"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"def spec_schema_path\" -A 30 auger.py | head -40",
+          "exit_code": 0,
+          "output_sha": "cefa5f4119474b644ed07bdfa8b09199449a38afa0ed436c5515b021fafbe451"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"def _spec_render\" -A 40 auger.py | head -50",
+          "exit_code": 0,
+          "output_sha": "d3ff1a7627ae0a40e87c4c3d085252e90013ef0880eda68a540d447c1ae4e667"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"def spec_schema_candidates\" -A 30 auger.py | head -40",
+          "exit_code": 0,
+          "output_sha": "0f97c61b41e493c81b337437822795e7e7c3bfb8534b67181930fb50af036b1a"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"def _spec_dispatch\" -A 200 auger.py | sed -n '60,200p'",
+          "exit_code": 0,
+          "output_sha": "c494607f0f8130ed7e1866680bc4e0a9b55964e6fdcf26a9c96b68b6f0ae82e7"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && sed -n '12762,12840p' auger.py",
+          "exit_code": 0,
+          "output_sha": "4869f67b9f46f1a6deb3dbd0d0368de2f6ea6ac42fec534e2ddf59a045e77fa9"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"def validate_xml_specs\" -A 60 auger.py | head -70",
+          "exit_code": 0,
+          "output_sha": "9c995c9c278e4ea0a1a0c2d5aca00caebe3e3b1890abe31208ae134ff0531bd2"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"def _xml_spec_documents\" -A 30 auger.py | head -40",
+          "exit_code": 0,
+          "output_sha": "d6f8e5bf688bf61ab052c1239624a0c016e1ca484b5df53f9ce0d73c1477ea38"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"def assemble_xml_requirement\" -A 40 auger.py | head -50",
+          "exit_code": 0,
+          "output_sha": "4ed4a1898345ccd14684f51fa24183d51588dcae78176921e241bd1488cc8ba7"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"test_xml_specs.py\" tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "3be8828ff87f41b9f2687ef11dc3ca447bfc076fc92b8b9fae74d4e59a478ec7"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && cat .gitreins/config.yaml 2>/dev/null | head -40",
+          "exit_code": 0,
+          "output_sha": "076820263c9dbf87f0f170b4aa2607511dde8466ca8916b09b325d8f937bcf0e"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH timeout 900 python3 -m pytest tests/test_xml_specs.py -q 2>&1 | tail -8",
+          "exit_code": 0,
+          "output_sha": "a46871ab994d14a1787e6ac90ecc4b3d2e264525bc39d3bd30401d98c97848a6"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH timeout 1800 python3 -m pytest tests/test_xml_specs.py tests/test_xsd_conformance.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_spec_assembly_report.py tests/test_spec_corpus_view.py tests/test_spec_context.py tests/test_spec_render.py -q 2>&1 | tail -8",
+          "exit_code": 0,
+          "output_sha": "f76130468475177699cb6af7f5eacd86a3223a8c1a2ee96fac283be331e44a07"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Regression runs: tests/test_xml_specs.py -q -> 58 passed in 1.16s. Broader spec surface (test_xml_specs, test_xsd_conformance, test_spec_validators_agree, test_spec_validate_obligations, test_spec_assembly_report, test_spec_corpus_view, test_spec_context, test_spec_render) -> 147 passed in 9.16s.\", \"key\": \"regression\"}",
+          "exit_code": 0,
+          "output_sha": "915e28a86a11f63eb33f47d70b7c643207c27e46197a5b6fa4790d192d972e68"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; d=/tmp/aug146-d1; rm -rf $d; mkdir -p $d; cp tests/fixtures/xml/specs/*.xml $d; printf \"<spec xmlns=\\\"urn:auger:spec:1\\\"><requirement id=\\\"B\\\">\" > $d/zz-broken.xml; python3 auger.py spec check $d >/dev/null 2>/tmp/d1.err; echo check-rc=$?; head -2 /tmp/d1.err; python3 auger.py spec bundle $d AUG-REQ-014 >/dev/null 2>/tmp/d1b.err; echo bundle-rc=$?; head -2 /tmp/d1b.err; python3 auger.py spec render $d --out /tmp >/dev/null 2>/tmp/d1c.err; echo render-rc=$?; head -2 /tmp/d1c.err'",
+          "exit_code": 0,
+          "output_sha": "77663c5fe18eabe4f95ce642a48f9f96487e6b95bd3552de709df7c7b0f62b2c"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: corpus-wide verbs still refuse the malformed file, naming it, exit 2: `spec check` -> check-rc=2 \\\"spec error (invalid-xml): zz-broken.xml: no element found: line 1, column 51\\\"; `spec bundle` -> bundle-rc=2 same; `spec render` -> render-rc=2 same; `spec validate` -> validate-rc=2 (criterion 3). Selection verbs (list/assemble) exit 0 and report the skip on stderr.\", \"key\": \"verified_derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "703de4f6cf5385c24211d059584cca44b2bf2aa30196ed1e07ec1e7c38a77182"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: tolerance is one code wide \\u2014 auger.py:7883 `SPEC_TOLERATED_UNREADABLE = (\\\"invalid-xml\\\",)`; auger.py:8053 `if not (tolerate_unreadable and exc.code in SPEC_TOLERATED_UNREADABLE): raise`. _spec_read_document (auger.py:7938-7979) raises external-entity-forbidden / unsupported-namespace / invalid-root / unsupported-schema-version / missing-document-metadata, none of which are tolerated. tests/test_xml_specs.py:1139-1196 asserts list exits 2 with the typed code for malformed, unsupported-schema-version and external-entity documents (ran: 1 passed).\", \"key\": \"verified_derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "24219bf2cf2381c7dd6462879b42bb47b331bc8cfe23f5ccc57cdc0374a02633"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; d=/tmp/aug146-d2; rm -rf $d; mkdir -p $d; cp tests/fixtures/xml/specs/*.xml $d; printf \"<spec xmlns=\\\"urn:auger:spec:1\\\"><requirement id=\\\"B\\\">\" > $d/zz-broken.xml; python3 auger.py spec assemble $d --id AUG-REQ-014 --format json >/tmp/d2.json 2>/tmp/d2.err; echo rc=$?; python3 -c \"import json;d=json.load(open(\\\"/tmp/d2.json\\\"));print(d[\\\"corpus\\\"])\"; cat /tmp/d2.err'",
+          "exit_code": 0,
+          "output_sha": "6a82e3fe02893700d6da2ec5ee8968f71d51feabffbbe2d7ee5279a02d763301"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; d=/tmp/aug146-d3; rm -rf $d; mkdir -p $d; cp tests/fixtures/xml/specs/*.xml $d; printf \"<spec xmlns=\\\"urn:auger:spec:1\\\"><requirement id=\\\"B\\\">\" > $d/zz-broken.xml; python3 auger.py spec list $d >/tmp/d3.out 2>/tmp/d3.err; echo rc=$?; wc -l < /tmp/d3.out; cat /tmp/d3.err'",
+          "exit_code": 0,
+          "output_sha": "c0728aaaf50ffacaafaef40924f1cfde7fcd4854ace1e24616e8137d6ad9a12c"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: seam \\u2014 the value written is the value read. `spec assemble ... --format json` on a corpus with zz-broken.xml -> rc=0, payload corpus = {'documents_discovered': 4, 'documents_parsed': 3, 'documents_selected': 2, 'documents_unreadable': 1} (auger.py:12647-12658 _spec_corpus_counts, called at auger.py:12856), and stderr carries \\\"skipped 1 unreadable document(s)\\\" + the file (auger.py:12629-12644 _spec_report_unreadable, called at auger.py:12735). `spec list` with no selector -> rc=0, 10 rows, same stderr notice.\", \"key\": \"verified_derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "231329c9748eafd7501082e2f256d80568a3b3a37595292b179ddd1df0702f26"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; d=/tmp/aug146-d4; rm -rf $d; mkdir -p $d; cp tests/fixtures/xml/specs/*.xml $d; printf \"<spec xmlns=\\\"urn:auger:spec:1\\\"><requirement id=\\\"B\\\">\" > $d/zz-broken.xml; python3 auger.py spec list $d --id AUG-REQ-014 >/dev/null 2>/tmp/d4.err; echo list-rc=$?; head -2 /tmp/d4.err; python3 auger.py spec assemble $d --id AUG-REQ-014 --format json >/dev/null 2>/tmp/d4b.err; echo asm-rc=$?; head -2 /tmp/d4b.err'",
+          "exit_code": 0,
+          "output_sha": "39a63b56769d6641dfaec28e0f2328058aef10710b3290b6f575e1654f58749e"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: the skip is never silent \\u2014 both selection verbs print the count AND the file on stderr while stdout stays parseable: `spec list --id AUG-REQ-014` -> list-rc=0, stderr \\\"spec: skipped 1 unreadable document(s) \\u2014 this verb is selection-scoped; `auger spec validate` refuses the corpus\\\" + \\\"spec:   zz-broken.xml: no element found: line 1, column 51 [invalid-xml]\\\"; `spec assemble --id AUG-REQ-014 --format json` -> asm-rc=0, same two stderr lines, stdout still json.loads-able (verified in derived_2).\", \"key\": \"verified_derived_3\"}",
+          "exit_code": 0,
+          "output_sha": "de9395e8ea4e0669efc10a610e3fcdb0b1495e89b75a1d8ec53c416d74f02903"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; d=/tmp/aug146-d5; rm -rf $d; mkdir -p $d; cp tests/fixtures/xml/specs/*.xml $d; printf \"<spec xmlns=\\\"urn:auger:spec:1\\\"><requirement id=\\\"B\\\">\" > $d/zz-broken.xml; python3 auger.py spec list $d --id AUG-REQ-014 --format json >/dev/null 2>&1; echo list-json-rc=$?; python3 auger.py spec assemble $d --id AUG-REQ-014 --format json --measure >/tmp/d5.json 2>/dev/null; echo asm-measure-rc=$?; python3 -c \"import json;d=json.load(open(\\\"/tmp/d5.json\\\"));print(sorted(d.keys()));print(d.get(\\\"corpus\\\"))\"'",
+          "exit_code": 0,
+          "output_sha": "f6c6c85e23ab26ff8288aabbc93129fd707161163fddfd1fe23b59e987274a31"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; d=/tmp/aug146-d5; python3 auger.py spec list $d --id AUG-REQ-014 --format json; echo rc=$?' 2>&1 | head -5; grep -n \"list.*format\\|--format\" auger.py | grep -n \"list\" | head -20",
+          "exit_code": 0,
+          "output_sha": "3f08853a3acbd1a97f7968d68777dc2a870d6c8ca6bd2248d2e462d0ff9f688d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"spec list\" docs/VERBS.md | head -20",
+          "exit_code": 0,
+          "output_sha": "6f72901384880c0725f0481ca30bfd560a4c1aee02e9405552ef6296912c0968"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: the measured report keeps its shape with a skipped document \\u2014 `spec assemble ... --format json --measure` on the corpus with zz-broken.xml -> rc=0, keys ['blocks','blocks_indexed','blocks_parsed','corpus','counts','documents_read','elapsed_ms','input_bytes','output_bytes','report_schema_version','schema_version','selection'], corpus={'documents_discovered':4,'documents_parsed':3,'documents_selected':2,'documents_unreadable':1}. (`spec list` has no --format flag by design \\u2014 docs/VERBS.md:633 \\u2014 so the rc=2 seen for `list --format json` is argparse rejecting an undocumented flag, not a regression.)\", \"key\": \"verified_derived_4\"}",
+          "exit_code": 0,
+          "output_sha": "4aee86ec55a2b409f04770bf28f3393190967bf80cd1c89f8d2042110fb4e5e6"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show dd9e4ae --stat | tail -15 && git diff dd9e4ae^ dd9e4ae -- tests/gate.sh docs/VERBS.md | head -60",
+          "exit_code": 0,
+          "output_sha": "32c025c55f08360ce32456ca0468e70ef1c7d8e64d7c68df17d1a53183c02971"
+        }
+      ]
+    }
+  },
+  "ungraded_criteria": [
+    "PROOF: `bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; d=/tmp/aug146-c3; rm -rf $d; mkdir -p $d; cp tests/fixtures/xml/specs/*.xml $d; printf \"<spec xmlns=\\\"urn:auger:spec:1\\\"><requirement id=\\\"B\\\">\" > $d/zz-broken.xml; python3 auger.py spec list $d --id AUG-REQ-030 >/tmp/aug146-c3.out 2>/tmp/aug146-c3.err; echo rc=$?; wc -l < /tmp/aug146-c3.out; grep -c unreadable /tmp/aug146-c3.err; python3 auger.py spec validate $d >/dev/null 2>&1; echo validate-rc=$?'` prints rc=0, then 1, then 1, then validate-rc=2. FAILIF: a nonzero list rc, zero or two selected rows, no 'unreadable' line on stderr, or a validate rc other than 2 (the defect must stay visible).",
+    "PROOF: `bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --measure >/tmp/aug146-c4.json; echo rc=$?; grep -c documents_unreadable /tmp/aug146-c4.json'` prints rc=0 then 1. FAILIF: nonzero rc or no documents_unreadable counter in the measured report."
+  ],
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [
+      {
+        "severity": "high",
+        "file": ".coding-hermes/board/events.jsonl",
+        "line": 569,
+        "detection": "new event rows are inserted with ids (548-551) lower than the rows that precede them (553-555) and are appended out of timestamp order",
+        "detail": "The four added task_created rows carry ids 548-551 and timestamps 00:39:50-51, yet they are appended after id 555 (12:25:16) and before id 556 (15:01:31), breaking the file's monotonic id/timestamp ordering."
+      },
+      {
+        "severity": "high",
+        "file": ".coding-hermes/board/events.jsonl",
+        "line": 573,
+        "detection": "event rows rewritten from the {ts,event,type} schema to the {timestamp,event_type,actor,tick_number} schema, discarding recorded detail",
+        "detail": "The two replaced lines for AUG-143 and AUG-145 used keys `ts`/`event`/`type` with substantive `detail` text (verdict ids, gate results, product commits); the replacements use `timestamp`/`event_type` and reduce `detail` to `{\"status\":\"complete\"}`, dropping the audit content and changing the record shape."
+      },
+      {
+        "severity": "medium",
+        "file": ".coding-hermes/board/events.jsonl",
+        "line": 572,
+        "detection": "rewritten event timestamps differ from the originals they replace",
+        "detail": "AUG-143's completion moves from 2026-11-12T22:55:00Z to 2026-11-12 22:48:58 and AUG-145's from 2026-11-13T01:20:00Z to 2026-11-13 01:21:22, so the same event id now reports a different time than the line it replaced."
+      }
+    ],
+    "summary": "The board event log is edited in place: new task_created rows are appended out of id/timestamp order, and two existing completion events are rewritten into a different schema with their audit detail and original timestamps discarded."
+  },
+  "summary": "Stage tier1: PASS\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10\n\nStage tier2: FAIL\n  COMPLETE\n  \u2713 PROOF: `PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py::test_selection_skips_a_malformed_unrelated_document -q` prints `1 passed`. FAILIF: any other pass count, a failure, or a collection error.: Ran the exact command: exit_code 0, output `.  [100%]` / `1 passed in 0.15s`. The test (tests/test_xml_specs.py:1095-1136) asserts `spec list --id W-REQ-1` exits 0 with exactly one row, stderr contains \"skipped 1 unreadable document(s)\" and \"zz-broken.xml\", `assemble --format json` carries corpus == {documents_discovered:3, documents_parsed:2, documents_unreadable:1, documents_selected:1}, and the strict API default `auger.load_spec_corpus(corpus)` still raises `invalid-xml`.\n  \u2713 PROOF: `PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py::test_corpus_wide_verbs_still_refuse_a_malformed_document -q` prints `1 passed`. FAILIF: any other pass count, a failure, or a collection error.: Ran the exact command: exit_code 0, output `.  [100%]` / `1 passed in 0.05s`. The test (tests/test_xml_specs.py:1139-1196) asserts `spec list` exits 2 with `spec error (<code>)` for a malformed document, an unsupported-schema-version document and a DOCTYPE/ENTITY document.\n  \u2713 PROOF: `bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; d=/tmp/aug146-c3; ...'` prints rc=0, then 1, then 1, then validate-rc=2. FAILIF: a nonzero list rc, zero or two selected rows, no 'unreadable' line on stderr, or a validate rc other than 2 (the defect must stay visible).: Ran the exact command verbatim: output `rc=0` / `1` / `1` / `validate-rc=2`. /tmp/aug146-c3.out holds exactly one row (`AUG-REQ-030\\trequirement\\tactive\\t2.0.0\\tassembly.xml#AUG-REQ-030\\tauger.spec`); /tmp/aug146-c3.err holds `spec: skipped 1 unreadable document(s) \u2014 this verb is selection-scoped; `auger spec validate` refuses the corpus` plus `spec:   zz-broken.xml: no element found: line 1, column 51 [invalid-xml]`.\n  \u2713 PROOF: `grep -c \"Corpus-wide vs selection-scoped\" docs/VERBS.md` prints 1. FAILIF: 0 \u2014 the selection-scoped vs corpus-wide rule is undocumented again.: `grep -c` -> `1`. The paragraph lives at docs/VERBS.md:692-703 and states which verbs are corpus-wide (validate/check/bundle) vs selection-scoped (list/assemble), the stderr count, the four `corpus.*` counters, and that the tolerance is exactly one code wide.\n  \u2713 PROOF: `bash -c 'export PATH=...; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --measure >/tmp/aug146-c4.json; echo rc=$?; grep -c documents_unreadable /tmp/aug146-c4.json'` prints rc=0 then 1. FAILIF: nonzero rc or no documents_unreadable counter in the measured report.: Ran the exact command: output `rc=0` then `1`. The counter is emitted by `_spec_corpus_counts` (auger.py:12647-12658, `\"documents_unreadable\": len(unreadable)`) and called at auger.py:12856 for every assemble, measured or not.\n  \u2713 PROOF: `grep -c \"tests/test_xml_specs.py\" tests/gate.sh` prints 2. FAILIF: 0 or 1 \u2014 the pinning suite dropped out of the gate pytest arm.: `grep -c` -> `2`: tests/gate.sh:157 (the comment naming the suite) and tests/gate.sh:206 (the pytest arm that actually runs `tests/test_xml_specs.py`).\n  \u2713 PROOF: bash -c \"git merge-base --is-ancestor dd9e4aee668a071de7eb48374111f179d5a621e2 HEAD; echo rc=$?\" prints rc=0. FAILIF: any nonzero rc \u2014 the cited fix commit is absent from the graded history.: Ran it: `rc=0`; `git log -1 dd9e4ae` -> `dd9e4ae fix(spec): selection verbs skip an unparseable document and count it (AUG-146)`. `git show --stat dd9e4ae` touches auger.py (+137), docs/VERBS.md (+13), tests/test_xml_specs.py (+152).\n  \u2713 Corpus-wide verbs (validate, check, bundle, render) still refuse a malformed document with exit 2 and name the file, so the tolerance did not leak into the corpus-wide path.: On a corpus of tests/fixtures/xml/specs/*.xml plus a truncated zz-broken.xml: `spec check` -> check-rc=2, `spec bundle` -> bundle-rc=2, `spec render` -> render-rc=2, `spec validate` -> validate-rc=2, each printing `spec error (invalid-xml): zz-broken.xml: no element found: line 1, column 51`. Code: `selection_scoped = command in (\"list\", \"assemble\")` (auger.py:12719) is the only place `tolerate_unreadable=True` is passed (auger.py:12725-12727); the else branch calls the strict `load_spec_corpus(a.root)` (auger.py:12734).\n  \u2713 The tolerance is exactly one code wide: only `invalid-xml` is skipped; wrong namespace/root, unsupported schema-version, DOCTYPE/ENTITY and include failures still refuse on the selection verbs too.: auger.py:7883 `SPEC_TOLERATED_UNREADABLE = (\"invalid-xml\",)`; auger.py:8053 `if not (tolerate_unreadable and exc.code in SPEC_TOLERATED_UNREADABLE): raise`. `_spec_read_document` (auger.py:7938-7979) raises external-entity-forbidden / unsupported-namespace / invalid-root / unsupported-schema-version / missing-document-metadata, none tolerated; `_spec_include_target` (auger.py:8222-8244) and `_spec_collect` (auger.py:8467-8470) still raise unresolved-include. tests/test_xml_specs.py:1168-1196 pins the schema-version and DOCTYPE cases on `list` (ran: 1 passed).\n  \u2713 The skip is reported, not silent: both selection verbs print the count and the offending file on stderr while stdout stays parseable, and the JSON `corpus` counters agree with what was actually read.: `spec list --id AUG-REQ-014` -> list-rc=0 with stderr `spec: skipped 1 unreadable document(s) \u2014 this verb is selection-scoped; ...` + `spec:   zz-broken.xml: no element found: line 1, column 51 [invalid-xml]`; `spec assemble --id AUG-REQ-014 --format json` -> asm-rc=0, same two stderr lines, stdout still `json.loads`-able with corpus {'documents_discovered': 4, 'documents_parsed': 3, 'documents_selected': 2, 'documents_unreadable': 1}. Emitters: `_spec_report_unreadable` (auger.py:12629-12644, called at auger.py:12735) and `_spec_corpus_counts` (auger.py:12647-12658).\n  \u2713 The measured assembly report keeps its documented shape when a document is skipped (all `--measure` keys plus the `corpus` block present, rc=0).: `spec assemble <corpus-with-zz-broken.xml> --id AUG-REQ-014 --format json --measure` -> asm-measure-rc=0; keys ['blocks','blocks_indexed','blocks_parsed','corpus','counts','documents_read','elapsed_ms','input_bytes','output_bytes','report_schema_version','schema_version','selection'], corpus={'documents_discovered':4,'documents_parsed':3,'documents_selected':2,'documents_unreadable':1}. Regression surface green: `pytest tests/test_xml_specs.py -q` -> `58 passed in 1.16s`; `pytest tests/test_xml_specs.py tests/test_xsd_conformance.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_spec_assembly_report.py tests/test_spec_corpus_view.py tests/test_spec_context.py tests/test_spec_render.py -q` -> `147 passed in 9.16s`.\n  \u2717 Coverage FAILED \u2014 ungraded: PROOF: `bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; d=/tmp/aug146-c3; rm -rf $d; mkdir -p $d; cp tests/fixtures/xml/specs/*.xml $d; printf \"<spec xmlns=\\\"urn:auger:spec:1\\\"><requirement id=\\\"B\\\">\" > $d/zz-broken.xml; python3 auger.py spec list $d --id AUG-REQ-030 >/tmp/aug146-c3.out 2>/tmp/aug146-c3.err; echo rc=$?; wc -l < /tmp/aug146-c3.out; grep -c unreadable /tmp/aug146-c3.err; python3 auger.py spec validate $d >/dev/null 2>&1; echo validate-rc=$?'` prints rc=0, then 1, then 1, then validate-rc=2. FAILIF: a nonzero list rc, zero or two selected rows, no 'unreadable' line on stderr, or a validate rc other than 2 (the defect must stay visible).; PROOF: `bash -c 'export PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --measure >/tmp/aug146-c4.json; echo rc=$?; grep -c documents_unreadable /tmp/aug146-c4.json'` prints rc=0 then 1. FAILIF: nonzero rc or no documents_unreadable counter in the measured report.\nAll seven given criteria and all five derived criteria pass with fresh command output: the two pinning tests pass, the CLI reproduces rc=0/1/1/validate-rc=2 exactly, the docs paragraph and gate arm are present, the fix commit dd9e4ae is in history, and the corpus-wide verbs (validate/check/bundle/render) still refuse the malformed file with exit 2 while list/assemble skip and count it. [uncovered failure paths: failure mode 0 (A reference or include edge pointing INTO a skipped document is not detected as such: `_spec_include_map`/`_spec_collect` only see parsed documents, so an `<include src>` into a malformed file surfaces as `unresolved-include` (\"was not indexed\") rather than a message naming the unreadable file, and a `depends-on`/`verifies` edge into a skipped document surfaces as `unresolved-reference` (\"no block with that id\"). The refusal still happens (exit 2), so the documented invariant holds, but the diagnostic misattributes the cause.): detected_by is empty \u2014 uncovered failure path; failure mode 1 (`spec context` (auger.py:11646-11648) passes `tolerate_unreadable=True, skipped=[]` and discards the list, so a malformed neighbour is skipped with no count and no stderr notice \u2014 the opposite of the 'never silent' rule this row establishes for the other selection verbs.): detected_by is empty \u2014 uncovered failure path]\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-11-13T03:48:54.043802",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-13T03:48:54.067912+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 3811,
+        "truncated": false,
+        "source": "git show 2aca2d4bcab0"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 13679,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-146"
+  }
+}
