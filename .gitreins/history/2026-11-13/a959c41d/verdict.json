@@ -1,0 +1,495 @@
+{
+  "task_id": "AUG-145",
+  "task_title": "assemble --out into a missing parent is a typed refusal, not a traceback (AUG-145)",
+  "task_criteria": [
+    "PROOF: `PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py -k \"out_refuses_a_missing_parent or out_refusal_leaves_the_directory or out_into_an_existing_directory\" -q` prints `3 passed`. FAILIF: any other pass count, a failure, or a collection error.",
+    "PROOF: `bash -c \"rm -rf /tmp/aug145-x; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --out /tmp/aug145-x/sub/asm.json >/dev/null 2>/tmp/aug145-err.txt; echo rc=\\$?; grep -c Traceback /tmp/aug145-err.txt; grep -c missing-out-directory /tmp/aug145-err.txt\"` prints rc=2, then 0, then 1. FAILIF: rc 1, any traceback line (the pre-fix crash), or no typed missing-out-directory code.",
+    "PROOF: `bash -c \"rm -rf /tmp/aug145-ok; mkdir -p /tmp/aug145-ok; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --out /tmp/aug145-ok/asm.json >/dev/null; echo rc=\\$?; ls /tmp/aug145-ok\"` prints rc=0 and exactly one entry asm.json. FAILIF: nonzero rc, more than one file left (a temporary sibling), or no output file.",
+    "PROOF: `grep -c \"tests/test_xml_specs.py\" tests/gate.sh` prints 2. FAILIF: 0 or 1 \u2014 the pin file must stay named in the gate pytest arm.",
+    "PROOF: bash -c \"git merge-base --is-ancestor c6b24b3 HEAD; echo rc=\\$?\" prints rc=0. FAILIF: any nonzero rc \u2014 the cited fix commit is absent from the graded history.",
+    "PROOF: `grep -c \"a refusal left a partial or temporary file behind\" tests/test_xml_specs.py` prints 1. FAILIF: 0 \u2014 the no-leftover assertion is gone from the suite."
+  ],
+  "passed": true,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "87e52981352320a1afb4de088d84820578d41fab",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "c634673e544d719fb2d34470a5b75651c677be63e8a9c4081ff96b50fa4b9f64",
+  "working_tree_dirty_path_count": 2,
+  "items": [
+    {
+      "criterion": "PROOF: `PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py -k \"out_refuses_a_missing_parent or out_refusal_leaves_the_directory or out_into_an_existing_directory\" -q` prints `3 passed`. FAILIF: any other pass count, a failure, or a collection error.",
+      "status": "PASS",
+      "detail": "Ran the exact command in /home/kara/auger: exit_code 0, output `...  [100%]` / `3 passed, 55 deselected in 0.42s`. The three selected tests are tests/test_xml_specs.py:900 (test_assemble_out_refuses_a_missing_parent_directory_without_a_traceback), :925 (test_assemble_out_refusal_leaves_the_directory_byte_identical), :948 (test_assemble_out_into_an_existing_directory_writes_exactly_one_file)."
+    },
+    {
+      "criterion": "PROOF: `bash -c \"rm -rf /tmp/aug145-x; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --out /tmp/aug145-x/sub/asm.json >/dev/null 2>/tmp/aug145-err.txt; echo rc=\\$?; grep -c Traceback /tmp/aug145-err.txt; grep -c missing-out-directory /tmp/aug145-err.txt\"` prints rc=2, then 0, then 1. FAILIF: rc 1, any traceback line (the pre-fix crash), or no typed missing-out-directory code.",
+      "status": "PASS",
+      "detail": "Ran the exact command: output `rc=2` / `0` / `1`. /tmp/aug145-err.txt contains exactly one line: `spec error (missing-out-directory): /tmp/aug145-x/sub is not a directory; create it first or pass --out into an existing one (nothing was written)` \u2014 no traceback. Refusal is raised in auger.py:9155-9160 before any filesystem write."
+    },
+    {
+      "criterion": "PROOF: `bash -c \"rm -rf /tmp/aug145-ok; mkdir -p /tmp/aug145-ok; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --out /tmp/aug145-ok/asm.json >/dev/null; echo rc=\\$?; ls /tmp/aug145-ok\"` prints rc=0 and exactly one entry asm.json. FAILIF: nonzero rc, more than one file left (a temporary sibling), or no output file.",
+      "status": "PASS",
+      "detail": "Ran the exact command: output `rc=0` then `asm.json` \u2014 exactly one entry, no `.asm.json.*.tmp` sibling. Success path auger.py:12910-12913 calls _spec_write_atomic then prints `wrote N block(s) to PATH`."
+    },
+    {
+      "criterion": "PROOF: `grep -c \"tests/test_xml_specs.py\" tests/gate.sh` prints 2. FAILIF: 0 or 1 \u2014 the pin file must stay named in the gate pytest arm.",
+      "status": "PASS",
+      "detail": "`grep -c \"tests/test_xml_specs.py\" tests/gate.sh` -> `2`. Occurrences: tests/gate.sh:157 (comment) and tests/gate.sh:206 (the pytest arm listing `tests/test_xml_specs.py`)."
+    },
+    {
+      "criterion": "PROOF: bash -c \"git merge-base --is-ancestor c6b24b3 HEAD; echo rc=\\$?\" prints rc=0. FAILIF: any nonzero rc \u2014 the cited fix commit is absent from the graded history.",
+      "status": "PASS",
+      "detail": "`git merge-base --is-ancestor c6b24b3 HEAD; echo rc=$?` -> `rc=0`. `git log --oneline -3 c6b24b3` shows `c6b24b3 fix(spec): refuse a bad --out path with a typed code instead of a traceback (AUG-145)`; `git show --stat c6b24b3` lists auger.py (+46/-6), docs/VERBS.md, tests/test_xml_specs.py (+100)."
+    },
+    {
+      "criterion": "PROOF: `grep -c \"a refusal left a partial or temporary file behind\" tests/test_xml_specs.py` prints 1. FAILIF: 0 \u2014 the no-leftover assertion is gone from the suite.",
+      "status": "PASS",
+      "detail": "`grep -c \"a refusal left a partial or temporary file behind\" tests/test_xml_specs.py` -> `1`; the assertion is at tests/test_xml_specs.py:940-942 (`sorted(path.name for path in tmp_path.iterdir()) == before`)."
+    },
+    {
+      "criterion": "The typed refusal is reachable from the real CLI entrypoint (auger.py spec assemble -> cmd_spec -> _spec_write_atomic) and exits 2 with no traceback, not just from the test harness.",
+      "status": "PASS",
+      "detail": "Live run `python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --out /tmp/aug145-x2/sub/asm.json` -> `spec error (missing-out-directory): ... (nothing was written)`, rc=2, no traceback. Wiring: auger.py:12912 `_spec_write_atomic(out, text)` inside the assemble verb; cmd_spec at auger.py:12622-12627 catches SpecError and prints `spec error ({exc.code}): {exc.detail}` then `SystemExit(2)`.",
+      "derived": true
+    },
+    {
+      "criterion": "The refusal path is side-effect free: a missing-parent refusal creates neither the target file nor the parent tree, and a directory-target refusal leaves the directory byte-identical (no temp sibling).",
+      "status": "PASS",
+      "detail": "After the missing-parent run, `ls -d /tmp/aug145-x2` -> `No such file or directory` (parent tree not materialised). Directory-target run `--out /tmp/aug145-d/asm.json` (a directory) -> `spec error (invalid-out-path): ... is a directory; --out names a file (nothing was written)`, rc=2, and `ls -a /tmp/aug145-d` shows only `. .. asm.json` \u2014 no temp sibling. Both checks are pinned by tests/test_xml_specs.py:918-920 and :940-942, which pass.",
+      "derived": true
+    },
+    {
+      "criterion": "The success path is unchanged: --out into an existing directory writes exactly one file (no temp sibling) with rc 0 and the documented \"wrote N block(s) to PATH\" line.",
+      "status": "PASS",
+      "detail": "Live run rc=0 with `ls /tmp/aug145-ok` -> `asm.json` only. tests/test_xml_specs.py:945-975 asserts code==0, `out.strip() == f\"wrote 3 block(s) to {target}\"`, `sorted(directory.iterdir()) == [\"asm.json\"]`, and the JSON payload counts.total==3; that test passes in the 3-passed run.",
+      "derived": true
+    },
+    {
+      "criterion": "The new typed codes are documented where the verb is documented (docs/VERBS.md / --help) so the contract is discoverable, and the whole test_xml_specs suite stays green (no regression).",
+      "status": "PASS",
+      "detail": "docs/VERBS.md:707-712 documents `missing-out-directory` (exit 2), `invalid-out-path`, `unwritable-out` and \"never a traceback ... leaves no temporary or partial file behind\"; `python3 auger.py spec assemble --help` prints `--out OUT  write the assembly here atomically; the parent directory must already exist (nothing is created when the run refuses)`. Full suite: `PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py -q` -> exit_code 0, `58 passed in 1.31s`.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "no_concerns_found",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261112T091941.670002Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nscanners: nice=nice -n 10\n7:56PM INF scanned ~3378680 bytes (3.38 MB) in 1.44s\n7:56PM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 251 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261112T091941.670002Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [  9%]\n........................................................................ [ 19%]\n........................................................................ [ 29%]\n........................................................................ [ 39%]\n............................s........................................... [ 49%]\n.......s................................................................ [ 59%]\n........................................................................ [ 69%]\n........................................................................ [ 79%]\n........................................................................ [ 89%]\n........................................................................ [ 99%]\n....                                                                     [100%]\n722 passed, 2 skipped in 953.25s (0:15:53)\n== wrapper regression (AUG-081) ==\ngate prerequisite preflight: PASS\nAUG-116: zombie pid 3778588 classified dead (kill -0 alone would have said alive)\nAUG-081 wrapper regression: PASS\nAUG-130 skipped-arm policy: PASS\n== end-to-end smoke ==\nnamespace: auger-smoke-3781354\nnamespace sweep: removed 1 stale throwaway(s)\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n\n\u2026 [529 chars omitted \u2014 13 line(s)] \u2026\n== spec corpus (AUG-136) ==\nspec: 3 document(s), 12 block(s), 7 reference(s) ok\n== prd proofs (AUG-137) ==\nprd proofs: 8 total \u00b7 3 required \u00b7 5 deferred \u2192 PASS\n   P1  deferred not-run   not-run (deferred to AUG-119): auger.py carries no board surface (grep -c boardctl auger.py -> 0): resolving a\n   P2  required pass      corpus=9249B bundle=8131B latency=14.7ms  2 generated view(s) verified byte-identical to the generator's output for specs/; one block edit propagated to\n   P3  deferred not-run   not-run (deferred to AUG-153): the checker half is reachable (`auger spec check --diff-file` reports `trace-mi\n   P4  deferred not-run   not-run (deferred to AUG-119): writing and reading back a canonical boardctl row is boardctl's surface, not au\n   P5  required pass      corpus=1084B bundle=435B latency=652.8ms  one query returned migration=tests/fixtures/xml/verification/migrations/001_add_marker.sql, fixture=tests/fixt\n   P6  deferred not-run   not-run (deferred to AUG-124): what counts as judge evidence \u2014 excluding the worker summary, refusing a PASS w\n   P7  required pass      corpus=9249B bundle=2944B latency=113.4ms  4/12 blocks selected by `applies-to auger.spec.select`; bundle is 31.8% of the corpus (2944 of 9249 bytes), fl\n   P8  deferred not-run   not-run (deferred to AUG-153): the flag and the process-liveness assertion live in the GitReins hook, which no\nprd-proofs: /home/kara/auger/docs/prd/evidence/AUG-137-prd-proofs.json agrees with this run\n== docs check ==\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261112T091941.670002Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 PROOF: `PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py -k \"out_refuses_a_missing_parent or out_refusal_leaves_the_directory or out_into_an_existing_directory\" -q` prints `3 passed`. FAILIF: any other pass count, a failure, or a collection error.: Ran the exact command in /home/kara/auger: exit_code 0, output `...  [100%]` / `3 passed, 55 deselected in 0.42s`. The three selected tests are tests/test_xml_specs.py:900 (test_assemble_out_refuses_a_missing_parent_directory_without_a_traceback), :925 (test_assemble_out_refusal_leaves_the_directory_byte_identical), :948 (test_assemble_out_into_an_existing_directory_writes_exactly_one_file).\n  \u2713 PROOF: `bash -c \"rm -rf /tmp/aug145-x; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --out /tmp/aug145-x/sub/asm.json >/dev/null 2>/tmp/aug145-err.txt; echo rc=\\$?; grep -c Traceback /tmp/aug145-err.txt; grep -c missing-out-directory /tmp/aug145-err.txt\"` prints rc=2, then 0, then 1. FAILIF: rc 1, any traceback line (the pre-fix crash), or no typed missing-out-directory code.: Ran the exact command: output `rc=2` / `0` / `1`. /tmp/aug145-err.txt contains exactly one line: `spec error (missing-out-directory): /tmp/aug145-x/sub is not a directory; create it first or pass --out into an existing one (nothing was written)` \u2014 no traceback. Refusal is raised in auger.py:9155-9160 before any filesystem write.\n  \u2713 PROOF: `bash -c \"rm -rf /tmp/aug145-ok; mkdir -p /tmp/aug145-ok; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --out /tmp/aug145-ok/asm.json >/dev/null; echo rc=\\$?; ls /tmp/aug145-ok\"` prints rc=0 and exactly one entry asm.json. FAILIF: nonzero rc, more than one file left (a temporary sibling), or no output file.: Ran the exact command: output `rc=0` then `asm.json` \u2014 exactly one entry, no `.asm.json.*.tmp` sibling. Success path auger.py:12910-12913 calls _spec_write_atomic then prints `wrote N block(s) to PATH`.\n  \u2713 PROOF: `grep -c \"tests/test_xml_specs.py\" tests/gate.sh` prints 2. FAILIF: 0 or 1 \u2014 the pin file must stay named in the gate pytest arm.: `grep -c \"tests/test_xml_specs.py\" tests/gate.sh` -> `2`. Occurrences: tests/gate.sh:157 (comment) and tests/gate.sh:206 (the pytest arm listing `tests/test_xml_specs.py`).\n  \u2713 PROOF: bash -c \"git merge-base --is-ancestor c6b24b3 HEAD; echo rc=\\$?\" prints rc=0. FAILIF: any nonzero rc \u2014 the cited fix commit is absent from the graded history.: `git merge-base --is-ancestor c6b24b3 HEAD; echo rc=$?` -> `rc=0`. `git log --oneline -3 c6b24b3` shows `c6b24b3 fix(spec): refuse a bad --out path with a typed code instead of a traceback (AUG-145)`; `git show --stat c6b24b3` lists auger.py (+46/-6), docs/VERBS.md, tests/test_xml_specs.py (+100).\n  \u2713 PROOF: `grep -c \"a refusal left a partial or temporary file behind\" tests/test_xml_specs.py` prints 1. FAILIF: 0 \u2014 the no-leftover assertion is gone from the suite.: `grep -c \"a refusal left a partial or temporary file behind\" tests/test_xml_specs.py` -> `1`; the assertion is at tests/test_xml_specs.py:940-942 (`sorted(path.name for path in tmp_path.iterdir()) == before`).\n  \u2713 The typed refusal is reachable from the real CLI entrypoint (auger.py spec assemble -> cmd_spec -> _spec_write_atomic) and exits 2 with no traceback, not just from the test harness.: Live run `python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --out /tmp/aug145-x2/sub/asm.json` -> `spec error (missing-out-directory): ... (nothing was written)`, rc=2, no traceback. Wiring: auger.py:12912 `_spec_write_atomic(out, text)` inside the assemble verb; cmd_spec at auger.py:12622-12627 catches SpecError and prints `spec error ({exc.code}): {exc.detail}` then `SystemExit(2)`.\n  \u2713 The refusal path is side-effect free: a missing-parent refusal creates neither the target file nor the parent tree, and a directory-target refusal leaves the directory byte-identical (no temp sibling).: After the missing-parent run, `ls -d /tmp/aug145-x2` -> `No such file or directory` (parent tree not materialised). Directory-target run `--out /tmp/aug145-d/asm.json` (a directory) -> `spec error (invalid-out-path): ... is a directory; --out names a file (nothing was written)`, rc=2, and `ls -a /tmp/aug145-d` shows only `. .. asm.json` \u2014 no temp sibling. Both checks are pinned by tests/test_xml_specs.py:918-920 and :940-942, which pass.\n  \u2713 The success path is unchanged: --out into an existing directory writes exactly one file (no temp sibling) with rc 0 and the documented \"wrote N block(s) to PATH\" line.: Live run rc=0 with `ls /tmp/aug145-ok` -> `asm.json` only. tests/test_xml_specs.py:945-975 asserts code==0, `out.strip() == f\"wrote 3 block(s) to {target}\"`, `sorted(directory.iterdir()) == [\"asm.json\"]`, and the JSON payload counts.total==3; that test passes in the 3-passed run.\n  \u2713 The new typed codes are documented where the verb is documented (docs/VERBS.md / --help) so the contract is discoverable, and the whole test_xml_specs suite stays green (no regression).: docs/VERBS.md:707-712 documents `missing-out-directory` (exit 2), `invalid-out-path`, `unwritable-out` and \"never a traceback ... leaves no temporary or partial file behind\"; `python3 auger.py spec assemble --help` prints `--out OUT  write the assembly here atomically; the parent directory must already exist (nothing is created when the run refuses)`. Full suite: `PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py -q` -> exit_code 0, `58 passed in 1.31s`.\nAll six given proofs reproduce exactly (3 passed, rc=2/0/1 with a typed missing-out-directory and no traceback, rc=0 with a single asm.json, gate.sh count 2, c6b24b3 an ancestor, the no-leftover assertion present), and the derived reachability, side-effect-freedom, success-path and documentation checks also hold. [uncovered failure paths: failure mode 0 (A non-OSError raised while writing (e.g. UnicodeEncodeError on a lone surrogate in the rendered text) still unlinks the temp file via the BaseException arm, but a failure between mkstemp and fdopen leaves the fd open \u2014 a leaked descriptor, not a leftover file): detected_by is empty \u2014 uncovered failure path]",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 PROOF: `PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py -k \"out_refuses_a_missing_parent or out_refusal_leaves_the_directory or out_into_an_existing_directory\" -q` prints `3 passed`. FAILIF: any other pass count, a failure, or a collection error.: Ran the exact command in /home/kara/auger: exit_code 0, output `...  [100%]` / `3 passed, 55 deselected in 0.42s`. The three selected tests are tests/test_xml_specs.py:900 (test_assemble_out_refuses_a_missing_parent_directory_without_a_traceback), :925 (test_assemble_out_refusal_leaves_the_directory_byte_identical), :948 (test_assemble_out_into_an_existing_directory_writes_exactly_one_file).\n  \u2713 PROOF: `bash -c \"rm -rf /tmp/aug145-x; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --out /tmp/aug145-x/sub/asm.json >/dev/null 2>/tmp/aug145-err.txt; echo rc=\\$?; grep -c Traceback /tmp/aug145-err.txt; grep -c missing-out-directory /tmp/aug145-err.txt\"` prints rc=2, then 0, then 1. FAILIF: rc 1, any traceback line (the pre-fix crash), or no typed missing-out-directory code.: Ran the exact command: output `rc=2` / `0` / `1`. /tmp/aug145-err.txt contains exactly one line: `spec error (missing-out-directory): /tmp/aug145-x/sub is not a directory; create it first or pass --out into an existing one (nothing was written)` \u2014 no traceback. Refusal is raised in auger.py:9155-9160 before any filesystem write.\n  \u2713 PROOF: `bash -c \"rm -rf /tmp/aug145-ok; mkdir -p /tmp/aug145-ok; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --out /tmp/aug145-ok/asm.json >/dev/null; echo rc=\\$?; ls /tmp/aug145-ok\"` prints rc=0 and exactly one entry asm.json. FAILIF: nonzero rc, more than one file left (a temporary sibling), or no output file.: Ran the exact command: output `rc=0` then `asm.json` \u2014 exactly one entry, no `.asm.json.*.tmp` sibling. Success path auger.py:12910-12913 calls _spec_write_atomic then prints `wrote N block(s) to PATH`.\n\n\u2026 [2880 chars omitted \u2014 6 line(s)] \u2026\n  \u2713 The new typed codes are documented where the verb is documented (docs/VERBS.md / --help) so the contract is discoverable, and the whole test_xml_specs suite stays green (no regression).: docs/VERBS.md:707-712 documents `missing-out-directory` (exit 2), `invalid-out-path`, `unwritable-out` and \"never a traceback ... leaves no temporary or partial file behind\"; `python3 auger.py spec assemble --help` prints `--out OUT  write the assembly here atomically; the parent directory must already exist (nothing is created when the run refuses)`. Full suite: `PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py -q` -> exit_code 0, `58 passed in 1.31s`.\nAll six given proofs reproduce exactly (3 passed, rc=2/0/1 with a typed missing-out-directory and no traceback, rc=0 with a single asm.json, gate.sh count 2, c6b24b3 an ancestor, the no-leftover assertion present), and the derived reachability, side-effect-freedom, success-path and documentation checks also hold. [uncovered failure paths: failure mode 0 (A non-OSError raised while writing (e.g. UnicodeEncodeError on a lone surrogate in the rendered text) still unlinks the temp file via the BaseException arm, but a failure between mkstemp and fdopen leaves the fd open \u2014 a leaked descriptor, not a leftover file): detected_by is empty \u2014 uncovered failure path]",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "PROOF: `PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py -k \"out_refuses_a_missing_parent or out_refusal_leaves_the_directory or out_into_an_existing_directory\" -q` prints `3 passed`. FAILIF: any other pass count, a failure, or a collection error.",
+                "status": "PASS",
+                "detail": "Ran the exact command in /home/kara/auger: exit_code 0, output `...  [100%]` / `3 passed, 55 deselected in 0.42s`. The three selected tests are tests/test_xml_specs.py:900 (test_assemble_out_refuses_a_missing_parent_directory_without_a_traceback), :925 (test_assemble_out_refusal_leaves_the_directory_byte_identical), :948 (test_assemble_out_into_an_existing_directory_writes_exactly_one_file)."
+              },
+              {
+                "criterion": "PROOF: `bash -c \"rm -rf /tmp/aug145-x; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --out /tmp/aug145-x/sub/asm.json >/dev/null 2>/tmp/aug145-err.txt; echo rc=\\$?; grep -c Traceback /tmp/aug145-err.txt; grep -c missing-out-directory /tmp/aug145-err.txt\"` prints rc=2, then 0, then 1. FAILIF: rc 1, any traceback line (the pre-fix crash), or no typed missing-out-directory code.",
+                "status": "PASS",
+                "detail": "Ran the exact command: output `rc=2` / `0` / `1`. /tmp/aug145-err.txt contains exactly one line: `spec error (missing-out-directory): /tmp/aug145-x/sub is not a directory; create it first or pass --out into an existing one (nothing was written)` \u2014 no traceback. Refusal is raised in auger.py:9155-9160 before any filesystem write."
+              },
+              {
+                "criterion": "PROOF: `bash -c \"rm -rf /tmp/aug145-ok; mkdir -p /tmp/aug145-ok; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --out /tmp/aug145-ok/asm.json >/dev/null; echo rc=\\$?; ls /tmp/aug145-ok\"` prints rc=0 and exactly one entry asm.json. FAILIF: nonzero rc, more than one file left (a temporary sibling), or no output file.",
+                "status": "PASS",
+                "detail": "Ran the exact command: output `rc=0` then `asm.json` \u2014 exactly one entry, no `.asm.json.*.tmp` sibling. Success path auger.py:12910-12913 calls _spec_write_atomic then prints `wrote N block(s) to PATH`."
+              },
+              {
+                "criterion": "PROOF: `grep -c \"tests/test_xml_specs.py\" tests/gate.sh` prints 2. FAILIF: 0 or 1 \u2014 the pin file must stay named in the gate pytest arm.",
+                "status": "PASS",
+                "detail": "`grep -c \"tests/test_xml_specs.py\" tests/gate.sh` -> `2`. Occurrences: tests/gate.sh:157 (comment) and tests/gate.sh:206 (the pytest arm listing `tests/test_xml_specs.py`)."
+              },
+              {
+                "criterion": "PROOF: bash -c \"git merge-base --is-ancestor c6b24b3 HEAD; echo rc=\\$?\" prints rc=0. FAILIF: any nonzero rc \u2014 the cited fix commit is absent from the graded history.",
+                "status": "PASS",
+                "detail": "`git merge-base --is-ancestor c6b24b3 HEAD; echo rc=$?` -> `rc=0`. `git log --oneline -3 c6b24b3` shows `c6b24b3 fix(spec): refuse a bad --out path with a typed code instead of a traceback (AUG-145)`; `git show --stat c6b24b3` lists auger.py (+46/-6), docs/VERBS.md, tests/test_xml_specs.py (+100)."
+              },
+              {
+                "criterion": "PROOF: `grep -c \"a refusal left a partial or temporary file behind\" tests/test_xml_specs.py` prints 1. FAILIF: 0 \u2014 the no-leftover assertion is gone from the suite.",
+                "status": "PASS",
+                "detail": "`grep -c \"a refusal left a partial or temporary file behind\" tests/test_xml_specs.py` -> `1`; the assertion is at tests/test_xml_specs.py:940-942 (`sorted(path.name for path in tmp_path.iterdir()) == before`)."
+              },
+              {
+                "criterion": "The typed refusal is reachable from the real CLI entrypoint (auger.py spec assemble -> cmd_spec -> _spec_write_atomic) and exits 2 with no traceback, not just from the test harness.",
+                "status": "PASS",
+                "detail": "Live run `python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --out /tmp/aug145-x2/sub/asm.json` -> `spec error (missing-out-directory): ... (nothing was written)`, rc=2, no traceback. Wiring: auger.py:12912 `_spec_write_atomic(out, text)` inside the assemble verb; cmd_spec at auger.py:12622-12627 catches SpecError and prints `spec error ({exc.code}): {exc.detail}` then `SystemExit(2)`.",
+                "derived": true
+              },
+              {
+                "criterion": "The refusal path is side-effect free: a missing-parent refusal creates neither the target file nor the parent tree, and a directory-target refusal leaves the directory byte-identical (no temp sibling).",
+                "status": "PASS",
+                "detail": "After the missing-parent run, `ls -d /tmp/aug145-x2` -> `No such file or directory` (parent tree not materialised). Directory-target run `--out /tmp/aug145-d/asm.json` (a directory) -> `spec error (invalid-out-path): ... is a directory; --out names a file (nothing was written)`, rc=2, and `ls -a /tmp/aug145-d` shows only `. .. asm.json` \u2014 no temp sibling. Both checks are pinned by tests/test_xml_specs.py:918-920 and :940-942, which pass.",
+                "derived": true
+              },
+              {
+                "criterion": "The success path is unchanged: --out into an existing directory writes exactly one file (no temp sibling) with rc 0 and the documented \"wrote N block(s) to PATH\" line.",
+                "status": "PASS",
+                "detail": "Live run rc=0 with `ls /tmp/aug145-ok` -> `asm.json` only. tests/test_xml_specs.py:945-975 asserts code==0, `out.strip() == f\"wrote 3 block(s) to {target}\"`, `sorted(directory.iterdir()) == [\"asm.json\"]`, and the JSON payload counts.total==3; that test passes in the 3-passed run.",
+                "derived": true
+              },
+              {
+                "criterion": "The new typed codes are documented where the verb is documented (docs/VERBS.md / --help) so the contract is discoverable, and the whole test_xml_specs suite stays green (no regression).",
+                "status": "PASS",
+                "detail": "docs/VERBS.md:707-712 documents `missing-out-directory` (exit 2), `invalid-out-path`, `unwritable-out` and \"never a traceback ... leaves no temporary or partial file behind\"; `python3 auger.py spec assemble --help` prints `--out OUT  write the assembly here atomically; the parent directory must already exist (nothing is created when the run refuses)`. Full suite: `PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py -q` -> exit_code 0, `58 passed in 1.31s`.",
+                "derived": true
+              }
+            ],
+            "summary": "All six given proofs reproduce exactly (3 passed, rc=2/0/1 with a typed missing-out-directory and no traceback, rc=0 with a single asm.json, gate.sh count 2, c6b24b3 an ancestor, the no-leftover assertion present), and the derived reachability, side-effect-freedom, success-path and documentation checks also hold. [uncovered failure paths: failure mode 0 (A non-OSError raised while writing (e.g. UnicodeEncodeError on a lone surrogate in the rendered text) still unlinks the temp file via the BaseException arm, but a failure between mkstemp and fdopen leaves the fd open \u2014 a leaked descriptor, not a leftover file): detected_by is empty \u2014 uncovered failure path]",
+            "provenance": {
+              "model": "deepseek-v4-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "deepseek-v4-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-145\"}",
+          "exit_code": 0,
+          "output_sha": "c207033e9ede7d2215563c793986515157aa034ed64316541e3aa37042886a30"
+        },
+        {
+          "tool": "run_command",
+          "command": "pwd && ls && git log --oneline -5",
+          "exit_code": 0,
+          "output_sha": "e1a04c317bfee70e10c9d7e20087f04001247624fd6296dfc4c00f336b2ad64e"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git log --oneline -3 c6b24b3 2>&1; echo \"---\"; git merge-base --is-ancestor c6b24b3 HEAD; echo rc=$?",
+          "exit_code": 0,
+          "output_sha": "d48eceec90885239791e2b1b1fa418a5e675eaf240eac0f374c7b048492e3fd6"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -c \"tests/test_xml_specs.py\" tests/gate.sh; echo \"---\"; grep -c \"a refusal left a partial or temporary file behind\" tests/test_xml_specs.py",
+          "exit_code": 0,
+          "output_sha": "6e3694ee6476ffab85d0e2f424f116ea5b0f06db4aefda5948ed7035581f2238"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: grep -c \\\"tests/test_xml_specs.py\\\" tests/gate.sh -> 2\", \"key\": \"verified_3\"}",
+          "exit_code": 0,
+          "output_sha": "7b6cb160e7fb0ba78e91c2b2836a13363a061ce376ac8fdef4aa8e714407e249"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: git merge-base --is-ancestor c6b24b3 HEAD -> rc=0; commit c6b24b3 \\\"fix(spec): refuse a bad --out path with a typed code instead of a traceback (AUG-145)\\\"\", \"key\": \"verified_4\"}",
+          "exit_code": 0,
+          "output_sha": "3af130e74943ce8c3796fe13ed2c79d0453644bade999bcd331330b2ec389a9c"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: grep -c \\\"a refusal left a partial or temporary file behind\\\" tests/test_xml_specs.py -> 1\", \"key\": \"verified_5\"}",
+          "exit_code": 0,
+          "output_sha": "31d4a77ff861f7c1e6c31d3abdee1f0a461aa6735f6d4c814ce86483ea2bb6b5"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py -k \"out_refuses_a_missing_parent or out_refusal_leaves_the_directory or out_into_an_existing_directory\" -q 2>&1 | tail -20",
+          "exit_code": 0,
+          "output_sha": "ca17d761d67da8d1c2b86f0a77280388514782469a60bc119dd280aaad43f843"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && bash -c \"rm -rf /tmp/aug145-x; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --out /tmp/aug145-x/sub/asm.json >/dev/null 2>/tmp/aug145-err.txt; echo rc=\\$?; grep -c Traceback /tmp/aug145-err.txt; grep -c missing-out-directory /tmp/aug145-err.txt\"",
+          "exit_code": 0,
+          "output_sha": "49403535d09023e85ac204a2fc78aa6ba59c92bf8bbf8c604b1bf51ae8b19de1"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && bash -c \"rm -rf /tmp/aug145-ok; mkdir -p /tmp/aug145-ok; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --out /tmp/aug145-ok/asm.json >/dev/null; echo rc=\\$?; ls /tmp/aug145-ok\"",
+          "exit_code": 0,
+          "output_sha": "69ebea81f3ac1ddd3ac755b025460af04edcc7f27494ac9ec6c714d36f5955c2"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && cat /tmp/aug145-err.txt",
+          "exit_code": 0,
+          "output_sha": "b82725becf6b7c5da359dd04e72ebf9761a4418a6b201faff7456c7fec2df72b"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: pytest -k \\\"out_refuses_a_missing_parent or out_refusal_leaves_the_directory or out_into_an_existing_directory\\\" -q -> \\\"3 passed, 55 deselected in 0.42s\\\", exit 0\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "078c26287075ed393e228fc4dab5878747b4a1b8a5e984c030aa815f102ab4cc"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: rc=2, grep -c Traceback -> 0, grep -c missing-out-directory -> 1. stderr: \\\"spec error (missing-out-directory): /tmp/aug145-x/sub is not a directory; create it first or pass --out into an existing one (nothing was written)\\\"\", \"key\": \"verified_1\"}",
+          "exit_code": 0,
+          "output_sha": "b62c453dd14af281dba10b365183a316185c8c0031fafd8e233ebf1937436c12"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: rc=0, ls /tmp/aug145-ok -> only asm.json\", \"key\": \"verified_2\"}",
+          "exit_code": 0,
+          "output_sha": "fed7b392e5b92459160077184f8a68967eafb30c491f5489891e9df599a57daf"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show --stat c6b24b3",
+          "exit_code": 0,
+          "output_sha": "c4ffef6a1b5fc0317fd13e4d71ac2c04186ab6d54e3caca9f9f052198c1ea6e9"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -rn \"missing-out-directory\" --include=*.py --include=*.sh --include=*.md . | head -30",
+          "exit_code": 0,
+          "output_sha": "cdfeac212433cd0f0f22b3164910ca636d5e4006a9965c0549539ad66bddc2d8"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 100, \"offset\": 9120, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "7508dd8520bfd321dab593e15c93041cd6e503081aab9384d5b74eac5824741d"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 130, \"offset\": 860, \"path\": \"tests/test_xml_specs.py\"}",
+          "exit_code": 0,
+          "output_sha": "f0a97d35eee1f4725f04a51c7f893538f9b593c5754d0d7d66aae19211b80ffe"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"_spec_write_atomic\" auger.py",
+          "exit_code": 0,
+          "output_sha": "df60e5f48e96b35692d1b8a5969686e00b1f524e184b8160023c60916b577392"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"SpecError\" auger.py | sed -n '1,5p'; echo ---; grep -n \"class SpecError\" -A 20 auger.py",
+          "exit_code": 0,
+          "output_sha": "2148633447852838e04e3d58c1fe87de6300fd0cd476b56f217d84182c6f32f8"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 40, \"offset\": 12890, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "17145cc2636c3f1e2821d41b8e4f57d8e534d9c267b67bc7310fc9f60bedb3c9"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"spec error (\" auger.py | head -20",
+          "exit_code": 0,
+          "output_sha": "e53ad1730b97685d0c193e3872eeb56979c80139b2d9ebe6485c0b18ac6ce5a8"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 30, \"offset\": 12610, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "27d307aeecfb01cccad73ba8e9ad4e7debfdb22166095919732f69cf61a5296a"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && sed -n '700,720p' docs/VERBS.md",
+          "exit_code": 0,
+          "output_sha": "2f6e8adece34e84b5470188931baccad68f2308292d44cba066c6fc9e70161f6"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"test_xml_specs.py\" tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "fb4f11236efe14f9271642b5e8547186a4cc54849b80313b06eab8fc461628db"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py -q 2>&1 | tail -5",
+          "exit_code": 0,
+          "output_sha": "fd5ee3ee83617fbdd9b490a96c9772a12c92521208d4f434c454cd04f2e789e9"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Derived criteria:\\nd0: The typed refusal is reachable from the real CLI entrypoint (auger.py spec assemble -> cmd_spec -> _spec_write_atomic) and exits 2 with no traceback, not just from the test harness.\\nd1: The refusal path is side-effect free: a missing-parent refusal creates neither the target file nor the parent tree, and a directory-target refusal leaves the directory byte-identical (no temp sibling).\\nd2: The success path is unchanged: --out into an existing directory writes exactly one file (no temp sibling) with rc 0 and the documented \\\"wrote N block(s) to PATH\\\" line.\\nd3: The new typed codes are documented where the verb is documented (docs/VERBS.md / --help) so the contract is discoverable, and the whole test_xml_specs suite stays green (no regression).\\n\", \"key\": \"derived\"}",
+          "exit_code": 0,
+          "output_sha": "bed40b58c4e7c3ac1bd0f85302d0bc5c20d82185d4913c0f71bb629132cfd49d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && bash -c \"rm -rf /tmp/aug145-d; mkdir -p /tmp/aug145-d/asm.json; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --out /tmp/aug145-d/asm.json; echo rc=\\$?; ls -a /tmp/aug145-d\" 2>&1",
+          "exit_code": 0,
+          "output_sha": "d95fca9f566a4c7a534b24c1c60bb72310afd3598b31b977ad9a139549fc4b62"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && bash -c \"rm -rf /tmp/aug145-x2; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --out /tmp/aug145-x2/sub/asm.json; echo rc=\\$?; ls -d /tmp/aug145-x2 2>&1\" 2>&1",
+          "exit_code": 2,
+          "output_sha": "ea61f23ca65c8bbb6ed3c97ad09b219acebb8e6974f9ab25e1570e49c112bfab"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && python3 auger.py spec assemble --help 2>&1 | grep -n -i \"out\" | head -20",
+          "exit_code": 0,
+          "output_sha": "e4b621fa0dc0f30ed5315d9dcc119b40128cf8fdfbc471d0e8b4c8a45a68e899"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && python3 auger.py spec assemble --help 2>&1 | sed -n '20,40p'",
+          "exit_code": 0,
+          "output_sha": "705cd1a3ffceccadf76b94b92193b248ae14097bd06a8f243872a86da4fe621e"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show c6b24b3 -- docs/VERBS.md | head -40",
+          "exit_code": 0,
+          "output_sha": "3e0270ea06df04aabbf08033c2e62f506698969ea36b64e3515bd174b778c6f6"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show c6b24b3 -- docs/VERBS.md | sed -n '40,90p'",
+          "exit_code": 0,
+          "output_sha": "48e527256bd299a2cb6a5449fd56edf89bfe1087c8e28a194b933621e550daf2"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show c6b24b3 -- auger.py | head -120",
+          "exit_code": 0,
+          "output_sha": "2b78f922866a3ecfc1ba5535963dc1bd3899b2865bc1aeab0ba18257af20eb36"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS d0: live CLI `python3 auger.py spec assemble ... --out /tmp/aug145-x2/sub/asm.json` -> \\\"spec error (missing-out-directory): ... (nothing was written)\\\", rc=2, no traceback. Reachable: auger.py:12912 _spec_write_atomic <- _spec_assemble; cmd_spec (auger.py:12622-12627) catches SpecError -> \\\"spec error (<code>)\\\" + SystemExit(2).\", \"key\": \"verified_derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "0bd00862843da77683f7afbd9e419d6f442cd720281760f72b711f75876be0d9"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS d1: missing-parent refusal -> `ls -d /tmp/aug145-x2` = \\\"No such file or directory\\\" (parent not created, no file). Directory-target refusal -> \\\"spec error (invalid-out-path)\\\", rc=2, `ls -a /tmp/aug145-d` shows only . .. asm.json (no temp sibling). Tests assert both at tests/test_xml_specs.py:918-920 and :940-942.\", \"key\": \"verified_derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "3c5b8d20daf9edc60698d9cea71a0fed063a6ca706dc9410a530e878b06620da"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS d2: rc=0, ls /tmp/aug145-ok -> asm.json only; test test_assemble_out_into_an_existing_directory_writes_exactly_one_file asserts stdout \\\"wrote 3 block(s) to <target>\\\" and iterdir()==[\\\"asm.json\\\"] (tests/test_xml_specs.py:945-975).\", \"key\": \"verified_derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "0125f0534dde8b55e202b5b86eddaaaea1f9a20b4573f3b14883e387747c230e"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS d3: docs/VERBS.md:707-712 documents missing-out-directory/invalid-out-path/unwritable-out and \\\"never a traceback\\\"; `auger spec assemble --help` line 26-28 states \\\"the parent directory must already exist (nothing is created when the run refuses)\\\". Full suite: `pytest tests/test_xml_specs.py -q` -> \\\"58 passed in 1.31s\\\", exit 0.\", \"key\": \"verified_derived_3\"}",
+          "exit_code": 0,
+          "output_sha": "5a2df65e7e15c4c43bba04b3aa25a5b6e81eec5ef282b7aecc9132e4d1e8a42a"
+        }
+      ]
+    }
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [
+      {
+        "severity": "high",
+        "file": ".coding-hermes/board/events.jsonl",
+        "line": 569,
+        "detection": "event ids inserted out of order and duplicating the id range already used by later lines",
+        "detail": "New events with ids 548-551 are appended after id 555 and before id 556, so the file's id sequence is no longer monotonic and the new ids collide with the position where 548-551 would already have belonged."
+      },
+      {
+        "severity": "high",
+        "file": ".coding-hermes/board/events.jsonl",
+        "line": 573,
+        "detection": "existing event record rewritten in place, discarding its detail payload",
+        "detail": "The AUG-143 task_completed event is replaced: its original `detail` (judged PASS text, tier1/tier2 results, product commit) is overwritten with `{\"status\":\"complete\"}`, its timestamp changes from 22:55:00Z to 22:48:58, and its schema switches from `ts`/`event` keys to `timestamp`/`event_type` \u2014 destroying recorded verification evidence."
+      },
+      {
+        "severity": "medium",
+        "file": ".coding-hermes/board/events.jsonl",
+        "line": 569,
+        "detection": "new task_created events reference task ids whose creation timestamps precede the events they are inserted after",
+        "detail": "REVIEW-AUGER-006..009 are stamped 2026-11-12 00:39:5x but are placed after events timestamped 07:13 through 12:25, so the log is no longer time-ordered."
+      }
+    ],
+    "summary": "The diff appends four new review tasks but corrupts the events log by inserting out-of-order/duplicate ids and overwriting the existing AUG-143 completion record, losing its verification detail."
+  },
+  "summary": "Stage tier1: PASS\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 PROOF: `PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py -k \"out_refuses_a_missing_parent or out_refusal_leaves_the_directory or out_into_an_existing_directory\" -q` prints `3 passed`. FAILIF: any other pass count, a failure, or a collection error.: Ran the exact command in /home/kara/auger: exit_code 0, output `...  [100%]` / `3 passed, 55 deselected in 0.42s`. The three selected tests are tests/test_xml_specs.py:900 (test_assemble_out_refuses_a_missing_parent_directory_without_a_traceback), :925 (test_assemble_out_refusal_leaves_the_directory_byte_identical), :948 (test_assemble_out_into_an_existing_directory_writes_exactly_one_file).\n  \u2713 PROOF: `bash -c \"rm -rf /tmp/aug145-x; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --out /tmp/aug145-x/sub/asm.json >/dev/null 2>/tmp/aug145-err.txt; echo rc=\\$?; grep -c Traceback /tmp/aug145-err.txt; grep -c missing-out-directory /tmp/aug145-err.txt\"` prints rc=2, then 0, then 1. FAILIF: rc 1, any traceback line (the pre-fix crash), or no typed missing-out-directory code.: Ran the exact command: output `rc=2` / `0` / `1`. /tmp/aug145-err.txt contains exactly one line: `spec error (missing-out-directory): /tmp/aug145-x/sub is not a directory; create it first or pass --out into an existing one (nothing was written)` \u2014 no traceback. Refusal is raised in auger.py:9155-9160 before any filesystem write.\n  \u2713 PROOF: `bash -c \"rm -rf /tmp/aug145-ok; mkdir -p /tmp/aug145-ok; python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --out /tmp/aug145-ok/asm.json >/dev/null; echo rc=\\$?; ls /tmp/aug145-ok\"` prints rc=0 and exactly one entry asm.json. FAILIF: nonzero rc, more than one file left (a temporary sibling), or no output file.: Ran the exact command: output `rc=0` then `asm.json` \u2014 exactly one entry, no `.asm.json.*.tmp` sibling. Success path auger.py:12910-12913 calls _spec_write_atomic then prints `wrote N block(s) to PATH`.\n  \u2713 PROOF: `grep -c \"tests/test_xml_specs.py\" tests/gate.sh` prints 2. FAILIF: 0 or 1 \u2014 the pin file must stay named in the gate pytest arm.: `grep -c \"tests/test_xml_specs.py\" tests/gate.sh` -> `2`. Occurrences: tests/gate.sh:157 (comment) and tests/gate.sh:206 (the pytest arm listing `tests/test_xml_specs.py`).\n  \u2713 PROOF: bash -c \"git merge-base --is-ancestor c6b24b3 HEAD; echo rc=\\$?\" prints rc=0. FAILIF: any nonzero rc \u2014 the cited fix commit is absent from the graded history.: `git merge-base --is-ancestor c6b24b3 HEAD; echo rc=$?` -> `rc=0`. `git log --oneline -3 c6b24b3` shows `c6b24b3 fix(spec): refuse a bad --out path with a typed code instead of a traceback (AUG-145)`; `git show --stat c6b24b3` lists auger.py (+46/-6), docs/VERBS.md, tests/test_xml_specs.py (+100).\n  \u2713 PROOF: `grep -c \"a refusal left a partial or temporary file behind\" tests/test_xml_specs.py` prints 1. FAILIF: 0 \u2014 the no-leftover assertion is gone from the suite.: `grep -c \"a refusal left a partial or temporary file behind\" tests/test_xml_specs.py` -> `1`; the assertion is at tests/test_xml_specs.py:940-942 (`sorted(path.name for path in tmp_path.iterdir()) == before`).\n  \u2713 The typed refusal is reachable from the real CLI entrypoint (auger.py spec assemble -> cmd_spec -> _spec_write_atomic) and exits 2 with no traceback, not just from the test harness.: Live run `python3 auger.py spec assemble tests/fixtures/xml/specs --id AUG-REQ-014 --format json --out /tmp/aug145-x2/sub/asm.json` -> `spec error (missing-out-directory): ... (nothing was written)`, rc=2, no traceback. Wiring: auger.py:12912 `_spec_write_atomic(out, text)` inside the assemble verb; cmd_spec at auger.py:12622-12627 catches SpecError and prints `spec error ({exc.code}): {exc.detail}` then `SystemExit(2)`.\n  \u2713 The refusal path is side-effect free: a missing-parent refusal creates neither the target file nor the parent tree, and a directory-target refusal leaves the directory byte-identical (no temp sibling).: After the missing-parent run, `ls -d /tmp/aug145-x2` -> `No such file or directory` (parent tree not materialised). Directory-target run `--out /tmp/aug145-d/asm.json` (a directory) -> `spec error (invalid-out-path): ... is a directory; --out names a file (nothing was written)`, rc=2, and `ls -a /tmp/aug145-d` shows only `. .. asm.json` \u2014 no temp sibling. Both checks are pinned by tests/test_xml_specs.py:918-920 and :940-942, which pass.\n  \u2713 The success path is unchanged: --out into an existing directory writes exactly one file (no temp sibling) with rc 0 and the documented \"wrote N block(s) to PATH\" line.: Live run rc=0 with `ls /tmp/aug145-ok` -> `asm.json` only. tests/test_xml_specs.py:945-975 asserts code==0, `out.strip() == f\"wrote 3 block(s) to {target}\"`, `sorted(directory.iterdir()) == [\"asm.json\"]`, and the JSON payload counts.total==3; that test passes in the 3-passed run.\n  \u2713 The new typed codes are documented where the verb is documented (docs/VERBS.md / --help) so the contract is discoverable, and the whole test_xml_specs suite stays green (no regression).: docs/VERBS.md:707-712 documents `missing-out-directory` (exit 2), `invalid-out-path`, `unwritable-out` and \"never a traceback ... leaves no temporary or partial file behind\"; `python3 auger.py spec assemble --help` prints `--out OUT  write the assembly here atomically; the parent directory must already exist (nothing is created when the run refuses)`. Full suite: `PATH=$PWD/.venv/bin:$HOME/.local/bin:$PATH python3 -m pytest tests/test_xml_specs.py -q` -> exit_code 0, `58 passed in 1.31s`.\nAll six given proofs reproduce exactly (3 passed, rc=2/0/1 with a typed missing-out-directory and no traceback, rc=0 with a single asm.json, gate.sh count 2, c6b24b3 an ancestor, the no-leftover assertion present), and the derived reachability, side-effect-freedom, success-path and documentation checks also hold. [uncovered failure paths: failure mode 0 (A non-OSError raised while writing (e.g. UnicodeEncodeError on a lone surrogate in the rendered text) still unlinks the temp file via the BaseException arm, but a failure between mkstemp and fdopen leaves the fd open \u2014 a leaked descriptor, not a leftover file): detected_by is empty \u2014 uncovered failure path]\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-11-13T01:13:59.855409",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-13T01:13:59.882276+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 3150,
+        "truncated": false,
+        "source": "git show 87e529813523"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 13265,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-145"
+  }
+}
