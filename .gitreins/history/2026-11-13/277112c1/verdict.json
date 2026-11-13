@@ -1,0 +1,418 @@
+{
+  "task_id": "AUG-149",
+  "task_title": "A no-match selection returns rc 0 with empty output and no diagnostic",
+  "task_criteria": [
+    "PROOF: python -m pytest tests/test_xml_specs.py -q -k no_match prints 2 passed. FAILIF: any failure, error, or a pass count other than 2 \u2014 one of the two verbs lost its reported-empty-selection assertion.",
+    "PROOF: python -m pytest tests/test_xml_specs.py -q -k three_shape_exit_code prints 1 passed. FAILIF: any failure, or a pass count other than 1 \u2014 a verb's --help epilogue no longer states the three selection shapes.",
+    "PROOF: grep -c \"spec note (no-match)\" ./auger.py prints 3. FAILIF: a lower count, meaning the notice emission was removed from the product code.",
+    "PROOF: grep -c \"no-match\" ./docs/VERBS.md prints 1. FAILIF: zero, meaning the exit-code contract for an empty selection is undocumented outside the code.",
+    "PROOF: python ./auger.py spec list specs --applies-to nope.none exits 0, writes nothing to stdout, and prints spec note (no-match) on stderr. FAILIF: a non-zero exit, silent stderr (the old defect), or any stdout row \u2014 the empty selection must stay reported and machine-parseable."
+  ],
+  "passed": true,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "bd506c3e0eb26ad6f7c431fd9a0b582c4737bc57",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "91bda30182b32ec60ce54d94f16fac41587d37a21b2d9c74cad623f615c74761",
+  "working_tree_dirty_path_count": 0,
+  "items": [
+    {
+      "criterion": "PROOF: python -m pytest tests/test_xml_specs.py -q -k no_match prints 2 passed. FAILIF: any failure, error, or a pass count other than 2 \u2014 one of the two verbs lost its reported-empty-selection assertion.",
+      "status": "PASS",
+      "detail": "Ran `python -m pytest tests/test_xml_specs.py -q -k no_match` -> exit 0, output `..  [100%]` / `2 passed, 56 deselected in 0.04s`. The two tests are tests/test_xml_specs.py:989 (list: asserts out==\"\" and \"spec note (no-match)\" in err) and tests/test_xml_specs.py:1012 (assemble: asserts counts.total 0, blocks==[] and \"spec note (no-match)\" in err)."
+    },
+    {
+      "criterion": "PROOF: python -m pytest tests/test_xml_specs.py -q -k three_shape_exit_code prints 1 passed. FAILIF: any failure, or a pass count other than 1 \u2014 a verb's --help epilogue no longer states the three selection shapes.",
+      "status": "PASS",
+      "detail": "Ran `python -m pytest tests/test_xml_specs.py -q -k three_shape_exit_code` -> exit 0, `.  [100%]` / `1 passed, 57 deselected in 0.02s`. Test tests/test_xml_specs.py:1043 loops over both verbs' --help asserting \"exit codes:\", \"no selector\", \"no match\". Confirmed live: `spec list --help` and `spec assemble --help` both print the three-shape epilogue (auger.py:14011-14020 and auger.py:14030-14038)."
+    },
+    {
+      "criterion": "PROOF: grep -c \"spec note (no-match)\" ./auger.py prints 3. FAILIF: a lower count, meaning the notice emission was removed from the product code.",
+      "status": "PASS",
+      "detail": "`grep -c \"spec note (no-match)\" ./auger.py` -> `3`. Lines: auger.py:12928 (the print inside `_spec_no_match_notice`), auger.py:14020 (list --help epilogue), auger.py:14038 (assemble --help epilogue). The helper is called from auger.py:12836 (list, `if selected and not rows`) and auger.py:12851 (assemble, `if not records`)."
+    },
+    {
+      "criterion": "PROOF: grep -c \"no-match\" ./docs/VERBS.md prints 1. FAILIF: zero, meaning the exit-code contract for an empty selection is undocumented outside the code.",
+      "status": "PASS",
+      "detail": "`grep -c \"no-match\" ./docs/VERBS.md` -> `1`; the hit is docs/VERBS.md:718: \"`spec note (no-match): <selection> matched no block` on stderr, stdout still whatever the verb renders\", inside the paragraph that states exit 0 for a reported empty selection and the three shapes for both verbs."
+    },
+    {
+      "criterion": "PROOF: python ./auger.py spec list specs --applies-to nope.none exits 0, writes nothing to stdout, and prints spec note (no-match) on stderr. FAILIF: a non-zero exit, silent stderr (the old defect), or any stdout row \u2014 the empty selection must stay reported and machine-parseable.",
+      "status": "PASS",
+      "detail": "Ran `python ./auger.py spec list specs --applies-to nope.none > /tmp/o.txt 2> /tmp/e.txt` -> `rc=0`, stdout `wc -c` = `0`, stderr = `spec note (no-match): applies-to=nope.none matched no block (empty selection, exit 0 \u2014 not a failure)`. Cross-checked the sibling verb: `spec assemble specs --applies-to nope.none --format json` -> rc=0, valid JSON with `counts.total` 0 on stdout, same note on stderr."
+    },
+    {
+      "criterion": "The no-match notice must not fire on the other two selection shapes (no selector, selector with matches) \u2014 otherwise the diagnostic becomes noise and the three shapes collapse.",
+      "status": "PASS",
+      "detail": "`spec list specs` -> rc=0, 12 stdout rows, stderr 0 bytes; `spec list specs --kind requirement` -> rc=0, 4 rows, stderr 0 bytes; `spec assemble specs --format json` (no selector) -> rc=2, stdout 0 bytes, `spec error (empty-selector)`. Code guards: auger.py:12835 `if selected and not rows` and auger.py:12850 `if not records`. Covered by test_list_without_a_selector_lists_the_whole_corpus, test_list_selector_with_matches_is_quiet, test_assemble_without_a_selector_is_still_refused, test_assemble_selector_with_matches_exits_zero_and_is_quiet in the 58-passed run.",
+      "derived": true
+    },
+    {
+      "criterion": "The notice must go to stderr only, never stdout, so stdout stays machine-parseable (list rows / assemble JSON).",
+      "status": "PASS",
+      "detail": "`_spec_no_match_notice` (auger.py:12919-12931) prints with `file=sys.stderr`. Live: list no-match stdout is 0 bytes; assemble no-match stdout is JSON that `json.loads` parses (asserted at tests/test_xml_specs.py:1016-1020) while the note appears only on stderr.",
+      "derived": true
+    },
+    {
+      "criterion": "The notice must name the actual selection so a caller can tell which selector matched nothing.",
+      "status": "PASS",
+      "detail": "Live stderr names it: `spec note (no-match): applies-to=nope.none matched no block ...`. For list the string comes from `_spec_describe_selection` (auger.py:8912, called at auger.py:12837); for assemble from the selection returned by `select_spec_blocks` (auger.py:12851). tests/test_xml_specs.py:996 asserts `\"applies-to=nope.none\" in err`.",
+      "derived": true
+    },
+    {
+      "criterion": "The full test file must stay green (no regression from the new emission).",
+      "status": "PASS",
+      "detail": "Ran `python -m pytest tests/test_xml_specs.py -q` -> exit 0, `58 passed in 1.42s`.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "no_concerns_found",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261113T121340.667634Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nscanners: nice=nice -n 10\n11:01AM INF scanned ~3397149 bytes (3.40 MB) in 1.59s\n11:01AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 251 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261113T121340.667634Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [  9%]\n........................................................................ [ 19%]\n........................................................................ [ 29%]\n........................................................................ [ 39%]\n............................s........................................... [ 49%]\n.......s................................................................ [ 59%]\n........................................................................ [ 69%]\n........................................................................ [ 79%]\n........................................................................ [ 89%]\n........................................................................ [ 99%]\n....                                                                     [100%]\n722 passed, 2 skipped in 851.97s (0:14:11)\n== wrapper regression (AUG-081) ==\ngate prerequisite preflight: PASS\nAUG-116: zombie pid 3891951 classified dead (kill -0 alone would have said alive)\nAUG-081 wrapper regression: PASS\nAUG-130 skipped-arm policy: PASS\n== end-to-end smoke ==\nnamespace: auger-smoke-3894360\nnamespace sweep: no stale auger-smoke-*/auger-eval-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n\n\u2026 [529 chars omitted \u2014 13 line(s)] \u2026\n== spec corpus (AUG-136) ==\nspec: 3 document(s), 12 block(s), 7 reference(s) ok\n== prd proofs (AUG-137) ==\nprd proofs: 8 total \u00b7 3 required \u00b7 5 deferred \u2192 PASS\n   P1  deferred not-run   not-run (deferred to AUG-119): auger.py carries no board surface (grep -c boardctl auger.py -> 0): resolving a\n   P2  required pass      corpus=9249B bundle=8131B latency=15.8ms  2 generated view(s) verified byte-identical to the generator's output for specs/; one block edit propagated to\n   P3  deferred not-run   not-run (deferred to AUG-153): the checker half is reachable (`auger spec check --diff-file` reports `trace-mi\n   P4  deferred not-run   not-run (deferred to AUG-119): writing and reading back a canonical boardctl row is boardctl's surface, not au\n   P5  required pass      corpus=1084B bundle=435B latency=726.2ms  one query returned migration=tests/fixtures/xml/verification/migrations/001_add_marker.sql, fixture=tests/fixt\n   P6  deferred not-run   not-run (deferred to AUG-124): what counts as judge evidence \u2014 excluding the worker summary, refusing a PASS w\n   P7  required pass      corpus=9249B bundle=2944B latency=130.7ms  4/12 blocks selected by `applies-to auger.spec.select`; bundle is 31.8% of the corpus (2944 of 9249 bytes), fl\n   P8  deferred not-run   not-run (deferred to AUG-153): the flag and the process-liveness assertion live in the GitReins hook, which no\nprd-proofs: /home/kara/auger/docs/prd/evidence/AUG-137-prd-proofs.json agrees with this run\n== docs check ==\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261113T121340.667634Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 PROOF: python -m pytest tests/test_xml_specs.py -q -k no_match prints 2 passed. FAILIF: any failure, error, or a pass count other than 2 \u2014 one of the two verbs lost its reported-empty-selection assertion.: Ran `python -m pytest tests/test_xml_specs.py -q -k no_match` -> exit 0, output `..  [100%]` / `2 passed, 56 deselected in 0.04s`. The two tests are tests/test_xml_specs.py:989 (list: asserts out==\"\" and \"spec note (no-match)\" in err) and tests/test_xml_specs.py:1012 (assemble: asserts counts.total 0, blocks==[] and \"spec note (no-match)\" in err).\n  \u2713 PROOF: python -m pytest tests/test_xml_specs.py -q -k three_shape_exit_code prints 1 passed. FAILIF: any failure, or a pass count other than 1 \u2014 a verb's --help epilogue no longer states the three selection shapes.: Ran `python -m pytest tests/test_xml_specs.py -q -k three_shape_exit_code` -> exit 0, `.  [100%]` / `1 passed, 57 deselected in 0.02s`. Test tests/test_xml_specs.py:1043 loops over both verbs' --help asserting \"exit codes:\", \"no selector\", \"no match\". Confirmed live: `spec list --help` and `spec assemble --help` both print the three-shape epilogue (auger.py:14011-14020 and auger.py:14030-14038).\n  \u2713 PROOF: grep -c \"spec note (no-match)\" ./auger.py prints 3. FAILIF: a lower count, meaning the notice emission was removed from the product code.: `grep -c \"spec note (no-match)\" ./auger.py` -> `3`. Lines: auger.py:12928 (the print inside `_spec_no_match_notice`), auger.py:14020 (list --help epilogue), auger.py:14038 (assemble --help epilogue). The helper is called from auger.py:12836 (list, `if selected and not rows`) and auger.py:12851 (assemble, `if not records`).\n  \u2713 PROOF: grep -c \"no-match\" ./docs/VERBS.md prints 1. FAILIF: zero, meaning the exit-code contract for an empty selection is undocumented outside the code.: `grep -c \"no-match\" ./docs/VERBS.md` -> `1`; the hit is docs/VERBS.md:718: \"`spec note (no-match): <selection> matched no block` on stderr, stdout still whatever the verb renders\", inside the paragraph that states exit 0 for a reported empty selection and the three shapes for both verbs.\n  \u2713 PROOF: python ./auger.py spec list specs --applies-to nope.none exits 0, writes nothing to stdout, and prints spec note (no-match) on stderr. FAILIF: a non-zero exit, silent stderr (the old defect), or any stdout row \u2014 the empty selection must stay reported and machine-parseable.: Ran `python ./auger.py spec list specs --applies-to nope.none > /tmp/o.txt 2> /tmp/e.txt` -> `rc=0`, stdout `wc -c` = `0`, stderr = `spec note (no-match): applies-to=nope.none matched no block (empty selection, exit 0 \u2014 not a failure)`. Cross-checked the sibling verb: `spec assemble specs --applies-to nope.none --format json` -> rc=0, valid JSON with `counts.total` 0 on stdout, same note on stderr.\n  \u2713 The no-match notice must not fire on the other two selection shapes (no selector, selector with matches) \u2014 otherwise the diagnostic becomes noise and the three shapes collapse.: `spec list specs` -> rc=0, 12 stdout rows, stderr 0 bytes; `spec list specs --kind requirement` -> rc=0, 4 rows, stderr 0 bytes; `spec assemble specs --format json` (no selector) -> rc=2, stdout 0 bytes, `spec error (empty-selector)`. Code guards: auger.py:12835 `if selected and not rows` and auger.py:12850 `if not records`. Covered by test_list_without_a_selector_lists_the_whole_corpus, test_list_selector_with_matches_is_quiet, test_assemble_without_a_selector_is_still_refused, test_assemble_selector_with_matches_exits_zero_and_is_quiet in the 58-passed run.\n  \u2713 The notice must go to stderr only, never stdout, so stdout stays machine-parseable (list rows / assemble JSON).: `_spec_no_match_notice` (auger.py:12919-12931) prints with `file=sys.stderr`. Live: list no-match stdout is 0 bytes; assemble no-match stdout is JSON that `json.loads` parses (asserted at tests/test_xml_specs.py:1016-1020) while the note appears only on stderr.\n  \u2713 The notice must name the actual selection so a caller can tell which selector matched nothing.: Live stderr names it: `spec note (no-match): applies-to=nope.none matched no block ...`. For list the string comes from `_spec_describe_selection` (auger.py:8912, called at auger.py:12837); for assemble from the selection returned by `select_spec_blocks` (auger.py:12851). tests/test_xml_specs.py:996 asserts `\"applies-to=nope.none\" in err`.\n  \u2713 The full test file must stay green (no regression from the new emission).: Ran `python -m pytest tests/test_xml_specs.py -q` -> exit 0, `58 passed in 1.42s`.\nAll five given criteria and four derived criteria pass with fresh command output: the no-match selection now exits 0 with empty/valid stdout and a selection-naming `spec note (no-match)` on stderr for both `list` and `assemble`, documented in docs/VERBS.md and both --help epilogues, with the other two selection shapes unchanged.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 PROOF: python -m pytest tests/test_xml_specs.py -q -k no_match prints 2 passed. FAILIF: any failure, error, or a pass count other than 2 \u2014 one of the two verbs lost its reported-empty-selection assertion.: Ran `python -m pytest tests/test_xml_specs.py -q -k no_match` -> exit 0, output `..  [100%]` / `2 passed, 56 deselected in 0.04s`. The two tests are tests/test_xml_specs.py:989 (list: asserts out==\"\" and \"spec note (no-match)\" in err) and tests/test_xml_specs.py:1012 (assemble: asserts counts.total 0, blocks==[] and \"spec note (no-match)\" in err).\n  \u2713 PROOF: python -m pytest tests/test_xml_specs.py -q -k three_shape_exit_code prints 1 passed. FAILIF: any failure, or a pass count other than 1 \u2014 a verb's --help epilogue no longer states the three selection shapes.: Ran `python -m pytest tests/test_xml_specs.py -q -k three_shape_exit_code` -> exit 0, `.  [100%]` / `1 passed, 57 deselected in 0.02s`. Test tests/test_xml_specs.py:1043 loops over both verbs' --help asserting \"exit codes:\", \"no selector\", \"no match\". Confirmed live: `spec list --help` and `spec assemble --help` both print the three-shape epilogue (auger.py:14011-14020 and auger.py:14030-14038).\n  \u2713 PROOF: grep -c \"spec note (no-match)\" ./auger.py prints 3. FAILIF: a lower count, meaning the notice emission was removed from the product code.: `grep -c \"spec note (no-match)\" ./auger.py` -> `3`. Lines: auger.py:12928 (the print inside `_spec_no_match_notice`), auger.py:14020 (list --help epilogue), auger.py:14038 (assemble --help epilogue). The helper is called from auger.py:12836 (list, `if selected and not rows`) and auger.py:12851 (assemble, `if not records`).\n  \u2713 PROOF: grep -c \"no-match\" ./docs/VERBS.md prints 1. FAILIF: zero, meaning the exit-code contract for an empty selection is undocumented outside the code.: `grep -c \"no-match\" ./docs/VERBS.md` -> `1`; the hit is docs/VERBS.md:718: \"`spec note (no-match): <selection> matched no block` on stderr, stdout still whatever the verb renders\", inside the paragraph that states exit 0 for a reported empty selection and the three shapes for both verbs.\n\n\u2026 [1436 chars omitted \u2014 2 line(s)] \u2026\n  \u2713 The notice must go to stderr only, never stdout, so stdout stays machine-parseable (list rows / assemble JSON).: `_spec_no_match_notice` (auger.py:12919-12931) prints with `file=sys.stderr`. Live: list no-match stdout is 0 bytes; assemble no-match stdout is JSON that `json.loads` parses (asserted at tests/test_xml_specs.py:1016-1020) while the note appears only on stderr.\n  \u2713 The notice must name the actual selection so a caller can tell which selector matched nothing.: Live stderr names it: `spec note (no-match): applies-to=nope.none matched no block ...`. For list the string comes from `_spec_describe_selection` (auger.py:8912, called at auger.py:12837); for assemble from the selection returned by `select_spec_blocks` (auger.py:12851). tests/test_xml_specs.py:996 asserts `\"applies-to=nope.none\" in err`.\n  \u2713 The full test file must stay green (no regression from the new emission).: Ran `python -m pytest tests/test_xml_specs.py -q` -> exit 0, `58 passed in 1.42s`.\nAll five given criteria and four derived criteria pass with fresh command output: the no-match selection now exits 0 with empty/valid stdout and a selection-naming `spec note (no-match)` on stderr for both `list` and `assemble`, documented in docs/VERBS.md and both --help epilogues, with the other two selection shapes unchanged.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "PROOF: python -m pytest tests/test_xml_specs.py -q -k no_match prints 2 passed. FAILIF: any failure, error, or a pass count other than 2 \u2014 one of the two verbs lost its reported-empty-selection assertion.",
+                "status": "PASS",
+                "detail": "Ran `python -m pytest tests/test_xml_specs.py -q -k no_match` -> exit 0, output `..  [100%]` / `2 passed, 56 deselected in 0.04s`. The two tests are tests/test_xml_specs.py:989 (list: asserts out==\"\" and \"spec note (no-match)\" in err) and tests/test_xml_specs.py:1012 (assemble: asserts counts.total 0, blocks==[] and \"spec note (no-match)\" in err)."
+              },
+              {
+                "criterion": "PROOF: python -m pytest tests/test_xml_specs.py -q -k three_shape_exit_code prints 1 passed. FAILIF: any failure, or a pass count other than 1 \u2014 a verb's --help epilogue no longer states the three selection shapes.",
+                "status": "PASS",
+                "detail": "Ran `python -m pytest tests/test_xml_specs.py -q -k three_shape_exit_code` -> exit 0, `.  [100%]` / `1 passed, 57 deselected in 0.02s`. Test tests/test_xml_specs.py:1043 loops over both verbs' --help asserting \"exit codes:\", \"no selector\", \"no match\". Confirmed live: `spec list --help` and `spec assemble --help` both print the three-shape epilogue (auger.py:14011-14020 and auger.py:14030-14038)."
+              },
+              {
+                "criterion": "PROOF: grep -c \"spec note (no-match)\" ./auger.py prints 3. FAILIF: a lower count, meaning the notice emission was removed from the product code.",
+                "status": "PASS",
+                "detail": "`grep -c \"spec note (no-match)\" ./auger.py` -> `3`. Lines: auger.py:12928 (the print inside `_spec_no_match_notice`), auger.py:14020 (list --help epilogue), auger.py:14038 (assemble --help epilogue). The helper is called from auger.py:12836 (list, `if selected and not rows`) and auger.py:12851 (assemble, `if not records`)."
+              },
+              {
+                "criterion": "PROOF: grep -c \"no-match\" ./docs/VERBS.md prints 1. FAILIF: zero, meaning the exit-code contract for an empty selection is undocumented outside the code.",
+                "status": "PASS",
+                "detail": "`grep -c \"no-match\" ./docs/VERBS.md` -> `1`; the hit is docs/VERBS.md:718: \"`spec note (no-match): <selection> matched no block` on stderr, stdout still whatever the verb renders\", inside the paragraph that states exit 0 for a reported empty selection and the three shapes for both verbs."
+              },
+              {
+                "criterion": "PROOF: python ./auger.py spec list specs --applies-to nope.none exits 0, writes nothing to stdout, and prints spec note (no-match) on stderr. FAILIF: a non-zero exit, silent stderr (the old defect), or any stdout row \u2014 the empty selection must stay reported and machine-parseable.",
+                "status": "PASS",
+                "detail": "Ran `python ./auger.py spec list specs --applies-to nope.none > /tmp/o.txt 2> /tmp/e.txt` -> `rc=0`, stdout `wc -c` = `0`, stderr = `spec note (no-match): applies-to=nope.none matched no block (empty selection, exit 0 \u2014 not a failure)`. Cross-checked the sibling verb: `spec assemble specs --applies-to nope.none --format json` -> rc=0, valid JSON with `counts.total` 0 on stdout, same note on stderr."
+              },
+              {
+                "criterion": "The no-match notice must not fire on the other two selection shapes (no selector, selector with matches) \u2014 otherwise the diagnostic becomes noise and the three shapes collapse.",
+                "status": "PASS",
+                "detail": "`spec list specs` -> rc=0, 12 stdout rows, stderr 0 bytes; `spec list specs --kind requirement` -> rc=0, 4 rows, stderr 0 bytes; `spec assemble specs --format json` (no selector) -> rc=2, stdout 0 bytes, `spec error (empty-selector)`. Code guards: auger.py:12835 `if selected and not rows` and auger.py:12850 `if not records`. Covered by test_list_without_a_selector_lists_the_whole_corpus, test_list_selector_with_matches_is_quiet, test_assemble_without_a_selector_is_still_refused, test_assemble_selector_with_matches_exits_zero_and_is_quiet in the 58-passed run.",
+                "derived": true
+              },
+              {
+                "criterion": "The notice must go to stderr only, never stdout, so stdout stays machine-parseable (list rows / assemble JSON).",
+                "status": "PASS",
+                "detail": "`_spec_no_match_notice` (auger.py:12919-12931) prints with `file=sys.stderr`. Live: list no-match stdout is 0 bytes; assemble no-match stdout is JSON that `json.loads` parses (asserted at tests/test_xml_specs.py:1016-1020) while the note appears only on stderr.",
+                "derived": true
+              },
+              {
+                "criterion": "The notice must name the actual selection so a caller can tell which selector matched nothing.",
+                "status": "PASS",
+                "detail": "Live stderr names it: `spec note (no-match): applies-to=nope.none matched no block ...`. For list the string comes from `_spec_describe_selection` (auger.py:8912, called at auger.py:12837); for assemble from the selection returned by `select_spec_blocks` (auger.py:12851). tests/test_xml_specs.py:996 asserts `\"applies-to=nope.none\" in err`.",
+                "derived": true
+              },
+              {
+                "criterion": "The full test file must stay green (no regression from the new emission).",
+                "status": "PASS",
+                "detail": "Ran `python -m pytest tests/test_xml_specs.py -q` -> exit 0, `58 passed in 1.42s`.",
+                "derived": true
+              }
+            ],
+            "summary": "All five given criteria and four derived criteria pass with fresh command output: the no-match selection now exits 0 with empty/valid stdout and a selection-naming `spec note (no-match)` on stderr for both `list` and `assemble`, documented in docs/VERBS.md and both --help epilogues, with the other two selection shapes unchanged.",
+            "provenance": {
+              "model": "deepseek-v4-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "deepseek-v4-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-149\"}",
+          "exit_code": 0,
+          "output_sha": "44f1eb12fefe593a29ea8bc680367dfffae16295db0dc5d49d9beb4b303e6193"
+        },
+        {
+          "tool": "run_command",
+          "command": "ls -la && cat .gitreins/config.yaml 2>/dev/null",
+          "exit_code": 0,
+          "output_sha": "64038d51be2cbbc81737a42281fc87bb034ff762b2c433602480b84a21443054"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara 2>/dev/null; pwd; grep -n \"test_command\" .gitreins/config.yaml",
+          "exit_code": 1,
+          "output_sha": "2fa5d6d5a1378d3baaa7cd1c21301ece2e3f9fc3e3e87cb0248002cf8c673484"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -c \"spec note (no-match)\" ./auger.py; grep -c \"no-match\" ./docs/VERBS.md; grep -n \"no-match\" ./docs/VERBS.md",
+          "exit_code": 0,
+          "output_sha": "51be3f328f6641ce33515c5b337ab36a56d0cd77ecd4fdf1285a671cd80c9ce6"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"spec note (no-match)\" ./auger.py",
+          "exit_code": 0,
+          "output_sha": "745f5908b39ec4b131f663b19bf205e34776c3c0355d88e59f6bbd98f971e69a"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n 690,760p ./docs/VERBS.md",
+          "exit_code": 0,
+          "output_sha": "ad1ea4f6761d9109ec3198a27327a73766c0196cd631fe43956e1b7849c00b73"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n 12880,12960p ./auger.py",
+          "exit_code": 0,
+          "output_sha": "490cfeeb280033099ca26f2a3a9c1be5c3d388a0256e4deeee1cb27f45f4e8fe"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n 13960,14070p ./auger.py",
+          "exit_code": 0,
+          "output_sha": "3595ceffee5f0bd877a1b58bff9a98b16277e4171c1e9b5e5818999cbd6a1b6d"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"_spec_no_match_notice\" ./auger.py",
+          "exit_code": 0,
+          "output_sha": "b38349a303b388c4d2f908e5ac31ef75b6729cf647236cbaceb35752c9b295bf"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n 13990,14030p ./auger.py",
+          "exit_code": 0,
+          "output_sha": "d35d4859d61eaa809319192c542c4b39b1a0a86923664ea671a697670032f17d"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n 12790,12870p ./auger.py",
+          "exit_code": 0,
+          "output_sha": "b94be45562160374741fe55092c6976ec501350ad643bf1be627796cd1112167"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"no_match\\|three_shape_exit_code\" tests/test_xml_specs.py",
+          "exit_code": 0,
+          "output_sha": "d902b32a1f382d6c6eceecd8791c0e1fb6287624f38a163fa2277f52541ad2d4"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n 960,1090p tests/test_xml_specs.py",
+          "exit_code": 0,
+          "output_sha": "71026ad28a9c71816a26ddce42cb2fa8901ffe038663a1564b55d7d86f723ade"
+        },
+        {
+          "tool": "run_command",
+          "command": "python -m pytest tests/test_xml_specs.py -q -k no_match 2>&1 | tail -20",
+          "exit_code": 0,
+          "output_sha": "1d1cb739e58110c000461b31e9cdee494dc00102e2df015cbe5e627faa98f6ef"
+        },
+        {
+          "tool": "run_command",
+          "command": "python -m pytest tests/test_xml_specs.py -q -k three_shape_exit_code 2>&1 | tail -20",
+          "exit_code": 0,
+          "output_sha": "660068c9eaa2345c59eb9fb5ad2ecb6ac546365939b6d9dc6cabc27744bda83a"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n 1012,1060p tests/test_xml_specs.py",
+          "exit_code": 0,
+          "output_sha": "952f13108319d36060e2d0852674b5abcd8c9fff2acab2980f1aee6f884d3c98"
+        },
+        {
+          "tool": "run_command",
+          "command": "python ./auger.py spec list specs --applies-to nope.none > /tmp/o.txt 2> /tmp/e.txt; echo \"rc=$?\"; echo \"--- stdout bytes:\"; wc -c < /tmp/o.txt; echo \"--- stderr:\"; cat /tmp/e.txt",
+          "exit_code": 0,
+          "output_sha": "260dc8f62c873a43c75e5f2c2447cb8f1708ab3ed325985a38a22a4786dc2c5e"
+        },
+        {
+          "tool": "run_command",
+          "command": "python ./auger.py spec assemble specs --applies-to nope.none --format json > /tmp/o2.txt 2> /tmp/e2.txt; echo \"rc=$?\"; echo \"--- stdout:\"; cat /tmp/o2.txt; echo \"--- stderr:\"; cat /tmp/e2.txt",
+          "exit_code": 0,
+          "output_sha": "07f1ad2aae9e11439e9f633b1629579a1bf7e0e0fda578b9c8b106e08538bb86"
+        },
+        {
+          "tool": "run_command",
+          "command": "python ./auger.py spec list --help 2>&1 | tail -12; echo \"=== assemble ===\"; python ./auger.py spec assemble --help 2>&1 | tail -12",
+          "exit_code": 0,
+          "output_sha": "12ec20fc173bfff1f21c1da2f6fe0d6852905fd621f826fb9f6f73bb360baff1"
+        },
+        {
+          "tool": "run_command",
+          "command": "python -m pytest tests/test_xml_specs.py -q 2>&1 | tail -5",
+          "exit_code": 0,
+          "output_sha": "58ccf99a729bffc29812dd06b7dfd41771a8c78dab42df151f08ca41b971c40d"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `python -m pytest tests/test_xml_specs.py -q -k no_match` -> \\\"2 passed, 56 deselected in 0.04s\\\" (exit 0). Tests at tests/test_xml_specs.py:989 (list) and :1012 (assemble) both assert \\\"spec note (no-match)\\\" in stderr.\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "2c8798c4cd5765964070181ac1c010995d52d32ccce2929541fc3de2f1747725"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `python -m pytest tests/test_xml_specs.py -q -k three_shape_exit_code` -> \\\"1 passed, 57 deselected in 0.02s\\\". Test at tests/test_xml_specs.py:1043 loops over list/assemble --help asserting \\\"exit codes:\\\", \\\"no selector\\\", \\\"no match\\\". Confirmed live: both --help epilogues print the three shapes (auger.py:14011-14020 list, auger.py:14030-14038 assemble).\", \"key\": \"verified_1\"}",
+          "exit_code": 0,
+          "output_sha": "bffd6ae29b6d06d45469f7127dbcde9940347f9162e23cf7175e4d0f0ffcc81f"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `grep -c \\\"spec note (no-match)\\\" ./auger.py` -> 3. Lines: auger.py:12928 (the emission inside _spec_no_match_notice), auger.py:14020 (list --help epilogue), auger.py:14038 (assemble --help epilogue). Emission is called from auger.py:12836 (list, when selected and rows==0) and auger.py:12851 (assemble, when not records).\", \"key\": \"verified_2\"}",
+          "exit_code": 0,
+          "output_sha": "e216bb06ac25d47bcf05f34c91d50b4d5b53b22df741d4ce871fd6f7d8baa461"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `grep -c \\\"no-match\\\" ./docs/VERBS.md` -> 1; the line is docs/VERBS.md:718: \\\"`spec note (no-match): <selection> matched no block` on stderr, stdout still whatever the verb renders\\\" inside the paragraph stating exit 0 / reported empty selection and the three shapes.\", \"key\": \"verified_3\"}",
+          "exit_code": 0,
+          "output_sha": "5f000a4dc820b2e52c82b97bccad6e849b2a94515a590a54f2b3952f266191f9"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `python ./auger.py spec list specs --applies-to nope.none` -> rc=0, stdout 0 bytes (`wc -c` = 0), stderr = \\\"spec note (no-match): applies-to=nope.none matched no block (empty selection, exit 0 \\u2014 not a failure)\\\". Also checked assemble: rc=0, valid JSON with counts.total 0 on stdout, same note on stderr.\", \"key\": \"verified_4\"}",
+          "exit_code": 0,
+          "output_sha": "e2c888352b5180b3135db2e7377da80c4ee68284d47cb9e2ddc6d78c320e8689"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"derived_0: The no-match notice must not fire on the other two selection shapes (no selector, selector with matches) \\u2014 otherwise the diagnostic becomes noise and the three shapes collapse.\\nderived_1: The notice must go to stderr only, never stdout, so stdout stays machine-parseable (list rows / assemble JSON).\\nderived_2: The notice must name the actual selection so a caller can tell which selector matched nothing.\\nderived_3: The full test file must stay green (no regression from the new emission).\", \"key\": \"derived\"}",
+          "exit_code": 0,
+          "output_sha": "a8347b0c9e86dee19760015081befc625280ad776ae15c1b790a50c1b0ab1057"
+        },
+        {
+          "tool": "run_command",
+          "command": "python ./auger.py spec list specs > /tmp/o3.txt 2> /tmp/e3.txt; echo \"list-no-sel rc=$? stdout_lines=$(wc -l < /tmp/o3.txt) stderr_bytes=$(wc -c < /tmp/e3.txt)\"; python ./auger.py spec list specs --kind requirement > /tmp/o4.txt 2> /tmp/e4.txt; echo \"list-match rc=$? stdout_lines=$(wc -l < /tmp/o4.txt) stderr_bytes=$(wc -c < /tmp/e4.txt)\"; python ./auger.py spec assemble specs --format json > /tmp/o5.txt 2> /tmp/e5.txt; echo \"asm-no-sel rc=$? stdout_bytes=$(wc -c < /tmp/o5.txt)\"; cat /tmp/e5.txt",
+          "exit_code": 0,
+          "output_sha": "7a6b5f72f6e3732b29611e8ac128c0c0d67b1aef5751264e645feb147b678a84"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"_spec_describe_selection\" ./auger.py | head; sed -n '/^def _spec_describe_selection/,/^def /p' ./auger.py | head -40",
+          "exit_code": 0,
+          "output_sha": "fa29188e8c98fb682be552e9dc5d44abd1fa76d249a9dfe1325562769c548391"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: no-selector and matching-selector shapes stay quiet. `spec list specs` -> rc=0, 12 stdout rows, stderr 0 bytes; `spec list specs --kind requirement` -> rc=0, 4 rows, stderr 0 bytes; `spec assemble specs --format json` (no selector) -> rc=2, stdout 0 bytes, \\\"spec error (empty-selector)\\\". Guarded in code by `if selected and not rows` (auger.py:12835) and `if not records` (auger.py:12850). Tests: test_list_without_a_selector_lists_the_whole_corpus, test_list_selector_with_matches_is_quiet, test_assemble_without_a_selector_is_still_refused, test_assemble_selector_with_matches_exits_zero_and_is_quiet \\u2014 all in the 58-passed run.\", \"key\": \"verified_derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "beb47b9ebc1f4c9feca623db389f42e68dd0ea69fb1cbff8a5be20664e970f21"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: notice is stderr-only. `_spec_no_match_notice` (auger.py:12919-12931) prints with file=sys.stderr; live run of `spec list specs --applies-to nope.none` gave stdout 0 bytes and the note on stderr; `spec assemble ... --format json` gave parseable JSON on stdout (json.loads succeeded in test at tests/test_xml_specs.py:1012-1020) with the note on stderr.\", \"key\": \"verified_derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "b5f3780e88f3710df7cf899a024f72eaf654f86ca2b7d8ee920682169295fc6d"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: the note names the selection. Live stderr: \\\"spec note (no-match): applies-to=nope.none matched no block (empty selection, exit 0 \\u2014 not a failure)\\\". For list the selection string comes from _spec_describe_selection (auger.py:8912, called at auger.py:12837); for assemble from select_spec_blocks' returned selection (auger.py:12851). Test asserts \\\"applies-to=nope.none\\\" in err (tests/test_xml_specs.py:996).\", \"key\": \"verified_derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "6168aa9c10a9b95f0908954c5c3d3ae9e906d543edb59b696d34e006835f404a"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `python -m pytest tests/test_xml_specs.py -q` -> \\\"58 passed in 1.42s\\\" (exit 0), no regressions from the new emission.\", \"key\": \"verified_derived_3\"}",
+          "exit_code": 0,
+          "output_sha": "cc0f031502eb1d9cfe17ebec7743b2152576f9c498ef3b41ce7495335ed371fd"
+        }
+      ]
+    }
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "The diff only appends a new pending task entry (AUG-149) to the tasks ledger with no code changes, so there is nothing to wire, test, or drift."
+  },
+  "summary": "Stage tier1: PASS\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 PROOF: python -m pytest tests/test_xml_specs.py -q -k no_match prints 2 passed. FAILIF: any failure, error, or a pass count other than 2 \u2014 one of the two verbs lost its reported-empty-selection assertion.: Ran `python -m pytest tests/test_xml_specs.py -q -k no_match` -> exit 0, output `..  [100%]` / `2 passed, 56 deselected in 0.04s`. The two tests are tests/test_xml_specs.py:989 (list: asserts out==\"\" and \"spec note (no-match)\" in err) and tests/test_xml_specs.py:1012 (assemble: asserts counts.total 0, blocks==[] and \"spec note (no-match)\" in err).\n  \u2713 PROOF: python -m pytest tests/test_xml_specs.py -q -k three_shape_exit_code prints 1 passed. FAILIF: any failure, or a pass count other than 1 \u2014 a verb's --help epilogue no longer states the three selection shapes.: Ran `python -m pytest tests/test_xml_specs.py -q -k three_shape_exit_code` -> exit 0, `.  [100%]` / `1 passed, 57 deselected in 0.02s`. Test tests/test_xml_specs.py:1043 loops over both verbs' --help asserting \"exit codes:\", \"no selector\", \"no match\". Confirmed live: `spec list --help` and `spec assemble --help` both print the three-shape epilogue (auger.py:14011-14020 and auger.py:14030-14038).\n  \u2713 PROOF: grep -c \"spec note (no-match)\" ./auger.py prints 3. FAILIF: a lower count, meaning the notice emission was removed from the product code.: `grep -c \"spec note (no-match)\" ./auger.py` -> `3`. Lines: auger.py:12928 (the print inside `_spec_no_match_notice`), auger.py:14020 (list --help epilogue), auger.py:14038 (assemble --help epilogue). The helper is called from auger.py:12836 (list, `if selected and not rows`) and auger.py:12851 (assemble, `if not records`).\n  \u2713 PROOF: grep -c \"no-match\" ./docs/VERBS.md prints 1. FAILIF: zero, meaning the exit-code contract for an empty selection is undocumented outside the code.: `grep -c \"no-match\" ./docs/VERBS.md` -> `1`; the hit is docs/VERBS.md:718: \"`spec note (no-match): <selection> matched no block` on stderr, stdout still whatever the verb renders\", inside the paragraph that states exit 0 for a reported empty selection and the three shapes for both verbs.\n  \u2713 PROOF: python ./auger.py spec list specs --applies-to nope.none exits 0, writes nothing to stdout, and prints spec note (no-match) on stderr. FAILIF: a non-zero exit, silent stderr (the old defect), or any stdout row \u2014 the empty selection must stay reported and machine-parseable.: Ran `python ./auger.py spec list specs --applies-to nope.none > /tmp/o.txt 2> /tmp/e.txt` -> `rc=0`, stdout `wc -c` = `0`, stderr = `spec note (no-match): applies-to=nope.none matched no block (empty selection, exit 0 \u2014 not a failure)`. Cross-checked the sibling verb: `spec assemble specs --applies-to nope.none --format json` -> rc=0, valid JSON with `counts.total` 0 on stdout, same note on stderr.\n  \u2713 The no-match notice must not fire on the other two selection shapes (no selector, selector with matches) \u2014 otherwise the diagnostic becomes noise and the three shapes collapse.: `spec list specs` -> rc=0, 12 stdout rows, stderr 0 bytes; `spec list specs --kind requirement` -> rc=0, 4 rows, stderr 0 bytes; `spec assemble specs --format json` (no selector) -> rc=2, stdout 0 bytes, `spec error (empty-selector)`. Code guards: auger.py:12835 `if selected and not rows` and auger.py:12850 `if not records`. Covered by test_list_without_a_selector_lists_the_whole_corpus, test_list_selector_with_matches_is_quiet, test_assemble_without_a_selector_is_still_refused, test_assemble_selector_with_matches_exits_zero_and_is_quiet in the 58-passed run.\n  \u2713 The notice must go to stderr only, never stdout, so stdout stays machine-parseable (list rows / assemble JSON).: `_spec_no_match_notice` (auger.py:12919-12931) prints with `file=sys.stderr`. Live: list no-match stdout is 0 bytes; assemble no-match stdout is JSON that `json.loads` parses (asserted at tests/test_xml_specs.py:1016-1020) while the note appears only on stderr.\n  \u2713 The notice must name the actual selection so a caller can tell which selector matched nothing.: Live stderr names it: `spec note (no-match): applies-to=nope.none matched no block ...`. For list the string comes from `_spec_describe_selection` (auger.py:8912, called at auger.py:12837); for assemble from the selection returned by `select_spec_blocks` (auger.py:12851). tests/test_xml_specs.py:996 asserts `\"applies-to=nope.none\" in err`.\n  \u2713 The full test file must stay green (no regression from the new emission).: Ran `python -m pytest tests/test_xml_specs.py -q` -> exit 0, `58 passed in 1.42s`.\nAll five given criteria and four derived criteria pass with fresh command output: the no-match selection now exits 0 with empty/valid stdout and a selection-naming `spec note (no-match)` on stderr for both `list` and `assemble`, documented in docs/VERBS.md and both --help epilogues, with the other two selection shapes unchanged.\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-11-13T16:16:45.017126",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-13T16:16:45.035575+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 3776,
+        "truncated": false,
+        "source": "git show bd506c3e0eb2"
+      }
+    ],
+    "task_id": "AUG-149"
+  }
+}
