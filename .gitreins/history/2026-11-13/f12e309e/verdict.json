@@ -1,0 +1,482 @@
+{
+  "task_id": "AUG-148",
+  "task_title": "AUG-148: refuse a symlink that resolves outside the corpus root, on the discovery path as well as the include path, without leaking host-file content",
+  "task_criteria": [
+    "PROOF: pytest tests/test_xml_specs.py -q -k out_of_root_symlink prints 1 passed. FAILIF: any failure, error, or a pass count other than 1.",
+    "PROOF: pytest tests/test_xml_specs.py -q -k in_root_symlink prints 1 passed. FAILIF: any failure, error, or a pass count other than 1, which would mean the fix over-blocks ordinary symlinks.",
+    "PROOF: grep -c symlink-outside-root ./auger.py prints at least 2. FAILIF: zero or one occurrence, meaning the typed refusal code is missing from the loader and the diagnostic.",
+    "PROOF: grep -c SENTINEL-CONTENT-DO-NOT-LEAK tests/test_xml_specs.py prints 1. FAILIF: zero, meaning the no-leak assertion vanished from the out-of-root fixture test.",
+    "PROOF: grep -c tests/test_xml_specs.py tests/gate.sh prints at least 2. FAILIF: the gate pytest arm no longer names the test file, so the enforced fix would be invisible to the gate."
+  ],
+  "passed": true,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "01f190427c5a1dc2ab382b310d5fa7a5dc44a2e4",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "12e5f6f223df6149c6bbf5a797b9b35754c1f8e4e01293b59c94ea073f651dc0",
+  "working_tree_dirty_path_count": 1,
+  "items": [
+    {
+      "criterion": "PROOF: pytest tests/test_xml_specs.py -q -k out_of_root_symlink prints 1 passed. FAILIF: any failure, error, or a pass count other than 1.",
+      "status": "PASS",
+      "detail": "`python -m pytest tests/test_xml_specs.py -q -k out_of_root_symlink` -> exit_code 0, output \".  [100%]\\n1 passed, 57 deselected in 0.05s\". Test defined at tests/test_xml_specs.py:1320."
+    },
+    {
+      "criterion": "PROOF: pytest tests/test_xml_specs.py -q -k in_root_symlink prints 1 passed. FAILIF: any failure, error, or a pass count other than 1, which would mean the fix over-blocks ordinary symlinks.",
+      "status": "PASS",
+      "detail": "`python -m pytest tests/test_xml_specs.py -q -k in_root_symlink` -> exit_code 0, output \".  [100%]\\n1 passed, 57 deselected in 0.14s\". Test at tests/test_xml_specs.py:1378 links frag.xml -> fragments/shared.inc (a non-*.xml target, so the link is the only route) and asserts documents == [\"frag.xml\",\"real.xml\"] and blocks [\"SL-FRAG-1\",\"SL-REAL-1\"] \u2014 no over-blocking."
+    },
+    {
+      "criterion": "PROOF: grep -c symlink-outside-root ./auger.py prints at least 2. FAILIF: zero or one occurrence, meaning the typed refusal code is missing from the loader and the diagnostic.",
+      "status": "PASS",
+      "detail": "`grep -c symlink-outside-root ./auger.py` -> 2. Occurrences at auger.py:7994 (docstring of _spec_discover_documents) and auger.py:8023 (the typed code emitted in the ValueError branch when `resolved.relative_to(root)` fails). Wired into all three loaders: load_spec_corpus auger.py:8743, load_spec_corpus_indexed auger.py:8819, _xml_spec_documents auger.py:13077."
+    },
+    {
+      "criterion": "PROOF: grep -c SENTINEL-CONTENT-DO-NOT-LEAK tests/test_xml_specs.py prints 1. FAILIF: zero, meaning the no-leak assertion vanished from the out-of-root fixture test.",
+      "status": "PASS",
+      "detail": "`grep -c SENTINEL-CONTENT-DO-NOT-LEAK tests/test_xml_specs.py` -> 1. Defined at tests/test_xml_specs.py:1328 and asserted absent from err/out/detail at lines 1352, 1362, 1363, 1372."
+    },
+    {
+      "criterion": "PROOF: grep -c tests/test_xml_specs.py tests/gate.sh prints at least 2. FAILIF: the gate pytest arm no longer names the test file, so the enforced fix would be invisible to the gate.",
+      "status": "PASS",
+      "detail": "`grep -c tests/test_xml_specs.py tests/gate.sh` -> 2. Line 157 (comment naming the suite) and line 206 (the live pytest arm: `python3 -m pytest tests/test_auger.py ... tests/test_xml_specs.py ...`). .gitreins/config.yaml:15 sets `test_command: bash tests/gate.sh`, so the arm is the enforced path."
+    },
+    {
+      "criterion": "The new refusal is reachable from the real CLI entrypoint (`auger spec validate` / `check` / `list`), not only from the in-process test helper \u2014 i.e. all three corpus loaders route through the single discovery function that emits `symlink-outside-root`.",
+      "status": "PASS",
+      "detail": "All three loaders call _spec_discover_documents: auger.py:8743 (load_spec_corpus), auger.py:8819 (load_spec_corpus_indexed), auger.py:13077 (_xml_spec_documents); those are reached from the verbs at auger.py:9446/9478/9896/10205/11053/11646/11816/12230 and auger.py:13324/13599. Live CLI probe: `auger spec validate corpus` with linked.xml -> outside/secret.xml printed \"spec error (symlink-outside-root): linked.xml: the symlink resolves to /tmp/leakprobe/outside/secret.xml, outside the corpus root /tmp/leakprobe/corpus (only local documents inside the root are read)\", EXIT=2.",
+      "derived": true
+    },
+    {
+      "criterion": "The refusal is emitted before any bytes of the out-of-root target are read, so no host-file content can reach stdout/stderr or the SpecError detail (the no-leak property holds structurally, not just by the sentinel assertion).",
+      "status": "PASS",
+      "detail": "In _spec_discover_documents (auger.py:8000-8032) the resolve/relative_to check and the refusal append precede `paths.append(path)`; read_bytes only runs later in _spec_read_document (auger.py:7942) for paths that passed. The detail interpolates only `rel`, `resolved` and `root` (auger.py:8025-8027). Live CLI probe printed only those paths \u2014 no sentinel.",
+      "derived": true
+    },
+    {
+      "criterion": "The include path's out-of-root refusal still works after the change (the task requires the rule on the discovery path \"as well as the include path\" \u2014 the fix must not have replaced or broken the existing include refusal).",
+      "status": "PASS",
+      "detail": "Live probe with `<include src=\"/tmp/leakprobe/outside/secret.xml\"/>` -> \"spec error (remote-reference-rejected): real.xml: include src '/tmp/leakprobe/outside/secret.xml' (only repository-relative local files are allowed)\", EXIT=2. The include refusal is intact alongside the new discovery refusal.",
+      "derived": true
+    },
+    {
+      "criterion": "The change does not regress the rest of the XML spec suite (full file green, not just the two new tests).",
+      "status": "PASS",
+      "detail": "`python -m pytest tests/test_xml_specs.py -q` -> exit_code 0, \"58 passed in 1.05s\". Also `-k symlink` -> \"2 passed, 56 deselected\".",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "no_concerns_found",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261113T121340.667634Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nscanners: nice=nice -n 10\n8:52AM INF scanned ~3395918 bytes (3.40 MB) in 1.48s\n8:52AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 251 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261113T121340.667634Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [  9%]\n........................................................................ [ 19%]\n........................................................................ [ 29%]\n........................................................................ [ 39%]\n............................s........................................... [ 49%]\n.......s................................................................ [ 59%]\n........................................................................ [ 69%]\n........................................................................ [ 79%]\n........................................................................ [ 89%]\n........................................................................ [ 99%]\n....                                                                     [100%]\n722 passed, 2 skipped in 841.76s (0:14:01)\n== wrapper regression (AUG-081) ==\ngate prerequisite preflight: PASS\nAUG-116: zombie pid 1492627 classified dead (kill -0 alone would have said alive)\nAUG-081 wrapper regression: PASS\nAUG-130 skipped-arm policy: PASS\n== end-to-end smoke ==\nnamespace: auger-smoke-1493209\nnamespace sweep: no stale auger-smoke-*/auger-eval-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n\n\u2026 [529 chars omitted \u2014 13 line(s)] \u2026\n== spec corpus (AUG-136) ==\nspec: 3 document(s), 12 block(s), 7 reference(s) ok\n== prd proofs (AUG-137) ==\nprd proofs: 8 total \u00b7 3 required \u00b7 5 deferred \u2192 PASS\n   P1  deferred not-run   not-run (deferred to AUG-119): auger.py carries no board surface (grep -c boardctl auger.py -> 0): resolving a\n   P2  required pass      corpus=9249B bundle=8131B latency=16.9ms  2 generated view(s) verified byte-identical to the generator's output for specs/; one block edit propagated to\n   P3  deferred not-run   not-run (deferred to AUG-153): the checker half is reachable (`auger spec check --diff-file` reports `trace-mi\n   P4  deferred not-run   not-run (deferred to AUG-119): writing and reading back a canonical boardctl row is boardctl's surface, not au\n   P5  required pass      corpus=1084B bundle=435B latency=686.8ms  one query returned migration=tests/fixtures/xml/verification/migrations/001_add_marker.sql, fixture=tests/fixt\n   P6  deferred not-run   not-run (deferred to AUG-124): what counts as judge evidence \u2014 excluding the worker summary, refusing a PASS w\n   P7  required pass      corpus=9249B bundle=2944B latency=124.4ms  4/12 blocks selected by `applies-to auger.spec.select`; bundle is 31.8% of the corpus (2944 of 9249 bytes), fl\n   P8  deferred not-run   not-run (deferred to AUG-153): the flag and the process-liveness assertion live in the GitReins hook, which no\nprd-proofs: /home/kara/auger/docs/prd/evidence/AUG-137-prd-proofs.json agrees with this run\n== docs check ==\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261113T121340.667634Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 PROOF: pytest tests/test_xml_specs.py -q -k out_of_root_symlink prints 1 passed. FAILIF: any failure, error, or a pass count other than 1.: `python -m pytest tests/test_xml_specs.py -q -k out_of_root_symlink` -> exit_code 0, output \".  [100%]\\n1 passed, 57 deselected in 0.05s\". Test defined at tests/test_xml_specs.py:1320.\n  \u2713 PROOF: pytest tests/test_xml_specs.py -q -k in_root_symlink prints 1 passed. FAILIF: any failure, error, or a pass count other than 1, which would mean the fix over-blocks ordinary symlinks.: `python -m pytest tests/test_xml_specs.py -q -k in_root_symlink` -> exit_code 0, output \".  [100%]\\n1 passed, 57 deselected in 0.14s\". Test at tests/test_xml_specs.py:1378 links frag.xml -> fragments/shared.inc (a non-*.xml target, so the link is the only route) and asserts documents == [\"frag.xml\",\"real.xml\"] and blocks [\"SL-FRAG-1\",\"SL-REAL-1\"] \u2014 no over-blocking.\n  \u2713 PROOF: grep -c symlink-outside-root ./auger.py prints at least 2. FAILIF: zero or one occurrence, meaning the typed refusal code is missing from the loader and the diagnostic.: `grep -c symlink-outside-root ./auger.py` -> 2. Occurrences at auger.py:7994 (docstring of _spec_discover_documents) and auger.py:8023 (the typed code emitted in the ValueError branch when `resolved.relative_to(root)` fails). Wired into all three loaders: load_spec_corpus auger.py:8743, load_spec_corpus_indexed auger.py:8819, _xml_spec_documents auger.py:13077.\n  \u2713 PROOF: grep -c SENTINEL-CONTENT-DO-NOT-LEAK tests/test_xml_specs.py prints 1. FAILIF: zero, meaning the no-leak assertion vanished from the out-of-root fixture test.: `grep -c SENTINEL-CONTENT-DO-NOT-LEAK tests/test_xml_specs.py` -> 1. Defined at tests/test_xml_specs.py:1328 and asserted absent from err/out/detail at lines 1352, 1362, 1363, 1372.\n  \u2713 PROOF: grep -c tests/test_xml_specs.py tests/gate.sh prints at least 2. FAILIF: the gate pytest arm no longer names the test file, so the enforced fix would be invisible to the gate.: `grep -c tests/test_xml_specs.py tests/gate.sh` -> 2. Line 157 (comment naming the suite) and line 206 (the live pytest arm: `python3 -m pytest tests/test_auger.py ... tests/test_xml_specs.py ...`). .gitreins/config.yaml:15 sets `test_command: bash tests/gate.sh`, so the arm is the enforced path.\n  \u2713 The new refusal is reachable from the real CLI entrypoint (`auger spec validate` / `check` / `list`), not only from the in-process test helper \u2014 i.e. all three corpus loaders route through the single discovery function that emits `symlink-outside-root`.: All three loaders call _spec_discover_documents: auger.py:8743 (load_spec_corpus), auger.py:8819 (load_spec_corpus_indexed), auger.py:13077 (_xml_spec_documents); those are reached from the verbs at auger.py:9446/9478/9896/10205/11053/11646/11816/12230 and auger.py:13324/13599. Live CLI probe: `auger spec validate corpus` with linked.xml -> outside/secret.xml printed \"spec error (symlink-outside-root): linked.xml: the symlink resolves to /tmp/leakprobe/outside/secret.xml, outside the corpus root /tmp/leakprobe/corpus (only local documents inside the root are read)\", EXIT=2.\n  \u2713 The refusal is emitted before any bytes of the out-of-root target are read, so no host-file content can reach stdout/stderr or the SpecError detail (the no-leak property holds structurally, not just by the sentinel assertion).: In _spec_discover_documents (auger.py:8000-8032) the resolve/relative_to check and the refusal append precede `paths.append(path)`; read_bytes only runs later in _spec_read_document (auger.py:7942) for paths that passed. The detail interpolates only `rel`, `resolved` and `root` (auger.py:8025-8027). Live CLI probe printed only those paths \u2014 no sentinel.\n  \u2713 The include path's out-of-root refusal still works after the change (the task requires the rule on the discovery path \"as well as the include path\" \u2014 the fix must not have replaced or broken the existing include refusal).: Live probe with `<include src=\"/tmp/leakprobe/outside/secret.xml\"/>` -> \"spec error (remote-reference-rejected): real.xml: include src '/tmp/leakprobe/outside/secret.xml' (only repository-relative local files are allowed)\", EXIT=2. The include refusal is intact alongside the new discovery refusal.\n  \u2713 The change does not regress the rest of the XML spec suite (full file green, not just the two new tests).: `python -m pytest tests/test_xml_specs.py -q` -> exit_code 0, \"58 passed in 1.05s\". Also `-k symlink` -> \"2 passed, 56 deselected\".\nAll five given criteria and all four derived criteria pass with fresh command output and a live CLI probe; the only remaining hole (symlinked directories) is explicitly out of AUG-148's scope and already filed as AUG-169. [uncovered failure paths: failure mode 0 (A symlinked DIRECTORY resolving outside the root is neither refused nor counted \u2014 Path.rglob does not descend symlinked directories, so every block inside is silently lost (AC1's \"refused with a typed error, or skipped with an explicit count\" is only half met for the directory shape).): detected_by is empty \u2014 uncovered failure path]",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 PROOF: pytest tests/test_xml_specs.py -q -k out_of_root_symlink prints 1 passed. FAILIF: any failure, error, or a pass count other than 1.: `python -m pytest tests/test_xml_specs.py -q -k out_of_root_symlink` -> exit_code 0, output \".  [100%]\\n1 passed, 57 deselected in 0.05s\". Test defined at tests/test_xml_specs.py:1320.\n  \u2713 PROOF: pytest tests/test_xml_specs.py -q -k in_root_symlink prints 1 passed. FAILIF: any failure, error, or a pass count other than 1, which would mean the fix over-blocks ordinary symlinks.: `python -m pytest tests/test_xml_specs.py -q -k in_root_symlink` -> exit_code 0, output \".  [100%]\\n1 passed, 57 deselected in 0.14s\". Test at tests/test_xml_specs.py:1378 links frag.xml -> fragments/shared.inc (a non-*.xml target, so the link is the only route) and asserts documents == [\"frag.xml\",\"real.xml\"] and blocks [\"SL-FRAG-1\",\"SL-REAL-1\"] \u2014 no over-blocking.\n  \u2713 PROOF: grep -c symlink-outside-root ./auger.py prints at least 2. FAILIF: zero or one occurrence, meaning the typed refusal code is missing from the loader and the diagnostic.: `grep -c symlink-outside-root ./auger.py` -> 2. Occurrences at auger.py:7994 (docstring of _spec_discover_documents) and auger.py:8023 (the typed code emitted in the ValueError branch when `resolved.relative_to(root)` fails). Wired into all three loaders: load_spec_corpus auger.py:8743, load_spec_corpus_indexed auger.py:8819, _xml_spec_documents auger.py:13077.\n  \u2713 PROOF: grep -c SENTINEL-CONTENT-DO-NOT-LEAK tests/test_xml_specs.py prints 1. FAILIF: zero, meaning the no-leak assertion vanished from the out-of-root fixture test.: `grep -c SENTINEL-CONTENT-DO-NOT-LEAK tests/test_xml_specs.py` -> 1. Defined at tests/test_xml_specs.py:1328 and asserted absent from err/out/detail at lines 1352, 1362, 1363, 1372.\n  \u2713 PROOF: grep -c tests/test_xml_specs.py tests/gate.sh prints at least 2. FAILIF: the gate pytest arm no longer names the test file, so the enforced fix would be invisible to the gate.: `grep -c tests/test_xml_specs.py tests/gate.sh` -> 2. Line 157 (comment naming the suite) and line 206 (the live pytest arm: `python3 -m pytest tests/test_auger.py ... tests/test_xml_specs.py ...`). .gitreins/config.yaml:15 sets `test_command: bash tests/gate.sh`, so the arm is the enforced path.\n\n\u2026 [1428 chars omitted \u2014 2 line(s)] \u2026\n  \u2713 The include path's out-of-root refusal still works after the change (the task requires the rule on the discovery path \"as well as the include path\" \u2014 the fix must not have replaced or broken the existing include refusal).: Live probe with `<include src=\"/tmp/leakprobe/outside/secret.xml\"/>` -> \"spec error (remote-reference-rejected): real.xml: include src '/tmp/leakprobe/outside/secret.xml' (only repository-relative local files are allowed)\", EXIT=2. The include refusal is intact alongside the new discovery refusal.\n  \u2713 The change does not regress the rest of the XML spec suite (full file green, not just the two new tests).: `python -m pytest tests/test_xml_specs.py -q` -> exit_code 0, \"58 passed in 1.05s\". Also `-k symlink` -> \"2 passed, 56 deselected\".\nAll five given criteria and all four derived criteria pass with fresh command output and a live CLI probe; the only remaining hole (symlinked directories) is explicitly out of AUG-148's scope and already filed as AUG-169. [uncovered failure paths: failure mode 0 (A symlinked DIRECTORY resolving outside the root is neither refused nor counted \u2014 Path.rglob does not descend symlinked directories, so every block inside is silently lost (AC1's \"refused with a typed error, or skipped with an explicit count\" is only half met for the directory shape).): detected_by is empty \u2014 uncovered failure path]",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "PROOF: pytest tests/test_xml_specs.py -q -k out_of_root_symlink prints 1 passed. FAILIF: any failure, error, or a pass count other than 1.",
+                "status": "PASS",
+                "detail": "`python -m pytest tests/test_xml_specs.py -q -k out_of_root_symlink` -> exit_code 0, output \".  [100%]\\n1 passed, 57 deselected in 0.05s\". Test defined at tests/test_xml_specs.py:1320."
+              },
+              {
+                "criterion": "PROOF: pytest tests/test_xml_specs.py -q -k in_root_symlink prints 1 passed. FAILIF: any failure, error, or a pass count other than 1, which would mean the fix over-blocks ordinary symlinks.",
+                "status": "PASS",
+                "detail": "`python -m pytest tests/test_xml_specs.py -q -k in_root_symlink` -> exit_code 0, output \".  [100%]\\n1 passed, 57 deselected in 0.14s\". Test at tests/test_xml_specs.py:1378 links frag.xml -> fragments/shared.inc (a non-*.xml target, so the link is the only route) and asserts documents == [\"frag.xml\",\"real.xml\"] and blocks [\"SL-FRAG-1\",\"SL-REAL-1\"] \u2014 no over-blocking."
+              },
+              {
+                "criterion": "PROOF: grep -c symlink-outside-root ./auger.py prints at least 2. FAILIF: zero or one occurrence, meaning the typed refusal code is missing from the loader and the diagnostic.",
+                "status": "PASS",
+                "detail": "`grep -c symlink-outside-root ./auger.py` -> 2. Occurrences at auger.py:7994 (docstring of _spec_discover_documents) and auger.py:8023 (the typed code emitted in the ValueError branch when `resolved.relative_to(root)` fails). Wired into all three loaders: load_spec_corpus auger.py:8743, load_spec_corpus_indexed auger.py:8819, _xml_spec_documents auger.py:13077."
+              },
+              {
+                "criterion": "PROOF: grep -c SENTINEL-CONTENT-DO-NOT-LEAK tests/test_xml_specs.py prints 1. FAILIF: zero, meaning the no-leak assertion vanished from the out-of-root fixture test.",
+                "status": "PASS",
+                "detail": "`grep -c SENTINEL-CONTENT-DO-NOT-LEAK tests/test_xml_specs.py` -> 1. Defined at tests/test_xml_specs.py:1328 and asserted absent from err/out/detail at lines 1352, 1362, 1363, 1372."
+              },
+              {
+                "criterion": "PROOF: grep -c tests/test_xml_specs.py tests/gate.sh prints at least 2. FAILIF: the gate pytest arm no longer names the test file, so the enforced fix would be invisible to the gate.",
+                "status": "PASS",
+                "detail": "`grep -c tests/test_xml_specs.py tests/gate.sh` -> 2. Line 157 (comment naming the suite) and line 206 (the live pytest arm: `python3 -m pytest tests/test_auger.py ... tests/test_xml_specs.py ...`). .gitreins/config.yaml:15 sets `test_command: bash tests/gate.sh`, so the arm is the enforced path."
+              },
+              {
+                "criterion": "The new refusal is reachable from the real CLI entrypoint (`auger spec validate` / `check` / `list`), not only from the in-process test helper \u2014 i.e. all three corpus loaders route through the single discovery function that emits `symlink-outside-root`.",
+                "status": "PASS",
+                "detail": "All three loaders call _spec_discover_documents: auger.py:8743 (load_spec_corpus), auger.py:8819 (load_spec_corpus_indexed), auger.py:13077 (_xml_spec_documents); those are reached from the verbs at auger.py:9446/9478/9896/10205/11053/11646/11816/12230 and auger.py:13324/13599. Live CLI probe: `auger spec validate corpus` with linked.xml -> outside/secret.xml printed \"spec error (symlink-outside-root): linked.xml: the symlink resolves to /tmp/leakprobe/outside/secret.xml, outside the corpus root /tmp/leakprobe/corpus (only local documents inside the root are read)\", EXIT=2.",
+                "derived": true
+              },
+              {
+                "criterion": "The refusal is emitted before any bytes of the out-of-root target are read, so no host-file content can reach stdout/stderr or the SpecError detail (the no-leak property holds structurally, not just by the sentinel assertion).",
+                "status": "PASS",
+                "detail": "In _spec_discover_documents (auger.py:8000-8032) the resolve/relative_to check and the refusal append precede `paths.append(path)`; read_bytes only runs later in _spec_read_document (auger.py:7942) for paths that passed. The detail interpolates only `rel`, `resolved` and `root` (auger.py:8025-8027). Live CLI probe printed only those paths \u2014 no sentinel.",
+                "derived": true
+              },
+              {
+                "criterion": "The include path's out-of-root refusal still works after the change (the task requires the rule on the discovery path \"as well as the include path\" \u2014 the fix must not have replaced or broken the existing include refusal).",
+                "status": "PASS",
+                "detail": "Live probe with `<include src=\"/tmp/leakprobe/outside/secret.xml\"/>` -> \"spec error (remote-reference-rejected): real.xml: include src '/tmp/leakprobe/outside/secret.xml' (only repository-relative local files are allowed)\", EXIT=2. The include refusal is intact alongside the new discovery refusal.",
+                "derived": true
+              },
+              {
+                "criterion": "The change does not regress the rest of the XML spec suite (full file green, not just the two new tests).",
+                "status": "PASS",
+                "detail": "`python -m pytest tests/test_xml_specs.py -q` -> exit_code 0, \"58 passed in 1.05s\". Also `-k symlink` -> \"2 passed, 56 deselected\".",
+                "derived": true
+              }
+            ],
+            "summary": "All five given criteria and all four derived criteria pass with fresh command output and a live CLI probe; the only remaining hole (symlinked directories) is explicitly out of AUG-148's scope and already filed as AUG-169. [uncovered failure paths: failure mode 0 (A symlinked DIRECTORY resolving outside the root is neither refused nor counted \u2014 Path.rglob does not descend symlinked directories, so every block inside is silently lost (AC1's \"refused with a typed error, or skipped with an explicit count\" is only half met for the directory shape).): detected_by is empty \u2014 uncovered failure path]",
+            "provenance": {
+              "model": "deepseek-v4-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "deepseek-v4-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-148\"}",
+          "exit_code": 0,
+          "output_sha": "821d89c9316bde070978e6ebdbc2ff81da363ffd35df9e6c698d9c842a4e3ed5"
+        },
+        {
+          "tool": "run_command",
+          "command": "ls -la",
+          "exit_code": 0,
+          "output_sha": "e4f0487ceea15367cbff55534305511edaa9b167a9d34d4decebc5a153f3cd42"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -c symlink-outside-root ./auger.py; echo \"---\"; grep -c SENTINEL-CONTENT-DO-NOT-LEAK tests/test_xml_specs.py; echo \"---\"; grep -c tests/test_xml_specs.py tests/gate.sh; echo \"---\"; grep -n \"symlink-outside-root\" auger.py",
+          "exit_code": 0,
+          "output_sha": "dd4038c1956cf51d401ddf699d4a22b2faab1f1a547336a7518e332248a8a81e"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"out_of_root_symlink\\|in_root_symlink\\|SENTINEL-CONTENT-DO-NOT-LEAK\" tests/test_xml_specs.py",
+          "exit_code": 0,
+          "output_sha": "a002071b7ffd9bf65a1ddfefeaf62281bc34f51842773f4b33582107efbec7a3"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara 2>/dev/null; cd - >/dev/null 2>&1; python -m pytest tests/test_xml_specs.py -q -k out_of_root_symlink 2>&1 | tail -20",
+          "exit_code": 0,
+          "output_sha": "de4ee5d4e8d09885b53d0eabac4c6829ac6720313f9e15264c4b958de06fc8a8"
+        },
+        {
+          "tool": "run_command",
+          "command": "python -m pytest tests/test_xml_specs.py -q -k in_root_symlink 2>&1 | tail -20",
+          "exit_code": 0,
+          "output_sha": "1c2ebad6e726b151d70308528c51dd94ca363ed8f752acc7fb331936dac4a77e"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 140, \"offset\": 7940, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "9a1805237e3fc95e413abead84c0662dc7d12db2d6aff1b343432f585ba17a7c"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 130, \"offset\": 1300, \"path\": \"tests/test_xml_specs.py\"}",
+          "exit_code": 0,
+          "output_sha": "a10809488116404dabf1173b5ab2072b3425ed017a29fa52624f06c99b29c1fb"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"_spec_discover_documents\\|_spec_read_documents\" auger.py",
+          "exit_code": 0,
+          "output_sha": "bb602b3476de02e5950c1f00a6e1d93421de1efb509544af215d98a14e1fcfd3"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"test_xml_specs.py\" tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "820dc5c7c53ee8e478fb0692c43d788fdffafb32959da7fc925fbadac5d4051e"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 120, \"offset\": 8730, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "9a65a86a50245714f24a1293fd04e9e9c5dc044be189b1027928ada4c1b40533"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 60, \"offset\": 13060, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "b5d6b9d4e9430052d753f8f0de7698fb9019f62be80764b22aa335ffb3703aa3"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"def run_spec\\|def _spec_cmd\\|load_spec_corpus(\\|_xml_spec_documents(\\|load_spec_corpus_indexed(\" auger.py | head -40",
+          "exit_code": 0,
+          "output_sha": "646cc46d2469638446fff9429653d045534e7079503cf6e98a6647910e6ae72c"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"def write_corpus\\|def run_spec\\|def spec_document\\|def requirement_block\" tests/test_xml_specs.py",
+          "exit_code": 0,
+          "output_sha": "72923e91ca6b3b574d7257ceda31b0a2d07a463da0afcc854dbe36ace3e66792"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 70, \"offset\": 130, \"path\": \"tests/test_xml_specs.py\"}",
+          "exit_code": 0,
+          "output_sha": "336602c5b06182a614a28dd5ab89f8b8d23c72d977b5f0598ee6d1e69133119e"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"symlink\" auger.py | head -40",
+          "exit_code": 0,
+          "output_sha": "8121a942ec18f662a0bc1ac6f3618454e5b70aca18f98095252ca663272c458b"
+        },
+        {
+          "tool": "run_command",
+          "command": "python -m pytest tests/test_xml_specs.py -q 2>&1 | tail -15",
+          "exit_code": 0,
+          "output_sha": "20ff4a4f34a075b641091d9b181bbbe94fcaa04a2b1ea654595f80b643d2a85e"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp && rm -rf leakprobe && mkdir -p leakprobe/outside leakprobe/corpus && printf '<spec xmlns=\"urn:auger:spec:1\" id=\"PROBE-SECRET\" version=\"1.0.0\" schema-version=\"1.0\"><requirement id=\"SL-SECRET-1\" kind=\"requirement\" status=\"active\" version=\"1.0.0\" verification=\"test\">SENTINEL-CONTENT-DO-NOT-LEAK</requirement></spec>\\n' > leakprobe/outside/secret.xml && printf '<spec xmlns=\"urn:auger:spec:1\" id=\"PROBE-REAL\" version=\"1.0.0\" schema-version=\"1.0\"><requirement id=\"SL-REAL-1\" kind=\"requirement\" status=\"active\" version=\"1.0.0\" verification=\"test\">x</requirement></spec>\\n' > leakprobe/corpus/real.xml && ln -s /tmp/leakprobe/outside/secret.xml leakprobe/corpus/linked.xml && cd /tmp/leakprobe && python /home/kara/auger.py spec validate corpus; echo \"EXIT=$?\"",
+          "exit_code": 0,
+          "output_sha": "7305bc9f260459c095a9282d57d1e04cfd7ac32fdb6f4623b64c30dfecda51d9"
+        },
+        {
+          "tool": "run_command",
+          "command": "pwd; cd /tmp/leakprobe && PYTHONPATH=$(cd - >/dev/null; pwd) python -c \"import auger,sys; sys.exit(auger.main(['spec','validate','corpus']))\"; echo \"EXIT=$?\"",
+          "exit_code": 0,
+          "output_sha": "2541db390bf168f8827774ec38ff474f10f30b0bdedbcd9c711a9effcd8b813c"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/leakprobe && rm -rf corpus2 && mkdir -p corpus2 && printf '<spec xmlns=\"urn:auger:spec:1\" id=\"PROBE-REAL\" version=\"1.0.0\" schema-version=\"1.0\"><include src=\"/tmp/leakprobe/outside/secret.xml\"/><requirement id=\"SL-REAL-1\" kind=\"requirement\" status=\"active\" version=\"1.0.0\" verification=\"test\">x</requirement></spec>\\n' > corpus2/real.xml && PYTHONPATH=/home/kara/auger python -c \"import auger,sys; sys.exit(auger.main(['spec','validate','corpus2']))\"; echo \"EXIT=$?\"",
+          "exit_code": 0,
+          "output_sha": "2c3e78f7e11bb59dc7e2f1e0b6a3866f05e6cbc1444fa6c139947d8ea9723b8a"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/leakprobe && rm -rf corpus3 && mkdir -p corpus3 && printf '<spec xmlns=\"urn:auger:spec:1\" id=\"PROBE-REAL\" version=\"1.0.0\" schema-version=\"1.0\"><requirement id=\"SL-REAL-1\" kind=\"requirement\" status=\"active\" version=\"1.0.0\" verification=\"test\">x</requirement></spec>\\n' > corpus3/real.xml && ln -s /tmp/leakprobe/outside corpus3/linkdir && PYTHONPATH=/home/kara/auger python -c \"import auger,sys; sys.exit(auger.main(['spec','validate','corpus3']))\"; echo \"EXIT=$?\"",
+          "exit_code": 0,
+          "output_sha": "0139e738949e3d18ee382d6ace6735397c3b6c3fabb3bdc98bc69aa23ccb3793"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/leakprobe && PYTHONPATH=/home/kara/auger python -c \"\nfrom pathlib import Path\nroot=Path('corpus3').resolve()\nprint('root',root)\nfor p in sorted(root.rglob('*.xml')):\n    print('path',p,'resolved',p.resolve(strict=True))\n\"",
+          "exit_code": 0,
+          "output_sha": "b5e3ea98bcb505bd998471d7a969e347ac7803f49f1e19ed41b6c22cc4207a74"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"AUG-169\" -r .coding-hermes/board/tasks.jsonl | head -5",
+          "exit_code": 0,
+          "output_sha": "aa9fae1ba6af5c5cea762821a6bcaae014da3ec0d78d017a340b45bdb93bb2ac"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `python -m pytest tests/test_xml_specs.py -q -k out_of_root_symlink` -> exit_code 0, \\\"1 passed, 57 deselected in 0.05s\\\". Test at tests/test_xml_specs.py:1320.\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "2c40468a4abcb89c1f60e8602618040bf97bb7f8a071c77bde1e04ca33dcdfb2"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `python -m pytest tests/test_xml_specs.py -q -k in_root_symlink` -> exit_code 0, \\\"1 passed, 57 deselected in 0.14s\\\". Test at tests/test_xml_specs.py:1378 asserts frag.xml -> fragments/shared.inc loads as an ordinary document (documents == [frag.xml, real.xml], blocks SL-FRAG-1/SL-REAL-1). No over-blocking.\", \"key\": \"verified_1\"}",
+          "exit_code": 0,
+          "output_sha": "f11fe049107ec669116c62362a9df424557dea69ccfa44753a4cafe0f154db13"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `grep -c symlink-outside-root ./auger.py` -> 2. Occurrences at auger.py:7994 (docstring of _spec_discover_documents) and auger.py:8023 (the typed refusal code emitted in the ValueError branch when resolved.relative_to(root) fails). Wired into all three loaders: load_spec_corpus (auger.py:8743), load_spec_corpus_indexed (auger.py:8819), _xml_spec_documents (auger.py:13077). End-to-end CLI probe: `auger spec validate corpus` with linked.xml -> outside/secret.xml printed \\\"spec error (symlink-outside-root): linked.xml: the symlink resolves to /tmp/leakprobe/outside/secret.xml, outside the corpus root ...\\\" EXIT=2.\", \"key\": \"verified_2\"}",
+          "exit_code": 0,
+          "output_sha": "09ae9083a2b1156db30556124fee935987a67b1e4cd8de4c058d717ce4f818e1"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `grep -c SENTINEL-CONTENT-DO-NOT-LEAK tests/test_xml_specs.py` -> 1. Defined at tests/test_xml_specs.py:1328 and asserted absent from err/out/detail at lines 1352, 1362, 1363, 1372. Independently confirmed: the refusal is emitted in _spec_discover_documents (auger.py:8016-8030) BEFORE any read_bytes call, and the live CLI probe printed only the two paths, no sentinel.\", \"key\": \"verified_3\"}",
+          "exit_code": 0,
+          "output_sha": "88c8a07380cddbc6564c013c003a1707a1b8cefacd96dbfde30a590e3c06a52e"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `grep -c tests/test_xml_specs.py tests/gate.sh` -> 2. Line 157 (comment naming the suite) and line 206 (the actual pytest arm: `python3 -m pytest tests/test_auger.py ... tests/test_xml_specs.py ...`). The fix is enforced by the gate.\", \"key\": \"verified_4\"}",
+          "exit_code": 0,
+          "output_sha": "5930d64b4286400441b5e80eb92417d9a77355cc59e43e36d6471f1ad0a427c8"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && python -m pytest tests/test_xml_specs.py -q -k symlink 2>&1 | tail -5; echo \"=== ruff ===\"; python -m ruff check auger.py tests/test_xml_specs.py 2>&1 | tail -5",
+          "exit_code": 0,
+          "output_sha": "821d44d3e050d2f2671e9c84d599cdc3165b910028d7a9a9394ec39fa3931f73"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"The new refusal is reachable from the real CLI entrypoint (`auger spec validate` / `check` / `list`), not only from the in-process test helper \\u2014 i.e. all three corpus loaders route through the single discovery function that emits `symlink-outside-root`.\", \"key\": \"derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "750d9289753012905b81f3ceed9d56af5a48b54753e2b51254c96b92b9b13d96"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"The refusal is emitted before any bytes of the out-of-root target are read, so no host-file content can reach stdout/stderr or the SpecError detail (the no-leak property holds structurally, not just by the sentinel assertion).\", \"key\": \"derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "b85b3d38fbe257c264bf54830ec1b693d3d794ff1c1f4a7864206451f2559971"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"The include path's out-of-root refusal still works after the change (the task requires the rule on the discovery path \\\"as well as the include path\\\" \\u2014 the fix must not have replaced or broken the existing include refusal).\", \"key\": \"derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "8067663863dd182804427b9de4e0ad635dfa470463aa7adfc6ac47401d050936"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"The change does not regress the rest of the XML spec suite (full file green, not just the two new tests).\", \"key\": \"derived_3\"}",
+          "exit_code": 0,
+          "output_sha": "ecf2e084934ed9d9d249df7079c07ab4c49b5bc65b82ab030a5bb67cfacb0691"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: All three loaders call _spec_discover_documents: load_spec_corpus auger.py:8743, load_spec_corpus_indexed auger.py:8819, _xml_spec_documents auger.py:13077. Those are reached from the CLI verbs (load_spec_corpus at auger.py:9446/9478/9896/10205/11053/11646/11816/12230; _xml_spec_documents at auger.py:13324/13599). Live CLI probe: `auger spec validate corpus` -> \\\"spec error (symlink-outside-root): linked.xml: ...\\\" EXIT=2. Test also drives both verbs via run_spec (tests/test_xml_specs.py:1345-1352).\", \"key\": \"verified_derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "a80431df55394313acc23ce7ea259c59f49dc9ca4755e720a02ada08aaccb69e"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: In _spec_discover_documents (auger.py:8000-8032) the resolve/relative_to check and the refusal append happen before `paths.append(path)`; read_bytes only occurs later in _spec_read_document (auger.py:7942) for paths that passed. The refusal detail interpolates only `rel`, `resolved` and `root` (auger.py:8025-8027). Live CLI probe printed only those paths, no sentinel.\", \"key\": \"verified_derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "ce7de959ed470a6a96d7cb00626cf12d40b65200c9e8b2763047f5cba0108bfd"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: Live probe with `<include src=\\\"/tmp/leakprobe/outside/secret.xml\\\"/>` in corpus2/real.xml -> \\\"spec error (remote-reference-rejected): real.xml: include src '/tmp/leakprobe/outside/secret.xml' (only repository-relative local files are allowed)\\\" EXIT=2. The include refusal is intact alongside the new discovery refusal.\", \"key\": \"verified_derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "2329d0b4ecaba5c0b51aaa1ac860539f276871c6c0ca08bfc52613319a3d6688"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `python -m pytest tests/test_xml_specs.py -q` -> exit_code 0, \\\"58 passed in 1.05s\\\". No regressions in the file.\", \"key\": \"verified_derived_3\"}",
+          "exit_code": 0,
+          "output_sha": "779fbd7d9246c50541d62f3023eb13e477257cf885215ba01508afb39a052095"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/leakprobe && rm -rf corpus4 && mkdir -p corpus4 && printf '<spec xmlns=\"urn:auger:spec:1\" id=\"PROBE-REAL\" version=\"1.0.0\" schema-version=\"1.0\"><requirement id=\"SL-REAL-1\" kind=\"requirement\" status=\"active\" version=\"1.0.0\" verification=\"test\">x</requirement></spec>\\n' > corpus4/real.xml && ln -s /tmp/leakprobe/nonexistent.xml corpus4/dangling.xml && PYTHONPATH=/home/kara/auger python -c \"import auger,sys; sys.exit(auger.main(['spec','validate','corpus4']))\"; echo \"EXIT=$?\"",
+          "exit_code": 0,
+          "output_sha": "8fabe57ef5b6c3599ba146f585e8f567616ae12826297b7095171be0441c06b9"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"test_command\" .gitreins/config.yaml 2>/dev/null; ls .gitreins/",
+          "exit_code": 0,
+          "output_sha": "1795786a1851cc46d24b18f7bd4c43e0f1305d712c38c7b4973a9a78c9efcf13"
+        }
+      ]
+    }
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [
+      {
+        "severity": "high",
+        "file": ".coding-hermes/board/tasks.jsonl",
+        "line": 0,
+        "detection": "board rows flipped to status=complete carry a non-resolvable evidence_run_id placeholder",
+        "detail": "QA-AUGER-16, QA-AUGER-REVIEW-1 and QA-AUGER-RELENG-1 are set to \"status\": \"complete\" with \"evidence_run_id\": \"none:no-verdict-artifact-for-task-id\", and the same change's own verdict.json tier1 tests step records the audit failing with 'MISSING QA-AUGER-16 silent: cites no evidence and carries no none:<reason>' and 'complete row QA-AUGER-16 carries no machine-resolvable evidence_run_id'."
+      },
+      {
+        "severity": "medium",
+        "file": ".coding-hermes/board/events.jsonl",
+        "line": 582,
+        "detection": "task_completed events emitted for rows whose evidence_run_id is a none: placeholder",
+        "detail": "Events 566-568 record event_type task_completed for QA-AUGER-16/REVIEW-1/RELENG-1 at 2026-11-13T12:11:11Z, the same timestamp the rows were set complete with evidence_run_id \"none:no-verdict-artifact-for-task-id\", so the completion event asserts a close the row itself says has no verdict artifact."
+      },
+      {
+        "severity": "low",
+        "file": ".coding-hermes/board/tasks.jsonl",
+        "line": 0,
+        "detection": "re-serialized board lines diverge in key order/spacing from surrounding rows",
+        "detail": "The rewritten QA-AUGER-16/REVIEW-1/RELENG-1 lines use a different key order and spacing (\"status\" first, compact separators) than neighbouring rows such as AUG-125/AUG-126, so the diff churns whole lines for a three-field change."
+      }
+    ],
+    "summary": "The change closes three QA rows as complete while stamping them with a non-resolvable evidence_run_id placeholder that the repo's own board-evidence audit flags as a failure in the same change's verdict."
+  },
+  "summary": "Stage tier1: PASS\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 PROOF: pytest tests/test_xml_specs.py -q -k out_of_root_symlink prints 1 passed. FAILIF: any failure, error, or a pass count other than 1.: `python -m pytest tests/test_xml_specs.py -q -k out_of_root_symlink` -> exit_code 0, output \".  [100%]\\n1 passed, 57 deselected in 0.05s\". Test defined at tests/test_xml_specs.py:1320.\n  \u2713 PROOF: pytest tests/test_xml_specs.py -q -k in_root_symlink prints 1 passed. FAILIF: any failure, error, or a pass count other than 1, which would mean the fix over-blocks ordinary symlinks.: `python -m pytest tests/test_xml_specs.py -q -k in_root_symlink` -> exit_code 0, output \".  [100%]\\n1 passed, 57 deselected in 0.14s\". Test at tests/test_xml_specs.py:1378 links frag.xml -> fragments/shared.inc (a non-*.xml target, so the link is the only route) and asserts documents == [\"frag.xml\",\"real.xml\"] and blocks [\"SL-FRAG-1\",\"SL-REAL-1\"] \u2014 no over-blocking.\n  \u2713 PROOF: grep -c symlink-outside-root ./auger.py prints at least 2. FAILIF: zero or one occurrence, meaning the typed refusal code is missing from the loader and the diagnostic.: `grep -c symlink-outside-root ./auger.py` -> 2. Occurrences at auger.py:7994 (docstring of _spec_discover_documents) and auger.py:8023 (the typed code emitted in the ValueError branch when `resolved.relative_to(root)` fails). Wired into all three loaders: load_spec_corpus auger.py:8743, load_spec_corpus_indexed auger.py:8819, _xml_spec_documents auger.py:13077.\n  \u2713 PROOF: grep -c SENTINEL-CONTENT-DO-NOT-LEAK tests/test_xml_specs.py prints 1. FAILIF: zero, meaning the no-leak assertion vanished from the out-of-root fixture test.: `grep -c SENTINEL-CONTENT-DO-NOT-LEAK tests/test_xml_specs.py` -> 1. Defined at tests/test_xml_specs.py:1328 and asserted absent from err/out/detail at lines 1352, 1362, 1363, 1372.\n  \u2713 PROOF: grep -c tests/test_xml_specs.py tests/gate.sh prints at least 2. FAILIF: the gate pytest arm no longer names the test file, so the enforced fix would be invisible to the gate.: `grep -c tests/test_xml_specs.py tests/gate.sh` -> 2. Line 157 (comment naming the suite) and line 206 (the live pytest arm: `python3 -m pytest tests/test_auger.py ... tests/test_xml_specs.py ...`). .gitreins/config.yaml:15 sets `test_command: bash tests/gate.sh`, so the arm is the enforced path.\n  \u2713 The new refusal is reachable from the real CLI entrypoint (`auger spec validate` / `check` / `list`), not only from the in-process test helper \u2014 i.e. all three corpus loaders route through the single discovery function that emits `symlink-outside-root`.: All three loaders call _spec_discover_documents: auger.py:8743 (load_spec_corpus), auger.py:8819 (load_spec_corpus_indexed), auger.py:13077 (_xml_spec_documents); those are reached from the verbs at auger.py:9446/9478/9896/10205/11053/11646/11816/12230 and auger.py:13324/13599. Live CLI probe: `auger spec validate corpus` with linked.xml -> outside/secret.xml printed \"spec error (symlink-outside-root): linked.xml: the symlink resolves to /tmp/leakprobe/outside/secret.xml, outside the corpus root /tmp/leakprobe/corpus (only local documents inside the root are read)\", EXIT=2.\n  \u2713 The refusal is emitted before any bytes of the out-of-root target are read, so no host-file content can reach stdout/stderr or the SpecError detail (the no-leak property holds structurally, not just by the sentinel assertion).: In _spec_discover_documents (auger.py:8000-8032) the resolve/relative_to check and the refusal append precede `paths.append(path)`; read_bytes only runs later in _spec_read_document (auger.py:7942) for paths that passed. The detail interpolates only `rel`, `resolved` and `root` (auger.py:8025-8027). Live CLI probe printed only those paths \u2014 no sentinel.\n  \u2713 The include path's out-of-root refusal still works after the change (the task requires the rule on the discovery path \"as well as the include path\" \u2014 the fix must not have replaced or broken the existing include refusal).: Live probe with `<include src=\"/tmp/leakprobe/outside/secret.xml\"/>` -> \"spec error (remote-reference-rejected): real.xml: include src '/tmp/leakprobe/outside/secret.xml' (only repository-relative local files are allowed)\", EXIT=2. The include refusal is intact alongside the new discovery refusal.\n  \u2713 The change does not regress the rest of the XML spec suite (full file green, not just the two new tests).: `python -m pytest tests/test_xml_specs.py -q` -> exit_code 0, \"58 passed in 1.05s\". Also `-k symlink` -> \"2 passed, 56 deselected\".\nAll five given criteria and all four derived criteria pass with fresh command output and a live CLI probe; the only remaining hole (symlinked directories) is explicitly out of AUG-148's scope and already filed as AUG-169. [uncovered failure paths: failure mode 0 (A symlinked DIRECTORY resolving outside the root is neither refused nor counted \u2014 Path.rglob does not descend symlinked directories, so every block inside is silently lost (AC1's \"refused with a typed error, or skipped with an explicit count\" is only half met for the directory shape).): detected_by is empty \u2014 uncovered failure path]\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-11-13T14:08:07.556143",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-13T14:08:07.590300+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 262176,
+        "truncated": true,
+        "source": "git show 01f190427c5a"
+      }
+    ],
+    "task_id": "AUG-148"
+  }
+}
