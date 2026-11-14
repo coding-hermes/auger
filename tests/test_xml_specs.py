@@ -871,7 +871,9 @@ def test_bundle_refuses_a_requirement_declaring_both_edge_directions(
     tmp_path: Path,
 ) -> None:
     """Both directions is a cycle, not a silently deduplicated pair."""
-    root = write_document_corpus(tmp_path / "corpus", "cycle.xml", BUNDLE_BOTH_DIRECTIONS)
+    root = write_document_corpus(
+        tmp_path / "corpus", "cycle.xml", BUNDLE_BOTH_DIRECTIONS
+    )
     code, out, err = run_spec(
         "bundle", str(root), "BC-REQ-1", "--repo-root", str(REPO_ROOT)
     )
@@ -1091,6 +1093,8 @@ def test_bundle_resolves_the_namespaced_shape_and_the_grammar_requires_the_names
     assert twin_code == 2, (twin_out, twin_err)
     assert twin_out == "", twin_out
     assert "spec error (schema-invalid)" in twin_err, twin_err
+
+
 # ------------------------------------------------- AUG-146: selection vs the whole corpus
 def test_selection_skips_a_malformed_unrelated_document(tmp_path: Path) -> None:
     """AUG-146/AC-14: one half-written file must not take every query offline.
@@ -1371,7 +1375,9 @@ def test_an_out_of_root_symlink_is_refused_not_read(tmp_path: Path) -> None:
     assert code == 0, (out, err)
     assert "matched: 0" in out, out
     assert "spec note (no-match): id=SL-SECRET-1" in err, err
-    assert "spec note (no-match)" in err, err   # AUG-149: an empty selection is a note, not an error
+    assert "spec note (no-match)" in err, (
+        err
+    )  # AUG-149: an empty selection is a note, not an error
     assert sentinel not in out and sentinel not in err
 
 
@@ -1403,3 +1409,66 @@ def test_an_in_root_symlink_is_an_ordinary_document(tmp_path: Path) -> None:
         "SL-FRAG-1",
         "SL-REAL-1",
     ], out
+
+
+def test_a_symlinked_directory_resolving_outside_the_root_is_refused(
+    tmp_path: Path,
+) -> None:
+    """AUG-169: a symlinked DIRECTORY that resolves outside the root is noticed.
+
+    Before this row discovery walked `root.rglob("*.xml")`, which does not descend symlinked
+    directories, so `sub -> ../outside` holding `secret.xml` was neither read, nor refused, nor
+    counted: `spec validate` answered `ok` while the directory's documents silently vanished.
+    The same resolve-and-compare rule the file-level pins enforce now applies to directory
+    symlinks too, and the diagnostic names the link and its target — never a byte of content.
+    """
+    sentinel = "SENTINEL-DIR-CONTENT-DO-NOT-LEAK"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.xml").write_text(
+        '<spec xmlns="urn:auger:spec:1" id="PROBE-DIR-SECRET" version="1.0.0" '
+        'schema-version="1.0">'
+        f'<requirement id="SL-DIR-SECRET-1" kind="requirement" status="active" '
+        f'version="1.0.0" verification="test">{sentinel}</requirement></spec>\n',
+        encoding="utf-8",
+    )
+    corpus = write_corpus(
+        tmp_path / "corpus",
+        {"real.xml": spec_document("PROBE-REAL", requirement_block("SL-REAL-1"))},
+    )
+    (corpus / "sub").symlink_to(outside)
+
+    # Strict, both loaders: the corpus holds an out-of-root symlinked directory, so both
+    # refuse with the SAME typed code the file-level rule uses.
+    for verb in ("validate", "check"):
+        code, out, err = run_spec(verb, str(corpus))
+        assert code == 2, (verb, out, err)
+        assert out == "", f"{verb} emitted stdout: {out!r}"
+        assert "spec error (symlink-outside-root)" in err, err
+        assert "sub" in err, f"{verb} diagnostic does not name the link: {err!r}"
+        assert str(outside) in err, (
+            f"{verb} diagnostic does not name the target: {err!r}"
+        )
+        assert sentinel not in out, f"{verb} leaked content on stdout: {out!r}"
+        assert sentinel not in err, f"{verb} leaked the target's content: {err!r}"
+
+    with pytest.raises(auger.SpecError) as caught:
+        auger.load_spec_corpus(corpus)
+    assert caught.value.code == "symlink-outside-root"
+    assert "sub" in caught.value.detail
+    assert sentinel not in caught.value.detail
+
+    # Selection-scoped: skipped and COUNTED, so the rest of the corpus still answers.
+    code, out, err = run_spec("list", str(corpus), "--id", "SL-REAL-1")
+    assert code == 0, (out, err)
+    assert [line.split("\t", 1)[0] for line in out.splitlines()] == ["SL-REAL-1"], out
+    assert "skipped 1 unreadable document(s)" in err, err
+    assert "symlink-outside-root" in err, err
+    assert sentinel not in err
+    assert sentinel not in out
+
+    # The out-of-root document is not IN the corpus: its id selects nothing.
+    code, out, err = run_spec("assemble", str(corpus), "--id", "SL-DIR-SECRET-1")
+    assert code == 0, (out, err)
+    assert "matched: 0" in out, out
+    assert sentinel not in out and sentinel not in err

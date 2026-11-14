@@ -1,0 +1,52 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______ test_a_symlinked_directory_resolving_outside_the_root_is_refused _______
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-4452/test_a_symlinked_directory_res0')
+
+    def test_a_symlinked_directory_resolving_outside_the_root_is_refused(
+        tmp_path: Path,
+    ) -> None:
+        """AUG-169: a symlinked DIRECTORY that resolves outside the root is noticed.
+    
+        Before this row discovery walked `root.rglob("*.xml")`, which does not descend symlinked
+        directories, so `sub -> ../outside` holding `secret.xml` was neither read, nor refused, nor
+        counted: `spec validate` answered `ok` while the directory's documents silently vanished.
+        The same resolve-and-compare rule the file-level pins enforce now applies to directory
+        symlinks too, and the diagnostic names the link and its target — never a byte of content.
+        """
+        sentinel = "SENTINEL-DIR-CONTENT-DO-NOT-LEAK"
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        (outside / "secret.xml").write_text(
+            '<spec xmlns="urn:auger:spec:1" id="PROBE-DIR-SECRET" version="1.0.0" '
+            'schema-version="1.0">'
+            f'<requirement id="SL-DIR-SECRET-1" kind="requirement" status="active" '
+            f'version="1.0.0" verification="test">{sentinel}</requirement></spec>\n',
+            encoding="utf-8",
+        )
+        corpus = write_corpus(
+            tmp_path / "corpus",
+            {"real.xml": spec_document("PROBE-REAL", requirement_block("SL-REAL-1"))},
+        )
+        (corpus / "sub").symlink_to(outside)
+    
+        # Strict, both loaders: the corpus holds an out-of-root symlinked directory, so both
+        # refuse with the SAME typed code the file-level rule uses.
+        for verb in ("validate", "check"):
+            code, out, err = run_spec(verb, str(corpus))
+>           assert code == 2, (verb, out, err)
+E           AssertionError: ('validate', 'spec: 1 document(s), 1 block(s), 0 reference(s) ok
+E             ', '')
+E           assert 0 == 2
+
+tests/test_xml_specs.py:1439: AssertionError
+=============================== warnings summary ===============================
+tests/conftest.py:623
+  /home/kara/worktrees/auger-AUG-169/tests/conftest.py:623: SyntaxWarning: 'return' in a 'finally' block
+    return
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_xml_specs.py::test_a_symlinked_directory_resolving_outside_the_root_is_refused
+1 failed, 58 deselected, 1 warning in 0.13s

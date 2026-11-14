@@ -7989,46 +7989,94 @@ def _spec_discover_documents(root: Path) -> tuple:
     read and parsed. The rule now lives at the ONE point where a document enters the corpus.
 
     A path whose RESOLVED target is outside the root is refused, whether it is a symlinked file or
-    a file reached through a symlinked directory (both `resolve()` out). A symlink that resolves
-    INSIDE the root is an ordinary document. The refusal carries paths only — never a byte of the
-    target's content — and its code is `symlink-outside-root`; a dangling `*.xml` symlink is
-    `unreadable-document` rather than a silent disappearance.
+    a file reached through a symlinked directory (both `resolve()` out). A symlinked DIRECTORY is
+    resolved BEFORE it is descended (AUG-169): one resolving outside the root is refused in place
+    and never walked, so nothing beneath it is discovered or read; one resolving inside the root is
+    walked like an ordinary directory (with a resolved-path cycle guard, since a symlink can point
+    back up the tree). A symlink that resolves INSIDE the root is an ordinary document. The refusal
+    carries paths only — never a byte of the target's content — and its code is
+    `symlink-outside-root`; a dangling `*.xml` symlink is `unreadable-document` rather than a
+    silent disappearance.
 
     Returns (paths, refusals) with refusals shaped like the loader's `skipped` entries: the strict
     callers turn the first one into a typed refusal, the selection-scoped ones count it.
     """
     paths: list = []
     refusals: list = []
-    for path in sorted(root.rglob("*.xml")):
-        rel = path.relative_to(root).as_posix()
+    # Resolved paths of directories already walked: a symlinked directory pointing back up the
+    # tree must not turn the walk into a cycle (os.walk with followlinks=True alone would loop).
+    visited_dirs: set = set()
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=True):
+        here = Path(dirpath)
         try:
-            resolved = path.resolve(strict=True)
+            visited_dirs.add(here.resolve(strict=True))
         except OSError:
-            refusals.append(
-                {
-                    "file": rel,
-                    "code": "unreadable-document",
-                    "detail": f"{rel}: the symlink target does not exist",
-                }
-            )
-            continue
-        if not resolved.is_file():
-            continue
-        try:
-            resolved.relative_to(root)
-        except ValueError:
-            refusals.append(
-                {
-                    "file": rel,
-                    "code": "symlink-outside-root",
-                    "detail": (
-                        f"{rel}: the symlink resolves to {resolved}, outside the corpus "
-                        f"root {root} (only local documents inside the root are read)"
-                    ),
-                }
-            )
-            continue
-        paths.append(path)
+            pass
+        kept: list = []
+        for name in sorted(dirnames):
+            entry = here / name
+            if not entry.is_symlink():
+                kept.append(name)
+                continue
+            try:
+                resolved_dir = entry.resolve(strict=True)
+            except OSError:
+                continue  # a dangling directory symlink holds no readable document
+            try:
+                resolved_dir.relative_to(root)
+            except ValueError:
+                refusals.append(
+                    {
+                        "file": entry.relative_to(root).as_posix(),
+                        "code": "symlink-outside-root",
+                        "detail": (
+                            f"{entry.relative_to(root).as_posix()}: the symlinked directory "
+                            f"resolves to {resolved_dir}, outside the corpus root {root} "
+                            f"(only local documents inside the root are read)"
+                        ),
+                    }
+                )
+                continue  # never descend, never read beneath it
+            if resolved_dir in visited_dirs:
+                continue  # symlink cycle: that directory has already been walked
+            visited_dirs.add(resolved_dir)
+            kept.append(name)
+        dirnames[:] = kept
+        for name in sorted(filenames):
+            if not name.endswith(".xml"):
+                continue
+            path = here / name
+            rel = path.relative_to(root).as_posix()
+            try:
+                resolved = path.resolve(strict=True)
+            except OSError:
+                refusals.append(
+                    {
+                        "file": rel,
+                        "code": "unreadable-document",
+                        "detail": f"{rel}: the symlink target does not exist",
+                    }
+                )
+                continue
+            if not resolved.is_file():
+                continue
+            try:
+                resolved.relative_to(root)
+            except ValueError:
+                refusals.append(
+                    {
+                        "file": rel,
+                        "code": "symlink-outside-root",
+                        "detail": (
+                            f"{rel}: the symlink resolves to {resolved}, outside the corpus "
+                            f"root {root} (only local documents inside the root are read)"
+                        ),
+                    }
+                )
+                continue
+            paths.append(path)
+    paths.sort()
+    refusals.sort(key=lambda refusal: refusal["file"])
     return paths, refusals
 
 
