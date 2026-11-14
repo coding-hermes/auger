@@ -6080,9 +6080,14 @@ def test_a_broken_verb_fails_exactly_one_named_test(tmp_path, live_service):
         # conftest.SUBSTRATE_LOCK_INHERITED_ENV.
         conftest.SUBSTRATE_LOCK_INHERITED_ENV: "1",
     }
+    # Absolute interpreter: a RELATIVE PATH entry makes sys.executable relative too, and this
+    # call runs with cwd set to a scratch child dir, so a relative argv[0] resolves against the
+    # wrong directory (FileNotFoundError) before the assertion can execute. Same defect and fix
+    # as run_auger in tests/test_spec_repository_root.py.
+    interpreter = os.path.abspath(sys.executable)
     proc = subprocess.run(
         [
-            sys.executable,
+            interpreter,
             "-m",
             "pytest",
             "-c",

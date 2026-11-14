@@ -166,6 +166,23 @@ def marker(**overrides: str | None) -> str:
     return f"# ch:trace {rendered}\n"
 
 
+def checker_command() -> str:
+    """The command string GitReins' `run_checker` executes FROM the scratch repo cwd.
+
+    The interpreter token must be ABSOLUTE: a relative PATH entry makes `sys.executable`
+    relative (`.venv/bin/python3`), and a command string executed from a scratch consumer
+    repo cannot resolve it (FileNotFoundError) before the checker runs.
+    """
+    return f"{os.path.abspath(sys.executable)} {AUGER} spec align"
+
+
+def test_the_checker_command_resolves_the_interpreter_absolutely() -> None:
+    """Pin for the command-string executor shape (AUG-161)."""
+    interpreter, _, rest = checker_command().partition(" ")
+    assert os.path.isabs(interpreter), checker_command()
+    assert rest == f"{AUGER} spec align"
+
+
 def run_cli(
     repo: Path,
     diff: str,
@@ -174,8 +191,12 @@ def run_cli(
     spec_root: Path | None = None,
 ) -> tuple[int, str, str]:
     """The exact argv GitReins builds, with the real auger binary and the diff on stdin."""
+    # Absolute interpreter: a RELATIVE PATH entry makes sys.executable relative too, and this
+    # call runs with cwd set to a scratch consumer repo, so a relative argv[0] resolves
+    # against the wrong directory (FileNotFoundError) before any assertion executes.
+    interpreter = os.path.abspath(sys.executable)
     argv = [
-        sys.executable,
+        interpreter,
         str(AUGER),
         "spec",
         "align",
@@ -309,8 +330,12 @@ def test_both_documented_checker_commands_agree(tmp_path: Path) -> None:
     }
     outputs = {}
     for label, verb_args in commands.items():
+        # Absolute interpreter: a RELATIVE PATH entry makes sys.executable relative too, and this
+        # call runs with cwd set to a scratch consumer repo, so a relative argv[0] resolves
+        # against the wrong directory (FileNotFoundError) before any assertion executes.
+        interpreter = os.path.abspath(sys.executable)
         done = subprocess.run(
-            [sys.executable, str(AUGER), "spec", *verb_args],
+            [interpreter, str(AUGER), "spec", *verb_args],
             input=diff,
             capture_output=True,
             text=True,
@@ -571,7 +596,7 @@ def test_gitreins_real_invocation_against_the_real_auger_binary(tmp_path: Path) 
     from engine import spec_alignment
 
     repo = build_repo(tmp_path)
-    command = f"{sys.executable} {AUGER} spec align"
+    command = checker_command()
 
     stage_append(repo, "tests/test_marker.py", "\n" + marker())
     aligned = spec_alignment.run_checker(

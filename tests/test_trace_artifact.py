@@ -454,9 +454,13 @@ def test_the_shipped_checker_accepts_the_marker(tmp_path: Path) -> None:
 
     diff_file = tmp_path / "trace.patch"
     diff_file.write_text(diff, encoding="utf-8")
+    # Absolute interpreter: a RELATIVE PATH entry makes sys.executable relative too, and this
+    # call runs with cwd set to a scratch dir, so a relative argv[0] resolves against the wrong
+    # directory (FileNotFoundError) before any assertion executes.
+    interpreter = os.path.abspath(sys.executable)
     done = subprocess.run(
         [
-            sys.executable,
+            interpreter,
             str(AUGER),
             "spec",
             "align",

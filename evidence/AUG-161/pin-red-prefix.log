@@ -1,0 +1,56 @@
+FF.                                                                      [100%]
+=================================== FAILURES ===================================
+_________ test_no_scratch_cwd_spawn_keeps_the_raw_relative_interpreter _________
+
+    def test_no_scratch_cwd_spawn_keeps_the_raw_relative_interpreter() -> None:
+        """A spawn that sets a NON-repo-root cwd must not pass raw `sys.executable` in argv.
+    
+        Red on the unfixed tree: the four scratch-cwd sites (tests/test_auger.py child-pytest,
+        tests/test_spec_alignment_check.py `run_cli` helper AND its `--diff-stdin` loop,
+        tests/test_trace_artifact.py `spec align --diff-file`) passed raw `sys.executable` and
+        died under a relative PATH entry before any assertion ran.
+        """
+        offenders = []
+        for fname, line, call, tree in _iter_spawn_sites():
+            cwd = next((kw for kw in call.keywords if kw.arg == "cwd"), None)
+            if cwd is None:
+                continue  # inherited cwd = the pytest invocation dir (repo root) — unaffected
+            cwd_expr = ast.unparse(cwd.value)
+            if cwd_expr in REPO_ROOT_CWD:
+                continue  # relative interpreter still resolves inside the repo root
+            if _spawn_is_raw(call, tree):
+                offenders.append(f"{fname}:{line} (cwd={cwd_expr})")
+>       assert not offenders, (
+            "spawns with a scratch cwd= keep raw sys.executable in argv — under a relative "
+            "PATH entry the child dies with FileNotFoundError before any assertion: "
+            + ", ".join(offenders)
+        )
+E       AssertionError: spawns with a scratch cwd= keep raw sys.executable in argv — under a relative PATH entry the child dies with FileNotFoundError before any assertion: test_auger.py:6083 (cwd=str(child)), test_spec_alignment_check.py:191 (cwd=str(repo)), test_spec_alignment_check.py:312 (cwd=str(repo)), test_trace_artifact.py:457 (cwd=str(tmp_path))
+E       assert not ['test_auger.py:6083 (cwd=str(child))', 'test_spec_alignment_check.py:191 (cwd=str(repo))', 'test_spec_alignment_check.py:312 (cwd=str(repo))', 'test_trace_artifact.py:457 (cwd=str(tmp_path))']
+
+tests/test_executable_path_robustness.py:110: AssertionError
+__ test_every_spawn_with_a_cwd_kwarg_is_either_repo_root_or_absolute_resolved __
+
+    def test_every_spawn_with_a_cwd_kwarg_is_either_repo_root_or_absolute_resolved() -> (
+        None
+    ):
+        """The audit's full disposition table, mechanically: every cwd= spawn is accounted for."""
+        unaccounted = []
+        for fname, line, call, tree in _iter_spawn_sites():
+            cwd = next((kw for kw in call.keywords if kw.arg == "cwd"), None)
+            if cwd is None or ast.unparse(cwd.value) in REPO_ROOT_CWD:
+                continue
+            if _spawn_is_raw(call, tree):
+                unaccounted.append(f"{fname}:{line}")
+>       assert not unaccounted, (
+            "spawn sites set a scratch cwd= without an absolute-resolved interpreter: "
+            + ", ".join(unaccounted)
+        )
+E       AssertionError: spawn sites set a scratch cwd= without an absolute-resolved interpreter: test_auger.py:6083, test_spec_alignment_check.py:191, test_spec_alignment_check.py:312, test_trace_artifact.py:457
+E       assert not ['test_auger.py:6083', 'test_spec_alignment_check.py:191', 'test_spec_alignment_check.py:312', 'test_trace_artifact.py:457']
+
+tests/test_executable_path_robustness.py:128: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_executable_path_robustness.py::test_no_scratch_cwd_spawn_keeps_the_raw_relative_interpreter
+FAILED tests/test_executable_path_robustness.py::test_every_spawn_with_a_cwd_kwarg_is_either_repo_root_or_absolute_resolved
+2 failed, 1 passed in 0.49s

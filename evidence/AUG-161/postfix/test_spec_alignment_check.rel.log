@@ -1,0 +1,51 @@
+<frozen site>:101: RuntimeWarning: Unexpected value in sys.prefix, expected /home/kara/worktrees/auger-AUG-161/.venv, got .venv
+<frozen site>:101: RuntimeWarning: Unexpected value in sys.exec_prefix, expected /home/kara/worktrees/auger-AUG-161/.venv, got .venv
+...................F..                                                   [100%]
+=================================== FAILURES ===================================
+_________ test_gitreins_real_invocation_against_the_real_auger_binary __________
+
+tmp_path = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-4578/test_gitreins_real_invocation_0')
+
+    def test_gitreins_real_invocation_against_the_real_auger_binary(tmp_path: Path) -> None:
+        """AC2: GitReins' own argv builder + stdio protocol, against the real auger binary.
+    
+        Not a stub: `engine.spec_alignment.run_checker` reads the staged diff itself, appends the four
+        flags itself, runs the checker in its own session with a bounded budget, and validates the
+        handshake and status. This test imports that module from the GitReins checkout and asserts
+        both directions — a valid marker passes, a markerless scoped change FAILS the guard.
+        """
+        module_path = GITREINS / "engine" / "spec_alignment.py"
+        if not module_path.is_file():
+            pytest.skip(
+                f"cross-repo proof: no GitReins checkout at {GITREINS} (set GITREINS_REPO); the "
+                "real-argv leg runs on a host that has both repositories"
+            )
+        if str(GITREINS) not in sys.path:
+            sys.path.insert(0, str(GITREINS))
+        from engine import spec_alignment
+    
+        repo = build_repo(tmp_path)
+        command = f"{sys.executable} {AUGER} spec align"
+    
+        stage_append(repo, "tests/test_marker.py", "\n" + marker())
+        aligned = spec_alignment.run_checker(
+            str(repo),
+            command=command,
+            spec_root="specs",
+            mode="block",
+            missing_checker="block",
+            protocol_version="1",
+            min_checker_version="1.0.0",
+            timeout=60.0,
+        )
+        assert aligned.missing_checker is False, aligned.output
+        assert "incompatible checker protocol" not in aligned.output, aligned.output
+>       assert aligned.passed is True, aligned.output
+E       AssertionError: [Errno 2] No such file or directory: '.venv/bin/python3'
+E       assert False is True
+E        +  where False = SpecAlignmentResult(passed=False, status='error', output="[Errno 2] No such file or directory: '.venv/bin/python3'", e...2] No such file or directory: '.venv/bin/python3'", warning='', exit_code=None, timed_out=False, missing_checker=False).passed
+
+tests/test_spec_alignment_check.py:597: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_spec_alignment_check.py::test_gitreins_real_invocation_against_the_real_auger_binary
+1 failed, 21 passed in 4.43s
