@@ -69,6 +69,31 @@ the views are derived — an edit to ONE block's body moves that block's section
 leaves every untouched block byte-identical. Edit the XML, then regenerate; a hand edit of either
 view fails those tests.
 
+## The brief-context builder (AUG-165)
+
+At dispatch time the factory foreman runs
+`python3 scripts/brief_spec_context.py --row <ROW-ID> --spec-root specs [--repo-root <git-top>]`
+and embeds what it prints into the worker brief. The builder resolves the row through the module's
+own API (`auger.build_spec_context` — the same selection `spec context` serves) and emits the
+selected blocks VERBATIM as a Markdown section, one heading per block carrying that block's own
+byte count and a header carrying the measured `input_bytes`.
+
+The exit-code contract is the seam's whole point:
+
+* **0 with a section** — the row is scoped by a `<task>` block; the blocks are embedded byte for
+  byte.
+* **0 with NO section** — the row has no spec references (`unscoped`/`inactive`/zero selection):
+  the brief gets **zero bytes, never an empty "SPEC CONTEXT" heading**, one honest line names the
+  reason (`unknown-task`, …) on stderr, and `--status-json FILE` records the machine-readable
+  outcome (`no-context`).
+* **3** — the answer is `ambiguous`: nothing is emitted and the candidate ids go to stderr so the
+  tick report surfaces the ambiguity instead of a brief that guessed.
+* **2** — a typed auger refusal (missing spec root, unreadable corpus), with the auger error text
+  unchanged on stderr.
+
+A no-context answer is a normal outcome (the shipped corpus scopes no rows yet), not an error; an
+ambiguous answer is never silent.
+
 ## What the corpus deliberately does not claim
 
 * No block describes `init`, `start`, `ask`, `answer`, `check`, `status`, `toggle`, `dump` or
