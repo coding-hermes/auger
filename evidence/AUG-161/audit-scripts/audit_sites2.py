@@ -7,24 +7,43 @@ For each occurrence (grep-equivalent, via AST Name/Attribute nodes resolving to 
         | non-spawn      (display/provenance/set-membership use)
 Reports json rows: file, line, class, spawncall, cwd, abs_resolved.
 """
-import ast, json, sys
+
+import ast
+import json
+import sys
 from pathlib import Path
 
 TESTS = Path(__file__).resolve().parent.parent / "tests"
 SPAWN_FUNCS = {"run", "Popen", "check_output", "check_call", "call"}
 
+
 def is_subprocess_call(node):
     f = node.func
-    return (isinstance(f, ast.Attribute) and f.attr in SPAWN_FUNCS
-            and (isinstance(f.value, ast.Name) and f.value.id in ("subprocess", "sp", "proc")
-                 or isinstance(f.value, ast.Attribute)))
+    return (
+        isinstance(f, ast.Attribute)
+        and f.attr in SPAWN_FUNCS
+        and (
+            isinstance(f.value, ast.Name)
+            and f.value.id in ("subprocess", "sp", "proc")
+            or isinstance(f.value, ast.Attribute)
+        )
+    )
+
 
 def mentions_sys_exec(node):
-    return any(isinstance(n, (ast.Attribute, ast.Name))
-               and (isinstance(n, ast.Attribute) and n.attr == "executable"
-                    and isinstance(n.value, ast.Name) and n.value.id == "sys"
-                    or isinstance(n, ast.Name) and n.id == "executable")
-               for n in ast.walk(node))
+    return any(
+        isinstance(n, (ast.Attribute, ast.Name))
+        and (
+            isinstance(n, ast.Attribute)
+            and n.attr == "executable"
+            and isinstance(n.value, ast.Name)
+            and n.value.id == "sys"
+            or isinstance(n, ast.Name)
+            and n.id == "executable"
+        )
+        for n in ast.walk(node)
+    )
+
 
 def call_name(call):
     f = call.func
@@ -34,20 +53,28 @@ def call_name(call):
         return f.id
     return type(f).__name__
 
+
 rows = []
 for path in sorted(TESTS.glob("*.py")):
     src = path.read_text()
     tree = ast.parse(src)
     # collect spawn call nodes and helper-call nodes across the module
-    spawns = [n for n in ast.walk(tree) if isinstance(n, ast.Call) and is_subprocess_call(n)]
+    spawns = [
+        n for n in ast.walk(tree) if isinstance(n, ast.Call) and is_subprocess_call(n)
+    ]
     helpers = {}  # func name -> does it spawn?
     for n in ast.walk(tree):
         if isinstance(n, ast.FunctionDef):
             helpers[n.name] = any(
-                isinstance(c, ast.Call) and is_subprocess_call(c) for c in ast.walk(n))
+                isinstance(c, ast.Call) and is_subprocess_call(c) for c in ast.walk(n)
+            )
     for node in ast.walk(tree):
-        if not (isinstance(node, ast.Attribute) and node.attr == "executable"
-                and isinstance(node.value, ast.Name) and node.value.id == "sys"):
+        if not (
+            isinstance(node, ast.Attribute)
+            and node.attr == "executable"
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "sys"
+        ):
             continue
         # climb to the enclosing Call (if any)
         enc = None
@@ -84,11 +111,21 @@ for path in sorted(TESTS.glob("*.py")):
         argv0 = ""
         if enc is not None and enc.args:
             argv0 = ast.unparse(enc.args[0])[:100]
-        abs_res = "abspath" in src[node.lineno - 5:node.lineno + 3] or "resolve()" in src[max(0, node.lineno - 6):node.lineno + 2]
-        rows.append({
-            "file": path.name, "line": node.lineno, "class": klass, "spawncall": sp,
-            "cwd": cwd, "abs_resolved_hint": abs_res, "argv0": argv0,
-        })
+        abs_res = (
+            "abspath" in src[node.lineno - 5 : node.lineno + 3]
+            or "resolve()" in src[max(0, node.lineno - 6) : node.lineno + 2]
+        )
+        rows.append(
+            {
+                "file": path.name,
+                "line": node.lineno,
+                "class": klass,
+                "spawncall": sp,
+                "cwd": cwd,
+                "abs_resolved_hint": abs_res,
+                "argv0": argv0,
+            }
+        )
 
 print(json.dumps(rows, indent=1))
 print(f"TOTAL_OCCURRENCES={len(rows)}", file=sys.stderr)
