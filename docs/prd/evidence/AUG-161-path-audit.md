@@ -27,9 +27,10 @@ Only sites whose `cwd=` is a scratch dir are broken.
 
 ## Method (mechanical, not memory)
 
-- `grep -n 'sys\.executable' tests/*.py` → **49 occurrences across 13 files** (the board
-  row said 14 files; the mechanical count is 13 — re-checkable with the grep).
-- An AST reader (`.scratch/audit_sites2.py`, run with the venv interpreter) classifies
+- `grep -n 'sys\.executable' tests/*.py` → **49 occurrences across 14 files** (the board
+  row said 18 files at filing; the mechanical count is 14, re-checkable with the grep —
+  driver re-measured at base `3df75c2`: `git grep -o` = 49 occurrences over 14 `.py` files).
+- An AST reader (`evidence/AUG-161/audit-scripts/audit_sites2.py`, run with the venv interpreter) classifies
   every occurrence: direct spawn (argument subtree of a `subprocess.run/Popen/
   check_output/check_call/call` node), helper-mediated spawn (passed to a local helper
   that spawns), or non-spawn (provenance assertions, display strings, runner-vector
@@ -47,7 +48,7 @@ or inherited-cwd).
 
 `subprocess.run(<argv VARIABLE>)` mediator sites are audited too: a variable built with
 `sys.executable` and later spawned counts as a spawn site (found by a data-flow sweep,
-`.scratch/find_mediators.py`).
+`evidence/AUG-161/audit-scripts/find_mediators.py`).
 
 | # | site | callable | cwd= | raw `sys.executable` in argv | disposition |
 |---|------|----------|------|------------------------------|-------------|
