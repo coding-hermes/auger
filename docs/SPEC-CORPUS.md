@@ -44,6 +44,24 @@ python auger.py spec assemble specs --applies-to auger.spec.select --format json
 repository it describes. This corpus lives inside the repository it describes, so
 `git rev-parse --show-toplevel` from `specs/` is the root and no flag is needed.
 
+## Querying the corpus as of a past version (AUG-167)
+
+`spec list` and `spec assemble` accept `--as-of REF`: the corpus subtree is materialised as it
+existed at that git ref (the repository is resolved from the spec root, the subtree is extracted
+with `git archive` into a temp directory, and the ordinary selection path runs over it — read-only,
+no `.git` mutation, the temp dir is removed when the verb returns). `--as-of HEAD` is byte-identical
+to plain selection, and an earlier commit returns the block bodies as they were THEN. Four typed
+refusals, each `spec error (<code>)` on stderr with exit 2:
+
+* `as-of-unknown-ref` — REF does not resolve in the repository;
+* `as-of-not-a-repository` — the spec root is not inside a git work tree;
+* `as-of-corpus-missing` — the corpus path does not exist at REF;
+* `as-of-git-unavailable` — the git executable is not available.
+
+`--as-of` is a selection-verb flag only: `validate`, `check`, `bundle` and the other spec verbs
+refuse it. Superseded/successor chains are NOT rewritten across versions — a historical query
+returns the historical corpus exactly as the loader sees any corpus.
+
 ## The generated views
 
 The XML is the source and the readable documents are views of it. Two views ship, rendered from the
