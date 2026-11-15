@@ -420,7 +420,7 @@ run_inner_gate(){
   # run would exit 0, and the assertion that the default run FAILS would fire
   # — the documented escape would break the gate. Callers that want the opt-in
   # pass it explicitly in "$@", after the unset.
-  output="$(env -u AUGER_ALLOW_SKIPPED_ARMS AUGER_CI=1 GITHUB_ACTIONS=true AUGER_GATE_INNER=1 \
+  output="$(env -u AUGER_ALLOW_SKIPPED_ARMS AUGER_CI=1 GITHUB_ACTIONS=true AUGER_GATE_INNER=1 GATE_FULL=1 \
             AUG130_REAL_PYTHON="$real_python" \
             PATH="$skiparms_dir:$PATH" "$@" \
             timeout 900 bash "$GATE" 2>&1)"
