@@ -1,0 +1,84 @@
+== BEFORE: live registry listing of auger-pytest-* rows ==
+auger-pytest-* registry rows: 15
+   auger-pytest-28c53dec-e7287dea33ab
+   auger-pytest-3d70e256-6da8d5431dd7
+   auger-pytest-4064466e-0f552411ee12
+   auger-pytest-4064466e-e10f8c2cdcf0
+   auger-pytest-7070836a-c9d858d1a06c
+   auger-pytest-a87ab01d-60d36fb0d1c9
+   auger-pytest-ba9719e3-262739849d62
+   auger-pytest-ba9719e3-37cd079df675
+   auger-pytest-ba9719e3-4737f771b326
+   auger-pytest-ba9719e3-54a2a6fdaf9a
+   auger-pytest-ba9719e3-5657e946cba1
+   auger-pytest-ba9719e3-567f534cc2ff
+   auger-pytest-ba9719e3-6527c6fa7f62
+   auger-pytest-ba9719e3-c5892b365dc3
+   auger-pytest-ba9719e3-f65c7fcd25e7
+
+== seeding controlled fixtures (registry rows + directories) ==
+create auger-pytest-r006e2e-old -> 201
+create auger-pytest-r006e2e-ghost -> 201
+create auger-pytest-r006e2e-fresh -> 201
+create auger-prod-r006e2e-guarded -> 201
+fixture mtimes: /home/kara/duckbrain/namespaces/auger-pytest-r006e2e-old 2026-11-12 05:37:50 -0500
+/home/kara/duckbrain/namespaces/auger-pytest-r006e2e-fresh 2026-11-15 05:37:51 -0500
+/home/kara/duckbrain/namespaces/auger-prod-r006e2e-guarded 2026-11-12 05:37:50 -0500
+
+== the ONE sweep run (fixed ns_helper, extracted verbatim from tests/smoke.sh) ==
+1
+namespace sweep: removed 1 stale throwaway(s)
+
+== AFTER: live registry listing of the fixture + pytest class ==
+fixture/pytest registry rows remaining: 18
+   auger-prod-r006e2e-guarded
+   auger-pytest-28c53dec-e7287dea33ab
+   auger-pytest-3d70e256-6da8d5431dd7
+   auger-pytest-4064466e-0f552411ee12
+   auger-pytest-4064466e-e10f8c2cdcf0
+   auger-pytest-7070836a-c9d858d1a06c
+   auger-pytest-a87ab01d-60d36fb0d1c9
+   auger-pytest-ba9719e3-262739849d62
+   auger-pytest-ba9719e3-37cd079df675
+   auger-pytest-ba9719e3-4737f771b326
+   auger-pytest-ba9719e3-54a2a6fdaf9a
+   auger-pytest-ba9719e3-5657e946cba1
+   auger-pytest-ba9719e3-567f534cc2ff
+   auger-pytest-ba9719e3-6527c6fa7f62
+   auger-pytest-ba9719e3-c5892b365dc3
+   auger-pytest-ba9719e3-f65c7fcd25e7
+   auger-pytest-r006e2e-fresh
+   auger-pytest-r006e2e-ghost
+
+== AFTER: directories on disk ==
+  GONE dir: auger-pytest-r006e2e-old
+  KEPT dir: auger-pytest-r006e2e-ghost
+  KEPT dir: auger-pytest-r006e2e-fresh
+  KEPT dir: auger-prod-r006e2e-guarded
+
+== cleanup of the survivors (disclosed: hand-run deletes of MY OWN fixtures, not part of the sweep) ==
+cleanup auger-pytest-r006e2e-fresh -> delete=200
+cleanup auger-prod-r006e2e-guarded -> delete=200
+
+
+== postscript: attribution and interpretation (written after the run) ==
+1. The foreman's 41-row backlog (measured 09:08Z) was already draining by an EXTERNAL
+   actor, not by this script: between 10:33Z and 10:37Z the registry went 42 -> 15
+   auger-pytest-* rows while this session's sweep run deleted NOTHING (it printed
+   "no stale ... older than a day" because the s3-sync push (pid 4150279, window
+   10:22-10:35Z) had made every surviving directory's mtime fresh and DuckBrain's
+   post-sync reconciliation dropped the ghost rows). The 27 dropped rows were NOT
+   reaped by tests/smoke.sh, so no 41->0 claim is made for the script here.
+2. What the script DOES prove live, in one repeatable sweep run: the in-class stale
+   fixture (auger-pytest-r006e2e-old, directory mtime 3 days old) was reaped —
+   "removed 1 stale throwaway(s)", registry row and directory both gone — while the
+   fresh in-class fixture (directory seconds old), the foreign prefix
+   (auger-prod-r006e2e-guarded, 3 days old) and the live sibling class (the 15 rows
+   above) were all KEPT. Prefix gate, >24h gate, both honored on the live substrate.
+3. The "ghost row, no directory" branch did not trigger live: DuckBrain's indexer
+   recreated the fixture's directory between creation and the sweep (a fresh mtime is
+   by definition not a sweep target). That branch is pinned hermetically in
+   tests/test_smoke_teardown.py::test_sweep_reaps_a_pytest_row_whose_directory_is_gone.
+4. Cleanup: the surviving fixtures were deleted by hand AFTER the sweep and disclosed
+   here — they were this session's own fixtures (fresh, foreign) plus the reaped
+   ghost's resurrected directory — not substrate backlog.

@@ -267,3 +267,16 @@ def test_sweep_still_reaps_the_original_smoke_and_eval_classes(rig):
     assert _deletes(rig, fresh) == [], _calls(rig)
     assert not d_old.exists()
     assert d_fresh.is_dir()
+
+
+def test_gate_arm_runs_this_file() -> None:
+    """A proof outside tests/gate.sh's pytest arm is never executed by CI or the guard."""
+    arm = [
+        line
+        for line in SMOKE.with_name("gate.sh").read_text(encoding="utf-8").splitlines()
+        if "python3 -m pytest" in line
+    ]
+    assert arm, "tests/gate.sh must have a pytest arm"
+    assert "tests/test_smoke_teardown.py" in arm[0], (
+        "tests/test_smoke_teardown.py must be named in tests/gate.sh's pytest arm"
+    )
