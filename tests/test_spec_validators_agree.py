@@ -68,6 +68,10 @@ EXPECTED = {
     "invalid/rollback-without-proof": "invalid-spec-graph",
     # AUG-143: both legal declarations on blocks that earn them (this corpus is valid).
     "rollback": None,
+    # AUG-142: the semantic-finding fixtures (contradiction / consistent / no-evidence corpora).
+    # Valid for BOTH verbs — the semantic rule runs in the `align` checker, not the loaders, so
+    # the corpora themselves must stay green here while the checker grades their contradictions.
+    "semantic": None,
     "invalid/reference-cycle": "reference-cycle",
     "invalid/schema-invalid": "schema-invalid",
     "invalid/schema-version": "unsupported-schema-version",

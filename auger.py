@@ -12242,6 +12242,119 @@ def _spec_finding(code: str, severity: str, why: str, evidence: str) -> dict:
     return {"code": code, "severity": severity, "why": why, "evidence": evidence}
 
 
+# AUG-142: the SEMANTIC finding class. A semantic finding claims a contradiction between things
+# the corpus SAYS, so it must carry the literal source text that justifies it (a finding whose
+# evidence excerpt is fabricated or empty is refused, never emitted), a digest of that source so
+# a caller can re-derive it, and an uncertainty statement — because a metadata+text rule cannot
+# be certain. Findings report problems; a finding NEVER certifies (no pass verdict, ever).
+SPEC_SEMANTIC_BANDS = ("high", "medium", "low")
+SPEC_SEMANTIC_RETIRED_STATUSES = ("deprecated", "superseded")
+SPEC_SEMANTIC_RULE_ID = "active-cites-deprecated-status"
+
+
+def _spec_semantic_finding(
+    *,
+    blocks,
+    rule_id,
+    reason,
+    evidence_excerpt,
+    source_digest,
+    uncertainty,
+    severity="warn",
+    code="semantic-contradiction",
+):
+    """Construct ONE semantic finding, refusing anything that cannot be evidenced.
+
+    Every semantic finding passes through this validator, so a rule that cannot quote the source
+    text it judged raises a typed `spec error` instead of emitting a fabricated rationale
+    (finding-missing-evidence), and one without a band/score pair raises
+    finding-missing-uncertainty / finding-invalid-uncertainty. The legacy keys ride along so the
+    shared sort/counts/exit-code path serves both finding classes unchanged.
+    """
+    excerpt = evidence_excerpt.strip() if isinstance(evidence_excerpt, str) else ""
+    if not excerpt:
+        raise SpecError(
+            "finding-missing-evidence",
+            f"a semantic finding ({rule_id}) names {', '.join(blocks)} but carries no evidence "
+            "excerpt: a finding must quote the literal source text that justifies it — without "
+            "that it is a fabricated rationale, and the checker refuses rather than emit one",
+        )
+    if (
+        not isinstance(uncertainty, dict)
+        or "band" not in uncertainty
+        or "score" not in (uncertainty)
+    ):
+        raise SpecError(
+            "finding-missing-uncertainty",
+            f"a semantic finding ({rule_id}) carries no uncertainty statement: band (one of "
+            f"{', '.join(SPEC_SEMANTIC_BANDS)}) and score (0..1) are BOTH mandatory, because a "
+            "metadata+text rule must state how much it can be trusted",
+        )
+    band, score = uncertainty["band"], uncertainty["score"]
+    if (
+        band not in SPEC_SEMANTIC_BANDS
+        or not isinstance(score, (int, float))
+        or isinstance(score, bool)
+        or not 0.0 <= float(score) <= 1.0
+    ):
+        raise SpecError(
+            "finding-invalid-uncertainty",
+            f"a semantic finding ({rule_id}) declares uncertainty={uncertainty!r}: band must be "
+            f"one of {', '.join(SPEC_SEMANTIC_BANDS)} and score a number in 0..1",
+        )
+    return {
+        "class": "semantic",
+        "code": code,
+        "severity": severity,
+        "why": reason,
+        "evidence": f"{'+'.join(blocks)}",
+        "blocks": list(blocks),
+        "rule_id": rule_id,
+        "reason": reason,
+        "evidence_excerpt": excerpt,
+        "source_digest": source_digest,
+        "uncertainty": {"band": band, "score": float(score)},
+    }
+
+
+def _spec_semantic_findings(blocks) -> list:
+    """The opt-in semantic pass: contradictions the corpus' own metadata states (AUG-142).
+
+    DETERMINISTIC and metadata+text only — no LLM call, no network. The rule: a block whose
+    status is `active` must not cite (depends-on/verifies/refs/implements) a block the corpus
+    itself marks `deprecated` or `superseded`; the retired block's prose is the literal evidence,
+    hashed into source_digest. A corpus with consistent statuses emits nothing.
+    """
+    blocks_by_id = {block["id"]: block for block in blocks}
+    findings: list = []
+    for block in blocks:
+        if block["status"] != "active":
+            continue
+        for attribute in ("depends-on", "verifies", "refs", "implements"):
+            for target in block["refs"].get(attribute, ()):
+                cited = blocks_by_id.get(target)
+                if cited is None or cited is block:
+                    continue
+                if cited["status"] not in SPEC_SEMANTIC_RETIRED_STATUSES:
+                    continue
+                text = " ".join((cited.get("text") or "").split())
+                findings.append(
+                    _spec_semantic_finding(
+                        blocks=[block["id"], target],
+                        rule_id=SPEC_SEMANTIC_RULE_ID,
+                        reason=(
+                            f"{block['id']} is active but its {attribute}= edge cites {target}, "
+                            f"whose corpus status is {cited['status']}: the contract the active "
+                            "block leans on has been retired by this same corpus"
+                        ),
+                        evidence_excerpt=text,
+                        source_digest=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                        uncertainty={"band": "high", "score": 1.0},
+                    )
+                )
+    return findings
+
+
 def align_staged_change(
     spec_root,
     *,
@@ -12249,6 +12362,7 @@ def align_staged_change(
     repository_root=None,
     protocol_version=None,
     max_diff_bytes=None,
+    semantic=False,
 ) -> dict:
     """Grade one staged diff against the spec corpus and the ch:trace doctrine (AUG-120).
 
@@ -12517,6 +12631,12 @@ def align_staged_change(
                 f"{changed_path}:1",
             )
 
+    if semantic:
+        # AUG-142: the OPT-IN semantic pass. Findings whose class is `semantic` join the
+        # location/marker findings; with the flag off nothing here runs and the payload is
+        # byte-identical to the pre-AUG-142 shape.
+        findings.extend(_spec_semantic_findings(blocks))
+
     referenced_blocks = []
     for block_id in sorted(set(declared) | set(related)):
         block = blocks_by_id[block_id]
@@ -12658,6 +12778,7 @@ def _spec_align_dispatch(a):
         repository_root=getattr(a, "repo_root", None),
         protocol_version=requested,
         max_diff_bytes=limit,
+        semantic=bool(getattr(a, "semantic", False)),
     )
     print(
         json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -13053,6 +13174,14 @@ def _add_spec_checker_flags(parser) -> None:
         metavar="N",
         help=f"refuse a diff larger than N bytes instead of buffering without limit "
         f"(default {SPEC_CHECK_MAX_DIFF_BYTES})",
+    )
+    parser.add_argument(
+        "--semantic",
+        action="store_true",
+        help="ALSO run the opt-in semantic pass (AUG-142): deterministic, metadata+text "
+        "contradiction findings whose class is `semantic`, each carrying the literal source "
+        "text it judged (evidence_excerpt + source_digest) and an uncertainty band/score. "
+        "Default OFF: without this flag the payload is byte-identical to the legacy shape",
     )
 
 
