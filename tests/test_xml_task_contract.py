@@ -388,12 +388,12 @@ def test_an_out_of_scope_entry_without_a_reason_is_refused(tmp_path: Path) -> No
 
 # ---------------------------------------------------------------- board fixtures (AC3/AC4/AC6)
 def boardctl_or_skip() -> str:
-    """The real boardctl, or a LOUD skip naming the remedy (a silent skip reads like a pass)."""
+    """Require boardctl: these tests promise board export/readback coverage, not an optional arm."""
     if BOARDCTL is None:
-        pytest.skip(
-            "boardctl is not installed on this host, so the board a task exports into cannot be "
-            "created; install coding-hermes-tools (`boardctl`) and re-run — the AC3/AC4/AC6 "
-            "proofs did NOT run here"
+        pytest.fail(
+            "boardctl is not installed on PATH; the AC3/AC4/AC6 board proofs cannot run. "
+            "Install coding-hermes-tools (boardctl) and re-run; refusing to report skipped "
+            "coverage as green."
         )
     return BOARDCTL
 
