@@ -152,6 +152,35 @@ def test_all_eight_contract_operations_return_data(api):
     assert check["verdict"] == "UNKNOWN" and check["jev_used"] is False
 
 
+def test_specs_route_serves_active_blocks_without_project_lookup(api, monkeypatch):
+    monkeypatch.setattr(
+        auger,
+        "spec_http_payload",
+        lambda block_id=None: {
+            "root": "specs",
+            "count": 1,
+            "blocks": [{"id": "SPEC-1", "kind": "requirement", "status": "active", "text": "build it"}],
+        },
+    )
+    status, content_type, body = request(api, "/api/ns/demo/specs")
+    assert status == 200 and content_type == "application/json"
+    assert json.loads(body)["blocks"][0]["id"] == "SPEC-1"
+
+
+def test_spec_http_payload_exposes_the_shipped_active_corpus():
+    payload = auger.spec_http_payload()
+    assert payload["count"] == len(payload["blocks"]) > 0
+    assert all(block["status"] == "active" and block["text"] for block in payload["blocks"])
+
+
+def test_check_returns_bounded_unknown_when_retrieval_times_out(api, monkeypatch):
+    monkeypatch.setattr(auger, "recall", lambda *a, **k: (_ for _ in ()).throw(auger.SubstrateError("timed out")))
+    status, _content_type, body = request(api, "/api/ns/demo/check", {"question": "sample question"})
+    payload = json.loads(body)
+    assert status == 200
+    assert payload["verdict"] == "UNKNOWN" and payload["jev_used"] is False
+
+
 def test_check_cost_matches_string_schema(api, monkeypatch):
     monkeypatch.setattr(
         auger,

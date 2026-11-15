@@ -67,6 +67,7 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from collections import Counter, deque
+from functools import lru_cache
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -1624,6 +1625,7 @@ def recall(
     limit: int = 5,
     missing_ok: bool = False,
     project_id: str | None = None,
+    timeout: int = 60,
 ) -> list:
     """Semantic search over a namespace's embedded rows.
 
@@ -1663,7 +1665,7 @@ def recall(
     )
     st, body, _ = db(
         f"/api/memories?namespace={url_seg(ns)}{prefix_query}&q={quote(q)}&limit={limit}",
-        timeout=60,
+        timeout=timeout,
     )
     if st != 200:
         if missing_ok and st == 404:
@@ -1682,6 +1684,39 @@ def recall(
             and str(item.get("key", "")).startswith(project_prefix)
         ]
     return items
+
+
+@lru_cache(maxsize=128)
+def _spec_http_payload() -> dict:
+    """Load the active XML corpus once per API process for external consumers."""
+    _root, _documents, blocks = load_spec_corpus(Path(__file__).resolve().parent / "specs")
+    return {
+        "root": "specs",
+        "count": sum(1 for block in blocks if block["status"] == "active"),
+        "blocks": [
+            {
+                "id": block["id"],
+                "kind": block["kind"],
+                "status": block["status"],
+                "version": block["version"],
+                "applies_to": block["applies_to"],
+                "text": block["text"],
+                "source": f"{block['source_file']}#{block['id']}",
+            }
+            for block in blocks
+            if block["status"] == "active"
+        ],
+    }
+
+
+def spec_http_payload(block_id: str | None = None) -> dict:
+    payload = _spec_http_payload()
+    if block_id is None:
+        return payload
+    matches = [block for block in payload["blocks"] if block["id"] == block_id]
+    if not matches:
+        raise APIError(404, f"unknown spec block {block_id!r}")
+    return {"root": payload["root"], "count": 1, "blocks": matches}
 
 
 # ---------------------------------------------------------------- the embedding store over HTTP (AUG-046)
@@ -2050,7 +2085,7 @@ def _jev_keys() -> list:
     return out
 
 
-def jev(state: str, questions: dict):
+def jev(state: str, questions: dict, timeout: int = 90):
     """Ask JEV. All questions ride ONE request for one flat cost. Fail-closed."""
     keys = _jev_keys()
     if not keys:
@@ -2062,7 +2097,7 @@ def jev(state: str, questions: dict):
             "POST",
             {"model": JEV_MODEL, "state": state, "questions": questions},
             {"Authorization": f"Bearer {k}"},
-            timeout=90,
+            timeout=timeout,
         )
         if st == 200 and isinstance(body, dict) and "answers" in body:
             return body, None
@@ -7551,6 +7586,12 @@ class APIHandler(BaseHTTPRequestHandler):
         if len(bits) not in (5, 6) or bits[1:3] != ["api", "ns"]:
             return self._send(404, {"error": f"no such route: {path}"})
         ns, op = unquote(bits[3]), bits[4]
+        # The authored XML corpus is local to auger, not a DuckBrain project. Serve it
+        # even when a namespace has multiple projects and ordinary row routes require
+        # an explicit project_id.
+        if op == "specs" and len(bits) in (5, 6):
+            block_id = unquote(bits[5]) if len(bits) == 6 else None
+            return self._send(200, spec_http_payload(block_id))
         _namespace(ns)
         pid = (args.get("project_id") or [None])[0]
         if op == "status" and len(bits) == 5:
@@ -7640,13 +7681,21 @@ class APIHandler(BaseHTTPRequestHandler):
                 raise APIError(400, "question is required")
             limit = max(1, min(1000, int(data.get("limit", 5))))
             tier = embedding_status()["tier"]
-            hits = recall(ns, question, limit)
+            # Keep the HTTP contract bounded: an external build agent must receive a
+            # verdict rather than holding its socket through the substrate's embedding
+            # timeout. The CLI keeps its historical 60s retrieval budget.
+            retrieval_error = None
+            try:
+                hits = recall(ns, question, limit, timeout=3)
+            except SubstrateError as exc:
+                hits = []
+                retrieval_error = str(exc)
             records = [
                 {
                     "key": h.get("key", ""),
                     "score": h.get("score"),
                     "content": h.get("content", ""),
-                    "timestamp": h.get("timestamp"),
+                    "timestamp": h.get("timestamp", ""),
                 }
                 for h in hits
                 if isinstance(h, dict)
@@ -7657,7 +7706,7 @@ class APIHandler(BaseHTTPRequestHandler):
                     f"- {h.get('key')}: {h.get('content', '')[:400]}" for h in records
                 )
             )
-            answers, err = jev(
+            answers, err = (None, retrieval_error) if retrieval_error else jev(
                 state,
                 {
                     "already_answered": {
@@ -7665,6 +7714,7 @@ class APIHandler(BaseHTTPRequestHandler):
                         "instructions": "Is the supplied evidence already answering the question? Higher noul means yes.",
                     }
                 },
+                timeout=10,
             )
             val = (
                 _noul((answers or {}).get("answers", {}), "already_answered")

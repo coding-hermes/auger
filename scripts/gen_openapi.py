@@ -175,6 +175,8 @@ READ_REGISTRY = (
     ("get", "/api/ns/{namespace}/status", "getNamespaceStatus"),
     ("get", "/api/ns/{namespace}/dump", "getNamespaceDump"),
     ("get", "/api/ns/{namespace}/export", "exportNamespace"),
+    ("get", "/api/ns/{namespace}/specs", "listNamespaceSpecs"),
+    ("get", "/api/ns/{namespace}/specs/{blockId}", "getNamespaceSpecBlock"),
     ("post", "/api/ns/{namespace}/check", "checkNamespaceEvidence"),
     ("get", "/api/ns/{namespace}/recall", "recallNamespace"),
     ("get", SEARCH_PATH, "searchNamespaceEmbeddings"),
@@ -311,6 +313,31 @@ def build_spec() -> dict:
                 },
                 parameters=[NS_PARAM],
                 cli="auger -n <namespace> export",
+            )
+        },
+        "/api/ns/{namespace}/specs": {
+            "get": _op(
+                "listNamespaceSpecs",
+                "List the active authored XML specification blocks",
+                "The local authored corpus consumed by external build agents. This "
+                "route is independent of DuckBrain project selection and returns "
+                "the same block prose the spec loader validates.",
+                {"200": _json_response("Active spec blocks.", {"type": "object"})},
+                parameters=[NS_PARAM],
+                cli="auger spec list specs --status active",
+            )
+        },
+        "/api/ns/{namespace}/specs/{blockId}": {
+            "get": _op(
+                "getNamespaceSpecBlock",
+                "Fetch one active authored XML specification block",
+                "Fetches a single block by its stable corpus id.",
+                {
+                    "200": _json_response("The requested spec block.", {"type": "object"}),
+                    "404": _err("The spec block does not exist."),
+                },
+                parameters=[NS_PARAM, {"name": "blockId", "in": "path", "required": True, "schema": {"type": "string"}}],
+                cli="curl /api/ns/<namespace>/specs/<blockId>",
             )
         },
         "/api/ns/{namespace}/check": {
