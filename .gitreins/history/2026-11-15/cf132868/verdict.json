@@ -1,0 +1,899 @@
+{
+  "task_id": "AUG-167",
+  "task_title": "Corpus time-travel: query the spec selection as-of a ref (spec list|assemble --as-of)",
+  "task_criteria": [
+    "AC1 old-text known: PROOF: `PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k earlier_commit_returns_old_text` prints 1 passed. FAILIF: it prints any other count or exits nonzero.",
+    "AC2 HEAD equivalence: PROOF: `PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k head_equals_plain` prints 2 passed (spec list and spec assemble JSON sha256 equality with --as-of HEAD). FAILIF: not exactly 2 passed.",
+    "AC3 typed refusals: PROOF: `PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k is_a_typed_refusal` prints 4 passed, each refusal rc 2 with empty stdout. FAILIF: not exactly 4 passed.",
+    "AC4 flag scope: PROOF: `bash evidence/AUG-167/06-flag-scope.sh` prints FLAG_SCOPE_OK and exits 0, with validate/check/bundle/render each rc 2 unrecognized arguments and list/assemble accepting the flag. FAILIF: the last line is not FLAG_SCOPE_OK or the exit code is nonzero.",
+    "AC5 read-only: PROOF: `PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k read_only_on_repo_and_temp` prints 1 passed, corpus sha256 unchanged and no staging dir left. FAILIF: not exactly 1 passed.",
+    "AC5 gate arm pinned: PROOF: `grep -c 'pytest .*test_spec_as_of' tests/gate.sh` prints 1, so the file is named once inside the gate pytest arm. FAILIF: the count is 0 or greater than 1."
+  ],
+  "passed": true,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "cd73bc930386a18e64edeb5d2d2eb043353ee4e3",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "a5883ad3bcb3bd0987a3e452d1c883b42bc7967a89d8622d0b8e4d24a538c289",
+  "working_tree_dirty_path_count": 3,
+  "items": [
+    {
+      "criterion": "AC1 old-text known: PROOF: `PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k earlier_commit_returns_old_text` prints 1 passed. FAILIF: it prints any other count or exits nonzero.",
+      "status": "PASS",
+      "detail": "Ran exactly that command: output `.  [100%]` / `1 passed, 10 deselected in 0.91s`, exit 0. The test (tests/test_spec_as_of.py:110) builds a hermetic two-commit repo whose block BODY is rewritten OLD_SENTINEL -> NEW_SENTINEL, then asserts `spec assemble --as-of <old_ref> --format json` contains OLD_SENTINEL and not NEW_SENTINEL, while plain assemble contains NEW_SENTINEL and not OLD_SENTINEL \u2014 so the old text is genuinely returned, not merely a rc-0."
+    },
+    {
+      "criterion": "AC2 HEAD equivalence: PROOF: `PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k head_equals_plain` prints 2 passed (spec list and spec assemble JSON sha256 equality with --as-of HEAD). FAILIF: not exactly 2 passed.",
+      "status": "PASS",
+      "detail": "Ran exactly that command: `..  [100%]` / `2 passed, 9 deselected in 0.75s`, exit 0. The two tests are tests/test_spec_as_of.py:150 (list: `head.stdout == plain.stdout` plus explicit sha256 equality) and :161 (assemble --format json: `head.stdout == plain.stdout`). Both run against the shipped specs/ corpus."
+    },
+    {
+      "criterion": "AC3 typed refusals: PROOF: `PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k is_a_typed_refusal` prints 4 passed, each refusal rc 2 with empty stdout. FAILIF: not exactly 4 passed.",
+      "status": "PASS",
+      "detail": "Ran exactly that command: `....  [100%]` / `4 passed, 7 deselected in 0.94s`, exit 0. Each of tests/test_spec_as_of.py:186 (as-of-unknown-ref), :196 (as-of-not-a-repository), :206 (as-of-corpus-missing), :219 (as-of-git-unavailable) asserts `returncode == 2`, `stdout == \"\"` and the typed code in stderr. Independently confirmed by hand: `python3 auger.py spec list specs --as-of no-such-ref-xyz` -> `spec error (as-of-unknown-ref): 'no-such-ref-xyz' does not resolve in the repository at /home/kara/auger`, rc=2."
+    },
+    {
+      "criterion": "AC4 flag scope: PROOF: `bash evidence/AUG-167/06-flag-scope.sh` prints FLAG_SCOPE_OK and exits 0, with validate/check/bundle/render each rc 2 unrecognized arguments and list/assemble accepting the flag. FAILIF: the last line is not FLAG_SCOPE_OK or the exit code is nonzero.",
+      "status": "PASS",
+      "detail": "Ran `bash evidence/AUG-167/06-flag-scope.sh`: exit 0, last line `FLAG_SCOPE_OK`. Output lines: `validate rc=2 unrecognized=1 stdout_bytes=0`, `check rc=2 unrecognized=1 stdout_bytes=0`, `bundle rc=2 unrecognized=1 stdout_bytes=0`, `render rc=2 unrecognized=1 stdout_bytes=0`, then `list rc=0 stdout_bytes=1335 (positive control)` and `assemble rc=0 stdout_bytes=1824 (positive control)`. Matches the argparse wiring: `--as-of` is added only inside `_add_spec_selectors` (auger.py:13243), which is called only by the `list` (auger.py:14318) and `assemble` (auger.py:14338) subparsers."
+    },
+    {
+      "criterion": "AC5 read-only: PROOF: `PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k read_only_on_repo_and_temp` prints 1 passed, corpus sha256 unchanged and no staging dir left. FAILIF: not exactly 1 passed.",
+      "status": "PASS",
+      "detail": "Ran exactly that command: `.  [100%]` / `1 passed, 10 deselected in 0.25s`, exit 0. tests/test_spec_as_of.py:262 snapshots the specs/ sha256 map, `git status --porcelain`, top-level repo entries and `auger-as-of-*` temp dirs before/after `spec list --as-of HEAD` and asserts all four unchanged. Implementation removes the staging dir in `finally` (auger.py:13405-13407). Independently: `ls /tmp | grep -c auger-as-of-` = 0 after both a successful and a refused run."
+    },
+    {
+      "criterion": "AC5 gate arm pinned: PROOF: `grep -c 'pytest .*test_spec_as_of' tests/gate.sh` prints 1, so the file is named once inside the gate pytest arm. FAILIF: the count is 0 or greater than 1.",
+      "status": "PASS",
+      "detail": "Ran `grep -c 'pytest .*test_spec_as_of' tests/gate.sh` -> `1`, exit 0. The single hit is tests/gate.sh:218, the gate's pytest-arm file list, which ends with `tests/test_spec_as_of.py`; the only other mention (tests/gate.sh:212) is a comment and does not match the pattern."
+    },
+    {
+      "criterion": "The --as-of flag is reachable from the real CLI entrypoint (main -> spec subparser -> cmd_spec) and actually changes the corpus read, not just parses.",
+      "status": "PASS",
+      "detail": "Traced end to end: main's `spec_sub` (auger.py:14295) -> `list`/`assemble` parsers call `_add_spec_selectors` (auger.py:14318/14338) which adds `--as-of` (auger.py:13243) -> `set_defaults(fn=cmd_spec)` -> `cmd_spec` (auger.py:12791) enters `_spec_corpus_as_of` and swaps `a.root` for the staged historical root (auger.py:12800-12812) -> `_spec_dispatch` reads that root. Live proof: `python3 auger.py spec list specs --as-of HEAD` prints the corpus listing (rc=0), and `spec assemble specs --id SPEC-VERBS-SELECTION --as-of HEAD` produces markdown byte-identical to plain (both sha256 96be6a31e89cb305347a4efdb15256f81bbe43fdf9f1d358c31062978ac54bb3).",
+      "derived": true
+    },
+    {
+      "criterion": "The staging directory is removed on every exit path, including a typed refusal raised after extraction (no temp litter on the failure path).",
+      "status": "PASS",
+      "detail": "`_spec_corpus_as_of` creates the staging dir only after the ref/corpus checks (auger.py:13402) and removes it in `finally` (auger.py:13405-13407); the contextmanager is entered inside cmd_spec's `try/except SpecError` (auger.py:12803-12820), so a refusal raised during dispatch unwinds through that `finally`. Verified live: `spec list specs --as-of no-such-ref-xyz` -> rc=2 with `spec error (as-of-unknown-ref)` and `ls /tmp | grep -c auger-as-of-` = 0 before and after.",
+      "derived": true
+    },
+    {
+      "criterion": "The feature does not regress the existing spec surface: the pre-existing spec test files still pass.",
+      "status": "PASS",
+      "detail": "`python3 -m pytest tests/test_spec_corpus_view.py tests/test_spec_render.py tests/test_spec_assembly_report.py tests/test_spec_repository_root.py -q` -> `45 passed in 3.29s`, exit 0. The full new file also passes: `pytest tests/test_spec_as_of.py -q` -> `11 passed in 3.70s`, exit 0.",
+      "derived": true
+    },
+    {
+      "criterion": "--as-of HEAD is byte-identical for the markdown (default) format too, not only JSON/list, so the equivalence claim is not format-specific.",
+      "status": "PASS",
+      "detail": "`spec assemble specs --id SPEC-VERBS-SELECTION` vs the same with `--as-of HEAD`: both sha256 `96be6a31e89cb305347a4efdb15256f81bbe43fdf9f1d358c31062978ac54bb3`, `diff -q` clean (printed MD_IDENTICAL). The committed tests only cover list and assemble-JSON, so this closes the default-format gap by direct measurement.",
+      "derived": true
+    },
+    {
+      "criterion": "The new test file is hermetic (no network/DuckBrain/live server) so the gate arm can run it without the live substrate.",
+      "status": "PASS",
+      "detail": "tests/test_spec_as_of.py imports only hashlib/json/subprocess/sys/tempfile/pathlib/pytest (lines 12-19); grep for requests/urllib/socket/DuckBrain finds only the docstring line 3. `env -u DUCKBRAIN_URL -u GITREINS_LLM_API_KEY python3 -m pytest tests/test_spec_as_of.py -q` -> `11 passed in 2.47s`, exit 0 \u2014 the gate arm (tests/gate.sh:218) can run it with no live substrate.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "no_concerns_found",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261115T203604.345580Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nscanners: nice=nice -n 10\n3:44PM INF scanned ~3613441 bytes (3.61 MB) in 3.9s\n3:44PM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 367 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261115T203604.345580Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [  9%]\n........................................................................ [ 18%]\n........................................................................ [ 28%]\n........................................................................ [ 37%]\n............................s........................................... [ 46%]\n.......s................................................................ [ 56%]\n........................................................................ [ 65%]\n........................................................................ [ 75%]\n........................................................................ [ 84%]\n........................................................................ [ 93%]\n................................................                         [100%]\n766 passed, 2 skipped in 993.04s (0:16:33)\n== wrapper regression (AUG-081) ==\ngate prerequisite preflight: PASS\nAUG-116: zombie pid 669562 classified dead (kill -0 alone would have said alive)\nAUG-081 wrapper regression: PASS\nAUG-130 skipped-arm policy: PASS\n== end-to-end smoke ==\nnamespace: auger-smoke-672364\nnamespace sweep: removed 1 stale throwaway(s)\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n\n\u2026 [528 chars omitted \u2014 13 line(s)] \u2026\n== spec corpus (AUG-136) ==\nspec: 3 document(s), 12 block(s), 7 reference(s) ok\n== prd proofs (AUG-137) ==\nprd proofs: 8 total \u00b7 3 required \u00b7 5 deferred \u2192 PASS\n   P1  deferred not-run   not-run (deferred to AUG-119): auger.py carries no board surface (grep -c boardctl auger.py -> 0): resolving a\n   P2  required pass      corpus=9249B bundle=8131B latency=15.5ms  2 generated view(s) verified byte-identical to the generator's output for specs/; one block edit propagated to\n   P3  deferred not-run   not-run (deferred to AUG-153): the checker half is reachable (`auger spec check --diff-file` reports `trace-mi\n   P4  deferred not-run   not-run (deferred to AUG-119): writing and reading back a canonical boardctl row is boardctl's surface, not au\n   P5  required pass      corpus=1084B bundle=435B latency=743.8ms  one query returned migration=tests/fixtures/xml/verification/migrations/001_add_marker.sql, fixture=tests/fixt\n   P6  deferred not-run   not-run (deferred to AUG-124): what counts as judge evidence \u2014 excluding the worker summary, refusing a PASS w\n   P7  required pass      corpus=9249B bundle=2944B latency=165.5ms  4/12 blocks selected by `applies-to auger.spec.select`; bundle is 31.8% of the corpus (2944 of 9249 bytes), fl\n   P8  deferred not-run   not-run (deferred to AUG-153): the flag and the process-liveness assertion live in the GitReins hook, which no\nprd-proofs: /home/kara/auger/docs/prd/evidence/AUG-137-prd-proofs.json agrees with this run\n== docs check ==\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261115T203604.345580Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 AC1 old-text known: PROOF: `PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k earlier_commit_returns_old_text` prints 1 passed. FAILIF: it prints any other count or exits nonzero.: Ran exactly that command: output `.  [100%]` / `1 passed, 10 deselected in 0.91s`, exit 0. The test (tests/test_spec_as_of.py:110) builds a hermetic two-commit repo whose block BODY is rewritten OLD_SENTINEL -> NEW_SENTINEL, then asserts `spec assemble --as-of <old_ref> --format json` contains OLD_SENTINEL and not NEW_SENTINEL, while plain assemble contains NEW_SENTINEL and not OLD_SENTINEL \u2014 so the old text is genuinely returned, not merely a rc-0.\n  \u2713 AC2 HEAD equivalence: PROOF: `PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k head_equals_plain` prints 2 passed (spec list and spec assemble JSON sha256 equality with --as-of HEAD). FAILIF: not exactly 2 passed.: Ran exactly that command: `..  [100%]` / `2 passed, 9 deselected in 0.75s`, exit 0. The two tests are tests/test_spec_as_of.py:150 (list: `head.stdout == plain.stdout` plus explicit sha256 equality) and :161 (assemble --format json: `head.stdout == plain.stdout`). Both run against the shipped specs/ corpus.\n  \u2713 AC3 typed refusals: PROOF: `PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k is_a_typed_refusal` prints 4 passed, each refusal rc 2 with empty stdout. FAILIF: not exactly 4 passed.: Ran exactly that command: `....  [100%]` / `4 passed, 7 deselected in 0.94s`, exit 0. Each of tests/test_spec_as_of.py:186 (as-of-unknown-ref), :196 (as-of-not-a-repository), :206 (as-of-corpus-missing), :219 (as-of-git-unavailable) asserts `returncode == 2`, `stdout == \"\"` and the typed code in stderr. Independently confirmed by hand: `python3 auger.py spec list specs --as-of no-such-ref-xyz` -> `spec error (as-of-unknown-ref): 'no-such-ref-xyz' does not resolve in the repository at /home/kara/auger`, rc=2.\n  \u2713 AC4 flag scope: PROOF: `bash evidence/AUG-167/06-flag-scope.sh` prints FLAG_SCOPE_OK and exits 0, with validate/check/bundle/render each rc 2 unrecognized arguments and list/assemble accepting the flag. FAILIF: the last line is not FLAG_SCOPE_OK or the exit code is nonzero.: Ran `bash evidence/AUG-167/06-flag-scope.sh`: exit 0, last line `FLAG_SCOPE_OK`. Output lines: `validate rc=2 unrecognized=1 stdout_bytes=0`, `check rc=2 unrecognized=1 stdout_bytes=0`, `bundle rc=2 unrecognized=1 stdout_bytes=0`, `render rc=2 unrecognized=1 stdout_bytes=0`, then `list rc=0 stdout_bytes=1335 (positive control)` and `assemble rc=0 stdout_bytes=1824 (positive control)`. Matches the argparse wiring: `--as-of` is added only inside `_add_spec_selectors` (auger.py:13243), which is called only by the `list` (auger.py:14318) and `assemble` (auger.py:14338) subparsers.\n  \u2713 AC5 read-only: PROOF: `PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k read_only_on_repo_and_temp` prints 1 passed, corpus sha256 unchanged and no staging dir left. FAILIF: not exactly 1 passed.: Ran exactly that command: `.  [100%]` / `1 passed, 10 deselected in 0.25s`, exit 0. tests/test_spec_as_of.py:262 snapshots the specs/ sha256 map, `git status --porcelain`, top-level repo entries and `auger-as-of-*` temp dirs before/after `spec list --as-of HEAD` and asserts all four unchanged. Implementation removes the staging dir in `finally` (auger.py:13405-13407). Independently: `ls /tmp | grep -c auger-as-of-` = 0 after both a successful and a refused run.\n  \u2713 AC5 gate arm pinned: PROOF: `grep -c 'pytest .*test_spec_as_of' tests/gate.sh` prints 1, so the file is named once inside the gate pytest arm. FAILIF: the count is 0 or greater than 1.: Ran `grep -c 'pytest .*test_spec_as_of' tests/gate.sh` -> `1`, exit 0. The single hit is tests/gate.sh:218, the gate's pytest-arm file list, which ends with `tests/test_spec_as_of.py`; the only other mention (tests/gate.sh:212) is a comment and does not match the pattern.\n  \u2713 The --as-of flag is reachable from the real CLI entrypoint (main -> spec subparser -> cmd_spec) and actually changes the corpus read, not just parses.: Traced end to end: main's `spec_sub` (auger.py:14295) -> `list`/`assemble` parsers call `_add_spec_selectors` (auger.py:14318/14338) which adds `--as-of` (auger.py:13243) -> `set_defaults(fn=cmd_spec)` -> `cmd_spec` (auger.py:12791) enters `_spec_corpus_as_of` and swaps `a.root` for the staged historical root (auger.py:12800-12812) -> `_spec_dispatch` reads that root. Live proof: `python3 auger.py spec list specs --as-of HEAD` prints the corpus listing (rc=0), and `spec assemble specs --id SPEC-VERBS-SELECTION --as-of HEAD` produces markdown byte-identical to plain (both sha256 96be6a31e89cb305347a4efdb15256f81bbe43fdf9f1d358c31062978ac54bb3).\n  \u2713 The staging directory is removed on every exit path, including a typed refusal raised after extraction (no temp litter on the failure path).: `_spec_corpus_as_of` creates the staging dir only after the ref/corpus checks (auger.py:13402) and removes it in `finally` (auger.py:13405-13407); the contextmanager is entered inside cmd_spec's `try/except SpecError` (auger.py:12803-12820), so a refusal raised during dispatch unwinds through that `finally`. Verified live: `spec list specs --as-of no-such-ref-xyz` -> rc=2 with `spec error (as-of-unknown-ref)` and `ls /tmp | grep -c auger-as-of-` = 0 before and after.\n  \u2713 The feature does not regress the existing spec surface: the pre-existing spec test files still pass.: `python3 -m pytest tests/test_spec_corpus_view.py tests/test_spec_render.py tests/test_spec_assembly_report.py tests/test_spec_repository_root.py -q` -> `45 passed in 3.29s`, exit 0. The full new file also passes: `pytest tests/test_spec_as_of.py -q` -> `11 passed in 3.70s`, exit 0.\n  \u2713 --as-of HEAD is byte-identical for the markdown (default) format too, not only JSON/list, so the equivalence claim is not format-specific.: `spec assemble specs --id SPEC-VERBS-SELECTION` vs the same with `--as-of HEAD`: both sha256 `96be6a31e89cb305347a4efdb15256f81bbe43fdf9f1d358c31062978ac54bb3`, `diff -q` clean (printed MD_IDENTICAL). The committed tests only cover list and assemble-JSON, so this closes the default-format gap by direct measurement.\n  \u2713 The new test file is hermetic (no network/DuckBrain/live server) so the gate arm can run it without the live substrate.: tests/test_spec_as_of.py imports only hashlib/json/subprocess/sys/tempfile/pathlib/pytest (lines 12-19); grep for requests/urllib/socket/DuckBrain finds only the docstring line 3. `env -u DUCKBRAIN_URL -u GITREINS_LLM_API_KEY python3 -m pytest tests/test_spec_as_of.py -q` -> `11 passed in 2.47s`, exit 0 \u2014 the gate arm (tests/gate.sh:218) can run it with no live substrate.\nAll six given criteria and all five derived criteria pass with fresh command output \u2014 the 11-test hermetic suite, the flag-scope script, the gate-arm grep, and live CLI runs all confirm `spec list|assemble --as-of REF` returns historical text, is byte-identical at HEAD, refuses with typed rc-2 errors, is scoped to the selection verbs, and leaves no writes or temp litter. [uncovered failure paths: failure mode 0 (`--as-of` on a corpus whose obligations name test/migration/fixture paths resolves those paths against the CURRENT repository root, not the historical tree, because `_spec_repository_root` runs `git rev-parse --show-toplevel` from the staged temp dir (auger.py:13454) and the staged dir is not a work tree.): detected_by is empty \u2014 uncovered failure path; failure mode 1 (`--as-of` combined with `--repo-root` is silently ignored: `--repo-root` is not on the list/assemble parsers, so a caller cannot pin the repository the ref is resolved in.): detected_by is empty \u2014 uncovered failure path]",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 AC1 old-text known: PROOF: `PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k earlier_commit_returns_old_text` prints 1 passed. FAILIF: it prints any other count or exits nonzero.: Ran exactly that command: output `.  [100%]` / `1 passed, 10 deselected in 0.91s`, exit 0. The test (tests/test_spec_as_of.py:110) builds a hermetic two-commit repo whose block BODY is rewritten OLD_SENTINEL -> NEW_SENTINEL, then asserts `spec assemble --as-of <old_ref> --format json` contains OLD_SENTINEL and not NEW_SENTINEL, while plain assemble contains NEW_SENTINEL and not OLD_SENTINEL \u2014 so the old text is genuinely returned, not merely a rc-0.\n  \u2713 AC2 HEAD equivalence: PROOF: `PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k head_equals_plain` prints 2 passed (spec list and spec assemble JSON sha256 equality with --as-of HEAD). FAILIF: not exactly 2 passed.: Ran exactly that command: `..  [100%]` / `2 passed, 9 deselected in 0.75s`, exit 0. The two tests are tests/test_spec_as_of.py:150 (list: `head.stdout == plain.stdout` plus explicit sha256 equality) and :161 (assemble --format json: `head.stdout == plain.stdout`). Both run against the shipped specs/ corpus.\n  \u2713 AC3 typed refusals: PROOF: `PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k is_a_typed_refusal` prints 4 passed, each refusal rc 2 with empty stdout. FAILIF: not exactly 4 passed.: Ran exactly that command: `....  [100%]` / `4 passed, 7 deselected in 0.94s`, exit 0. Each of tests/test_spec_as_of.py:186 (as-of-unknown-ref), :196 (as-of-not-a-repository), :206 (as-of-corpus-missing), :219 (as-of-git-unavailable) asserts `returncode == 2`, `stdout == \"\"` and the typed code in stderr. Independently confirmed by hand: `python3 auger.py spec list specs --as-of no-such-ref-xyz` -> `spec error (as-of-unknown-ref): 'no-such-ref-xyz' does not resolve in the repository at /home/kara/auger`, rc=2.\n\n\u2026 [4297 chars omitted \u2014 7 line(s)] \u2026\n  \u2713 The new test file is hermetic (no network/DuckBrain/live server) so the gate arm can run it without the live substrate.: tests/test_spec_as_of.py imports only hashlib/json/subprocess/sys/tempfile/pathlib/pytest (lines 12-19); grep for requests/urllib/socket/DuckBrain finds only the docstring line 3. `env -u DUCKBRAIN_URL -u GITREINS_LLM_API_KEY python3 -m pytest tests/test_spec_as_of.py -q` -> `11 passed in 2.47s`, exit 0 \u2014 the gate arm (tests/gate.sh:218) can run it with no live substrate.\nAll six given criteria and all five derived criteria pass with fresh command output \u2014 the 11-test hermetic suite, the flag-scope script, the gate-arm grep, and live CLI runs all confirm `spec list|assemble --as-of REF` returns historical text, is byte-identical at HEAD, refuses with typed rc-2 errors, is scoped to the selection verbs, and leaves no writes or temp litter. [uncovered failure paths: failure mode 0 (`--as-of` on a corpus whose obligations name test/migration/fixture paths resolves those paths against the CURRENT repository root, not the historical tree, because `_spec_repository_root` runs `git rev-parse --show-toplevel` from the staged temp dir (auger.py:13454) and the staged dir is not a work tree.): detected_by is empty \u2014 uncovered failure path; failure mode 1 (`--as-of` combined with `--repo-root` is silently ignored: `--repo-root` is not on the list/assemble parsers, so a caller cannot pin the repository the ref is resolved in.): detected_by is empty \u2014 uncovered failure path]",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "AC1 old-text known: PROOF: `PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k earlier_commit_returns_old_text` prints 1 passed. FAILIF: it prints any other count or exits nonzero.",
+                "status": "PASS",
+                "detail": "Ran exactly that command: output `.  [100%]` / `1 passed, 10 deselected in 0.91s`, exit 0. The test (tests/test_spec_as_of.py:110) builds a hermetic two-commit repo whose block BODY is rewritten OLD_SENTINEL -> NEW_SENTINEL, then asserts `spec assemble --as-of <old_ref> --format json` contains OLD_SENTINEL and not NEW_SENTINEL, while plain assemble contains NEW_SENTINEL and not OLD_SENTINEL \u2014 so the old text is genuinely returned, not merely a rc-0."
+              },
+              {
+                "criterion": "AC2 HEAD equivalence: PROOF: `PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k head_equals_plain` prints 2 passed (spec list and spec assemble JSON sha256 equality with --as-of HEAD). FAILIF: not exactly 2 passed.",
+                "status": "PASS",
+                "detail": "Ran exactly that command: `..  [100%]` / `2 passed, 9 deselected in 0.75s`, exit 0. The two tests are tests/test_spec_as_of.py:150 (list: `head.stdout == plain.stdout` plus explicit sha256 equality) and :161 (assemble --format json: `head.stdout == plain.stdout`). Both run against the shipped specs/ corpus."
+              },
+              {
+                "criterion": "AC3 typed refusals: PROOF: `PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k is_a_typed_refusal` prints 4 passed, each refusal rc 2 with empty stdout. FAILIF: not exactly 4 passed.",
+                "status": "PASS",
+                "detail": "Ran exactly that command: `....  [100%]` / `4 passed, 7 deselected in 0.94s`, exit 0. Each of tests/test_spec_as_of.py:186 (as-of-unknown-ref), :196 (as-of-not-a-repository), :206 (as-of-corpus-missing), :219 (as-of-git-unavailable) asserts `returncode == 2`, `stdout == \"\"` and the typed code in stderr. Independently confirmed by hand: `python3 auger.py spec list specs --as-of no-such-ref-xyz` -> `spec error (as-of-unknown-ref): 'no-such-ref-xyz' does not resolve in the repository at /home/kara/auger`, rc=2."
+              },
+              {
+                "criterion": "AC4 flag scope: PROOF: `bash evidence/AUG-167/06-flag-scope.sh` prints FLAG_SCOPE_OK and exits 0, with validate/check/bundle/render each rc 2 unrecognized arguments and list/assemble accepting the flag. FAILIF: the last line is not FLAG_SCOPE_OK or the exit code is nonzero.",
+                "status": "PASS",
+                "detail": "Ran `bash evidence/AUG-167/06-flag-scope.sh`: exit 0, last line `FLAG_SCOPE_OK`. Output lines: `validate rc=2 unrecognized=1 stdout_bytes=0`, `check rc=2 unrecognized=1 stdout_bytes=0`, `bundle rc=2 unrecognized=1 stdout_bytes=0`, `render rc=2 unrecognized=1 stdout_bytes=0`, then `list rc=0 stdout_bytes=1335 (positive control)` and `assemble rc=0 stdout_bytes=1824 (positive control)`. Matches the argparse wiring: `--as-of` is added only inside `_add_spec_selectors` (auger.py:13243), which is called only by the `list` (auger.py:14318) and `assemble` (auger.py:14338) subparsers."
+              },
+              {
+                "criterion": "AC5 read-only: PROOF: `PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k read_only_on_repo_and_temp` prints 1 passed, corpus sha256 unchanged and no staging dir left. FAILIF: not exactly 1 passed.",
+                "status": "PASS",
+                "detail": "Ran exactly that command: `.  [100%]` / `1 passed, 10 deselected in 0.25s`, exit 0. tests/test_spec_as_of.py:262 snapshots the specs/ sha256 map, `git status --porcelain`, top-level repo entries and `auger-as-of-*` temp dirs before/after `spec list --as-of HEAD` and asserts all four unchanged. Implementation removes the staging dir in `finally` (auger.py:13405-13407). Independently: `ls /tmp | grep -c auger-as-of-` = 0 after both a successful and a refused run."
+              },
+              {
+                "criterion": "AC5 gate arm pinned: PROOF: `grep -c 'pytest .*test_spec_as_of' tests/gate.sh` prints 1, so the file is named once inside the gate pytest arm. FAILIF: the count is 0 or greater than 1.",
+                "status": "PASS",
+                "detail": "Ran `grep -c 'pytest .*test_spec_as_of' tests/gate.sh` -> `1`, exit 0. The single hit is tests/gate.sh:218, the gate's pytest-arm file list, which ends with `tests/test_spec_as_of.py`; the only other mention (tests/gate.sh:212) is a comment and does not match the pattern."
+              },
+              {
+                "criterion": "The --as-of flag is reachable from the real CLI entrypoint (main -> spec subparser -> cmd_spec) and actually changes the corpus read, not just parses.",
+                "status": "PASS",
+                "detail": "Traced end to end: main's `spec_sub` (auger.py:14295) -> `list`/`assemble` parsers call `_add_spec_selectors` (auger.py:14318/14338) which adds `--as-of` (auger.py:13243) -> `set_defaults(fn=cmd_spec)` -> `cmd_spec` (auger.py:12791) enters `_spec_corpus_as_of` and swaps `a.root` for the staged historical root (auger.py:12800-12812) -> `_spec_dispatch` reads that root. Live proof: `python3 auger.py spec list specs --as-of HEAD` prints the corpus listing (rc=0), and `spec assemble specs --id SPEC-VERBS-SELECTION --as-of HEAD` produces markdown byte-identical to plain (both sha256 96be6a31e89cb305347a4efdb15256f81bbe43fdf9f1d358c31062978ac54bb3).",
+                "derived": true
+              },
+              {
+                "criterion": "The staging directory is removed on every exit path, including a typed refusal raised after extraction (no temp litter on the failure path).",
+                "status": "PASS",
+                "detail": "`_spec_corpus_as_of` creates the staging dir only after the ref/corpus checks (auger.py:13402) and removes it in `finally` (auger.py:13405-13407); the contextmanager is entered inside cmd_spec's `try/except SpecError` (auger.py:12803-12820), so a refusal raised during dispatch unwinds through that `finally`. Verified live: `spec list specs --as-of no-such-ref-xyz` -> rc=2 with `spec error (as-of-unknown-ref)` and `ls /tmp | grep -c auger-as-of-` = 0 before and after.",
+                "derived": true
+              },
+              {
+                "criterion": "The feature does not regress the existing spec surface: the pre-existing spec test files still pass.",
+                "status": "PASS",
+                "detail": "`python3 -m pytest tests/test_spec_corpus_view.py tests/test_spec_render.py tests/test_spec_assembly_report.py tests/test_spec_repository_root.py -q` -> `45 passed in 3.29s`, exit 0. The full new file also passes: `pytest tests/test_spec_as_of.py -q` -> `11 passed in 3.70s`, exit 0.",
+                "derived": true
+              },
+              {
+                "criterion": "--as-of HEAD is byte-identical for the markdown (default) format too, not only JSON/list, so the equivalence claim is not format-specific.",
+                "status": "PASS",
+                "detail": "`spec assemble specs --id SPEC-VERBS-SELECTION` vs the same with `--as-of HEAD`: both sha256 `96be6a31e89cb305347a4efdb15256f81bbe43fdf9f1d358c31062978ac54bb3`, `diff -q` clean (printed MD_IDENTICAL). The committed tests only cover list and assemble-JSON, so this closes the default-format gap by direct measurement.",
+                "derived": true
+              },
+              {
+                "criterion": "The new test file is hermetic (no network/DuckBrain/live server) so the gate arm can run it without the live substrate.",
+                "status": "PASS",
+                "detail": "tests/test_spec_as_of.py imports only hashlib/json/subprocess/sys/tempfile/pathlib/pytest (lines 12-19); grep for requests/urllib/socket/DuckBrain finds only the docstring line 3. `env -u DUCKBRAIN_URL -u GITREINS_LLM_API_KEY python3 -m pytest tests/test_spec_as_of.py -q` -> `11 passed in 2.47s`, exit 0 \u2014 the gate arm (tests/gate.sh:218) can run it with no live substrate.",
+                "derived": true
+              }
+            ],
+            "summary": "All six given criteria and all five derived criteria pass with fresh command output \u2014 the 11-test hermetic suite, the flag-scope script, the gate-arm grep, and live CLI runs all confirm `spec list|assemble --as-of REF` returns historical text, is byte-identical at HEAD, refuses with typed rc-2 errors, is scoped to the selection verbs, and leaves no writes or temp litter. [uncovered failure paths: failure mode 0 (`--as-of` on a corpus whose obligations name test/migration/fixture paths resolves those paths against the CURRENT repository root, not the historical tree, because `_spec_repository_root` runs `git rev-parse --show-toplevel` from the staged temp dir (auger.py:13454) and the staged dir is not a work tree.): detected_by is empty \u2014 uncovered failure path; failure mode 1 (`--as-of` combined with `--repo-root` is silently ignored: `--repo-root` is not on the list/assemble parsers, so a caller cannot pin the repository the ref is resolved in.): detected_by is empty \u2014 uncovered failure path]",
+            "provenance": {
+              "model": "deepseek-v4-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "deepseek-v4-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-167\"}",
+          "exit_code": 0,
+          "output_sha": "1e418ee5803191b294b0b09ee4a2351773745ccc51af0480669b94e0797f67f5"
+        },
+        {
+          "tool": "run_command",
+          "command": "pwd && ls -la && git log --oneline -5",
+          "exit_code": 0,
+          "output_sha": "12bec0dc2446ce815cadc42f00f0f4bd6031722f0eb2e9e8a33f5ce68ec37de9"
+        },
+        {
+          "tool": "run_command",
+          "command": "ls -la tests/ | head -50; echo ---; ls -la evidence/AUG-167/ 2>&1; echo ---; cat .gitreins/config.yaml",
+          "exit_code": 0,
+          "output_sha": "eddc97588db42e4250efb3553e6622afad89816060019a43b79ee1006bc32e5b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show --stat bc79d5d",
+          "exit_code": 0,
+          "output_sha": "a525da6ca786884c14e91ad9a3702a3c6fdf9582658b7b4360643da585a5d1cd"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && ls -la evidence/AUG-167/",
+          "exit_code": 0,
+          "output_sha": "896ef6c8a1ea028dd8316f44206a93d74453a456567ea04a9ea1dc80ac152379"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"tests/test_spec_as_of.py\"}",
+          "exit_code": 0,
+          "output_sha": "a739a78b01f233695fa42c6ac07acf548123547a304651724e97e635cb8c7eff"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k earlier_commit_returns_old_text 2>&1 | tail -20; echo \"EXIT=$?\"",
+          "exit_code": 0,
+          "output_sha": "cde3d6c2073d513b060b4c6621998b709f6a78889c9cc6d7cdb3280baecfd7ca"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k head_equals_plain 2>&1 | tail -20; echo \"EXIT=$?\"",
+          "exit_code": 0,
+          "output_sha": "4eda2be9d9672be03a17d22a031a45a85e1b5d6ce12aa8620618b3ebf1add51c"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k is_a_typed_refusal 2>&1 | tail -20; echo \"EXIT=$?\"",
+          "exit_code": 0,
+          "output_sha": "f567bc6794a3b83d6ae3123ddd2a3405503af939d3e6dd81e1fd8459fe2e2c9f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k read_only_on_repo_and_temp 2>&1 | tail -20; echo \"EXIT=$?\"",
+          "exit_code": 0,
+          "output_sha": "3bbb001e82a0d838d5ff75e8314e01a6aa878f6b1659c8afdb37960bca73c7bf"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && bash evidence/AUG-167/06-flag-scope.sh; echo \"EXIT=$?\"",
+          "exit_code": 0,
+          "output_sha": "246644859b7525c701d7f2c5567fda9ddcc0921199beb7ae4e303cb0dadf15ff"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -c 'pytest .*test_spec_as_of' tests/gate.sh; echo \"EXIT=$?\"; echo ---; grep -n 'test_spec_as_of' tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "af14ae416a3d5b24153a0e9452e9f3851c61975d5b9e77c10b57f1a492f86c81"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show bc79d5d -- auger.py | head -200",
+          "exit_code": 0,
+          "output_sha": "c8a4cdf42becb7016d1cc56aa2dbc8669307393a6f3f886253ee61fe64da10c6"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && cat evidence/AUG-167/06-flag-scope.sh",
+          "exit_code": 0,
+          "output_sha": "16a1ca889a31a55b87c7551bf0cefb71939bbc469db096638c50e4f6a58a859f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'as_of\\|as-of' auger.py | head -60",
+          "exit_code": 0,
+          "output_sha": "7937af1aa52c8d98927e9044d8cef51a6f71fa0bef938eef2743e060e8c8e926"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 120, \"offset\": 12780, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "91a21c21b374a99ae8618b04eec8b279351a1ef1679e639e2a8e37b4e5c45627"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 200, \"offset\": 13220, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "a6d7c382444e538cbd8a3feef3b2f17aa3db73fefc2ea48f082ed59382519f3e"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_add_selection_args\\|_spec_add_selection_args(\\|def _spec_add_\\|add_argument_group\\|spec_parser\\|subparsers' auger.py | sed -n '1,80p'",
+          "exit_code": 0,
+          "output_sha": "63ceeb1c8bc24c831fe45efb9cbca7ba748d506a64ced399a17f4c9de560cf52"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 180, \"offset\": 14290, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "bf8849880ba6ec43f0c6adab3b061366facb9ab097901d7ca2794a7f7329ca7b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _add_spec_selectors' auger.py",
+          "exit_code": 0,
+          "output_sha": "7fd5219a3aac734373bbf2bc07c60f2d2457bb2bcc7f8d35c4c832b92a883936"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 15, \"offset\": 13209, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "e5c32b430ee00417061a2a027f22c30b3e8806817e596536c53b2636382d1daf"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'class SpecError' -A 20 auger.py | head -40",
+          "exit_code": 0,
+          "output_sha": "32615ff491cd980ed2790698bf7da5150f23b5f624c17b7f3978c1845000f6e6"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_repository_root' -A 60 auger.py | head -80",
+          "exit_code": 0,
+          "output_sha": "9716bc3e9772b19a422947db262e3c8ae916f6c54123c89dc1f5997929549673"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n '_spec_repository_root(' auger.py",
+          "exit_code": 0,
+          "output_sha": "e850297d19f758e5186673496b789cdf592dab75d8dc202f7ded17627379b50a"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 40, \"offset\": 13720, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "9df727031313827f15a0dc22ea5ee9c3ce389d6d929d4c58f17cee423549f141"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 30, \"offset\": 13615, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "f3a52c26a759ca9d11360d3c4babc2296df4dfcd612e72e9d168e5e2b317b7e5"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_select\\|def _spec_list\\|def _spec_assemble\\|def _spec_selection' auger.py",
+          "exit_code": 1,
+          "output_sha": "e74d70fb124fc30bb601e3b96c590893dc58316bd65b19a36e306c0b3407b04f"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 80, \"offset\": 12900, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "75dc69ffd7235134874ec397c042d961aa684daf509dc50949f17cddedd04b4a"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def load_spec_corpus_indexed' -A 60 auger.py | head -80",
+          "exit_code": 0,
+          "output_sha": "d84aedeb9639d87b25f4217d8fa494f7ad4f11d8982d557e1e2f5ce1cae8dc7c"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_discover_documents' -A 60 auger.py | head -80",
+          "exit_code": 0,
+          "output_sha": "112b7bd79682234f8c1e6ee39dc88a933a0a21670887c7aec2549d6e88a8da0a"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_include_map' -A 50 auger.py | head -70",
+          "exit_code": 0,
+          "output_sha": "1671b016f592fd4ddc1144c36d0a9d370f7c7b36ea0222ab38e8878e76397809"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_include_target' -A 40 auger.py | head -50",
+          "exit_code": 0,
+          "output_sha": "a3bbe3c1266de00ddf424a7fb220b2616729e70ba88634c046a6c9b09c7a1cd3"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def materialize_spec_records' -A 60 auger.py | head -80",
+          "exit_code": 0,
+          "output_sha": "aab5d431b056b7b9b734d46d298cd0aeeb7ccf496be130701b2f9c7dc4c4f464"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_collect' -A 70 auger.py | head -90",
+          "exit_code": 0,
+          "output_sha": "df7b431db16cf9a7b93e7714e9ff7273e8a493d76d67e4f3f7990b62fdfa3173"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_read_documents' -A 40 auger.py | head -50",
+          "exit_code": 0,
+          "output_sha": "3ee13bfe28834b1dd7b0feeb419d37431beedb23fd728acd195df2bc5f2c77a3"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_read_document' -A 60 auger.py | head -70",
+          "exit_code": 0,
+          "output_sha": "2bee2af28c769a7960627d61b33e657f3efd8d68a75c775629a10db661275795"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_load_schema' -A 40 auger.py | head -50",
+          "exit_code": 0,
+          "output_sha": "c74e278dd29530dd181512d2053c5e59fc6ff0d4383fe907abd4cc535d580652"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def spec_schema_path' -A 30 auger.py | head -40",
+          "exit_code": 0,
+          "output_sha": "b523ba4128979b49522daeb48c7c7559c650d681154f8a867e1d7b5b7a63292b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def spec_schema_candidates' -A 30 auger.py | head -40",
+          "exit_code": 0,
+          "output_sha": "807011abe7ca29d93b65bdfc877f12b7e2022792c7ebc0d7e2e2054007adf1de"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'SPEC_SCHEMA_PATH\\s*=\\|SPEC_SCHEMA_INSTALL_RELPATH\\s*=\\|def _spec_data_roots' -A 12 auger.py | head -40",
+          "exit_code": 0,
+          "output_sha": "6a80c9a5fbd6147d842de0229b0e24100d5c9a02f7f02d6152af8a5ec3822a55"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'SPEC_SCHEMA_RELPATH\\s*=' auger.py; ls specs/; ls specs/schema 2>/dev/null",
+          "exit_code": 0,
+          "output_sha": "df5ca3d580a0ab54a7a19805f392ac7705128ae3aa88c1e88b04dab8548b4562"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_render' -A 40 auger.py | head -50",
+          "exit_code": 0,
+          "output_sha": "bd891f93e8624925cfffacc4b5e5398e4d5a01e6c540186fe987275c650d8b1c"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_write_atomic' -A 25 auger.py | head -35",
+          "exit_code": 0,
+          "output_sha": "40144db09833877a0450ad5b5ef0aff45e6f91120800b4428541329dbf942e4a"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_write_atomic' -A 45 auger.py | sed -n '25,50p'",
+          "exit_code": 0,
+          "output_sha": "04fc6d04edc93fc01c91ca26f742f77f48f18c49359ddfdad161155a91a423f9"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_discover_documents' -A 110 auger.py | sed -n '60,115p'",
+          "exit_code": 0,
+          "output_sha": "d02e60aa4fdf295e84bddfc789957e03362541604c0e7269b0630d275045f13d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_block' -A 120 auger.py | grep -n 'is_file\\|read_bytes\\|open(\\|Path(' ",
+          "exit_code": 1,
+          "output_sha": "559b73bd403915090f5a146d601ae6fcba744cdf6fd5c3e7a1830e70156b0f0d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_block' -A 200 auger.py | sed -n '1,200p' | grep -n 'fixture\\|migration\\|path' | head -40",
+          "exit_code": 0,
+          "output_sha": "f1c8143c2a0f2f85cbacb07e8346686a6a97ae1853c4ba1a3e95680ca314157d"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 60, \"offset\": 8380, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "c378b8a4cd9dbdd2719a31bf729111ef918e7a870e47e033e07c0b66f040a167"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_xsd_conformance\\|_spec_schema_violations(' auger.py | head; echo ---; grep -n 'def _spec_xsd_conformance' -A 40 auger.py | head -50",
+          "exit_code": 0,
+          "output_sha": "9184d4f6e643fc501b25d227f8b1f11a74e86615242a3c255edc3528fb4669a7"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 40, \"offset\": 8245, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "530b4558d8a64480bdd5884663392954a2ec410af9b5ce8953c8d66dcdb3a3ca"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n '_spec_assert_schema_conformance(' auger.py",
+          "exit_code": 0,
+          "output_sha": "c6390dfe76a61ea2be17854e614611ffa7f2526521b2e28dfb11549117fee739"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 30, \"offset\": 8904, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "294e7a63d0e1bd75c78fc9101f4e0304719792b865d693ee24a15c69ee9edf86"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_validate_blocks' -A 60 auger.py | head -70",
+          "exit_code": 0,
+          "output_sha": "3958864598d149a48cfc4c6916b1a277a4f6d683aa1ebf47eb9d833d9f9e6452"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_validate_tasks' -A 80 auger.py | grep -n 'is_file\\|read_bytes\\|open(\\|Path(' ",
+          "exit_code": 1,
+          "output_sha": "0c3db50c71d1ed9b04b5b413ba439ec8ce7e35eea6ce374a2e9a51fef322788d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_validate_tasks' -A 90 auger.py | sed -n '1,90p'",
+          "exit_code": 0,
+          "output_sha": "7c60945c1a135ac9718d4b108a3e970d042d3cfcac9a42718ecf78d2171bfa0f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_validate_tasks' -A 130 auger.py | sed -n '90,135p'",
+          "exit_code": 0,
+          "output_sha": "9a8b322835990b858bc6fd3b4ca20952e0bdaf3c36254fbefccddb03907d513b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_validate_decision_refs' -A 40 auger.py | head -50",
+          "exit_code": 0,
+          "output_sha": "c68fd4b9924c095f14c4236ff036fee735c313596b49b2281c89562c25c70c87"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n '_spec_validate_decision_refs(' auger.py",
+          "exit_code": 0,
+          "output_sha": "3be844c21e265afd648c3770a451284575df2b6388f66f68ee75ddd4d27ac581"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 20, \"offset\": 13800, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "452a1b59cb537cbb8a6ac16fbe2cf1a8b90ae054a7dac460acff149d15b7cea4"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_validate_obligations\\|def validate_xml_specs' auger.py",
+          "exit_code": 0,
+          "output_sha": "ed34c514fed504f3795d004373c495f1cf956a25a5c16976cba30e87c85c270e"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 40, \"offset\": 13589, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "d6d4ec2d8dd5b4e63f1832a9c6c2b0741608f7967e9c1440a0ba5b3b5fd1f158"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_validate_obligations\\|def _spec_obligation\\|def _spec_check_obligations' auger.py; grep -n 'stale-test-ref' auger.py | head",
+          "exit_code": 0,
+          "output_sha": "694ab242d7a6c3bbfbea650d34e3c653d0048d3d9c84d564cbe672a2171aa696"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 60, \"offset\": 13755, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "5a6bcf9e6cf1adc02656452deb8494dbbd2804d9f35f292475fdb565cb5ea5b0"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_obligation_ids' -A 40 auger.py | head -50",
+          "exit_code": 0,
+          "output_sha": "32385c9880c7881c9dc7ee5c7f6f421e0a49cc525308e9db04f3750677ec0448"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_source_index' -A 40 auger.py | head -50",
+          "exit_code": 0,
+          "output_sha": "6ccaa0274066d83029f0c97ac6a39dc8cb16dbe91d16acf43bdaf69980735cc3"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_bundle' -A 60 auger.py | head -70",
+          "exit_code": 0,
+          "output_sha": "21e4886aabe26e4b651b2f7412ab6ff87070452fed26d57e59e6b308bc4fa01a"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 70, \"offset\": 12980, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "28355fe452c3a03dfb2c0fe701a737f36048b7ef53d3d72b97d37bff88a946b0"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def assemble_xml_requirement' -A 70 auger.py | head -80",
+          "exit_code": 0,
+          "output_sha": "439c293fc8950bc78e3d1b58c1f0b9c779f917e0c72e26bbaf903862f7b79b37"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_no_match_notice' -A 20 auger.py | head -25",
+          "exit_code": 0,
+          "output_sha": "6854aca55f071e9ef1e86fe7c13ac887e9871fb797b082ce8530baf81415bb3d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_align_dispatch' -A 40 auger.py | head -50",
+          "exit_code": 0,
+          "output_sha": "4e7d3ca466587a8f134a9e9388bf292ccab4c1f864488599fb8e61e8983e5d9b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_align_dispatch' -A 90 auger.py | sed -n '50,95p'",
+          "exit_code": 0,
+          "output_sha": "3cfc46c1430f90b03293b6e946acd624a7b80aebfea1d47c57e5e488d5598fbe"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def align_staged_change' -A 60 auger.py | head -70",
+          "exit_code": 0,
+          "output_sha": "e1a149da621f12fda66bba9c67276a5beb2a109f7eab57b4dcbdd5208e1a8054"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_check_repo_root' -A 40 auger.py | head -50",
+          "exit_code": 0,
+          "output_sha": "c42b810b51cba8516d0b1ccf321cd7d91e8b003fec131a8cffd4056d865b570b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_check_citations' -A 40 auger.py | head -50",
+          "exit_code": 0,
+          "output_sha": "bbbe5521334385c2c359766ab05bf42c04ec830b31bcb1381cfb54e13193e308"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_check_markers' -A 120 auger.py | sed -n '40,120p'",
+          "exit_code": 0,
+          "output_sha": "47fed893c291b8ee2e3e5e432274747b53932f2fccc28adff23c207737e40856"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_check_resolve_test' -A 40 auger.py | sed -n '10,45p'",
+          "exit_code": 0,
+          "output_sha": "9b3107fac04333b01933eab027dea305d00247dde83849648545356ffadc8038"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_check_board_rows' -A 40 auger.py | sed -n '1,45p'",
+          "exit_code": 0,
+          "output_sha": "9e41751a371700b36221ba76c7dc182c24918099c1d13ab575083f999e938007"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_check_markers' -A 45 auger.py | sed -n '1,45p'",
+          "exit_code": 0,
+          "output_sha": "effd8b944253f1f4ecbdc1266a683ad8997c1240bdcd5c4831db684b2e0664ba"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_check_diff' -A 60 auger.py | head -70",
+          "exit_code": 0,
+          "output_sha": "9a0cc2863bea88f25114f3875e2afb480a05f023ff54c5a2db18421a980b0ea1"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_check_path' -A 20 auger.py | head -25",
+          "exit_code": 0,
+          "output_sha": "970bb1a7ac713ddb5fbadc47a9d10e009c7fc62263375dc68fd848bcbd53999d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_check_annotations' -A 12 auger.py | head -15; echo ---; grep -n 'SPEC_TRACE_ANNOTATION_RE\\s*=' -A 3 auger.py",
+          "exit_code": 0,
+          "output_sha": "e24d6557224d3d9804c7dffb5ae7d7766489401e4c11ff566e31f95fd1a2d6be"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_check_annotations' -A 10 auger.py | head -12; echo \"=== marker regex ===\"; grep -n 'SPEC_TRACE_MARKER_RE\\s*=' -A 3 auger.py",
+          "exit_code": 0,
+          "output_sha": "3718e650e0f02fc98c5c5ccfa83b2f040223d12b2b997d7a7951294e734df9c3"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_check_annotations' -A 10 auger.py | head -12; echo \"=== marker regex ===\"; grep -n 'SPEC_TRACE_MARKER_RE = ' -A 2 auger.py",
+          "exit_code": 0,
+          "output_sha": "52e2c6888c1b7ee93a927ca566cf60ebef96b9bfae06b49e25f1607d90f533c5"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_check_annotations' -A 10 auger.py | head -12; echo \"=== marker regex ===\"; grep -n 'SPEC_TRACE_MARKER_RE = ' -A 2 auger.py",
+          "exit_code": 0,
+          "output_sha": "018e31c6f6f7b58137e9977df59a2d19616e7f6dbeded7a6e9e831c58faccff8"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'def _spec_check_annotations' -A 10 auger.py | head -12; echo \"=== marker regex ===\"; grep -n 'SPEC_TRACE_MARKER_RE = ' -A 2 auger.py",
+          "exit_code": 0,
+          "output_sha": "9632e087a32620d9a1d6ab9509c292d236198ab452a73fed1e42d498152a302e"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k earlier_commit_returns_old_text` -> \\\"1 passed, 10 deselected in 0.91s\\\", exit 0. Test at tests/test_spec_as_of.py:110 builds a hermetic two-commit repo (OLD_SENTINEL -> NEW_SENTINEL) and asserts assemble --as-of <old_ref> returns OLD_SENTINEL and not NEW_SENTINEL, while plain assemble returns NEW_SENTINEL.\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "8bbbf099d809359d648ac609258630fb28aa0659203807a26173195f1df59400"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `-k head_equals_plain` -> \\\"2 passed, 9 deselected in 0.75s\\\", exit 0. tests/test_spec_as_of.py:150 (list) and :161 (assemble --format json) compare stdout of plain vs --as-of HEAD on the shipped corpus, incl. sha256 equality.\", \"key\": \"verified_1\"}",
+          "exit_code": 0,
+          "output_sha": "69292b3d21c42ba633dd27f69e92bb421d5b1e69c5e177d61d11392ba5800e22"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `-k is_a_typed_refusal` -> \\\"4 passed, 7 deselected in 0.94s\\\", exit 0. tests/test_spec_as_of.py:186/196/206/219 each assert returncode==2, stdout==\\\"\\\" and the typed code (as-of-unknown-ref / as-of-not-a-repository / as-of-corpus-missing / as-of-git-unavailable).\", \"key\": \"verified_2\"}",
+          "exit_code": 0,
+          "output_sha": "323a7da2d5c6082093bb4f62ebf3b903ca29f77cc11b0fdbf32eb7cca54fe7a9"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `bash evidence/AUG-167/06-flag-scope.sh` exit 0, last line FLAG_SCOPE_OK. Output: validate/check/bundle/render each rc=2 unrecognized=1 stdout_bytes=0; list rc=0 stdout_bytes=1335, assemble rc=0 stdout_bytes=1824. Matches argparse wiring: --as-of is added only in _add_spec_selectors (auger.py:13209-13248), used by list (auger.py:14318) and assemble (auger.py:14338) only.\", \"key\": \"verified_3\"}",
+          "exit_code": 0,
+          "output_sha": "b34f8efa3c85e97a1b1f54fba2be08e8c2375af6c1c933124860559b3bfd9973"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `-k read_only_on_repo_and_temp` -> \\\"1 passed, 10 deselected in 0.25s\\\", exit 0. tests/test_spec_as_of.py:262 snapshots specs/ sha256 map, `git status --porcelain`, top-level entries and temp litter before/after `spec list --as-of HEAD` and asserts all unchanged. Implementation removes staging in `finally` (auger.py:13405-13407).\", \"key\": \"verified_4\"}",
+          "exit_code": 0,
+          "output_sha": "c02848117a8c6ec726557c026bee475e011656073cf7e96768f5794bddd34c09"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `grep -c 'pytest .*test_spec_as_of' tests/gate.sh` -> 1 (exit 0). The single hit is tests/gate.sh:218, the gate pytest arm's file list, which ends with tests/test_spec_as_of.py.\", \"key\": \"verified_5\"}",
+          "exit_code": 0,
+          "output_sha": "b3afc640c9a334872bd385e5472f122637823380f1e960c8daaf2cac532a63dd"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"derived_0: The --as-of flag is reachable from the real CLI entrypoint (main -> spec subparser -> cmd_spec) and actually changes the corpus read, not just parses.\\nderived_1: The staging directory is removed on every exit path, including a typed refusal raised after extraction (no temp litter on the failure path).\\nderived_2: The feature does not regress the existing spec surface: the pre-existing spec test files still pass.\\nderived_3: --as-of HEAD is byte-identical for the markdown (default) format too, not only JSON/list, so the equivalence claim is not format-specific.\\nderived_4: The new test file is hermetic (no network/DuckBrain/live server) so the gate arm can run it without the live substrate.\", \"key\": \"derived_criteria\"}",
+          "exit_code": 0,
+          "output_sha": "539d85fa2d3c1af20fe2dc3a341cc945c8212d60764fe4b6e6053e32748b5e05"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q 2>&1 | tail -5",
+          "exit_code": 0,
+          "output_sha": "b71eab0a274ba353862ebeae77d67d20c1ae8c1747ab535500ce9f427f8f193d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_corpus_view.py tests/test_spec_render.py tests/test_spec_assembly_report.py tests/test_spec_repository_root.py -q 2>&1 | tail -5",
+          "exit_code": 0,
+          "output_sha": "ad8cd8cec6c12196b538d32476bba2a82bcecdb47238438997ecae510f3908e5"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && ls /tmp | grep -c 'auger-as-of-' ; echo \"---\"; PATH=$PWD/.venv/bin:$PATH python3 auger.py spec list specs --as-of HEAD | head -3; echo \"rc=$?\"",
+          "exit_code": 0,
+          "output_sha": "d4b9bb26506698638f2e7961d3b96f96065386abbd8170a9fd60fcadb684a50a"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && PATH=$PWD/.venv/bin:$PATH python3 auger.py spec assemble specs --id SPEC-VERBS-SELECTION > /tmp/a.md 2>/dev/null; PATH=$PWD/.venv/bin:$PATH python3 auger.py spec assemble specs --id SPEC-VERBS-SELECTION --as-of HEAD > /tmp/b.md 2>/dev/null; sha256sum /tmp/a.md /tmp/b.md; diff -q /tmp/a.md /tmp/b.md && echo MD_IDENTICAL",
+          "exit_code": 0,
+          "output_sha": "522a776260371b2cdc279ca0e8d7c82b8174ab51e222498ff8421a12f2ebaa48"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && ls /tmp | grep -c 'auger-as-of-'; echo \"--- failure path: unknown ref then check litter\"; PATH=$PWD/.venv/bin:$PATH python3 auger.py spec list specs --as-of no-such-ref-xyz; echo \"rc=$?\"; ls /tmp | grep -c 'auger-as-of-'",
+          "exit_code": 1,
+          "output_sha": "bc6d9e906cd672ce5c6627ff31eda68b23c3f6c54d306ce8772577e18cf30a0a"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: Reachable from the real CLI. `python3 auger.py spec list specs --as-of HEAD` prints the corpus listing (rc=0) and `spec assemble ... --as-of HEAD` produces markdown identical to plain (sha256 96be6a31... both). Wiring: main -> spec_sub parser (auger.py:14295) -> list/assemble parsers call _add_spec_selectors (auger.py:14318/14338) which adds --as-of (auger.py:13243) -> set_defaults(fn=cmd_spec) -> cmd_spec (auger.py:12791) swaps a.root for the staged historical root (auger.py:12800-12812) -> _spec_dispatch reads it.\", \"key\": \"verified_derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "22428212adb8060231b0154985dd109989b8101e8849c7234389be25b15a7883"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: No temp litter on the failure path. `spec list specs --as-of no-such-ref-xyz` -> rc=2, \\\"spec error (as-of-unknown-ref): ...\\\" and `ls /tmp | grep -c auger-as-of-` = 0 both before and after. The staging dir is created only after ref/corpus checks (auger.py:13402) and removed in `finally` (auger.py:13405-13407); the contextmanager is entered inside cmd_spec's try/except SpecError (auger.py:12803-12820), so a refusal raised during dispatch also unwinds through the finally.\", \"key\": \"verified_derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "aa61c61bfd822fce88a2732784024d102cc5621955fbf0923ee8e8c107127286"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `python3 -m pytest tests/test_spec_corpus_view.py tests/test_spec_render.py tests/test_spec_assembly_report.py tests/test_spec_repository_root.py -q` -> \\\"45 passed in 3.29s\\\", exit 0. Full new file: `pytest tests/test_spec_as_of.py -q` -> \\\"11 passed in 3.70s\\\".\", \"key\": \"verified_derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "f6bafff247d2996d8f57dc8a0158da998d53193205497169264090a75f4dfcf6"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: markdown (default) format is byte-identical too. `spec assemble specs --id SPEC-VERBS-SELECTION` vs the same with `--as-of HEAD`: both sha256 96be6a31e89cb305347a4efdb15256f81bbe43fdf9f1d358c31062978ac54bb3, `diff -q` clean (MD_IDENTICAL).\", \"key\": \"verified_derived_3\"}",
+          "exit_code": 0,
+          "output_sha": "1a53854f1034a39d8f5deef6131a44dc338be3517318a9751eaa4629ff937d48"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'import requests\\|urllib.request\\|http\\|DuckBrain\\|duckbrain\\|socket' tests/test_spec_as_of.py; echo \"rc=$?\"; echo \"--- run with no network env vars\"; env -u DUCKBRAIN_URL -u GITREINS_LLM_API_KEY PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q 2>&1 | tail -3",
+          "exit_code": 0,
+          "output_sha": "1e2329e746cde401cd7ee792a6607a8cd4518d4bcfc1249fa92608428fad3542"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: Hermetic. tests/test_spec_as_of.py imports only hashlib/json/subprocess/sys/tempfile/pathlib/pytest (lines 12-19); no requests/urllib/socket/DuckBrain references (grep found only the docstring line 3). `env -u DUCKBRAIN_URL -u GITREINS_LLM_API_KEY python3 -m pytest tests/test_spec_as_of.py -q` -> \\\"11 passed in 2.47s\\\", exit 0 \\u2014 so the gate arm can run it without the live substrate.\", \"key\": \"verified_derived_4\"}",
+          "exit_code": 0,
+          "output_sha": "701e6b96cee12aac8b01b02a22495e42bcd31c67d075e9a414ceeed2fec1a53b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && sed -n '205,222p' tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "58a56b31a7c857b18bc6c7e7e686a8d0463fa00510725315f07ff2c933e05029"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show bc79d5d -- docs/SPEC-CORPUS.md | head -40",
+          "exit_code": 0,
+          "output_sha": "8ff034ce8aadfb18339eac6e960e521d4b3f36759a4f772071715d753ce6373e"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git status --porcelain; echo \"rc=$?\"",
+          "exit_code": 0,
+          "output_sha": "0e55a56e33b03b7b5800d5e896ce873e82af8f461c215a26ff3c4b0f49699d05"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && sed -n '40,75p' docs/SPEC-CORPUS.md",
+          "exit_code": 0,
+          "output_sha": "496b9f1b651e04f974d541dcde8be75e471b08d9a1c42ec6f661648b34783144"
+        }
+      ]
+    }
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "The diff only edits board bookkeeping \u2014 AUG-153 gains an updated_at and a foreman_note recording a rollout, and AUG-150's foreman_note is rewritten \u2014 with no code, config, or wiring changes to review."
+  },
+  "summary": "Stage tier1: PASS\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 AC1 old-text known: PROOF: `PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k earlier_commit_returns_old_text` prints 1 passed. FAILIF: it prints any other count or exits nonzero.: Ran exactly that command: output `.  [100%]` / `1 passed, 10 deselected in 0.91s`, exit 0. The test (tests/test_spec_as_of.py:110) builds a hermetic two-commit repo whose block BODY is rewritten OLD_SENTINEL -> NEW_SENTINEL, then asserts `spec assemble --as-of <old_ref> --format json` contains OLD_SENTINEL and not NEW_SENTINEL, while plain assemble contains NEW_SENTINEL and not OLD_SENTINEL \u2014 so the old text is genuinely returned, not merely a rc-0.\n  \u2713 AC2 HEAD equivalence: PROOF: `PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k head_equals_plain` prints 2 passed (spec list and spec assemble JSON sha256 equality with --as-of HEAD). FAILIF: not exactly 2 passed.: Ran exactly that command: `..  [100%]` / `2 passed, 9 deselected in 0.75s`, exit 0. The two tests are tests/test_spec_as_of.py:150 (list: `head.stdout == plain.stdout` plus explicit sha256 equality) and :161 (assemble --format json: `head.stdout == plain.stdout`). Both run against the shipped specs/ corpus.\n  \u2713 AC3 typed refusals: PROOF: `PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k is_a_typed_refusal` prints 4 passed, each refusal rc 2 with empty stdout. FAILIF: not exactly 4 passed.: Ran exactly that command: `....  [100%]` / `4 passed, 7 deselected in 0.94s`, exit 0. Each of tests/test_spec_as_of.py:186 (as-of-unknown-ref), :196 (as-of-not-a-repository), :206 (as-of-corpus-missing), :219 (as-of-git-unavailable) asserts `returncode == 2`, `stdout == \"\"` and the typed code in stderr. Independently confirmed by hand: `python3 auger.py spec list specs --as-of no-such-ref-xyz` -> `spec error (as-of-unknown-ref): 'no-such-ref-xyz' does not resolve in the repository at /home/kara/auger`, rc=2.\n  \u2713 AC4 flag scope: PROOF: `bash evidence/AUG-167/06-flag-scope.sh` prints FLAG_SCOPE_OK and exits 0, with validate/check/bundle/render each rc 2 unrecognized arguments and list/assemble accepting the flag. FAILIF: the last line is not FLAG_SCOPE_OK or the exit code is nonzero.: Ran `bash evidence/AUG-167/06-flag-scope.sh`: exit 0, last line `FLAG_SCOPE_OK`. Output lines: `validate rc=2 unrecognized=1 stdout_bytes=0`, `check rc=2 unrecognized=1 stdout_bytes=0`, `bundle rc=2 unrecognized=1 stdout_bytes=0`, `render rc=2 unrecognized=1 stdout_bytes=0`, then `list rc=0 stdout_bytes=1335 (positive control)` and `assemble rc=0 stdout_bytes=1824 (positive control)`. Matches the argparse wiring: `--as-of` is added only inside `_add_spec_selectors` (auger.py:13243), which is called only by the `list` (auger.py:14318) and `assemble` (auger.py:14338) subparsers.\n  \u2713 AC5 read-only: PROOF: `PATH=$PWD/.venv/bin:$PATH python3 -m pytest tests/test_spec_as_of.py -q -k read_only_on_repo_and_temp` prints 1 passed, corpus sha256 unchanged and no staging dir left. FAILIF: not exactly 1 passed.: Ran exactly that command: `.  [100%]` / `1 passed, 10 deselected in 0.25s`, exit 0. tests/test_spec_as_of.py:262 snapshots the specs/ sha256 map, `git status --porcelain`, top-level repo entries and `auger-as-of-*` temp dirs before/after `spec list --as-of HEAD` and asserts all four unchanged. Implementation removes the staging dir in `finally` (auger.py:13405-13407). Independently: `ls /tmp | grep -c auger-as-of-` = 0 after both a successful and a refused run.\n  \u2713 AC5 gate arm pinned: PROOF: `grep -c 'pytest .*test_spec_as_of' tests/gate.sh` prints 1, so the file is named once inside the gate pytest arm. FAILIF: the count is 0 or greater than 1.: Ran `grep -c 'pytest .*test_spec_as_of' tests/gate.sh` -> `1`, exit 0. The single hit is tests/gate.sh:218, the gate's pytest-arm file list, which ends with `tests/test_spec_as_of.py`; the only other mention (tests/gate.sh:212) is a comment and does not match the pattern.\n  \u2713 The --as-of flag is reachable from the real CLI entrypoint (main -> spec subparser -> cmd_spec) and actually changes the corpus read, not just parses.: Traced end to end: main's `spec_sub` (auger.py:14295) -> `list`/`assemble` parsers call `_add_spec_selectors` (auger.py:14318/14338) which adds `--as-of` (auger.py:13243) -> `set_defaults(fn=cmd_spec)` -> `cmd_spec` (auger.py:12791) enters `_spec_corpus_as_of` and swaps `a.root` for the staged historical root (auger.py:12800-12812) -> `_spec_dispatch` reads that root. Live proof: `python3 auger.py spec list specs --as-of HEAD` prints the corpus listing (rc=0), and `spec assemble specs --id SPEC-VERBS-SELECTION --as-of HEAD` produces markdown byte-identical to plain (both sha256 96be6a31e89cb305347a4efdb15256f81bbe43fdf9f1d358c31062978ac54bb3).\n  \u2713 The staging directory is removed on every exit path, including a typed refusal raised after extraction (no temp litter on the failure path).: `_spec_corpus_as_of` creates the staging dir only after the ref/corpus checks (auger.py:13402) and removes it in `finally` (auger.py:13405-13407); the contextmanager is entered inside cmd_spec's `try/except SpecError` (auger.py:12803-12820), so a refusal raised during dispatch unwinds through that `finally`. Verified live: `spec list specs --as-of no-such-ref-xyz` -> rc=2 with `spec error (as-of-unknown-ref)` and `ls /tmp | grep -c auger-as-of-` = 0 before and after.\n  \u2713 The feature does not regress the existing spec surface: the pre-existing spec test files still pass.: `python3 -m pytest tests/test_spec_corpus_view.py tests/test_spec_render.py tests/test_spec_assembly_report.py tests/test_spec_repository_root.py -q` -> `45 passed in 3.29s`, exit 0. The full new file also passes: `pytest tests/test_spec_as_of.py -q` -> `11 passed in 3.70s`, exit 0.\n  \u2713 --as-of HEAD is byte-identical for the markdown (default) format too, not only JSON/list, so the equivalence claim is not format-specific.: `spec assemble specs --id SPEC-VERBS-SELECTION` vs the same with `--as-of HEAD`: both sha256 `96be6a31e89cb305347a4efdb15256f81bbe43fdf9f1d358c31062978ac54bb3`, `diff -q` clean (printed MD_IDENTICAL). The committed tests only cover list and assemble-JSON, so this closes the default-format gap by direct measurement.\n  \u2713 The new test file is hermetic (no network/DuckBrain/live server) so the gate arm can run it without the live substrate.: tests/test_spec_as_of.py imports only hashlib/json/subprocess/sys/tempfile/pathlib/pytest (lines 12-19); grep for requests/urllib/socket/DuckBrain finds only the docstring line 3. `env -u DUCKBRAIN_URL -u GITREINS_LLM_API_KEY python3 -m pytest tests/test_spec_as_of.py -q` -> `11 passed in 2.47s`, exit 0 \u2014 the gate arm (tests/gate.sh:218) can run it with no live substrate.\nAll six given criteria and all five derived criteria pass with fresh command output \u2014 the 11-test hermetic suite, the flag-scope script, the gate-arm grep, and live CLI runs all confirm `spec list|assemble --as-of REF` returns historical text, is byte-identical at HEAD, refuses with typed rc-2 errors, is scoped to the selection verbs, and leaves no writes or temp litter. [uncovered failure paths: failure mode 0 (`--as-of` on a corpus whose obligations name test/migration/fixture paths resolves those paths against the CURRENT repository root, not the historical tree, because `_spec_repository_root` runs `git rev-parse --show-toplevel` from the staged temp dir (auger.py:13454) and the staged dir is not a work tree.): detected_by is empty \u2014 uncovered failure path; failure mode 1 (`--as-of` combined with `--repo-root` is silently ignored: `--repo-root` is not on the list/assemble parsers, so a caller cannot pin the repository the ref is resolved in.): detected_by is empty \u2014 uncovered failure path]\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-11-15T21:04:28.833968",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-15T21:04:28.856664+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 4942,
+        "truncated": false,
+        "source": "git show cd73bc930386"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 31179,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-167"
+  }
+}
