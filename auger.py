@@ -56,9 +56,11 @@ import os
 import re
 import shlex
 import sqlite3
+import shutil
 import subprocess
 import sys
 import sysconfig
+import tarfile
 import tempfile
 import time
 import urllib.error
@@ -12788,8 +12790,27 @@ def _spec_align_dispatch(a):
 
 def cmd_spec(a):
     """`auger spec validate|list|assemble` — the XML spec authoring surface (AUG-118)."""
+    # AUG-167: `--as-of` is a SELECTION-verb flag. The corpus is read as it existed at
+    # REF from a temp extraction of the git subtree, the ordinary dispatch runs over
+    # that root, and the temp dir is removed when the dispatch returns. `a.root` is
+    # restored afterwards so nothing downstream can observe the staging path. The
+    # refusal rendering below must ALSO cover the historical read (an unknown ref is a
+    # typed refusal, not a traceback), so the handler wraps the whole dispatch.
+    as_of = getattr(a, "as_of", None)
+    if as_of and getattr(a, "spec_cmd", "validate") in ("list", "assemble"):
+        staging = _spec_corpus_as_of(a.root, as_of)
+    else:
+        staging = contextlib.nullcontext()
     try:
-        return _spec_dispatch(a)
+        with staging as historical_root:
+            if historical_root is not None:
+                original_root = a.root
+                a.root = str(historical_root)
+            try:
+                return _spec_dispatch(a)
+            finally:
+                if historical_root is not None:
+                    a.root = original_root
     except SpecError as exc:
         print(f"spec error ({exc.code}): {exc.detail}", file=sys.stderr)
         raise SystemExit(2) from None
@@ -13214,6 +13235,16 @@ def _add_spec_selectors(parser) -> None:
         metavar="X.Y.Z",
         help="select this block version attribute",
     )
+    # AUG-167: corpus time-travel. The corpus is READ as it existed at REF (git-backed
+    # history) and the ordinary selection path runs over that historical tree; `--as-of
+    # HEAD` is byte-identical to plain selection. Refusals: `as-of-unknown-ref`,
+    # `as-of-not-a-repository`, `as-of-corpus-missing`, `as-of-git-unavailable`.
+    parser.add_argument(
+        "--as-of",
+        metavar="REF",
+        help="query the corpus as it existed at this git ref (commit, tag or branch); "
+        "--as-of HEAD equals plain selection",
+    )
 
 
 # ---------------------------------------------------------------- XML spec graph (AUG-118/AUG-123)
@@ -13289,6 +13320,92 @@ def _git_toplevel(directory):
         return None
     path = Path(shown)
     return path.resolve() if path.is_dir() else None
+
+
+def _spec_git_run(args: list) -> subprocess.CompletedProcess:
+    """A `git` subprocess that refuses as `as-of-git-unavailable` when git is absent.
+
+    The refusal class belongs to the FEATURE (--as-of), not to repo discovery: the
+    AUG-127 validators keep `_git_toplevel`'s raise-through behaviour untouched.
+    """
+    try:
+        return subprocess.run(args, capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        raise SpecError(
+            "as-of-git-unavailable",
+            "the git executable is not available; --as-of reads corpus history through git",
+        ) from None
+
+
+@contextlib.contextmanager
+def _spec_corpus_as_of(spec_root, ref: str):
+    """Materialise the spec corpus AS IT EXISTED at git `ref` (AUG-167).
+
+    Yields a fresh temp-directory root holding the corpus subtree at `ref`; the
+    caller runs the ordinary selection path over it and the directory is removed
+    in `finally` — no litter, no writes into the corpus, no `.git` mutation.
+    Every failure is a typed refusal; there is no fallback to current-day content
+    (a silently-current answer on a valid ref is exactly the defect this forbids).
+    """
+    spec_root = Path(spec_root).resolve()
+    top = None
+    try:
+        top = _git_toplevel(spec_root)
+    except FileNotFoundError:
+        pass
+    if top is None:
+        if _spec_git_run(["git", "--version"]).returncode != 0:
+            raise SpecError(
+                "as-of-git-unavailable",
+                "the git executable is not available; --as-of reads corpus history "
+                "through git",
+            )
+        raise SpecError(
+            "as-of-not-a-repository",
+            f"{spec_root} is not inside a git work tree; --as-of reads corpus history "
+            "from the repository the corpus is committed in",
+        )
+    probe = _spec_git_run(
+        ["git", "-C", str(top), "rev-parse", "--verify", "--quiet", ref]
+    )
+    if probe.returncode != 0:
+        raise SpecError(
+            "as-of-unknown-ref",
+            f"{ref!r} does not resolve in the repository at {top}",
+        )
+    rel = spec_root.relative_to(top).as_posix()  # "." when the corpus IS the toplevel
+    if rel != ".":
+        exists = _spec_git_run(
+            ["git", "-C", str(top), "cat-file", "-e", f"{ref}:{rel}"]
+        )
+        if exists.returncode != 0:
+            raise SpecError(
+                "as-of-corpus-missing",
+                f"the corpus path {rel!r} does not exist at {ref!r} in {top}",
+            )
+    archive_args = ["git", "-C", str(top), "archive", "--format=tar", ref]
+    if rel != ".":
+        archive_args += ["--", rel]
+    try:
+        archive = subprocess.run(archive_args, capture_output=True, check=False)
+    except FileNotFoundError:
+        raise SpecError(
+            "as-of-git-unavailable",
+            "the git executable is not available; --as-of reads corpus history through git",
+        ) from None
+    if archive.returncode != 0:
+        raise SpecError(
+            "as-of-corpus-missing",
+            f"git archive {ref!r} -- {rel} failed: "
+            f"{archive.stderr.decode(errors='replace').strip()}",
+        )
+    staging = Path(tempfile.mkdtemp(prefix="auger-as-of-"))
+    try:
+        with tarfile.open(fileobj=io.BytesIO(archive.stdout), mode="r:") as tar:
+            tar.extractall(staging, filter="data")
+        yield staging / rel if rel != "." else staging
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def _spec_repository_root(spec_root, explicit=None):
