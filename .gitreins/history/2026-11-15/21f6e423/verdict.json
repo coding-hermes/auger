@@ -1,0 +1,481 @@
+{
+  "task_id": "REVIEW-AUGER-006",
+  "task_title": "The smoke teardown consults the DELETE status before rmtree and treats 409 like 429 (AUG-117 recurrence)",
+  "task_criteria": [
+    "PASS: the smoke teardown consults the DELETE status before it removes the namespace\ndirectory \u2014 the only shutil.rmtree in the helper sits after the 200/404 guard.\nPROOF: grep -n \"st not in (200, 404)\" tests/smoke.sh prints line 101 and\ngrep -n \"shutil.rmtree\" tests/smoke.sh prints line 103, so the guard precedes the rmtree.\nFAILIF: the rmtree line number is not greater than the guard line number, or either\npattern is absent from tests/smoke.sh.\n",
+    "PASS: the hermetic teardown proof is collected and green \u2014 8 tests, no skips.\nPROOF: python3 -m pytest tests/test_smoke_teardown.py -q prints \"8 passed\".\nFAILIF: any failed or errored node, a collection error, or a pass count other than 8.\n",
+    "PASS: the throwaway sweep covers the pytest leak class and still spares fresh and\nforeign namespaces (the prefix and 24h gates are unchanged).\nPROOF: python3 -m pytest tests/test_smoke_teardown.py -q -k sweep prints \"5 passed\".\nFAILIF: fewer than 5 passed, any failure, or a collection error.\n",
+    "PASS: the gate pytest arm names the proof file, so the gate and CI execute it.\nPROOF: grep pytest tests/gate.sh | grep -c test_smoke_teardown.py prints 1.\nFAILIF: a count of 0, or a count above 1.\n"
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "65e1f4886e6db777b970eb47bdcb33b14a458b64",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "e937f8c3ed818c8069916d63f9cbe1f90bdeef6f0e2bda148df8b511e0fdbf2d",
+  "working_tree_dirty_path_count": 678,
+  "items": [
+    {
+      "criterion": "PASS: the smoke teardown consults the DELETE status before it removes the namespace\ndirectory \u2014 the only shutil.rmtree in the helper sits after the 200/404 guard.\nPROOF: grep -n \"st not in (200, 404)\" tests/smoke.sh prints line 101 and\ngrep -n \"shutil.rmtree\" tests/smoke.sh prints line 103, so the guard precedes the rmtree.\nFAILIF: the rmtree line number is not greater than the guard line number, or either\npattern is absent from tests/smoke.sh.\n",
+      "status": "PASS",
+      "detail": "`grep -n \"st not in (200, 404)\" tests/smoke.sh` -> `101:    if st not in (200, 404):`; `grep -n \"shutil.rmtree\" tests/smoke.sh` -> `103:    shutil.rmtree(os.path.join(ROOT, ns), ignore_errors=True)` (single occurrence). 103 > 101. drop() at tests/smoke.sh:95-105 runs the DELETE (with the 409 ladder) first, returns `False, f\"DELETE returned HTTP {st}\"` on any non-200/404, and only then rmtree's."
+    },
+    {
+      "criterion": "PASS: the hermetic teardown proof is collected and green \u2014 8 tests, no skips.\nPROOF: python3 -m pytest tests/test_smoke_teardown.py -q prints \"8 passed\".\nFAILIF: any failed or errored node, a collection error, or a pass count other than 8.\n",
+      "status": "PASS",
+      "detail": "`python3 -m pytest tests/test_smoke_teardown.py -q` -> `........ [100%]` / `8 passed in 0.41s` (exit_code 0). Re-run with `-q -rs` also printed `8 passed in 0.47s` with no skip lines, so no node is skipped."
+    },
+    {
+      "criterion": "PASS: the throwaway sweep covers the pytest leak class and still spares fresh and\nforeign namespaces (the prefix and 24h gates are unchanged).\nPROOF: python3 -m pytest tests/test_smoke_teardown.py -q -k sweep prints \"5 passed\".\nFAILIF: fewer than 5 passed, any failure, or a collection error.\n",
+      "status": "PASS",
+      "detail": "`python3 -m pytest tests/test_smoke_teardown.py -q -k sweep` -> `..... [100%]` / `5 passed, 3 deselected in 0.54s` (exit_code 0). The five sweep tests (tests/test_smoke_teardown.py:198-262) cover stale auger-pytest-* reaping, the ghost-row shape, a fresh pytest dir spared, foreign prefixes (auger-prod-one/releases/auger) untouched, and the original auger-smoke-/auger-eval- classes still reaped. Gates unchanged in shape: THROWAWAY at tests/smoke.sh:34, 24h cutoff at tests/smoke.sh:113."
+    },
+    {
+      "criterion": "PASS: the gate pytest arm names the proof file, so the gate and CI execute it.\nPROOF: grep pytest tests/gate.sh | grep -c test_smoke_teardown.py prints 1.\nFAILIF: a count of 0, or a count above 1.\n",
+      "status": "PASS",
+      "detail": "`grep pytest tests/gate.sh | grep -c test_smoke_teardown.py` -> `1`. The single hit is the run_pytest_arm invocation at tests/gate.sh:212 which names `tests/test_smoke_teardown.py`; run_pytest_arm is called at tests/gate.sh:237 and :240 in both gate modes, and tests/test_smoke_teardown.py:266-278 (test_gate_arm_runs_this_file) asserts the file is named in that arm."
+    },
+    {
+      "criterion": "The 409 ladder in drop() is bounded and terminates (no unbounded retry loop) and a persistent 409 is reported, never reinterpreted as deletion.",
+      "status": "PASS",
+      "detail": "tests/smoke.sh:95-105: `for attempt in range(len(conflict_backoffs) + 1)` with `if st != 409 or attempt == len(conflict_backoffs): break`; a persistent 409 returns `(False, \"DELETE returned HTTP 409\")` and the caller prints `teardown skipped: ...` (tests/smoke.sh:155-157). test_teardown_survives_a_persistent_409_with_the_directory_intact asserts the delete count equals len(ladder)+1 and the directory survives \u2014 `python3 -m pytest tests/test_smoke_teardown.py -q -k \"persistent_409 or transient_409\"` -> `2 passed, 6 deselected`.",
+      "derived": true
+    },
+    {
+      "criterion": "The hermetic rig's namespace root (AUGER_NS_ROOT) is the same directory the real auger writes to (DUCKBRAIN_NAMESPACES_PATH / DUCKBRAIN_DATA_DIR), so the tests' \"directory intact/removed\" assertions are about the real namespace directory.",
+      "status": "FAIL",
+      "detail": "tests/smoke.sh:40 sets `ROOT = os.environ.get(\"AUGER_NS_ROOT\") or ~/duckbrain/namespaces`, but auger resolves its namespace tree via namespaces_base() (auger.py:483-491) from DUCKBRAIN_NAMESPACES_PATH / DUCKBRAIN_DATA_DIR; AUGER_NS_ROOT is read nowhere in auger.py (grep hits only tests/smoke.sh:38,40 and tests/test_smoke_teardown.py). Reproduced by extracting the real ns_helper heredoc and running `helper teardown auger-smoke-x` with a stub DELETE returning 200 while the namespace directory existed at $DUCKBRAIN_NAMESPACES_PATH/auger-smoke-x (the layout auger actually writes): stdout `namespace auger-smoke-x removed`, rc 0, but `REAL namespace dir still exists: True`. So the smoke teardown never removes the real namespace directory, and the tests' directory assertions (tests/test_smoke_teardown.py:139-144, 168-172, 185-190) are made against a directory auger never writes to \u2014 the 409 \"directory intact\" assertion is vacuous.",
+      "derived": true
+    },
+    {
+      "criterion": "The 429 contract is preserved: a 429 from the DELETE still leads to exactly one re-entry of drop() and never to an rmtree under a surviving registry row.",
+      "status": "PASS",
+      "detail": "429 is still absorbed inline by the transport (auger.py:568-583, honouring retryAfter/Retry-After, bounded by `retries`), and the teardown caller re-enters drop() exactly once (tests/smoke.sh:155-157: `if not ok and \"HTTP 429\" in why: ok, why = drop(ns)`). Because rmtree now sits behind the 200/404 guard (tests/smoke.sh:101-103), a 429 surviving both attempts returns before rmtree, so no directory is destroyed under a surviving row; the 409 ladder is a separate path and does not consume the 429 budget.",
+      "derived": true
+    },
+    {
+      "criterion": "The fix does not regress the non-throwaway guard: teardown still refuses namespaces lacking the throwaway prefix.",
+      "status": "PASS",
+      "detail": "tests/smoke.sh:149-150 still refuses before any DELETE: `teardown skipped: {ns} lacks the auger-smoke-/auger-eval- prefix`; the sweep still prefix-gates on THROWAWAY (tests/smoke.sh:34, 116-117). test_sweep_never_takes_a_foreign_prefix (tests/test_smoke_teardown.py:236-250) asserts zero deletes and untouched dirs for auger-prod-one/releases/auger \u2014 green in the `-k sweep` run (`5 passed`).",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "changes_required",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": false,
+      "any_failed": true,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2717 tests: FAIL (tests/test_auger.py::test_a_question_landing_in_a_domain_advances_its_row_too [first failing i",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261113T121340.667634Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nscanners: nice=nice -n 10\n7:29AM INF scanned ~3552182 bytes (3.55 MB) in 1.47s\n7:29AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 351 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261113T121340.667634Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": false,
+          "output": "scanners: nice=nice -n 10\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [  9%]\n........................................................................ [ 19%]\n........................................................................ [ 28%]\n........................................................................ [ 38%]\n.E.E.E.E.E.E.E.E..E.E.E.E...............s............................... [ 46%]\n...................s.................................................... [ 55%]\n........................................................................ [ 65%]\n........................................................................ [ 74%]\n........................................................................ [ 84%]\n........................................................................ [ 93%]\n..........EE..................................                           [100%]\n==================================== ERRORS ====================================\n_ ERROR at teardown of test_a_question_landing_in_a_domain_advances_its_row_too _\n\nlive_service = 'http://127.0.0.1:3000'\n\n    @pytest.fixture\n    def ns_created(live_service: str) -> str:\n        \"\"\"A fresh ephemeral namespace, removed in a finalizer even when the test fails.\n    \n        Depends on `live_service`, so the cross-process substrate lock is held for the whole\n        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to\n        every call the fixture and the test make against the live substrate.\n        \"\"\"\n        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]\n        status, body, _ = auger.db(\"/api/namespaces\", \"POST\", {\"name\": ns})\n        if status not in (200, 201):\n            pytest.fail(f\"could not create test namespace {ns} ({status}): {body}\")\n        CREATED.append(ns)\n        try:\n            yield ns\n        finally:\n            problems = teardown_namespace(ns)\n            if problems:\n                if any(\"429\" in p for p in problems):\n                    # The limiter beat even the transport's own budget on this one namespace.\n                    # AUG-020's contract: ONE extra retry, then LEAVE it with a skip note \u2014 a\n\n\u2026 [34327 chars omitted \u2014 549 line(s)] \u2026\n\ntests/test_packaging_wheel.py:102: Failed\n=========================== short test summary info ============================\nERROR tests/test_auger.py::test_a_question_landing_in_a_domain_advances_its_row_too\nERROR tests/test_auger.py::test_domain_advance_is_a_reach_not_a_regress - Fai...\nERROR tests/test_auger.py::test_null_ring_domain_rows_advance_through_the_real_write_path\nERROR tests/test_auger.py::test_a_refused_advance_warns_once_and_costs_nothing\nERROR tests/test_auger.py::test_a_failed_rewrite_restores_the_original_row - ...\nERROR tests/test_auger.py::test_a_question_row_stored_with_nulls_still_takes_a_partial_patch\nERROR tests/test_auger.py::test_a_refused_rewrite_puts_the_question_row_back\nERROR tests/test_auger.py::test_a_domain_whose_row_is_gone_is_reported_absent_not_skipped\nERROR tests/test_auger.py::test_confidence_sentinel_stays_in_the_store_and_never_renders\nERROR tests/test_auger.py::test_confidence_sentinel_decisions_are_thin_not_confident\nERROR tests/test_auger.py::test_confidence_sentinel_is_never_a_priority_judgment_below_the_floor\nERROR tests/test_auger.py::test_confidence_sentinel_is_excluded_from_status_aggregates\nERROR tests/test_packaging_wheel.py::test_the_wheel_carries_the_schema_and_the_example\nERROR tests/test_packaging_wheel.py::test_a_fresh_venv_install_validates_the_shipped_example\n750 passed, 2 skipped, 14 errors in 1911.50s (0:31:51)\n",
+          "error": "",
+          "data": {
+            "exit_code": 1,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261113T121340.667634Z.log"
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": false,
+      "any_failed": true,
+      "summary": "INCOMPLETE\n  \u2713 PASS: the smoke teardown consults the DELETE status before it removes the namespace\ndirectory \u2014 the only shutil.rmtree in the helper sits after the 200/404 guard.\nPROOF: grep -n \"st not in (200, 404)\" tests/smoke.sh prints line 101 and\ngrep -n \"shutil.rmtree\" tests/smoke.sh prints line 103, so the guard precedes the rmtree.\nFAILIF: the rmtree line number is not greater than the guard line number, or either\npattern is absent from tests/smoke.sh.\n: `grep -n \"st not in (200, 404)\" tests/smoke.sh` -> `101:    if st not in (200, 404):`; `grep -n \"shutil.rmtree\" tests/smoke.sh` -> `103:    shutil.rmtree(os.path.join(ROOT, ns), ignore_errors=True)` (single occurrence). 103 > 101. drop() at tests/smoke.sh:95-105 runs the DELETE (with the 409 ladder) first, returns `False, f\"DELETE returned HTTP {st}\"` on any non-200/404, and only then rmtree's.\n  \u2713 PASS: the hermetic teardown proof is collected and green \u2014 8 tests, no skips.\nPROOF: python3 -m pytest tests/test_smoke_teardown.py -q prints \"8 passed\".\nFAILIF: any failed or errored node, a collection error, or a pass count other than 8.\n: `python3 -m pytest tests/test_smoke_teardown.py -q` -> `........ [100%]` / `8 passed in 0.41s` (exit_code 0). Re-run with `-q -rs` also printed `8 passed in 0.47s` with no skip lines, so no node is skipped.\n  \u2713 PASS: the throwaway sweep covers the pytest leak class and still spares fresh and\nforeign namespaces (the prefix and 24h gates are unchanged).\nPROOF: python3 -m pytest tests/test_smoke_teardown.py -q -k sweep prints \"5 passed\".\nFAILIF: fewer than 5 passed, any failure, or a collection error.\n: `python3 -m pytest tests/test_smoke_teardown.py -q -k sweep` -> `..... [100%]` / `5 passed, 3 deselected in 0.54s` (exit_code 0). The five sweep tests (tests/test_smoke_teardown.py:198-262) cover stale auger-pytest-* reaping, the ghost-row shape, a fresh pytest dir spared, foreign prefixes (auger-prod-one/releases/auger) untouched, and the original auger-smoke-/auger-eval- classes still reaped. Gates unchanged in shape: THROWAWAY at tests/smoke.sh:34, 24h cutoff at tests/smoke.sh:113.\n  \u2713 PASS: the gate pytest arm names the proof file, so the gate and CI execute it.\nPROOF: grep pytest tests/gate.sh | grep -c test_smoke_teardown.py prints 1.\nFAILIF: a count of 0, or a count above 1.\n: `grep pytest tests/gate.sh | grep -c test_smoke_teardown.py` -> `1`. The single hit is the run_pytest_arm invocation at tests/gate.sh:212 which names `tests/test_smoke_teardown.py`; run_pytest_arm is called at tests/gate.sh:237 and :240 in both gate modes, and tests/test_smoke_teardown.py:266-278 (test_gate_arm_runs_this_file) asserts the file is named in that arm.\n  \u2713 The 409 ladder in drop() is bounded and terminates (no unbounded retry loop) and a persistent 409 is reported, never reinterpreted as deletion.: tests/smoke.sh:95-105: `for attempt in range(len(conflict_backoffs) + 1)` with `if st != 409 or attempt == len(conflict_backoffs): break`; a persistent 409 returns `(False, \"DELETE returned HTTP 409\")` and the caller prints `teardown skipped: ...` (tests/smoke.sh:155-157). test_teardown_survives_a_persistent_409_with_the_directory_intact asserts the delete count equals len(ladder)+1 and the directory survives \u2014 `python3 -m pytest tests/test_smoke_teardown.py -q -k \"persistent_409 or transient_409\"` -> `2 passed, 6 deselected`.\n  \u2717 The hermetic rig's namespace root (AUGER_NS_ROOT) is the same directory the real auger writes to (DUCKBRAIN_NAMESPACES_PATH / DUCKBRAIN_DATA_DIR), so the tests' \"directory intact/removed\" assertions are about the real namespace directory.: tests/smoke.sh:40 sets `ROOT = os.environ.get(\"AUGER_NS_ROOT\") or ~/duckbrain/namespaces`, but auger resolves its namespace tree via namespaces_base() (auger.py:483-491) from DUCKBRAIN_NAMESPACES_PATH / DUCKBRAIN_DATA_DIR; AUGER_NS_ROOT is read nowhere in auger.py (grep hits only tests/smoke.sh:38,40 and tests/test_smoke_teardown.py). Reproduced by extracting the real ns_helper heredoc and running `helper teardown auger-smoke-x` with a stub DELETE returning 200 while the namespace directory existed at $DUCKBRAIN_NAMESPACES_PATH/auger-smoke-x (the layout auger actually writes): stdout `namespace auger-smoke-x removed`, rc 0, but `REAL namespace dir still exists: True`. So the smoke teardown never removes the real namespace directory, and the tests' directory assertions (tests/test_smoke_teardown.py:139-144, 168-172, 185-190) are made against a directory auger never writes to \u2014 the 409 \"directory intact\" assertion is vacuous.\n  \u2713 The 429 contract is preserved: a 429 from the DELETE still leads to exactly one re-entry of drop() and never to an rmtree under a surviving registry row.: 429 is still absorbed inline by the transport (auger.py:568-583, honouring retryAfter/Retry-After, bounded by `retries`), and the teardown caller re-enters drop() exactly once (tests/smoke.sh:155-157: `if not ok and \"HTTP 429\" in why: ok, why = drop(ns)`). Because rmtree now sits behind the 200/404 guard (tests/smoke.sh:101-103), a 429 surviving both attempts returns before rmtree, so no directory is destroyed under a surviving row; the 409 ladder is a separate path and does not consume the 429 budget.\n  \u2713 The fix does not regress the non-throwaway guard: teardown still refuses namespaces lacking the throwaway prefix.: tests/smoke.sh:149-150 still refuses before any DELETE: `teardown skipped: {ns} lacks the auger-smoke-/auger-eval- prefix`; the sweep still prefix-gates on THROWAWAY (tests/smoke.sh:34, 116-117). test_sweep_never_takes_a_foreign_prefix (tests/test_smoke_teardown.py:236-250) asserts zero deletes and untouched dirs for auger-prod-one/releases/auger \u2014 green in the `-k sweep` run (`5 passed`).\nThe four command-shaped criteria all hold (guard at smoke.sh:101 precedes the sole rmtree at :103; 8 passed; 5 passed for -k sweep; gate count 1), but the teardown's ROOT (AUGER_NS_ROOT) is not the directory auger actually writes to (DUCKBRAIN_NAMESPACES_PATH/DATA_DIR), so the smoke teardown reports removal while leaving the real namespace directory behind and the hermetic directory assertions are vacuous. [uncovered failure paths: failure mode 0 (The smoke teardown reports \"namespace <ns> removed\" while the real namespace directory (under DUCKBRAIN_NAMESPACES_PATH / DUCKBRAIN_DATA_DIR) is left on disk \u2014 the helper's ROOT is a different path than auger's namespaces_base().): detected_by is empty \u2014 uncovered failure path; failure mode 1 (The hermetic proof's \"directory intact after a 409\" assertion is vacuous: the rig creates the directory under AUGER_NS_ROOT, which the helper rmtree's, but auger never writes there, so the test cannot observe the real ghost-row shape.): detected_by is empty \u2014 uncovered failure path]",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": false,
+          "output": "INCOMPLETE\n  \u2713 PASS: the smoke teardown consults the DELETE status before it removes the namespace\ndirectory \u2014 the only shutil.rmtree in the helper sits after the 200/404 guard.\nPROOF: grep -n \"st not in (200, 404)\" tests/smoke.sh prints line 101 and\ngrep -n \"shutil.rmtree\" tests/smoke.sh prints line 103, so the guard precedes the rmtree.\nFAILIF: the rmtree line number is not greater than the guard line number, or either\npattern is absent from tests/smoke.sh.\n: `grep -n \"st not in (200, 404)\" tests/smoke.sh` -> `101:    if st not in (200, 404):`; `grep -n \"shutil.rmtree\" tests/smoke.sh` -> `103:    shutil.rmtree(os.path.join(ROOT, ns), ignore_errors=True)` (single occurrence). 103 > 101. drop() at tests/smoke.sh:95-105 runs the DELETE (with the 409 ladder) first, returns `False, f\"DELETE returned HTTP {st}\"` on any non-200/404, and only then rmtree's.\n  \u2713 PASS: the hermetic teardown proof is collected and green \u2014 8 tests, no skips.\nPROOF: python3 -m pytest tests/test_smoke_teardown.py -q prints \"8 passed\".\nFAILIF: any failed or errored node, a collection error, or a pass count other than 8.\n: `python3 -m pytest tests/test_smoke_teardown.py -q` -> `........ [100%]` / `8 passed in 0.41s` (exit_code 0). Re-run with `-q -rs` also printed `8 passed in 0.47s` with no skip lines, so no node is skipped.\n  \u2713 PASS: the throwaway sweep covers the pytest leak class and still spares fresh and\nforeign namespaces (the prefix and 24h gates are unchanged).\nPROOF: python3 -m pytest tests/test_smoke_teardown.py -q -k sweep prints \"5 passed\".\nFAILIF: fewer than 5 passed, any failure, or a collection error.\n: `python3 -m pytest tests/test_smoke_teardown.py -q -k sweep` -> `..... [100%]` / `5 passed, 3 deselected in 0.54s` (exit_code 0). The five sweep tests (tests/test_smoke_teardown.py:198-262) cover stale auger-pytest-* reaping, the ghost-row shape, a fresh pytest dir spared, foreign prefixes (auger-prod-one/releases/auger) untouched, and the original auger-smoke-/auger-eval- classes still reaped. Gates unchanged in shape: THROWAWAY at tests/smoke.sh:34, 24h cutoff at tests/smoke.sh:113.\n  \u2713 PASS: the gate pytest arm names the proof file, so the gate and CI execute it.\nPROOF: grep pytest tests/gate.sh | grep -c test_smoke_teardown.py prints 1.\nFAILIF: a count of 0, or a count above 1.\n\n\u2026 [2901 chars omitted \u2014 4 line(s)] \u2026\n  \u2713 The fix does not regress the non-throwaway guard: teardown still refuses namespaces lacking the throwaway prefix.: tests/smoke.sh:149-150 still refuses before any DELETE: `teardown skipped: {ns} lacks the auger-smoke-/auger-eval- prefix`; the sweep still prefix-gates on THROWAWAY (tests/smoke.sh:34, 116-117). test_sweep_never_takes_a_foreign_prefix (tests/test_smoke_teardown.py:236-250) asserts zero deletes and untouched dirs for auger-prod-one/releases/auger \u2014 green in the `-k sweep` run (`5 passed`).\nThe four command-shaped criteria all hold (guard at smoke.sh:101 precedes the sole rmtree at :103; 8 passed; 5 passed for -k sweep; gate count 1), but the teardown's ROOT (AUGER_NS_ROOT) is not the directory auger actually writes to (DUCKBRAIN_NAMESPACES_PATH/DATA_DIR), so the smoke teardown reports removal while leaving the real namespace directory behind and the hermetic directory assertions are vacuous. [uncovered failure paths: failure mode 0 (The smoke teardown reports \"namespace <ns> removed\" while the real namespace directory (under DUCKBRAIN_NAMESPACES_PATH / DUCKBRAIN_DATA_DIR) is left on disk \u2014 the helper's ROOT is a different path than auger's namespaces_base().): detected_by is empty \u2014 uncovered failure path; failure mode 1 (The hermetic proof's \"directory intact after a 409\" assertion is vacuous: the rig creates the directory under AUGER_NS_ROOT, which the helper rmtree's, but auger never writes there, so the test cannot observe the real ghost-row shape.): detected_by is empty \u2014 uncovered failure path]",
+          "error": "",
+          "data": {
+            "verdict": "INCOMPLETE",
+            "items": [
+              {
+                "criterion": "PASS: the smoke teardown consults the DELETE status before it removes the namespace\ndirectory \u2014 the only shutil.rmtree in the helper sits after the 200/404 guard.\nPROOF: grep -n \"st not in (200, 404)\" tests/smoke.sh prints line 101 and\ngrep -n \"shutil.rmtree\" tests/smoke.sh prints line 103, so the guard precedes the rmtree.\nFAILIF: the rmtree line number is not greater than the guard line number, or either\npattern is absent from tests/smoke.sh.\n",
+                "status": "PASS",
+                "detail": "`grep -n \"st not in (200, 404)\" tests/smoke.sh` -> `101:    if st not in (200, 404):`; `grep -n \"shutil.rmtree\" tests/smoke.sh` -> `103:    shutil.rmtree(os.path.join(ROOT, ns), ignore_errors=True)` (single occurrence). 103 > 101. drop() at tests/smoke.sh:95-105 runs the DELETE (with the 409 ladder) first, returns `False, f\"DELETE returned HTTP {st}\"` on any non-200/404, and only then rmtree's."
+              },
+              {
+                "criterion": "PASS: the hermetic teardown proof is collected and green \u2014 8 tests, no skips.\nPROOF: python3 -m pytest tests/test_smoke_teardown.py -q prints \"8 passed\".\nFAILIF: any failed or errored node, a collection error, or a pass count other than 8.\n",
+                "status": "PASS",
+                "detail": "`python3 -m pytest tests/test_smoke_teardown.py -q` -> `........ [100%]` / `8 passed in 0.41s` (exit_code 0). Re-run with `-q -rs` also printed `8 passed in 0.47s` with no skip lines, so no node is skipped."
+              },
+              {
+                "criterion": "PASS: the throwaway sweep covers the pytest leak class and still spares fresh and\nforeign namespaces (the prefix and 24h gates are unchanged).\nPROOF: python3 -m pytest tests/test_smoke_teardown.py -q -k sweep prints \"5 passed\".\nFAILIF: fewer than 5 passed, any failure, or a collection error.\n",
+                "status": "PASS",
+                "detail": "`python3 -m pytest tests/test_smoke_teardown.py -q -k sweep` -> `..... [100%]` / `5 passed, 3 deselected in 0.54s` (exit_code 0). The five sweep tests (tests/test_smoke_teardown.py:198-262) cover stale auger-pytest-* reaping, the ghost-row shape, a fresh pytest dir spared, foreign prefixes (auger-prod-one/releases/auger) untouched, and the original auger-smoke-/auger-eval- classes still reaped. Gates unchanged in shape: THROWAWAY at tests/smoke.sh:34, 24h cutoff at tests/smoke.sh:113."
+              },
+              {
+                "criterion": "PASS: the gate pytest arm names the proof file, so the gate and CI execute it.\nPROOF: grep pytest tests/gate.sh | grep -c test_smoke_teardown.py prints 1.\nFAILIF: a count of 0, or a count above 1.\n",
+                "status": "PASS",
+                "detail": "`grep pytest tests/gate.sh | grep -c test_smoke_teardown.py` -> `1`. The single hit is the run_pytest_arm invocation at tests/gate.sh:212 which names `tests/test_smoke_teardown.py`; run_pytest_arm is called at tests/gate.sh:237 and :240 in both gate modes, and tests/test_smoke_teardown.py:266-278 (test_gate_arm_runs_this_file) asserts the file is named in that arm."
+              },
+              {
+                "criterion": "The 409 ladder in drop() is bounded and terminates (no unbounded retry loop) and a persistent 409 is reported, never reinterpreted as deletion.",
+                "status": "PASS",
+                "detail": "tests/smoke.sh:95-105: `for attempt in range(len(conflict_backoffs) + 1)` with `if st != 409 or attempt == len(conflict_backoffs): break`; a persistent 409 returns `(False, \"DELETE returned HTTP 409\")` and the caller prints `teardown skipped: ...` (tests/smoke.sh:155-157). test_teardown_survives_a_persistent_409_with_the_directory_intact asserts the delete count equals len(ladder)+1 and the directory survives \u2014 `python3 -m pytest tests/test_smoke_teardown.py -q -k \"persistent_409 or transient_409\"` -> `2 passed, 6 deselected`.",
+                "derived": true
+              },
+              {
+                "criterion": "The hermetic rig's namespace root (AUGER_NS_ROOT) is the same directory the real auger writes to (DUCKBRAIN_NAMESPACES_PATH / DUCKBRAIN_DATA_DIR), so the tests' \"directory intact/removed\" assertions are about the real namespace directory.",
+                "status": "FAIL",
+                "detail": "tests/smoke.sh:40 sets `ROOT = os.environ.get(\"AUGER_NS_ROOT\") or ~/duckbrain/namespaces`, but auger resolves its namespace tree via namespaces_base() (auger.py:483-491) from DUCKBRAIN_NAMESPACES_PATH / DUCKBRAIN_DATA_DIR; AUGER_NS_ROOT is read nowhere in auger.py (grep hits only tests/smoke.sh:38,40 and tests/test_smoke_teardown.py). Reproduced by extracting the real ns_helper heredoc and running `helper teardown auger-smoke-x` with a stub DELETE returning 200 while the namespace directory existed at $DUCKBRAIN_NAMESPACES_PATH/auger-smoke-x (the layout auger actually writes): stdout `namespace auger-smoke-x removed`, rc 0, but `REAL namespace dir still exists: True`. So the smoke teardown never removes the real namespace directory, and the tests' directory assertions (tests/test_smoke_teardown.py:139-144, 168-172, 185-190) are made against a directory auger never writes to \u2014 the 409 \"directory intact\" assertion is vacuous.",
+                "derived": true
+              },
+              {
+                "criterion": "The 429 contract is preserved: a 429 from the DELETE still leads to exactly one re-entry of drop() and never to an rmtree under a surviving registry row.",
+                "status": "PASS",
+                "detail": "429 is still absorbed inline by the transport (auger.py:568-583, honouring retryAfter/Retry-After, bounded by `retries`), and the teardown caller re-enters drop() exactly once (tests/smoke.sh:155-157: `if not ok and \"HTTP 429\" in why: ok, why = drop(ns)`). Because rmtree now sits behind the 200/404 guard (tests/smoke.sh:101-103), a 429 surviving both attempts returns before rmtree, so no directory is destroyed under a surviving row; the 409 ladder is a separate path and does not consume the 429 budget.",
+                "derived": true
+              },
+              {
+                "criterion": "The fix does not regress the non-throwaway guard: teardown still refuses namespaces lacking the throwaway prefix.",
+                "status": "PASS",
+                "detail": "tests/smoke.sh:149-150 still refuses before any DELETE: `teardown skipped: {ns} lacks the auger-smoke-/auger-eval- prefix`; the sweep still prefix-gates on THROWAWAY (tests/smoke.sh:34, 116-117). test_sweep_never_takes_a_foreign_prefix (tests/test_smoke_teardown.py:236-250) asserts zero deletes and untouched dirs for auger-prod-one/releases/auger \u2014 green in the `-k sweep` run (`5 passed`).",
+                "derived": true
+              }
+            ],
+            "summary": "The four command-shaped criteria all hold (guard at smoke.sh:101 precedes the sole rmtree at :103; 8 passed; 5 passed for -k sweep; gate count 1), but the teardown's ROOT (AUGER_NS_ROOT) is not the directory auger actually writes to (DUCKBRAIN_NAMESPACES_PATH/DATA_DIR), so the smoke teardown reports removal while leaving the real namespace directory behind and the hermetic directory assertions are vacuous. [uncovered failure paths: failure mode 0 (The smoke teardown reports \"namespace <ns> removed\" while the real namespace directory (under DUCKBRAIN_NAMESPACES_PATH / DUCKBRAIN_DATA_DIR) is left on disk \u2014 the helper's ROOT is a different path than auger's namespaces_base().): detected_by is empty \u2014 uncovered failure path; failure mode 1 (The hermetic proof's \"directory intact after a 409\" assertion is vacuous: the rig creates the directory under AUGER_NS_ROOT, which the helper rmtree's, but auger never writes there, so the test cannot observe the real ghost-row shape.): detected_by is empty \u2014 uncovered failure path]",
+            "provenance": {
+              "model": "deepseek-v4-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "deepseek-v4-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"REVIEW-AUGER-006\"}",
+          "exit_code": 0,
+          "output_sha": "83c77ae3df3bcfb0cedba1aa8f7c22d4180b16867fac6a693847c82a6ca6d468"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && ls && git log --oneline -5",
+          "exit_code": 0,
+          "output_sha": "9aa894c9e30bc955d27d6eab9d40da1b0ae225e6b3e7b8f9d17871759df29877"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && grep -n \"st not in (200, 404)\" tests/smoke.sh; echo \"---\"; grep -n \"shutil.rmtree\" tests/smoke.sh; echo \"---\"; grep -n \"pytest\" tests/gate.sh | grep -c test_smoke_teardown.py",
+          "exit_code": 0,
+          "output_sha": "f4388849fd1654bd7859e61b051ecb60b244596c01b99525396b1b439201ce2e"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && sed -n '1,200p' tests/smoke.sh",
+          "exit_code": 0,
+          "output_sha": "9d17f877c05be065183f24a671758a3882dee8b62b85daa7ad2aa5c69f136e38"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && sed -n '40,140p' tests/smoke.sh",
+          "exit_code": 0,
+          "output_sha": "6b603648ece219a3fc3c18fe094b27ce22c29432ed43e0689ff9c10dca00491d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && ls tests/ && cat pytest.ini && grep -n \"pytest\" tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "5d80d74473917f563d4674a7ee7f59eab94a5eb65935195a8284643d560ae1fc"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && sed -n '180,245p' tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "e7e3d7c350b39c28a6736ce4614d4de0afb126629e4cfaf1f29f264fde3a4312"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && sed -n '80,140p' tests/smoke.sh",
+          "exit_code": 0,
+          "output_sha": "16869600bf9a9e6a5f19289818627c24b0b0787881d9633fc6ed226cc7e9c267"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && sed -n '140,200p' tests/smoke.sh",
+          "exit_code": 0,
+          "output_sha": "d5efc70f4b8c54abac3781ce79bb2790ba2a5951fb6a3072eb30b57c155c447c"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && grep -n \"test_smoke_teardown\" tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "5859c21b4345942ab45da4447b5a3415c9821f588ec65a262fbe591310c109b7"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && sed -n '200,215p' tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "7b32be778162e458031aa4503b797e955d11570a60dc989d6c4347bf00634c7b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && python3 -m pytest tests/test_smoke_teardown.py -q 2>&1 | tail -20",
+          "exit_code": 0,
+          "output_sha": "771b153c014923ba0dc6e9c2f8fb862a04b0467caded1acc2ae7b3d352e4a317"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && python3 -m pytest tests/test_smoke_teardown.py -q -k sweep 2>&1 | tail -10; echo \"=== full with skips ===\"; python3 -m pytest tests/test_smoke_teardown.py -q -rs 2>&1 | tail -10",
+          "exit_code": 0,
+          "output_sha": "252f1d088590d74cd766f1f16e7d0b3aa4ddb142208fda4b76d77cffd2b1ee90"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && cat tests/test_smoke_teardown.py",
+          "exit_code": 0,
+          "output_sha": "154a08d5a0925d7ab8d120bf4fac2d10414174ed252ade1fd3d56ac5202f4c0f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && sed -n '60,200p' tests/test_smoke_teardown.py",
+          "exit_code": 0,
+          "output_sha": "f21a4f78eae0d26e7f156c443f5be2b7e2e6b31b7f76ee0bf92344fe785e5448"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && sed -n '200,280p' tests/test_smoke_teardown.py",
+          "exit_code": 0,
+          "output_sha": "f50cda98bf5a9188edeae8cf2df85f79abd925d02defc47206cd4ebd25f0db37"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && grep -n \"def delete_namespace\" -A 40 auger.py | head -60",
+          "exit_code": 0,
+          "output_sha": "4c446c46165f9a6d70d95369f22990b147fad2c47a8bf655b6b420013cc2c810"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && sed -n '140,200p' tests/test_smoke_teardown.py",
+          "exit_code": 0,
+          "output_sha": "00dbf81a0f271070d4850ba762a57e4be4ea891166a9e1247c4fffd531616ce4"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && grep -n \"TEARDOWN_RETRIES\" auger.py | head; echo \"---\"; grep -n \"def db(\" -A 60 auger.py | sed -n '1,80p'",
+          "exit_code": 0,
+          "output_sha": "d9c23def062e5ff867d5a3834a5dd58b2831b0a568c3637b8b6f12aa135a00ba"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && sed -n '500,604p' auger.py",
+          "exit_code": 0,
+          "output_sha": "cd47b3ebef5dd52dbeba3b552784e42c443c866dcc7a2aab90c0780c7c10b268"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && grep -n \"def run_live_arm\" -A 30 tests/gate.sh",
+          "exit_code": 1,
+          "output_sha": "638282f5bb30f6aed3cce6bc8e5116b89ee22e44af05de31cab4b0c9e784b9e4"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && grep -n \"AUGER_NS_ROOT\\|AUGER_CONFLICT_BACKOFFS\" -r --include=*.py --include=*.sh --include=*.md . | grep -v \"^./venv\" | head -30",
+          "exit_code": 0,
+          "output_sha": "0687b4b09d4d373fb9a94dac3ac5550f143dcb12ab359443ca049e35945d5174"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && grep -n \"run_live_arm\" tests/gate.sh; echo \"---\"; sed -n '150,180p' tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "bf8f3a1ad32c896dc1cce18916b239c35ee1cbb8b92d0621f3cfb69340f7c165"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && sed -n '120,135p' tests/gate.sh; echo \"=== 265-280 ===\"; sed -n '265,280p' tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "ce0aebedb070bdc7003e0ddfcab829826c30d1bc7cc378538b55964da870e243"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && grep -n \"def ns_dir\" -A 15 auger.py",
+          "exit_code": 0,
+          "output_sha": "a92bf258f7332ce0f6be7005a778c4ef2b57eb96daf14a537f97891a264a6bc5"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && grep -n \"def _make_ns\" -A 12 tests/test_smoke_teardown.py",
+          "exit_code": 0,
+          "output_sha": "59c49d894a7ea8869d5da3ce0b5873f3cfb664d1e75199789acbd4427d6e3694"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && grep -n \"def namespaces_base\" -A 20 auger.py",
+          "exit_code": 0,
+          "output_sha": "6ab609c74b5a2b0e65f4e7dc7e45153e5d074ba6c18684643e7cf715aa207411"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && grep -n \"NAMESPACES_PATH_ENV\\s*=\\|DATA_DIR_ENV\\s*=\" auger.py",
+          "exit_code": 0,
+          "output_sha": "406a822efda17ebef6764dd4a0ff3d5f8272a1036571d159852a49063a736092"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && grep -n \"AUGER_NS_ROOT\\|AUGER_CONFLICT_BACKOFFS\" tests/smoke.sh",
+          "exit_code": 0,
+          "output_sha": "d4aa47e81cda13752b03ac89488a5a649bb59bca2a7538b4801b76859a6d803b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && grep -n \"def _deletes\" -A 10 tests/test_smoke_teardown.py",
+          "exit_code": 0,
+          "output_sha": "b98629ab1212cb22f2ca04620ebce234ee24a6ef840193ad4ae4a7194717bf9f"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: grep -n \\\"st not in (200, 404)\\\" tests/smoke.sh -> 101; grep -n \\\"shutil.rmtree\\\" tests/smoke.sh -> 103 (only occurrence). 103 > 101, guard precedes rmtree. drop() at tests/smoke.sh:74-105: DELETE loop (409 ladder) then `if st not in (200,404): return False` then rmtree.\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "c05715170035410d8ab473b3719e82cdc5d78869deb633247ef06dd1a3e78c27"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: python3 -m pytest tests/test_smoke_teardown.py -q -> \\\"........ [100%]\\\\n8 passed in 0.41s\\\"; -q -rs also \\\"8 passed\\\" (no skips).\", \"key\": \"verified_1\"}",
+          "exit_code": 0,
+          "output_sha": "e315a51e7e708dfb25d1b5b36b7d652c6f634fb41f768be63cd5f7052eb8dc70"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: python3 -m pytest tests/test_smoke_teardown.py -q -k sweep -> \\\"5 passed, 3 deselected in 0.54s\\\". The 5 sweep tests (tests/test_smoke_teardown.py:198-262) cover: stale auger-pytest-* reaped, ghost row (dir gone) reaped, fresh pytest dir spared, foreign prefixes (auger-prod-one/releases/auger) untouched, and auger-smoke-/auger-eval- classes still reaped. Prefix gate THROWAWAY at tests/smoke.sh:34 and 24h cutoff at tests/smoke.sh:113 unchanged in shape.\", \"key\": \"verified_2\"}",
+          "exit_code": 0,
+          "output_sha": "7dfaa4800b7909f239e9f015374088cecbc495144c2117d21cb5e608ef6ee554"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: grep pytest tests/gate.sh | grep -c test_smoke_teardown.py -> 1. The single hit is the run_pytest_arm invocation at tests/gate.sh:212 which names tests/test_smoke_teardown.py; run_pytest_arm is called at gate.sh:237/240 in both gate modes, and tests/test_smoke_teardown.py:266-278 (test_gate_arm_runs_this_file) asserts the file is named in the arm.\", \"key\": \"verified_3\"}",
+          "exit_code": 0,
+          "output_sha": "e96c22c67a0ff07885e6ba51c1572a8393f85c4c7a3b6203c1373eefae6444ba"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"derived_0: The 409 ladder in drop() is bounded and terminates (no unbounded retry loop) and a persistent 409 is reported, never reinterpreted as deletion.\\nderived_1: The hermetic rig's namespace root (AUGER_NS_ROOT) is the same directory the real auger writes to (DUCKBRAIN_NAMESPACES_PATH / DUCKBRAIN_DATA_DIR), so the tests' \\\"directory intact/removed\\\" assertions are about the real namespace directory.\\nderived_2: The 429 contract is preserved: a 429 from the DELETE still leads to exactly one re-entry of drop() and never to an rmtree under a surviving registry row.\\nderived_3: The fix does not regress the non-throwaway guard: teardown still refuses namespaces lacking the throwaway prefix.\\n\", \"key\": \"derived\"}",
+          "exit_code": 0,
+          "output_sha": "df680f010b9035d33e5929630413dc8d55d80903cbb2f6c3d2f80b08c6088a8d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && python3 -m pytest tests/test_smoke_teardown.py -q -k \"persistent_409 or transient_409\" -v 2>&1 | tail -15",
+          "exit_code": 0,
+          "output_sha": "c679bfb5fd4ae898462b08f97eec79d1a165c550e40f50036473e58f5f169cc5"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && python3 - <<'PY'\nimport pathlib, re\nsrc = pathlib.Path(\"tests/smoke.sh\").read_text().splitlines()\nstarts=[i for i,l in enumerate(src) if \"<<'PY'\" in l]\nends=[i for i,l in enumerate(src) if i>starts[0] and l.strip()==\"PY\"]\nbody=\"\\n\".join(src[starts[0]+1:ends[0]])\nprint(\"heredoc lines\", starts[0]+2, \"-\", ends[0])\nprint(\"AUGER_NS_ROOT in body:\", \"AUGER_NS_ROOT\" in body)\nprint(\"DUCKBRAIN_NAMESPACES_PATH in body:\", \"DUCKBRAIN_NAMESPACES_PATH\" in body)\nprint(\"ns_dir( in body:\", \"ns_dir(\" in body)\nPY",
+          "exit_code": 0,
+          "output_sha": "46a900d529c4ccd1c9e869931a10b13682ee1aa599b106ace5a8a1d7a3177884"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && python3 - <<'PY'\nimport pathlib, os, tempfile, subprocess, sys, json\nsrc = pathlib.Path(\"tests/smoke.sh\").read_text().splitlines()\nstarts=[i for i,l in enumerate(src) if \"<<'PY'\" in l]\nends=[i for i,l in enumerate(src) if i>starts[0] and l.strip()==\"PY\"]\nbody=\"\\n\".join(src[starts[0]+1:ends[0]])\ntmp=pathlib.Path(tempfile.mkdtemp())\n(tmp/\"tests\").mkdir()\n(tmp/\"auger.py\").write_text('''\nimport os\ndef db(path, method=\"GET\", *a, **k):\n    if path==\"/api/namespaces\": return 200, {\"namespaces\":[{\"name\":\"auger-smoke-x\"}]}, None\n    return 500, {}, None\ndef delete_namespace(ns, retries=2):\n    return 200, {}\n''')\n(tmp/\"helper.py\").write_text(body)\nnsroot=tmp/\"nsroot\"; nsroot.mkdir()\n(nsroot/\"auger-smoke-x\"/\"tables\").mkdir(parents=True)\nenv=dict(os.environ, AUGER_NS_ROOT=str(nsroot), AUGER_CONFLICT_BACKOFFS=\"0\")\np=subprocess.run([sys.executable, str(tmp/\"helper.py\"), str(tmp), \"teardown\", \"auger-smoke-x\"], env=env, capture_output=True, text=True)\nprint(\"rc\", p.returncode); print(p.stdout); print(p.stderr[-500:])\nprint(\"dir still exists:\", (nsroot/\"auger-smoke-x\").exists())\nPY",
+          "exit_code": 0,
+          "output_sha": "c9e81ab49c612a6d61cdc44aad48ecbc0a61ca082241d0932b4128c2da3fce4f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && python3 - <<'PY'\nimport pathlib, os, tempfile, subprocess, sys\nsrc = pathlib.Path(\"tests/smoke.sh\").read_text().splitlines()\nstarts=[i for i,l in enumerate(src) if \"<<'PY'\" in l]\nends=[i for i,l in enumerate(src) if i>starts[0] and l.strip()==\"PY\"]\nbody=\"\\n\".join(src[starts[0]+1:ends[0]])\ntmp=pathlib.Path(tempfile.mkdtemp())\n(tmp/\"tests\").mkdir()\n(tmp/\"auger.py\").write_text('''\ndef db(path, method=\"GET\", *a, **k):\n    if path==\"/api/namespaces\": return 200, {\"namespaces\":[{\"name\":\"auger-smoke-x\"}]}, None\n    return 500, {}, None\ndef delete_namespace(ns, retries=2):\n    return 200, {}\n''')\n(tmp/\"helper.py\").write_text(body)\n# simulate the REAL layout: auger writes to $DUCKBRAIN_NAMESPACES_PATH/auger-smoke-x\nreal=tmp/\"realns\"; real.mkdir()\n(real/\"auger-smoke-x\"/\"tables\").mkdir(parents=True)\n(real/\"auger-smoke-x\"/\"tables\"/\"decision.json\").write_text(\"[]\")\nenv=dict(os.environ, DUCKBRAIN_NAMESPACES_PATH=str(real), AUGER_CONFLICT_BACKOFFS=\"0\")\nenv.pop(\"AUGER_NS_ROOT\", None)\np=subprocess.run([sys.executable, str(tmp/\"helper.py\"), str(tmp), \"teardown\", \"auger-smoke-x\"], env=env, capture_output=True, text=True)\nprint(\"rc\", p.returncode); print(\"stdout:\", p.stdout.strip()); print(\"stderr:\", p.stderr[-300:])\nprint(\"REAL namespace dir still exists:\", (real/\"auger-smoke-x\").exists())\nPY",
+          "exit_code": 0,
+          "output_sha": "e126581789466a69cb2ca3917399a6afc8c181fb6f876735ac3eb61569bda585"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"derived_0 PASS: drop() at tests/smoke.sh:95-105 loops `for attempt in range(len(conflict_backoffs)+1)` and breaks when st != 409 or the ladder is exhausted; a persistent 409 returns (False, \\\"DELETE returned HTTP 409\\\") and the caller prints \\\"teardown skipped: ...\\\" (tests/smoke.sh:155-157). test_teardown_survives_a_persistent_409_with_the_directory_intact asserts the delete count == len(ladder)+1 and the directory survives \\u2014 ran green (2 passed for -k \\\"persistent_409 or transient_409\\\").\", \"key\": \"verified_derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "4a4f390b46f35a7d99cd273fe5174bb1ca2a157bc7ba54257ccea51d1465ea91"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"derived_1 FAIL: the hermetic rig's root is NOT the directory auger writes to. tests/smoke.sh:40 sets ROOT = os.environ.get(\\\"AUGER_NS_ROOT\\\") or ~/duckbrain/namespaces, but auger resolves its namespace tree via namespaces_base() (auger.py:483-491) from DUCKBRAIN_NAMESPACES_PATH / DUCKBRAIN_DATA_DIR \\u2014 AUGER_NS_ROOT is read nowhere in auger.py (grep: only tests/smoke.sh:38,40 and tests/test_smoke_teardown.py). Reproduced: extracted the real ns_helper heredoc, created the namespace dir under $DUCKBRAIN_NAMESPACES_PATH/auger-smoke-x (the real layout), ran `helper teardown auger-smoke-x` with a stub DELETE returning 200 -> stdout \\\"namespace auger-smoke-x removed\\\", rc 0, but \\\"REAL namespace dir still exists: True\\\". So the tests' \\\"directory intact / directory removed\\\" assertions (tests/test_smoke_teardown.py:139-144, 168-172, 185-190) are about a directory auger never writes to; the real namespace directory is never removed by the smoke teardown, and the 409 \\\"directory intact\\\" assertion is vacuous.\", \"key\": \"verified_derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "4e79740b69d5610caea3f492dff2a2ded785f149b2812be9a9ac47e6efe70ddd"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"derived_2 PASS: 429 is still absorbed by the transport (auger.py:568-583 retries 429 inline honouring retryAfter/Retry-After, bounded by `retries`), and the teardown caller re-enters drop() exactly once on a 429 (tests/smoke.sh:155-157: `if not ok and \\\"HTTP 429\\\" in why: ok, why = drop(ns)`). Because rmtree now sits behind the 200/404 guard (tests/smoke.sh:101-103), a 429 that survives both attempts returns before rmtree, so no directory is destroyed under a surviving row. The 409 ladder does not consume the 429 budget (separate code path).\", \"key\": \"verified_derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "6680ea56a7fd793e285aaadfb6e14a3451be630c7e9e532893b7ecd64c151969"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"derived_3 PASS: tests/smoke.sh:149-150 still refuses a namespace lacking the throwaway prefix (\\\"teardown skipped: {ns} lacks the auger-smoke-/auger-eval- prefix\\\") before any DELETE; the sweep still prefix-gates on THROWAWAY (tests/smoke.sh:34, 116-117). test_sweep_never_takes_a_foreign_prefix (tests/test_smoke_teardown.py:236-250) asserts zero deletes and untouched dirs for auger-prod-one/releases/auger \\u2014 green in the 5-passed sweep run.\", \"key\": \"verified_derived_3\"}",
+          "exit_code": 0,
+          "output_sha": "58e49b984bbcfbd76758e16228e5e4062b326ec902f2fdd0d5dbb8ead9d936e7"
+        }
+      ]
+    }
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "The diff only flips a task's status to complete and records a completion timestamp in the tasks ledger; no code, wiring, or test surface is touched, so there is nothing to flag."
+  },
+  "summary": "Stage tier1: FAIL\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2717 tests: FAIL (tests/test_auger.py::test_a_question_landing_in_a_domain_advances_its_row_too [first failing i\n\nStage tier2: FAIL\n  INCOMPLETE\n  \u2713 PASS: the smoke teardown consults the DELETE status before it removes the namespace\ndirectory \u2014 the only shutil.rmtree in the helper sits after the 200/404 guard.\nPROOF: grep -n \"st not in (200, 404)\" tests/smoke.sh prints line 101 and\ngrep -n \"shutil.rmtree\" tests/smoke.sh prints line 103, so the guard precedes the rmtree.\nFAILIF: the rmtree line number is not greater than the guard line number, or either\npattern is absent from tests/smoke.sh.\n: `grep -n \"st not in (200, 404)\" tests/smoke.sh` -> `101:    if st not in (200, 404):`; `grep -n \"shutil.rmtree\" tests/smoke.sh` -> `103:    shutil.rmtree(os.path.join(ROOT, ns), ignore_errors=True)` (single occurrence). 103 > 101. drop() at tests/smoke.sh:95-105 runs the DELETE (with the 409 ladder) first, returns `False, f\"DELETE returned HTTP {st}\"` on any non-200/404, and only then rmtree's.\n  \u2713 PASS: the hermetic teardown proof is collected and green \u2014 8 tests, no skips.\nPROOF: python3 -m pytest tests/test_smoke_teardown.py -q prints \"8 passed\".\nFAILIF: any failed or errored node, a collection error, or a pass count other than 8.\n: `python3 -m pytest tests/test_smoke_teardown.py -q` -> `........ [100%]` / `8 passed in 0.41s` (exit_code 0). Re-run with `-q -rs` also printed `8 passed in 0.47s` with no skip lines, so no node is skipped.\n  \u2713 PASS: the throwaway sweep covers the pytest leak class and still spares fresh and\nforeign namespaces (the prefix and 24h gates are unchanged).\nPROOF: python3 -m pytest tests/test_smoke_teardown.py -q -k sweep prints \"5 passed\".\nFAILIF: fewer than 5 passed, any failure, or a collection error.\n: `python3 -m pytest tests/test_smoke_teardown.py -q -k sweep` -> `..... [100%]` / `5 passed, 3 deselected in 0.54s` (exit_code 0). The five sweep tests (tests/test_smoke_teardown.py:198-262) cover stale auger-pytest-* reaping, the ghost-row shape, a fresh pytest dir spared, foreign prefixes (auger-prod-one/releases/auger) untouched, and the original auger-smoke-/auger-eval- classes still reaped. Gates unchanged in shape: THROWAWAY at tests/smoke.sh:34, 24h cutoff at tests/smoke.sh:113.\n  \u2713 PASS: the gate pytest arm names the proof file, so the gate and CI execute it.\nPROOF: grep pytest tests/gate.sh | grep -c test_smoke_teardown.py prints 1.\nFAILIF: a count of 0, or a count above 1.\n: `grep pytest tests/gate.sh | grep -c test_smoke_teardown.py` -> `1`. The single hit is the run_pytest_arm invocation at tests/gate.sh:212 which names `tests/test_smoke_teardown.py`; run_pytest_arm is called at tests/gate.sh:237 and :240 in both gate modes, and tests/test_smoke_teardown.py:266-278 (test_gate_arm_runs_this_file) asserts the file is named in that arm.\n  \u2713 The 409 ladder in drop() is bounded and terminates (no unbounded retry loop) and a persistent 409 is reported, never reinterpreted as deletion.: tests/smoke.sh:95-105: `for attempt in range(len(conflict_backoffs) + 1)` with `if st != 409 or attempt == len(conflict_backoffs): break`; a persistent 409 returns `(False, \"DELETE returned HTTP 409\")` and the caller prints `teardown skipped: ...` (tests/smoke.sh:155-157). test_teardown_survives_a_persistent_409_with_the_directory_intact asserts the delete count equals len(ladder)+1 and the directory survives \u2014 `python3 -m pytest tests/test_smoke_teardown.py -q -k \"persistent_409 or transient_409\"` -> `2 passed, 6 deselected`.\n  \u2717 The hermetic rig's namespace root (AUGER_NS_ROOT) is the same directory the real auger writes to (DUCKBRAIN_NAMESPACES_PATH / DUCKBRAIN_DATA_DIR), so the tests' \"directory intact/removed\" assertions are about the real namespace directory.: tests/smoke.sh:40 sets `ROOT = os.environ.get(\"AUGER_NS_ROOT\") or ~/duckbrain/namespaces`, but auger resolves its namespace tree via namespaces_base() (auger.py:483-491) from DUCKBRAIN_NAMESPACES_PATH / DUCKBRAIN_DATA_DIR; AUGER_NS_ROOT is read nowhere in auger.py (grep hits only tests/smoke.sh:38,40 and tests/test_smoke_teardown.py). Reproduced by extracting the real ns_helper heredoc and running `helper teardown auger-smoke-x` with a stub DELETE returning 200 while the namespace directory existed at $DUCKBRAIN_NAMESPACES_PATH/auger-smoke-x (the layout auger actually writes): stdout `namespace auger-smoke-x removed`, rc 0, but `REAL namespace dir still exists: True`. So the smoke teardown never removes the real namespace directory, and the tests' directory assertions (tests/test_smoke_teardown.py:139-144, 168-172, 185-190) are made against a directory auger never writes to \u2014 the 409 \"directory intact\" assertion is vacuous.\n  \u2713 The 429 contract is preserved: a 429 from the DELETE still leads to exactly one re-entry of drop() and never to an rmtree under a surviving registry row.: 429 is still absorbed inline by the transport (auger.py:568-583, honouring retryAfter/Retry-After, bounded by `retries`), and the teardown caller re-enters drop() exactly once (tests/smoke.sh:155-157: `if not ok and \"HTTP 429\" in why: ok, why = drop(ns)`). Because rmtree now sits behind the 200/404 guard (tests/smoke.sh:101-103), a 429 surviving both attempts returns before rmtree, so no directory is destroyed under a surviving row; the 409 ladder is a separate path and does not consume the 429 budget.\n  \u2713 The fix does not regress the non-throwaway guard: teardown still refuses namespaces lacking the throwaway prefix.: tests/smoke.sh:149-150 still refuses before any DELETE: `teardown skipped: {ns} lacks the auger-smoke-/auger-eval- prefix`; the sweep still prefix-gates on THROWAWAY (tests/smoke.sh:34, 116-117). test_sweep_never_takes_a_foreign_prefix (tests/test_smoke_teardown.py:236-250) asserts zero deletes and untouched dirs for auger-prod-one/releases/auger \u2014 green in the `-k sweep` run (`5 passed`).\nThe four command-shaped criteria all hold (guard at smoke.sh:101 precedes the sole rmtree at :103; 8 passed; 5 passed for -k sweep; gate count 1), but the teardown's ROOT (AUGER_NS_ROOT) is not the directory auger actually writes to (DUCKBRAIN_NAMESPACES_PATH/DATA_DIR), so the smoke teardown reports removal while leaving the real namespace directory behind and the hermetic directory assertions are vacuous. [uncovered failure paths: failure mode 0 (The smoke teardown reports \"namespace <ns> removed\" while the real namespace directory (under DUCKBRAIN_NAMESPACES_PATH / DUCKBRAIN_DATA_DIR) is left on disk \u2014 the helper's ROOT is a different path than auger's namespaces_base().): detected_by is empty \u2014 uncovered failure path; failure mode 1 (The hermetic proof's \"directory intact after a 409\" assertion is vacuous: the rig creates the directory under AUGER_NS_ROOT, which the helper rmtree's, but auger never writes there, so the test cannot observe the real ghost-row shape.): detected_by is empty \u2014 uncovered failure path]\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-11-15T13:02:04.739424",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-15T13:02:04.785196+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 2332,
+        "truncated": false,
+        "source": "git show 65e1f4886e6d"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 339,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "REVIEW-AUGER-006"
+  }
+}
