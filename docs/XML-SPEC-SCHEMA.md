@@ -393,6 +393,40 @@ never read a verdict out of a contract we did not agree to speak.
 * `findings[]` is `{code, severity, why, evidence}` with `evidence` a `file:line` or a
   `file#block-id` citation.
 
+**Semantic findings (opt-in, `--semantic`; AUG-142).** With the flag off, the payload is
+byte-identical to the shape documented here. With it on, the checker ALSO runs the semantic pass:
+a DETERMINISTIC, metadata+text scan — no LLM call, no network — whose findings join the
+location/marker findings with `class` = `semantic`. The rule (`rule_id`
+`active-cites-deprecated-status`): a block whose corpus status is `active` must not cite
+(`depends-on=`/`verifies=`/`refs=`/`implements=`) a block the same corpus marks `deprecated` or
+`superseded`. A corpus with consistent statuses emits nothing.
+
+Every semantic finding carries ALL of:
+
+* `blocks[]` — the two block ids involved (the active one and the retired one it cites);
+* `rule_id` — the rule that fired;
+* `reason` — the specific pair and edge, in prose;
+* `evidence_excerpt` — the LITERAL source text of the cited block (normalized whitespace);
+* `source_digest` — sha256 of that text, re-derivable from the excerpt;
+* `uncertainty` — `{band, score}` with `band` in `high|medium|low` and `score` numeric 0..1.
+
+A semantic finding is constructed through one validator, which REFUSES (typed `spec error`, exit
+2, nothing on stdout):
+
+* `finding-missing-evidence` — a finding with an empty/blank/absent `evidence_excerpt`: a claim
+  without the literal source text that justifies it is a fabricated rationale, and the checker
+  refuses rather than emit one;
+* `finding-missing-uncertainty` — no `uncertainty` statement, or a missing `band`/`score`;
+* `finding-invalid-uncertainty` — a `band` outside the vocabulary or a `score` outside 0..1.
+
+**Findings never certify.** A finding reports a problem: a semantic finding carries only `warn` or
+`info` severity, never a verdict-shaped field (`verdict`/`verified`/`outcome`/`result`), and no
+finding in the payload claims verification — a pass verdict can only come from the proof the
+finding points at, never from metadata.
+
+**No write.** The checker reads only: a run that emits semantic findings leaves the corpus tree
+byte-for-byte unchanged (pinned by a hash test), the same guarantee `spec align` already states.
+
 **Findings** (each one is a rule; `fail` blocks under a blocking policy):
 
 | code | severity | meaning |
