@@ -19,8 +19,10 @@ echo "namespace: $NS"
 
 # ---------------------------------------------------------------- namespace hygiene (AUG-020)
 # DuckBrain's namespace list is a SHARED surface: the production `auger` namespace and live
-# dogfood/judge namespaces sit beside this script's throwaways. Two rules, both prefix-gated
-# to auger-smoke-*/auger-eval-* so nothing else is ever touched:
+# dogfood/judge namespaces sit beside this script's throwaways. Three classes are prefix-gated
+# as throwaways — auger-smoke-*/auger-eval-* and, since REVIEW-AUGER-006, auger-pytest-* (the
+# pytest harness's own leak class, invisible to the sweep before the prefix existed). Nothing
+# else is ever touched:
 #   * BEFORE creating its own namespace, sweep PREVIOUS throwaways older than a day (or
 #     listed with no directory — the observed leak shape). A live sibling run always has a
 #     fresh directory, so an in-flight judge or another smoke run is never a sweep target.
@@ -32,7 +34,7 @@ import os, shutil, sys, time
 sys.path.insert(0, sys.argv[1])
 import auger
 
-THROWAWAY = ("auger-smoke-", "auger-eval-")
+THROWAWAY = ("auger-smoke-", "auger-eval-", "auger-pytest-")
 # REVIEW-AUGER-006: hermetic tests redirect the root with AUGER_NS_ROOT; the default
 # stays the operator's real namespace directory.
 ROOT = os.environ.get("AUGER_NS_ROOT") or os.path.join(
@@ -54,22 +56,53 @@ def listed():
     return [n.get("name") for n in body.get("namespaces", [])
             if isinstance(n, dict) and isinstance(n.get("name"), str)]
 
-def drop(ns):
+def _conflict_backoffs(default):
+    """The 409 backoff ladder. AUGER_CONFLICT_BACKOFFS (comma-separated seconds) overrides
+    it — the hermetic rig collapses the waits to zero without changing the shape."""
+    raw = os.environ.get("AUGER_CONFLICT_BACKOFFS")
+    if raw:
+        return tuple(float(x) for x in raw.split(","))
+    return default
+
+
+#: DuckBrain's own s3 push holds a namespace's native sync lock after a write, and a DELETE
+#: inside that window answers 409 CONFLICT. The pytest harness already retries that conflict
+#: on a bounded ladder (conftest.TEARDOWN_CONFLICT_BACKOFFS, 61s total — REVIEW-AUGER-005);
+#: the smoke arm speaks the same contract now (REVIEW-AUGER-006, the AUG-117 recurrence):
+TEARDOWN_CONFLICT_BACKOFFS = (1, 2, 4, 8, 16, 30)
+
+
+def drop(ns, conflict_backoffs=None):
     """Remove one throwaway namespace over both paths. Returns (gone, why).
 
-    `attempts` counts the caller's own invocations of this function: the 429 contract
-    is "retry ONCE", so the caller re-enters after a 429 and the SECOND attempt's
-    first DELETE is the third HTTP try overall — and the last.
+    The DELETE decides; the directory follows it. rmtree runs ONLY after the DELETE
+    returned 200/404 — a refused delete (409 while a push holds the lock, 429 under a
+    saturated limiter) keeps the directory AND the registry row standing, consistent and
+    repairable by a later DELETE. The pre-fix code rmtree'd BEFORE consulting the status,
+    so a 409 destroyed the directory under a surviving row — the AUG-117 ghost-row shape.
+
+    409 is retried on a BOUNDED ladder (one sleep per rung, never a fixed long sleep), so
+    DuckBrain's ordinary post-write push window settles inside the budget. A conflict that
+    outlives it is reported, never reinterpreted as deletion.
+
+    The 429 contract is unchanged: the transport retries once internally (retries=1) and
+    the teardown caller re-enters this function once more after that.
     """
-    try:
-        st, _body = auger.delete_namespace(ns, retries=1)
-    except SystemExit as exc:
-        return False, f"no DuckBrain token ({exc})"
+    if conflict_backoffs is None:
+        conflict_backoffs = _conflict_backoffs(TEARDOWN_CONFLICT_BACKOFFS)
+    for attempt in range(len(conflict_backoffs) + 1):
+        try:
+            st, _body = auger.delete_namespace(ns, retries=1)
+        except SystemExit as exc:
+            return False, f"no DuckBrain token ({exc})"
+        if st != 409 or attempt == len(conflict_backoffs):
+            break
+        time.sleep(conflict_backoffs[attempt])
+    if st not in (200, 404):
+        return False, f"DELETE returned HTTP {st}"
     shutil.rmtree(os.path.join(ROOT, ns), ignore_errors=True)
     if os.path.exists(os.path.join(ROOT, ns)):
         return False, "its directory could not be removed"
-    if st not in (200, 404):
-        return False, f"DELETE returned HTTP {st}"
     return True, ""
 
 mode = sys.argv[2]
@@ -89,9 +122,13 @@ if mode == "sweep":
             if not os.path.isdir(d) or os.path.getmtime(d) < cutoff:
                 stale.append(n)
         if not stale:
-            print("namespace sweep: no stale auger-smoke-*/auger-eval-* older than a day")
+            print("no stale auger-smoke-*/auger-eval-*/auger-pytest-* older than a day")
         else:
-            gone = [n for n in stale if drop(n)[0]]
+            # The sweep walks MANY rows, so each one gets a SHORT conflict ladder — a
+            # held lock gives up after 7s per row and is reported, never reinterpreted.
+            # A later sweep (the next smoke run) finishes the job once the push clears.
+            short = _conflict_backoffs((1, 2, 4))
+            gone = [n for n in stale if drop(n, conflict_backoffs=short)[0]]
             stuck = sorted(n for n in stale if n not in gone)
             if stuck:
                 print(f"namespace sweep: removed {len(gone)}, gave up on {len(stuck)}: {' '.join(stuck)}")
