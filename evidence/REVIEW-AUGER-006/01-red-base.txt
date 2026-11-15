@@ -1,0 +1,112 @@
+FFFF...                                                                  [100%]
+=================================== FAILURES ===================================
+________ test_teardown_settles_a_transient_409_and_removes_both_halves _________
+
+rig = namespace(here=PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-4856/test_teardown_settles_a_transi0/repo'), h...'), log=PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-4856/test_teardown_settles_a_transi0/stub_log.jsonl'))
+
+    def test_teardown_settles_a_transient_409_and_removes_both_halves(rig):
+        """A 409 that settles inside the conflict budget ends with BOTH halves removed.
+    
+        RED on the unfixed drop(): it rmtree's the directory on the FIRST attempt (before
+        the status is consulted), reports "HTTP 409" and — because the caller only re-enters
+        for a 429 — never issues the second DELETE. The directory is gone while the registry
+        row survives: the orphan this row exists to close.
+        """
+        ns = "auger-smoke-r006a"
+        _set_state(rig, listing=[ns], delete_statuses=[409, 200])
+        d = _make_ns(rig, ns)
+    
+        proc = _run(rig, "teardown", ns)
+    
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+>       assert len(_deletes(rig, ns)) == 2, _calls(rig)
+E       AssertionError: [{'call': 'db', 'path': '/api/namespaces', 'method': 'GET'}, {'call': 'delete_namespace', 'ns': 'auger-smoke-r006a', 'status': 409}]
+E       assert 1 == 2
+E        +  where 1 = len([{'call': 'delete_namespace', 'ns': 'auger-smoke-r006a', 'status': 409}])
+E        +    where [{'call': 'delete_namespace', 'ns': 'auger-smoke-r006a', 'status': 409}] = _deletes(namespace(here=PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-4856/test_teardown_settles_a_transi0/repo'), h...'), log=PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-4856/test_teardown_settles_a_transi0/stub_log.jsonl')), 'auger-smoke-r006a')
+
+tests/test_smoke_teardown.py:161: AssertionError
+______ test_teardown_survives_a_persistent_409_with_the_directory_intact _______
+
+rig = namespace(here=PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-4856/test_teardown_survives_a_persi0/repo'), h...'), log=PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-4856/test_teardown_survives_a_persi0/stub_log.jsonl'))
+
+    def test_teardown_survives_a_persistent_409_with_the_directory_intact(rig):
+        """A 409 that outlives the budget keeps the directory AND the row — both or neither.
+    
+        RED on the unfixed drop(): rmtree ran before the status check, so the directory was
+        destroyed under the surviving registry row (the AUG-117 ghost-row shape). The delete
+        count must also be bounded: one try per ladder step, never an unbounded loop.
+        """
+        ns = "auger-smoke-r006b"
+        _set_state(rig, listing=[ns], delete_statuses=[409])
+        d = _make_ns(rig, ns)
+    
+        proc = _run(rig, "teardown", ns)
+    
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+>       assert d.is_dir(), (
+            "the directory was removed while the DELETE was refused — AUG-117 ghost row"
+        )
+E       AssertionError: the directory was removed while the DELETE was refused — AUG-117 ghost row
+E       assert False
+E        +  where False = is_dir()
+E        +    where is_dir = PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-4856/test_teardown_survives_a_persi0/nsroot/auger-smoke-r006b').is_dir
+
+tests/test_smoke_teardown.py:180: AssertionError
+__________________ test_sweep_reaps_a_stale_pytest_namespace ___________________
+
+rig = namespace(here=PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-4856/test_sweep_reaps_a_stale_pytes0/repo'), h...'), log=PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-4856/test_sweep_reaps_a_stale_pytes0/stub_log.jsonl'))
+
+    def test_sweep_reaps_a_stale_pytest_namespace(rig):
+        """AC3: the sweep's throwaway class covers auger-pytest-* rows older than 24h.
+    
+        RED on the unfixed script: THROWAWAY at tests/smoke.sh:34 never matches the
+        auger-pytest- prefix, so the 41-row pytest backlog the foreman measured is invisible
+        to every sweep the script can run.
+        """
+        ns = "auger-pytest-r006-old"
+        _set_state(rig, listing=[ns], delete_statuses=[200])
+        d = _make_ns(rig, ns, mtime=OLD)
+    
+        proc = _run(rig, "sweep")
+    
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+>       assert len(_deletes(rig, ns)) == 1, _calls(rig)
+E       AssertionError: [{'call': 'db', 'path': '/api/namespaces', 'method': 'GET'}]
+E       assert 0 == 1
+E        +  where 0 = len([])
+E        +    where [] = _deletes(namespace(here=PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-4856/test_sweep_reaps_a_stale_pytes0/repo'), h...'), log=PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-4856/test_sweep_reaps_a_stale_pytes0/stub_log.jsonl')), 'auger-pytest-r006-old')
+
+tests/test_smoke_teardown.py:205: AssertionError
+____________ test_sweep_reaps_a_pytest_row_whose_directory_is_gone _____________
+
+rig = namespace(here=PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-4856/test_sweep_reaps_a_pytest_row_0/repo'), h...'), log=PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-4856/test_sweep_reaps_a_pytest_row_0/stub_log.jsonl'))
+
+    def test_sweep_reaps_a_pytest_row_whose_directory_is_gone(rig):
+        """The observed leak shape (registry row survives, directory does not) is a target."""
+        ns = "auger-pytest-r006-ghost"
+        _set_state(rig, listing=[ns], delete_statuses=[200])
+        # no directory created on purpose
+    
+        proc = _run(rig, "sweep")
+    
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+>       assert len(_deletes(rig, ns)) == 1, _calls(rig)
+E       AssertionError: [{'call': 'db', 'path': '/api/namespaces', 'method': 'GET'}]
+E       assert 0 == 1
+E        +  where 0 = len([])
+E        +    where [] = _deletes(namespace(here=PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-4856/test_sweep_reaps_a_pytest_row_0/repo'), h...'), log=PosixPath('/var/tmp/hermes-scratch/pytest-of-kara/pytest-4856/test_sweep_reaps_a_pytest_row_0/stub_log.jsonl')), 'auger-pytest-r006-ghost')
+
+tests/test_smoke_teardown.py:219: AssertionError
+=============================== warnings summary ===============================
+tests/conftest.py:623
+  /home/kara/worktrees/auger-REVIEW-AUGER-006/tests/conftest.py:623: SyntaxWarning: 'return' in a 'finally' block
+    return
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_smoke_teardown.py::test_teardown_settles_a_transient_409_and_removes_both_halves
+FAILED tests/test_smoke_teardown.py::test_teardown_survives_a_persistent_409_with_the_directory_intact
+FAILED tests/test_smoke_teardown.py::test_sweep_reaps_a_stale_pytest_namespace
+FAILED tests/test_smoke_teardown.py::test_sweep_reaps_a_pytest_row_whose_directory_is_gone
+4 failed, 3 passed, 1 warning in 0.25s

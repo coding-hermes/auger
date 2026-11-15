@@ -33,7 +33,11 @@ sys.path.insert(0, sys.argv[1])
 import auger
 
 THROWAWAY = ("auger-smoke-", "auger-eval-")
-ROOT = os.path.join(os.path.expanduser("~"), "duckbrain", "namespaces")
+# REVIEW-AUGER-006: hermetic tests redirect the root with AUGER_NS_ROOT; the default
+# stays the operator's real namespace directory.
+ROOT = os.environ.get("AUGER_NS_ROOT") or os.path.join(
+    os.path.expanduser("~"), "duckbrain", "namespaces"
+)
 
 def listed():
     """The registry's names, or None when DuckBrain cannot be asked right now.
