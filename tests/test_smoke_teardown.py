@@ -10,10 +10,12 @@ repair. The pytest half of the same defect is already pinned in tests/test_auger
 These tests are hermetic: no live DuckBrain, no substrate flock. They extract the
 REAL `ns_helper` python heredoc out of tests/smoke.sh and run it against a stub
 `auger` module whose DELETE answers a scripted status sequence and whose registry
-answers a scripted listing. Two seams (both documented at the script) keep the
+answers a scripted listing. Three seams (documented at the script) keep the
 operator's home out of the blast radius: `AUGER_NS_ROOT` redirects the namespace
-directory root, and (with the fix) `AUGER_CONFLICT_BACKOFFS` collapses the 409
-backoff ladder to zero waits so the hermetic run stays fast.
+directory root, `AUGER_CONFLICT_BACKOFFS` collapses the 409 backoff ladder to zero
+waits so the hermetic run stays fast, and `AUGER_REAL_AUGER` lets the stub serve
+the REAL `auger.namespaces_base()` so the root-coupling proof (REVIEW-AUGER-006-r2)
+exercises the product's own resolver instead of a copy of it.
 """
 
 import json
@@ -25,6 +27,8 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+
+import auger  # noqa: E402  (conftest puts REPO_ROOT on sys.path first)
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 SMOKE = REPO_ROOT / "tests" / "smoke.sh"
@@ -61,6 +65,25 @@ def delete_namespace(ns, retries=2):
         st = 200
     _record({"call": "delete_namespace", "ns": ns, "status": st})
     return st, {"deleted": st in (200, 404)}
+
+
+# REVIEW-AUGER-006-r2: the helper under test resolves its namespace root through
+# auger.namespaces_base(). Serving the REAL product function (loaded from the repo's
+# own auger.py, named by AUGER_REAL_AUGER) keeps the env precedence
+# (DUCKBRAIN_NAMESPACES_PATH -> DUCKBRAIN_DATA_DIR -> legacy default) auger's own —
+# the rig cannot pass by duplicating the resolver and getting the copy wrong.
+import importlib.util
+
+_real_auger = os.environ.get("AUGER_REAL_AUGER", "")
+if not os.path.isfile(_real_auger):
+    raise RuntimeError(
+        f"AUGER_REAL_AUGER must name the real auger.py for the root-coupling proof, "
+        f"got {_real_auger!r}"
+    )
+_spec = importlib.util.spec_from_file_location("auger_product", _real_auger)
+_product = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_product)
+namespaces_base = _product.namespaces_base
 '''
 
 
@@ -103,14 +126,23 @@ def _set_state(rig, listing, delete_statuses):
     )
 
 
-def _run(rig, mode, ns=None):
+def _run(rig, mode, ns=None, env_overrides=None):
     env = dict(os.environ)
     env["AUGER_NS_ROOT"] = str(rig.nsroot)
     env["AUGER_STUB_STATE"] = str(rig.state)
     env["AUGER_STUB_LOG"] = str(rig.log)
+    env["AUGER_REAL_AUGER"] = str(REPO_ROOT / "auger.py")
     env["AUGER_CONFLICT_BACKOFFS"] = (
         "0"  # hermetic: the ladder stays bounded, just zero-wait
     )
+    # REVIEW-AUGER-006-r2: an override value of None REMOVES the key, so the
+    # root-coupling tests can unset AUGER_NS_ROOT and let the helper fall through
+    # to auger.namespaces_base() — the exact premise of the defect.
+    for key, value in (env_overrides or {}).items():
+        if value is None:
+            env.pop(key, None)
+        else:
+            env[key] = value
     argv = [sys.executable, str(rig.helper), str(rig.here), mode]
     if ns is not None:
         argv.append(ns)
@@ -192,6 +224,139 @@ def test_teardown_survives_a_persistent_409_with_the_directory_intact(rig):
     bounded = len(ladder.split(",")) + 1
     assert len(_deletes(rig, ns)) == bounded, _calls(rig)
     assert "409" in proc.stdout and "teardown skipped" in proc.stdout, proc.stdout
+
+
+def test_helper_root_follows_auger_data_dir_on_a_200(rig, tmp_path, monkeypatch):
+    """REVIEW-AUGER-006-r2: with AUGER_NS_ROOT unset, the helper operates on the tree
+    auger's OWN resolver names — a 200 DELETE removes THAT directory.
+
+    Red on the pre-fix smoke.sh: ROOT fell back to the hardcoded legacy
+    ~/duckbrain/namespaces while auger resolved DUCKBRAIN_DATA_DIR/namespaces, so
+    drop() rmtree'd a different tree, printed "namespace ... removed", and left the
+    REAL namespace directory on disk (verdict b41fdb86's ROOT-derivation gap).
+    """
+    scratch = tmp_path / "substrate"
+    base = scratch / "namespaces"
+    ns = "auger-smoke-r006-root"
+    d = base / ns
+    (d / "tables").mkdir(parents=True)
+    (d / "tables" / "decision.json").write_text("[]", encoding="utf-8")
+
+    # Premise: under this env, the product itself resolves the scratch tree.
+    with monkeypatch.context() as m:
+        m.setenv("DUCKBRAIN_DATA_DIR", str(scratch))
+        m.delenv("DUCKBRAIN_NAMESPACES_PATH", raising=False)
+        m.delenv("AUGER_NS_ROOT", raising=False)
+        assert auger.namespaces_base() == str(base)
+
+    _set_state(rig, listing=[ns], delete_statuses=[200])
+    proc = _run(
+        rig,
+        "teardown",
+        ns,
+        env_overrides={
+            "AUGER_NS_ROOT": None,
+            "DUCKBRAIN_NAMESPACES_PATH": None,
+            "DUCKBRAIN_DATA_DIR": str(scratch),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert len(_deletes(rig, ns)) == 1, _calls(rig)
+    assert "removed" in proc.stdout and "teardown skipped" not in proc.stdout, (
+        proc.stdout
+    )
+    assert not d.exists(), (
+        "the helper claimed removal but the directory under auger's own tree "
+        "(auger.namespaces_base()) survived — the ROOT-derivation gap"
+    )
+
+
+def test_persistent_409_keeps_the_directory_where_auger_actually_writes(rig, tmp_path):
+    """The 409 "directory intact" assertion must be about a path auger would write.
+
+    With AUGER_NS_ROOT unset and DUCKBRAIN_DATA_DIR pointed at a scratch substrate,
+    the namespace directory is created where auger.namespaces_base() resolves. A
+    persistent 409 must keep THAT directory standing — and the non-vacuity tail
+    proves the assertion target is live: when the conflict clears (a scripted 200 on
+    a fresh helper run), the very same directory is the one removed. Red on the
+    pre-fix smoke.sh, where the kept/removed path was the never-written legacy tree
+    and both halves of this assertion were vacuous.
+    """
+    scratch = tmp_path / "substrate"
+    base = scratch / "namespaces"
+    ns = "auger-smoke-r006-keep"
+    d = base / ns
+    (d / "tables").mkdir(parents=True)
+    (d / "tables" / "decision.json").write_text("[]", encoding="utf-8")
+    overrides = {
+        "AUGER_NS_ROOT": None,
+        "DUCKBRAIN_NAMESPACES_PATH": None,
+        "DUCKBRAIN_DATA_DIR": str(scratch),
+    }
+
+    _set_state(rig, listing=[ns], delete_statuses=[409])
+    proc = _run(rig, "teardown", ns, env_overrides=overrides)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert d.is_dir(), (
+        "the directory under auger's own tree was removed while the DELETE was "
+        "refused — AUG-117 ghost row"
+    )
+    with open(d / "tables" / "decision.json", encoding="utf-8") as fh:
+        assert fh.read() == "[]", "the namespace's data was removed with the directory"
+    ladder = os.environ.get("AUGER_CONFLICT_BACKOFFS", "0")
+    bounded = len(ladder.split(",")) + 1
+    assert len(_deletes(rig, ns)) == bounded, _calls(rig)
+    assert "409" in proc.stdout and "teardown skipped" in proc.stdout, proc.stdout
+
+    # Non-vacuity: flip the script to a 200 and require the SAME directory gone.
+    rig.log.unlink(missing_ok=True)
+    _set_state(rig, listing=[ns], delete_statuses=[200])
+    proc = _run(rig, "teardown", ns, env_overrides=overrides)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert not d.exists(), (
+        "the kept directory was not the one auger's resolver names — the 409 "
+        "assertion was vacuous"
+    )
+
+
+def test_helper_root_prefers_duckbrain_namespaces_path(rig, tmp_path, monkeypatch):
+    """namespaces_base()'s FIRST choice is DUCKBRAIN_NAMESPACES_PATH — the helper's
+    fallback must honour the same precedence, not just the DATA_DIR leg."""
+    scratch = tmp_path / "substrate"
+    base = scratch / "ns-tree"
+    ns = "auger-smoke-r006-np"
+    d = base / ns
+    (d / "tables").mkdir(parents=True)
+    (d / "tables" / "decision.json").write_text("[]", encoding="utf-8")
+    data_dir = scratch / "other"
+
+    # Premise: under this env the product resolves the NAMESPACES_PATH leg first.
+    with monkeypatch.context() as m:
+        m.setenv("DUCKBRAIN_NAMESPACES_PATH", str(base))
+        m.setenv("DUCKBRAIN_DATA_DIR", str(data_dir))
+        m.delenv("AUGER_NS_ROOT", raising=False)
+        assert auger.namespaces_base() == str(base)
+
+    _set_state(rig, listing=[ns], delete_statuses=[200])
+    proc = _run(
+        rig,
+        "teardown",
+        ns,
+        env_overrides={
+            "AUGER_NS_ROOT": None,
+            "DUCKBRAIN_NAMESPACES_PATH": str(base),
+            "DUCKBRAIN_DATA_DIR": str(data_dir),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert len(_deletes(rig, ns)) == 1, _calls(rig)
+    assert not d.exists(), (
+        "the helper did not follow DUCKBRAIN_NAMESPACES_PATH, namespaces_base()'s "
+        "first choice"
+    )
 
 
 def test_sweep_reaps_a_stale_pytest_namespace(rig):

@@ -35,11 +35,13 @@ sys.path.insert(0, sys.argv[1])
 import auger
 
 THROWAWAY = ("auger-smoke-", "auger-eval-", "auger-pytest-")
-# REVIEW-AUGER-006: hermetic tests redirect the root with AUGER_NS_ROOT; the default
-# stays the operator's real namespace directory.
-ROOT = os.environ.get("AUGER_NS_ROOT") or os.path.join(
-    os.path.expanduser("~"), "duckbrain", "namespaces"
-)
+# REVIEW-AUGER-006: hermetic tests redirect the root with AUGER_NS_ROOT. Otherwise
+# fall back to auger's OWN resolver (REVIEW-AUGER-006-r2, verdict b41fdb86): the
+# hardcoded legacy ~/duckbrain/namespaces guess disagreed with namespaces_base()
+# whenever DUCKBRAIN_NAMESPACES_PATH/DUCKBRAIN_DATA_DIR was set, so drop() rmtree'd
+# a tree auger never writes to and left the real namespace directory on disk. Call
+# the product's resolver directly rather than duplicating its env precedence.
+ROOT = os.environ.get("AUGER_NS_ROOT") or auger.namespaces_base()
 
 def listed():
     """The registry's names, or None when DuckBrain cannot be asked right now.

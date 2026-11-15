@@ -1,0 +1,136 @@
+=== 04 ROOT-COUPLING PROBE (post-fix) ===
+=== command: python3 /tmp/probe_root_coupling.py  (script body included at the bottom of this file) ===
+
+scratch substrate:    /var/tmp/hermes-scratch/auger-root-coupling-8pkjf9tp
+DUCKBRAIN_DATA_DIR:   /var/tmp/hermes-scratch/auger-root-coupling-8pkjf9tp
+AUGER_NS_ROOT:       <unset>
+DUCKBRAIN_NAMESPACES_PATH: <unset>
+
+auger.namespaces_base(): /var/tmp/hermes-scratch/auger-root-coupling-8pkjf9tp/namespaces
+ROOT line in smoke.sh:  ROOT = os.environ.get("AUGER_NS_ROOT") or auger.namespaces_base()
+helper ROOT:            /var/tmp/hermes-scratch/auger-root-coupling-8pkjf9tp/namespaces
+
+ROOT == namespaces_base(): True
+
+namespace directory created where auger writes: /var/tmp/hermes-scratch/auger-root-coupling-8pkjf9tp/namespaces/auger-smoke-r006-probe
+exists before teardown: True
+helper stdout: namespace auger-smoke-r006-probe removed
+helper rc:     0
+directory exists after teardown: False
+
+VERDICT: COUPLED — the helper removed the directory under auger.namespaces_base()
+
+probe exit code: 0
+
+=== probe script (/tmp/probe_root_coupling.py), committed inline for reproducibility ===
+
+#!/usr/bin/env python3
+"""Evidence probe for REVIEW-AUGER-006-r2 (evidence/REVIEW-AUGER-006-r2/04).
+
+Shows, under a scratch substrate env (DUCKBRAIN_DATA_DIR set, AUGER_NS_ROOT and
+DUCKBRAIN_NAMESPACES_PATH unset):
+  1. auger.namespaces_base() -- the product's own namespace tree;
+  2. the ns_helper's ROOT, computed by exec'ing the actual ROOT= line extracted
+     from tests/smoke.sh -- it must EQUAL namespaces_base() after the fix;
+  3. an end-to-end teardown: a namespace directory created under THAT root is the
+     one the helper's drop() removes on a scripted 200 DELETE.
+"""
+import json
+import os
+import pathlib
+import shutil
+import subprocess
+import sys
+import tempfile
+
+WORKTREE = pathlib.Path("/home/kara/worktrees/auger-REVIEW-AUGER-006-r2")
+sys.path.insert(0, str(WORKTREE))
+import auger  # the real product module
+
+scratch = pathlib.Path(tempfile.mkdtemp(prefix="auger-root-coupling-"))
+env = dict(os.environ)
+env["DUCKBRAIN_DATA_DIR"] = str(scratch)
+env.pop("DUCKBRAIN_NAMESPACES_PATH", None)
+env.pop("AUGER_NS_ROOT", None)
+# The probe itself must live under the SAME env it hands the helper — otherwise the
+# in-process auger.namespaces_base() reads the ambient env and proves nothing.
+saved = {k: os.environ.get(k) for k in ("DUCKBRAIN_DATA_DIR", "DUCKBRAIN_NAMESPACES_PATH", "AUGER_NS_ROOT")}
+os.environ.update({k: v for k, v in env.items() if k.startswith("DUCKBRAIN") or k.startswith("AUGER_")})
+os.environ.pop("DUCKBRAIN_NAMESPACES_PATH", None)
+os.environ.pop("AUGER_NS_ROOT", None)
+
+print("scratch substrate:   ", scratch)
+print("DUCKBRAIN_DATA_DIR:  ", env["DUCKBRAIN_DATA_DIR"])
+print("AUGER_NS_ROOT:       <unset>")
+print("DUCKBRAIN_NAMESPACES_PATH: <unset>")
+print()
+print("auger.namespaces_base():", auger.namespaces_base())
+
+# --- the helper's ROOT, straight out of smoke.sh's heredoc --------------------
+lines = (WORKTREE / "tests" / "smoke.sh").read_text(encoding="utf-8").splitlines()
+start = next(i for i, l in enumerate(lines) if "<<'PY'" in l)
+end = next(i for i, l in enumerate(lines) if i > start and l.strip() == "PY")
+body = "\n".join(lines[start + 1 : end])
+root_line = next(l for l in body.splitlines() if l.startswith("ROOT = "))
+print("ROOT line in smoke.sh: ", root_line.strip())
+scope = {"os": os, "auger": auger}
+exec(root_line, scope)  # noqa: S102 -- the exact line the helper runs
+print("helper ROOT:           ", scope["ROOT"])
+print()
+print("ROOT == namespaces_base():", scope["ROOT"] == auger.namespaces_base())
+
+# --- end-to-end: a 200 DELETE removes the directory under THAT root ----------
+NS = "auger-smoke-r006-probe"
+nsdir = pathlib.Path(auger.namespaces_base()) / NS
+(nsdir / "tables").mkdir(parents=True)
+(nsdir / "tables" / "decision.json").write_text("[]", encoding="utf-8")
+print()
+print("namespace directory created where auger writes:", nsdir)
+print("exists before teardown:", nsdir.exists())
+
+rig = pathlib.Path(tempfile.mkdtemp(prefix="auger-root-coupling-rig-"))
+(rig / "tests").mkdir()
+shutil.copy2(WORKTREE / "tests" / "smoke.sh", rig / "tests" / "smoke.sh")
+(rig / "auger.py").write_text(
+    """\
+import importlib.util, json, os
+_state = json.load(open(os.environ["AUGER_STUB_STATE"], encoding="utf-8"))
+def db(path, method="GET", *a, **k):
+    if path == "/api/namespaces" and method == "GET":
+        return 200, {"namespaces": [{"name": n} for n in _state["listing"]]}, None
+    return 500, {"error": "unexpected"}, None
+def delete_namespace(ns, retries=2):
+    return _state["delete_status"], {"deleted": True}
+_spec = importlib.util.spec_from_file_location(
+    "auger_product", os.environ["AUGER_REAL_AUGER"])
+_product = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_product)
+namespaces_base = _product.namespaces_base
+""",
+    encoding="utf-8",
+)
+helper = rig / "ns_helper_body.py"
+helper.write_text(body, encoding="utf-8")
+state = rig / "state.json"
+state.write_text(json.dumps({"listing": [NS], "delete_status": 200}), encoding="utf-8")
+
+env["AUGER_STUB_STATE"] = str(state)
+env["AUGER_REAL_AUGER"] = str(WORKTREE / "auger.py")
+proc = subprocess.run(
+    [sys.executable, str(helper), str(rig), "teardown", NS],
+    env=env, capture_output=True, text=True, timeout=120,
+)
+print("helper stdout:", proc.stdout.strip())
+print("helper rc:    ", proc.returncode)
+print("directory exists after teardown:", nsdir.exists())
+print()
+print("VERDICT:", "COUPLED — the helper removed the directory under"
+      if not nsdir.exists() else "STILL DECOUPLED — the directory survived",
+      "auger.namespaces_base()")
+shutil.rmtree(scratch, ignore_errors=True)
+shutil.rmtree(rig, ignore_errors=True)
+for k, v in saved.items():
+    if v is None:
+        os.environ.pop(k, None)
+    else:
+        os.environ[k] = v
