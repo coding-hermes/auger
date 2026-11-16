@@ -1,0 +1,553 @@
+{
+  "task_id": "AUG-174",
+  "task_title": "AUG-174 CI boardctl install: pinned public release before the gate, fail-loud intent preserved",
+  "task_criteria": [
+    "FAILIF: the pinned boardctl install step is absent from .github/workflows/ci.yml, or it is ordered AFTER the gate step, so CI installs the binary too late to help. PROOF: bash -c 'awk \"/name: install boardctl/{i=NR} /name: run the gate/{g=NR} END{printf \\\"install=%d gate=%d\\\\n\\\", i, g; exit !(i && g && i<g)}\" .github/workflows/ci.yml' exits 0 and prints install=97 gate=136.",
+    "FAILIF: the install-contract regression test file is missing or does not pin the release tag, the sha256sum check, the exact binary name boardctl, the unknown-arch refusal, the step ordering, or the GITHUB_PATH export to later steps. PROOF: bash -c 'PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_ci_boardctl_install.py -q' prints 9 passed and exits 0.",
+    "FAILIF: the boardctl-backed plan/board proofs fail on a host that HAS boardctl, i.e. the fix bought nothing. PROOF: bash -c 'PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_xml_task_contract.py -q' prints 11 passed and exits 0.",
+    "FAILIF: with boardctl absent from PATH the three plan/board proofs pass, are reported as skipped, or the suite prints green coverage it did not run - 4820be8's fail-loud intent must survive. PROOF: bash -c 'PATH=/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_xml_task_contract.py -q' exits 1 with exactly 3 failed / 8 passed, the three failures being the boardctl-backed node ids.",
+    "FAILIF: tests/test_ci_boardctl_install.py is not named in the tests/gate.sh pytest arm, so the suite cannot regress the install contract. PROOF: bash -c 'grep -c test_ci_boardctl_install tests/gate.sh' prints 1."
+  ],
+  "passed": true,
+  "worktree": "/home/kara/.hermes/cache/scratch/auger-judge-AUG174",
+  "branch": "",
+  "commit": "f62c6c35d0ea05d2895ef7f2bd2b173bd7c55b17",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "4435376b06aad19d32e0346b50d8ed1a499c9411d9d2c9e36bb9bbd04c3eeb8c",
+  "working_tree_dirty_path_count": 0,
+  "items": [
+    {
+      "criterion": "FAILIF: the pinned boardctl install step is absent from .github/workflows/ci.yml, or it is ordered AFTER the gate step, so CI installs the binary too late to help. PROOF: bash -c 'awk \"/name: install boardctl/{i=NR} /name: run the gate/{g=NR} END{printf \\\"install=%d gate=%d\\\\n\\\", i, g; exit !(i && g && i<g)}\" .github/workflows/ci.yml' exits 0 and prints install=97 gate=136.",
+      "status": "PASS",
+      "detail": "Ran the exact proof: output `install=97 gate=136`, exit=0. grep confirms .github/workflows/ci.yml:97 `- name: install boardctl (pinned release, checksum-verified)` and :136 `- name: run the gate (tests/gate.sh)`. yaml.safe_load of the workflow shows the step list order: 0 checkout, 1 set up python 3.11, 2 install ruff and pytest, 3 install boardctl, 4 run the gate \u2014 the install is a real member of jobs.gate.steps, positioned immediately before the gate."
+    },
+    {
+      "criterion": "FAILIF: the install-contract regression test file is missing or does not pin the release tag, the sha256sum check, the exact binary name boardctl, the unknown-arch refusal, the step ordering, or the GITHUB_PATH export to later steps. PROOF: bash -c 'PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_ci_boardctl_install.py -q' prints 9 passed and exits 0.",
+      "status": "PASS",
+      "detail": "Ran the exact proof: `9 passed in 0.17s`, exit=0. --collect-only lists all 9 node ids. Each required property is pinned in tests/test_ci_boardctl_install.py: pinned tag via `re.search(r\"BOARDCTL_TAG=v\\d+\\.\\d+\\.\\d+\\b\")` + a `latest` rejection (lines 96-99); checksum via `\"SHA256SUMS\" not in text or \"sha256sum -c\" not in text` (line 102); exact binary name via INSTALL_RE requiring `\"${DEST}/boardctl\"` (lines 44-46, 94); unknown-arch refusal via `\"uname -m\" not in text` (line 110); ordering via `if idx >= gate_idx: findings.append(\"install-step-after-gate\")` (line 89); GITHUB_PATH export via `if \"GITHUB_PATH\" not in text` (line 118). Non-vacuity proven live: I moved the install step after the gate in ci.yml and the suite went red (`1 failed, 8 passed`, test_the_real_workflow_satisfies_every_assertion at line 137); ci.yml restored, `git status --short .github/workflows/ci.yml` empty."
+    },
+    {
+      "criterion": "FAILIF: the boardctl-backed plan/board proofs fail on a host that HAS boardctl, i.e. the fix bought nothing. PROOF: bash -c 'PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_xml_task_contract.py -q' prints 11 passed and exits 0.",
+      "status": "PASS",
+      "detail": "Ran the exact proof: `11 passed in 0.38s`, exit=0. boardctl is present at /home/kara/.local/bin/boardctl (12368770 bytes), so the three boardctl-backed proofs really executed rather than being skipped. Combined run with the install-contract file: `20 passed in 0.46s`, exit=0."
+    },
+    {
+      "criterion": "FAILIF: with boardctl absent from PATH the three plan/board proofs pass, are reported as skipped, or the suite prints green coverage it did not run - 4820be8's fail-loud intent must survive. PROOF: bash -c 'PATH=/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_xml_task_contract.py -q' exits 1 with exactly 3 failed / 8 passed, the three failures being the boardctl-backed node ids.",
+      "status": "PASS",
+      "detail": "Ran the exact proof: exit=1, `3 failed, 8 passed in 0.27s`. The three failures are exactly the boardctl-backed node ids: test_an_approved_plan_digest_exports_one_board_row, test_an_unapproved_or_stale_digest_leaves_the_board_untouched, test_the_exporter_only_invokes_boardctl_create_and_readback. Each fails at tests/test_xml_task_contract.py:393 via pytest.fail(\"boardctl is not installed on PATH; ... refusing to report skipped coverage as green.\") \u2014 no skip, no green. `git diff 4820be8 HEAD -- tests/test_xml_task_contract.py` is EMPTY, so the fail-loud commit is byte-identical and untouched by this change."
+    },
+    {
+      "criterion": "FAILIF: tests/test_ci_boardctl_install.py is not named in the tests/gate.sh pytest arm, so the suite cannot regress the install contract. PROOF: bash -c 'grep -c test_ci_boardctl_install tests/gate.sh' prints 1.",
+      "status": "PASS",
+      "detail": "Ran the exact proof: output `1`, exit=0. tests/gate.sh:218 \u2014 the pytest arm's file list ends with `... tests/test_spec_as_of.py tests/test_ci_boardctl_install.py \"$@\"`, so the new file is inside the gate's pytest invocation (append-only, no reorder or timeout change)."
+    },
+    {
+      "criterion": "The install step's shipped run body actually succeeds end-to-end against the real public release when the install dir is NOT already on PATH (the exact runner shape), and exports the dir via GITHUB_PATH.",
+      "status": "PASS",
+      "detail": "Extracted the shipped run body verbatim from ci.yml (2061 chars) and executed it with the install dir absent from PATH: `env GITHUB_PATH=/tmp/aug174rev/ghpath BOARDCTL_INSTALL_DIR=/tmp/aug174rev/bin PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin bash run.sh` -> `boardctl_linux_amd64: OK` / `boardctl: installed v0.5.0 (boardctl_linux_amd64) to /tmp/aug174rev/bin/boardctl` / `boardctl version v0.5.0`, rc=0; ghpath contains `/tmp/aug174rev/bin`. The real network download of the public v0.5.0 release succeeded, and the absolute-path self-check (`\"${DEST}/boardctl\" version`) avoids the `command not found` red documented in evidence/AUG-174/07-path-export-absolute-selfcheck.txt.",
+      "derived": true
+    },
+    {
+      "criterion": "The install step fails closed on both refusal paths: unknown arch exits non-zero with a loud message, and a checksum that does not match aborts the step.",
+      "status": "PASS",
+      "detail": "(a) unknown arch: ran the shipped body with `uname -m` replaced by `echo riscv64` -> `boardctl install: no release asset for arch 'riscv64' (supported: x86_64, aarch64)`, rc=1. (b) checksum mismatch: replaced the SHA256SUMS grep pattern with a non-matching asset name -> `sha256sum: 'standard input': no properly formatted checksum lines found`, rc=1 (set -euo pipefail aborts before install). Both refusal paths fail closed; neither silently falls back to an unverified asset.",
+      "derived": true
+    },
+    {
+      "criterion": "The install step is reachable in the real workflow job (jobs.gate.steps) and its prerequisites (curl, sha256sum, install, mktemp) are available on the declared runner ubuntu-latest without extra setup.",
+      "status": "PASS",
+      "detail": "yaml.safe_load of ci.yml succeeds; jobs.gate.runs-on = `ubuntu-latest`; the install step is index 3 of 8 in jobs.gate.steps (not orphaned, not in a dead branch). Every tool the body uses resolves on a standard image \u2014 verified present on this host: curl /usr/bin/curl, sha256sum /usr/bin/sha256sum, install /usr/bin/install, mktemp /usr/bin/mktemp, grep /usr/bin/grep, uname /usr/bin/uname. The step needs no token: the release URL is the public github.com/coding-hermes/boardctl path.",
+      "derived": true
+    },
+    {
+      "criterion": "The new test file is hermetic and adds no dependency the CI 'install ruff and pytest' step does not already provide (pyyaml), so the gate arm cannot red on a missing import.",
+      "status": "PASS",
+      "detail": "tests/test_ci_boardctl_install.py imports only stdlib (importlib.util, re, pathlib) plus pytest and yaml (lines 32-37). ci.yml:82 installs `\"ruff==0.15.22\" pytest pyyaml \"lxml>=5\"` in the step immediately BEFORE the boardctl install, so pyyaml is present. Hermetic: `pytest tests/test_ci_boardctl_install.py -q` -> `9 passed in 0.17s` with no network and no substrate. `ruff check tests/test_ci_boardctl_install.py` -> `All checks passed!`, rc=0; py_compile OK; LSP diagnostics empty.",
+      "derived": true
+    },
+    {
+      "criterion": "The fail-loud helper boardctl_or_skip is unchanged in behaviour (still pytest.fail, no pytest.skip) so 4820be8's intent is not weakened by the CI install.",
+      "status": "PASS",
+      "detail": "`git diff 4820be8 HEAD -- tests/test_xml_task_contract.py` is EMPTY \u2014 the file is byte-identical to the fail-loud commit. boardctl_or_skip at tests/test_xml_task_contract.py:391-398 still calls pytest.fail (not pytest.skip) with the original message. Behaviour re-proven by the boardctl-less run (exit=1, 3 failed / 8 passed, each raising at line 393). Two tests in test_ci_boardctl_install.py pin this (test_boardctl_or_skip_still_raises_when_the_binary_is_missing, test_boardctl_or_skip_has_no_skip_fallback), both passing in the 9-passed run.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "no_concerns_found",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nscanners: nice=nice -n 10\n1:53AM INF scanned ~3665460 bytes (3.67 MB) in 2.22s\n1:53AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 377 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [  9%]\n........................................................................ [ 18%]\n........................................................................ [ 27%]\n........................................................................ [ 36%]\n............................s........................................... [ 46%]\n..........s............................................................. [ 55%]\n........................................................................ [ 64%]\n........................................................................ [ 73%]\n........................................................................ [ 83%]\n........................................................................ [ 92%]\n............................................................             [100%]\n778 passed, 2 skipped in 861.30s (0:14:21)\n== wrapper regression (AUG-081) ==\ngate prerequisite preflight: PASS\nAUG-116: zombie pid 3946101 classified dead (kill -0 alone would have said alive)\nAUG-081 wrapper regression: PASS\nAUG-130 skipped-arm policy: PASS\n== end-to-end smoke ==\nnamespace: auger-smoke-3947383\nno stale auger-smoke-*/auger-eval-*/auger-pytest-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n\n\u2026 [557 chars omitted \u2014 14 line(s)] \u2026\nspec: 3 document(s), 12 block(s), 7 reference(s) ok\n== prd proofs (AUG-137) ==\nprd proofs: 8 total \u00b7 3 required \u00b7 5 deferred \u2192 PASS\n   P1  deferred not-run   not-run (deferred to AUG-119): auger.py carries no board surface (grep -c boardctl auger.py -> 0): resolving a\n   P2  required pass      corpus=9249B bundle=8131B latency=21.7ms  2 generated view(s) verified byte-identical to the generator's output for specs/; one block edit propagated to\n   P3  deferred not-run   not-run (deferred to AUG-153): the checker half is reachable (`auger spec check --diff-file` reports `trace-mi\n   P4  deferred not-run   not-run (deferred to AUG-119): writing and reading back a canonical boardctl row is boardctl's surface, not au\n   P5  required pass      corpus=1084B bundle=435B latency=827.7ms  one query returned migration=tests/fixtures/xml/verification/migrations/001_add_marker.sql, fixture=tests/fixt\n   P6  deferred not-run   not-run (deferred to AUG-124): what counts as judge evidence \u2014 excluding the worker summary, refusing a PASS w\n   P7  required pass      corpus=9249B bundle=2944B latency=139.1ms  4/12 blocks selected by `applies-to auger.spec.select`; bundle is 31.8% of the corpus (2944 of 9249 bytes), fl\n   P8  deferred not-run   not-run (deferred to AUG-153): the flag and the process-liveness assertion live in the GitReins hook, which no\nprd-proofs: /home/kara/.hermes/cache/scratch/auger-judge-AUG174/docs/prd/evidence/AUG-137-prd-proofs.json agrees with this run\n== docs check ==\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 FAILIF: the pinned boardctl install step is absent from .github/workflows/ci.yml, or it is ordered AFTER the gate step, so CI installs the binary too late to help. PROOF: bash -c 'awk \"/name: install boardctl/{i=NR} /name: run the gate/{g=NR} END{printf \\\"install=%d gate=%d\\\\n\\\", i, g; exit !(i && g && i<g)}\" .github/workflows/ci.yml' exits 0 and prints install=97 gate=136.: Ran the exact proof: output `install=97 gate=136`, exit=0. grep confirms .github/workflows/ci.yml:97 `- name: install boardctl (pinned release, checksum-verified)` and :136 `- name: run the gate (tests/gate.sh)`. yaml.safe_load of the workflow shows the step list order: 0 checkout, 1 set up python 3.11, 2 install ruff and pytest, 3 install boardctl, 4 run the gate \u2014 the install is a real member of jobs.gate.steps, positioned immediately before the gate.\n  \u2713 FAILIF: the install-contract regression test file is missing or does not pin the release tag, the sha256sum check, the exact binary name boardctl, the unknown-arch refusal, the step ordering, or the GITHUB_PATH export to later steps. PROOF: bash -c 'PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_ci_boardctl_install.py -q' prints 9 passed and exits 0.: Ran the exact proof: `9 passed in 0.17s`, exit=0. --collect-only lists all 9 node ids. Each required property is pinned in tests/test_ci_boardctl_install.py: pinned tag via `re.search(r\"BOARDCTL_TAG=v\\d+\\.\\d+\\.\\d+\\b\")` + a `latest` rejection (lines 96-99); checksum via `\"SHA256SUMS\" not in text or \"sha256sum -c\" not in text` (line 102); exact binary name via INSTALL_RE requiring `\"${DEST}/boardctl\"` (lines 44-46, 94); unknown-arch refusal via `\"uname -m\" not in text` (line 110); ordering via `if idx >= gate_idx: findings.append(\"install-step-after-gate\")` (line 89); GITHUB_PATH export via `if \"GITHUB_PATH\" not in text` (line 118). Non-vacuity proven live: I moved the install step after the gate in ci.yml and the suite went red (`1 failed, 8 passed`, test_the_real_workflow_satisfies_every_assertion at line 137); ci.yml restored, `git status --short .github/workflows/ci.yml` empty.\n  \u2713 FAILIF: the boardctl-backed plan/board proofs fail on a host that HAS boardctl, i.e. the fix bought nothing. PROOF: bash -c 'PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_xml_task_contract.py -q' prints 11 passed and exits 0.: Ran the exact proof: `11 passed in 0.38s`, exit=0. boardctl is present at /home/kara/.local/bin/boardctl (12368770 bytes), so the three boardctl-backed proofs really executed rather than being skipped. Combined run with the install-contract file: `20 passed in 0.46s`, exit=0.\n  \u2713 FAILIF: with boardctl absent from PATH the three plan/board proofs pass, are reported as skipped, or the suite prints green coverage it did not run - 4820be8's fail-loud intent must survive. PROOF: bash -c 'PATH=/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_xml_task_contract.py -q' exits 1 with exactly 3 failed / 8 passed, the three failures being the boardctl-backed node ids.: Ran the exact proof: exit=1, `3 failed, 8 passed in 0.27s`. The three failures are exactly the boardctl-backed node ids: test_an_approved_plan_digest_exports_one_board_row, test_an_unapproved_or_stale_digest_leaves_the_board_untouched, test_the_exporter_only_invokes_boardctl_create_and_readback. Each fails at tests/test_xml_task_contract.py:393 via pytest.fail(\"boardctl is not installed on PATH; ... refusing to report skipped coverage as green.\") \u2014 no skip, no green. `git diff 4820be8 HEAD -- tests/test_xml_task_contract.py` is EMPTY, so the fail-loud commit is byte-identical and untouched by this change.\n  \u2713 FAILIF: tests/test_ci_boardctl_install.py is not named in the tests/gate.sh pytest arm, so the suite cannot regress the install contract. PROOF: bash -c 'grep -c test_ci_boardctl_install tests/gate.sh' prints 1.: Ran the exact proof: output `1`, exit=0. tests/gate.sh:218 \u2014 the pytest arm's file list ends with `... tests/test_spec_as_of.py tests/test_ci_boardctl_install.py \"$@\"`, so the new file is inside the gate's pytest invocation (append-only, no reorder or timeout change).\n  \u2713 The install step's shipped run body actually succeeds end-to-end against the real public release when the install dir is NOT already on PATH (the exact runner shape), and exports the dir via GITHUB_PATH.: Extracted the shipped run body verbatim from ci.yml (2061 chars) and executed it with the install dir absent from PATH: `env GITHUB_PATH=/tmp/aug174rev/ghpath BOARDCTL_INSTALL_DIR=/tmp/aug174rev/bin PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin bash run.sh` -> `boardctl_linux_amd64: OK` / `boardctl: installed v0.5.0 (boardctl_linux_amd64) to /tmp/aug174rev/bin/boardctl` / `boardctl version v0.5.0`, rc=0; ghpath contains `/tmp/aug174rev/bin`. The real network download of the public v0.5.0 release succeeded, and the absolute-path self-check (`\"${DEST}/boardctl\" version`) avoids the `command not found` red documented in evidence/AUG-174/07-path-export-absolute-selfcheck.txt.\n  \u2713 The install step fails closed on both refusal paths: unknown arch exits non-zero with a loud message, and a checksum that does not match aborts the step.: (a) unknown arch: ran the shipped body with `uname -m` replaced by `echo riscv64` -> `boardctl install: no release asset for arch 'riscv64' (supported: x86_64, aarch64)`, rc=1. (b) checksum mismatch: replaced the SHA256SUMS grep pattern with a non-matching asset name -> `sha256sum: 'standard input': no properly formatted checksum lines found`, rc=1 (set -euo pipefail aborts before install). Both refusal paths fail closed; neither silently falls back to an unverified asset.\n  \u2713 The install step is reachable in the real workflow job (jobs.gate.steps) and its prerequisites (curl, sha256sum, install, mktemp) are available on the declared runner ubuntu-latest without extra setup.: yaml.safe_load of ci.yml succeeds; jobs.gate.runs-on = `ubuntu-latest`; the install step is index 3 of 8 in jobs.gate.steps (not orphaned, not in a dead branch). Every tool the body uses resolves on a standard image \u2014 verified present on this host: curl /usr/bin/curl, sha256sum /usr/bin/sha256sum, install /usr/bin/install, mktemp /usr/bin/mktemp, grep /usr/bin/grep, uname /usr/bin/uname. The step needs no token: the release URL is the public github.com/coding-hermes/boardctl path.\n  \u2713 The new test file is hermetic and adds no dependency the CI 'install ruff and pytest' step does not already provide (pyyaml), so the gate arm cannot red on a missing import.: tests/test_ci_boardctl_install.py imports only stdlib (importlib.util, re, pathlib) plus pytest and yaml (lines 32-37). ci.yml:82 installs `\"ruff==0.15.22\" pytest pyyaml \"lxml>=5\"` in the step immediately BEFORE the boardctl install, so pyyaml is present. Hermetic: `pytest tests/test_ci_boardctl_install.py -q` -> `9 passed in 0.17s` with no network and no substrate. `ruff check tests/test_ci_boardctl_install.py` -> `All checks passed!`, rc=0; py_compile OK; LSP diagnostics empty.\n  \u2713 The fail-loud helper boardctl_or_skip is unchanged in behaviour (still pytest.fail, no pytest.skip) so 4820be8's intent is not weakened by the CI install.: `git diff 4820be8 HEAD -- tests/test_xml_task_contract.py` is EMPTY \u2014 the file is byte-identical to the fail-loud commit. boardctl_or_skip at tests/test_xml_task_contract.py:391-398 still calls pytest.fail (not pytest.skip) with the original message. Behaviour re-proven by the boardctl-less run (exit=1, 3 failed / 8 passed, each raising at line 393). Two tests in test_ci_boardctl_install.py pin this (test_boardctl_or_skip_still_raises_when_the_binary_is_missing, test_boardctl_or_skip_has_no_skip_fallback), both passing in the 9-passed run.\nAll five given criteria and all five derived criteria pass with executed proof: the pinned checksum-verified boardctl install sits at ci.yml:97 before the gate at :136, its shipped body installs and self-checks the real v0.5.0 release and fails closed on bad arch/checksum, the 9-test install contract is non-vacuous and wired into tests/gate.sh:218, and 4820be8's fail-loud proofs still red 3/8 without boardctl while passing 11/11 with it. [uncovered failure paths: failure mode 0 (The install step depends on a live network fetch of a third-party GitHub release; if the release asset or SHA256SUMS is ever removed or the tag is retagged, the step reds the whole gate before any code is tested.): detected_by is empty \u2014 uncovered failure path]",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 FAILIF: the pinned boardctl install step is absent from .github/workflows/ci.yml, or it is ordered AFTER the gate step, so CI installs the binary too late to help. PROOF: bash -c 'awk \"/name: install boardctl/{i=NR} /name: run the gate/{g=NR} END{printf \\\"install=%d gate=%d\\\\n\\\", i, g; exit !(i && g && i<g)}\" .github/workflows/ci.yml' exits 0 and prints install=97 gate=136.: Ran the exact proof: output `install=97 gate=136`, exit=0. grep confirms .github/workflows/ci.yml:97 `- name: install boardctl (pinned release, checksum-verified)` and :136 `- name: run the gate (tests/gate.sh)`. yaml.safe_load of the workflow shows the step list order: 0 checkout, 1 set up python 3.11, 2 install ruff and pytest, 3 install boardctl, 4 run the gate \u2014 the install is a real member of jobs.gate.steps, positioned immediately before the gate.\n  \u2713 FAILIF: the install-contract regression test file is missing or does not pin the release tag, the sha256sum check, the exact binary name boardctl, the unknown-arch refusal, the step ordering, or the GITHUB_PATH export to later steps. PROOF: bash -c 'PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_ci_boardctl_install.py -q' prints 9 passed and exits 0.: Ran the exact proof: `9 passed in 0.17s`, exit=0. --collect-only lists all 9 node ids. Each required property is pinned in tests/test_ci_boardctl_install.py: pinned tag via `re.search(r\"BOARDCTL_TAG=v\\d+\\.\\d+\\.\\d+\\b\")` + a `latest` rejection (lines 96-99); checksum via `\"SHA256SUMS\" not in text or \"sha256sum -c\" not in text` (line 102); exact binary name via INSTALL_RE requiring `\"${DEST}/boardctl\"` (lines 44-46, 94); unknown-arch refusal via `\"uname -m\" not in text` (line 110); ordering via `if idx >= gate_idx: findings.append(\"install-step-after-gate\")` (line 89); GITHUB_PATH export via `if \"GITHUB_PATH\" not in text` (line 118). Non-vacuity proven live: I moved the install step after the gate in ci.yml and the suite went red (`1 failed, 8 passed`, test_the_real_workflow_satisfies_every_assertion at line 137); ci.yml restored, `git status --short .github/workflows/ci.yml` empty.\n\n\u2026 [5001 chars omitted \u2014 7 line(s)] \u2026\n  \u2713 The fail-loud helper boardctl_or_skip is unchanged in behaviour (still pytest.fail, no pytest.skip) so 4820be8's intent is not weakened by the CI install.: `git diff 4820be8 HEAD -- tests/test_xml_task_contract.py` is EMPTY \u2014 the file is byte-identical to the fail-loud commit. boardctl_or_skip at tests/test_xml_task_contract.py:391-398 still calls pytest.fail (not pytest.skip) with the original message. Behaviour re-proven by the boardctl-less run (exit=1, 3 failed / 8 passed, each raising at line 393). Two tests in test_ci_boardctl_install.py pin this (test_boardctl_or_skip_still_raises_when_the_binary_is_missing, test_boardctl_or_skip_has_no_skip_fallback), both passing in the 9-passed run.\nAll five given criteria and all five derived criteria pass with executed proof: the pinned checksum-verified boardctl install sits at ci.yml:97 before the gate at :136, its shipped body installs and self-checks the real v0.5.0 release and fails closed on bad arch/checksum, the 9-test install contract is non-vacuous and wired into tests/gate.sh:218, and 4820be8's fail-loud proofs still red 3/8 without boardctl while passing 11/11 with it. [uncovered failure paths: failure mode 0 (The install step depends on a live network fetch of a third-party GitHub release; if the release asset or SHA256SUMS is ever removed or the tag is retagged, the step reds the whole gate before any code is tested.): detected_by is empty \u2014 uncovered failure path]",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "FAILIF: the pinned boardctl install step is absent from .github/workflows/ci.yml, or it is ordered AFTER the gate step, so CI installs the binary too late to help. PROOF: bash -c 'awk \"/name: install boardctl/{i=NR} /name: run the gate/{g=NR} END{printf \\\"install=%d gate=%d\\\\n\\\", i, g; exit !(i && g && i<g)}\" .github/workflows/ci.yml' exits 0 and prints install=97 gate=136.",
+                "status": "PASS",
+                "detail": "Ran the exact proof: output `install=97 gate=136`, exit=0. grep confirms .github/workflows/ci.yml:97 `- name: install boardctl (pinned release, checksum-verified)` and :136 `- name: run the gate (tests/gate.sh)`. yaml.safe_load of the workflow shows the step list order: 0 checkout, 1 set up python 3.11, 2 install ruff and pytest, 3 install boardctl, 4 run the gate \u2014 the install is a real member of jobs.gate.steps, positioned immediately before the gate."
+              },
+              {
+                "criterion": "FAILIF: the install-contract regression test file is missing or does not pin the release tag, the sha256sum check, the exact binary name boardctl, the unknown-arch refusal, the step ordering, or the GITHUB_PATH export to later steps. PROOF: bash -c 'PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_ci_boardctl_install.py -q' prints 9 passed and exits 0.",
+                "status": "PASS",
+                "detail": "Ran the exact proof: `9 passed in 0.17s`, exit=0. --collect-only lists all 9 node ids. Each required property is pinned in tests/test_ci_boardctl_install.py: pinned tag via `re.search(r\"BOARDCTL_TAG=v\\d+\\.\\d+\\.\\d+\\b\")` + a `latest` rejection (lines 96-99); checksum via `\"SHA256SUMS\" not in text or \"sha256sum -c\" not in text` (line 102); exact binary name via INSTALL_RE requiring `\"${DEST}/boardctl\"` (lines 44-46, 94); unknown-arch refusal via `\"uname -m\" not in text` (line 110); ordering via `if idx >= gate_idx: findings.append(\"install-step-after-gate\")` (line 89); GITHUB_PATH export via `if \"GITHUB_PATH\" not in text` (line 118). Non-vacuity proven live: I moved the install step after the gate in ci.yml and the suite went red (`1 failed, 8 passed`, test_the_real_workflow_satisfies_every_assertion at line 137); ci.yml restored, `git status --short .github/workflows/ci.yml` empty."
+              },
+              {
+                "criterion": "FAILIF: the boardctl-backed plan/board proofs fail on a host that HAS boardctl, i.e. the fix bought nothing. PROOF: bash -c 'PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_xml_task_contract.py -q' prints 11 passed and exits 0.",
+                "status": "PASS",
+                "detail": "Ran the exact proof: `11 passed in 0.38s`, exit=0. boardctl is present at /home/kara/.local/bin/boardctl (12368770 bytes), so the three boardctl-backed proofs really executed rather than being skipped. Combined run with the install-contract file: `20 passed in 0.46s`, exit=0."
+              },
+              {
+                "criterion": "FAILIF: with boardctl absent from PATH the three plan/board proofs pass, are reported as skipped, or the suite prints green coverage it did not run - 4820be8's fail-loud intent must survive. PROOF: bash -c 'PATH=/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_xml_task_contract.py -q' exits 1 with exactly 3 failed / 8 passed, the three failures being the boardctl-backed node ids.",
+                "status": "PASS",
+                "detail": "Ran the exact proof: exit=1, `3 failed, 8 passed in 0.27s`. The three failures are exactly the boardctl-backed node ids: test_an_approved_plan_digest_exports_one_board_row, test_an_unapproved_or_stale_digest_leaves_the_board_untouched, test_the_exporter_only_invokes_boardctl_create_and_readback. Each fails at tests/test_xml_task_contract.py:393 via pytest.fail(\"boardctl is not installed on PATH; ... refusing to report skipped coverage as green.\") \u2014 no skip, no green. `git diff 4820be8 HEAD -- tests/test_xml_task_contract.py` is EMPTY, so the fail-loud commit is byte-identical and untouched by this change."
+              },
+              {
+                "criterion": "FAILIF: tests/test_ci_boardctl_install.py is not named in the tests/gate.sh pytest arm, so the suite cannot regress the install contract. PROOF: bash -c 'grep -c test_ci_boardctl_install tests/gate.sh' prints 1.",
+                "status": "PASS",
+                "detail": "Ran the exact proof: output `1`, exit=0. tests/gate.sh:218 \u2014 the pytest arm's file list ends with `... tests/test_spec_as_of.py tests/test_ci_boardctl_install.py \"$@\"`, so the new file is inside the gate's pytest invocation (append-only, no reorder or timeout change)."
+              },
+              {
+                "criterion": "The install step's shipped run body actually succeeds end-to-end against the real public release when the install dir is NOT already on PATH (the exact runner shape), and exports the dir via GITHUB_PATH.",
+                "status": "PASS",
+                "detail": "Extracted the shipped run body verbatim from ci.yml (2061 chars) and executed it with the install dir absent from PATH: `env GITHUB_PATH=/tmp/aug174rev/ghpath BOARDCTL_INSTALL_DIR=/tmp/aug174rev/bin PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin bash run.sh` -> `boardctl_linux_amd64: OK` / `boardctl: installed v0.5.0 (boardctl_linux_amd64) to /tmp/aug174rev/bin/boardctl` / `boardctl version v0.5.0`, rc=0; ghpath contains `/tmp/aug174rev/bin`. The real network download of the public v0.5.0 release succeeded, and the absolute-path self-check (`\"${DEST}/boardctl\" version`) avoids the `command not found` red documented in evidence/AUG-174/07-path-export-absolute-selfcheck.txt.",
+                "derived": true
+              },
+              {
+                "criterion": "The install step fails closed on both refusal paths: unknown arch exits non-zero with a loud message, and a checksum that does not match aborts the step.",
+                "status": "PASS",
+                "detail": "(a) unknown arch: ran the shipped body with `uname -m` replaced by `echo riscv64` -> `boardctl install: no release asset for arch 'riscv64' (supported: x86_64, aarch64)`, rc=1. (b) checksum mismatch: replaced the SHA256SUMS grep pattern with a non-matching asset name -> `sha256sum: 'standard input': no properly formatted checksum lines found`, rc=1 (set -euo pipefail aborts before install). Both refusal paths fail closed; neither silently falls back to an unverified asset.",
+                "derived": true
+              },
+              {
+                "criterion": "The install step is reachable in the real workflow job (jobs.gate.steps) and its prerequisites (curl, sha256sum, install, mktemp) are available on the declared runner ubuntu-latest without extra setup.",
+                "status": "PASS",
+                "detail": "yaml.safe_load of ci.yml succeeds; jobs.gate.runs-on = `ubuntu-latest`; the install step is index 3 of 8 in jobs.gate.steps (not orphaned, not in a dead branch). Every tool the body uses resolves on a standard image \u2014 verified present on this host: curl /usr/bin/curl, sha256sum /usr/bin/sha256sum, install /usr/bin/install, mktemp /usr/bin/mktemp, grep /usr/bin/grep, uname /usr/bin/uname. The step needs no token: the release URL is the public github.com/coding-hermes/boardctl path.",
+                "derived": true
+              },
+              {
+                "criterion": "The new test file is hermetic and adds no dependency the CI 'install ruff and pytest' step does not already provide (pyyaml), so the gate arm cannot red on a missing import.",
+                "status": "PASS",
+                "detail": "tests/test_ci_boardctl_install.py imports only stdlib (importlib.util, re, pathlib) plus pytest and yaml (lines 32-37). ci.yml:82 installs `\"ruff==0.15.22\" pytest pyyaml \"lxml>=5\"` in the step immediately BEFORE the boardctl install, so pyyaml is present. Hermetic: `pytest tests/test_ci_boardctl_install.py -q` -> `9 passed in 0.17s` with no network and no substrate. `ruff check tests/test_ci_boardctl_install.py` -> `All checks passed!`, rc=0; py_compile OK; LSP diagnostics empty.",
+                "derived": true
+              },
+              {
+                "criterion": "The fail-loud helper boardctl_or_skip is unchanged in behaviour (still pytest.fail, no pytest.skip) so 4820be8's intent is not weakened by the CI install.",
+                "status": "PASS",
+                "detail": "`git diff 4820be8 HEAD -- tests/test_xml_task_contract.py` is EMPTY \u2014 the file is byte-identical to the fail-loud commit. boardctl_or_skip at tests/test_xml_task_contract.py:391-398 still calls pytest.fail (not pytest.skip) with the original message. Behaviour re-proven by the boardctl-less run (exit=1, 3 failed / 8 passed, each raising at line 393). Two tests in test_ci_boardctl_install.py pin this (test_boardctl_or_skip_still_raises_when_the_binary_is_missing, test_boardctl_or_skip_has_no_skip_fallback), both passing in the 9-passed run.",
+                "derived": true
+              }
+            ],
+            "summary": "All five given criteria and all five derived criteria pass with executed proof: the pinned checksum-verified boardctl install sits at ci.yml:97 before the gate at :136, its shipped body installs and self-checks the real v0.5.0 release and fails closed on bad arch/checksum, the 9-test install contract is non-vacuous and wired into tests/gate.sh:218, and 4820be8's fail-loud proofs still red 3/8 without boardctl while passing 11/11 with it. [uncovered failure paths: failure mode 0 (The install step depends on a live network fetch of a third-party GitHub release; if the release asset or SHA256SUMS is ever removed or the tag is retagged, the step reds the whole gate before any code is tested.): detected_by is empty \u2014 uncovered failure path]",
+            "provenance": {
+              "model": "deepseek-v4-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "deepseek-v4-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-174\"}",
+          "exit_code": 0,
+          "output_sha": "56dc8e096b14ef7fe84b2923fef8310e4e9b250c166d1a25ded5b95f7fb707f3"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger 2>/dev/null || cd .; pwd; ls",
+          "exit_code": 0,
+          "output_sha": "5dd1ff1c24cab4eec0746a617c637a6b724cdc0935ba0e9dd33751caf8c28945"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && ls -la .github/workflows/ 2>&1; echo \"---\"; ls tests/ | head -50; echo \"---\"; cat .gitreins/config.yaml 2>&1",
+          "exit_code": 0,
+          "output_sha": "1b5857e78d449a7e6ea275675b6359767cc66d21369487fcc0a941e48e6ebf7a"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git log --oneline -8; echo \"---\"; git status --short",
+          "exit_code": 0,
+          "output_sha": "64b2c9c0b9082ebf61420a19f5eb11b32cadd7888e8d7a4847328ce502fee90d"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \".github/workflows/ci.yml\"}",
+          "exit_code": 0,
+          "output_sha": "5a2cf04ac6aaa82b857741695215db7480b76bad996c0bd282d2fcfc24abbed7"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && bash -c 'awk \"/name: install boardctl/{i=NR} /name: run the gate/{g=NR} END{printf \\\"install=%d gate=%d\\\\n\\\", i, g; exit !(i && g && i<g)}\" .github/workflows/ci.yml'; echo \"exit=$?\"",
+          "exit_code": 0,
+          "output_sha": "9b13e1d042cea5d49e1fe86aec34b90e185f761d4a8b2ce0e961c28b5aa7138e"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"name: install boardctl\\|name: run the gate\" .github/workflows/ci.yml",
+          "exit_code": 0,
+          "output_sha": "f7d52b2a9428d8704b55f9cf745bffff87eeccf0a34e6e2867a5bf9b43938190"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"tests/test_ci_boardctl_install.py\"}",
+          "exit_code": 0,
+          "output_sha": "a2f406076d5aede826f83507291f96ae3cd53dd9bf0ecdeed8f5d421284a0dd2"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && bash -c 'PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_ci_boardctl_install.py -q' 2>&1 | tail -20; echo \"exit=${PIPESTATUS[0]}\"",
+          "exit_code": 2,
+          "output_sha": "eefb327d06f6edc5bfbd9a9cd9e3c36e8529a821702ce73fb1477580beab25d6"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && bash -c 'PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_ci_boardctl_install.py -q'; echo \"exit=$?\"",
+          "exit_code": 0,
+          "output_sha": "864784d91d2b3b0fb0e3a6e00e8678736656086ea2356f6e8001462453a3fd39"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && bash -c 'PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_xml_task_contract.py -q'; echo \"exit=$?\"",
+          "exit_code": 0,
+          "output_sha": "dd05bbf1ef224763aa70cf7530824ac5c0f6cbd60d2ceee8bcd1528424382c16"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && bash -c 'PATH=/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_xml_task_contract.py -q'; echo \"exit=$?\"",
+          "exit_code": 0,
+          "output_sha": "62b426a7d83ebffa48785e7dca409f1259a80f1f01c64c687f62348fa5e8cf3a"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && bash -c 'grep -c test_ci_boardctl_install tests/gate.sh'; echo \"exit=$?\"; grep -n \"test_ci_boardctl_install\" tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "529b84c20bbb556dba9c631fcdf555dfc8362f41f8a7c82726aa2b12614f72ed"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && sed -n 370,400p tests/test_xml_task_contract.py; echo \"=== BOARDCTL def ===\"; grep -n \"BOARDCTL\" tests/test_xml_task_contract.py | head -20",
+          "exit_code": 0,
+          "output_sha": "53a1ed726f89a795b6c03ca13cf320587d4adb641103de05019173d6a4f5a203"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git diff tests/conftest.py; echo \"=== which boardctl ===\"; which boardctl; ls -la ~/.local/bin/boardctl 2>&1",
+          "exit_code": 0,
+          "output_sha": "836fb5ad0f8efabb9c81b639ea4c148703ef8a82d07aab61a0cf2cf43e4903b0"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git log --oneline -3 -- tests/conftest.py; echo \"=== is conftest change part of AUG-174? ===\"; git log --format='%h %s' -1 8acf84d; git show --stat 8acf84d 2fe06e7 4c6ff2b | head -40",
+          "exit_code": 0,
+          "output_sha": "999a882317e0fe00201cb07ee1351ab38c1b0471d24158f37fb9537e077e3f25"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && ls evidence/AUG-174/ 2>&1; echo \"===\"; cat evidence/AUG-174/*.md 2>/dev/null | head -80",
+          "exit_code": 0,
+          "output_sha": "e4f96360166c17e1b1ad601bbe7e183cbc31432a03a37de231d422d5bc071fd8"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && cat evidence/AUG-174/03-install-step-simulated.txt; echo \"=== 07 ===\"; cat evidence/AUG-174/07-path-export-absolute-selfcheck.txt",
+          "exit_code": 0,
+          "output_sha": "46b16fc2d438a57550103ed407017f725f1b29cf7f6aa077634668caf661c612"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && cat evidence/AUG-174/extract_install_step.py",
+          "exit_code": 0,
+          "output_sha": "95620e8e0990bca09801b06d4ef815191b088e94ba7a271b78c8cde8313017b9"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && mkdir -p /tmp/aug174rev && /home/kara/auger/.venv/bin/python3 - <<'EOF'\nimport yaml, pathlib\ndata = yaml.safe_load(pathlib.Path('.github/workflows/ci.yml').read_text())\nsteps = data['jobs']['gate']['steps']\nstep = next(s for s in steps if 'github.com/coding-hermes/boardctl/releases/download' in (s.get('run') or ''))\npathlib.Path('/tmp/aug174rev/run.sh').write_text(step['run'])\nprint(\"step:\", step['name'], len(step['run']))\nEOF\necho \"=== run with DEST not on PATH, GITHUB_PATH set ===\"\nenv GITHUB_PATH=/tmp/aug174rev/ghpath BOARDCTL_INSTALL_DIR=/tmp/aug174rev/bin PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin bash /tmp/aug174rev/run.sh; echo \"rc=$?\"; echo \"ghpath:\"; cat /tmp/aug174rev/ghpath",
+          "exit_code": 0,
+          "output_sha": "30c9436d1afb563b126004577410bab7ce8fdc7343a24e8e1a8da9e80b1b3d83"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug174rev && sed 's/uname -m/echo riscv64/g' run.sh > run_badarch.sh && env GITHUB_PATH=/tmp/aug174rev/gp2 BOARDCTL_INSTALL_DIR=/tmp/aug174rev/bin2 PATH=/usr/local/bin:/usr/bin:/bin bash run_badarch.sh; echo \"rc=$?\"",
+          "exit_code": 0,
+          "output_sha": "e1ece92ba3468c5bfcf9c0b2060ee73b923399bdb625ee8070f5a2deb2906dbc"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug174rev && sed 's|^BASE_URL=.*|BASE_URL=\"https://github.com/coding-hermes/boardctl/releases/download/v0.5.0\"|; s|BOARDCTL_TAG=v0.5.0|BOARDCTL_TAG=v0.5.0|' run.sh > run_ok.sh; sed 's|grep -E \"\\^\\[0-9a-f\\]{64}\\[\\[:space:\\]\\]+\\${BOARDCTL_ASSET}\\\\\\$\" SHA256SUMS|grep -E \"^[0-9a-f]{64}[[:space:]]+nonexistent_asset$\" SHA256SUMS|' run.sh > run_badsum.sh; grep -n \"grep -E\" run_badsum.sh; env GITHUB_PATH=/tmp/aug174rev/gp3 BOARDCTL_INSTALL_DIR=/tmp/aug174rev/bin3 PATH=/usr/local/bin:/usr/bin:/bin bash run_badsum.sh; echo \"rc=$?\"",
+          "exit_code": 0,
+          "output_sha": "0a58bec0423eed6b9652997aee39b95be47e2082dfb3a8048d99457584001c35"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && sed -n 200,240p tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "c528f0700bf0c1b5a19010b398896d0eb5c1ca5997f2b50b2bcb47649407de4d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && bash -c 'PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_ci_boardctl_install.py tests/test_xml_task_contract.py -q'; echo \"exit=$?\"",
+          "exit_code": 0,
+          "output_sha": "9d1e5faeacf72df25e56970e9e4551e633def1234c1fad1da2db11935526f833"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: awk proof exits 0, prints install=97 gate=136. grep confirms ci.yml:97 \\\"- name: install boardctl (pinned release, checksum-verified)\\\" and ci.yml:136 \\\"- name: run the gate (tests/gate.sh)\\\". Install step is between \\\"install ruff and pytest\\\" and the gate.\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "43f3cebacf33cbc382ac3087400959e7104b51f4c18f883dc3bc2fa67f74c657"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `pytest tests/test_ci_boardctl_install.py -q` -> \\\"9 passed in 0.17s\\\", exit=0. File pins: BOARDCTL_TAG=v\\\\d+\\\\.\\\\d+\\\\.\\\\d+ (unpinned-version/latest-version), SHA256SUMS + sha256sum -c (missing-checksum), INSTALL_RE requiring ${DEST}/boardctl (wrong-install-name), uname -m arch guard (missing-arch-guard), idx>=gate_idx ordering (install-step-after-gate), GITHUB_PATH (path-not-exported). Each has a mutation leg in tmp_path proving non-vacuity.\", \"key\": \"verified_1\"}",
+          "exit_code": 0,
+          "output_sha": "4ceaf37b5d282557f8123c131b424fc330f53283ae331c70f2dedfe508944fd4"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `PATH=/home/kara/.local/bin:... pytest tests/test_xml_task_contract.py -q` -> \\\"11 passed in 0.38s\\\", exit=0. boardctl present at /home/kara/.local/bin/boardctl (12368770 bytes). Combined run with test_ci_boardctl_install.py: 20 passed, exit=0.\", \"key\": \"verified_2\"}",
+          "exit_code": 0,
+          "output_sha": "ee64b130ae795aec862652f2035a006fa13115666cad2a3edb571fb0b1d5666c"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `PATH=/usr/local/bin:/usr/bin:/bin pytest tests/test_xml_task_contract.py -q` -> exit=1, \\\"3 failed, 8 passed in 0.27s\\\". The 3 failures are exactly the boardctl-backed node ids: test_an_approved_plan_digest_exports_one_board_row, test_an_unapproved_or_stale_digest_leaves_the_board_untouched, test_the_exporter_only_invokes_boardctl_create_and_readback. Each fails via tests/test_xml_task_contract.py:393 pytest.fail(\\\"boardctl is not installed on PATH...refusing to report skipped coverage as green\\\") - no skip, no green.\", \"key\": \"verified_3\"}",
+          "exit_code": 0,
+          "output_sha": "5c1592cce61574516d6bd0bba21121752311f840559e44447b4e4ebfe5b87e88"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `grep -c test_ci_boardctl_install tests/gate.sh` -> \\\"1\\\", exit=0. tests/gate.sh:218 pytest arm file list ends with \\\"... tests/test_spec_as_of.py tests/test_ci_boardctl_install.py \\\\\\\"$@\\\\\\\"\\\".\", \"key\": \"verified_4\"}",
+          "exit_code": 0,
+          "output_sha": "59ba9985aea7bf08fb6945cefe16b0a2d470d3625978ab1aabef8e41781cea46"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Derived criteria for AUG-174:\\nd0: The install step's shipped run body actually succeeds end-to-end against the real public release when the install dir is NOT already on PATH (the exact runner shape), and exports the dir via GITHUB_PATH.\\nd1: The install step fails closed on both refusal paths: unknown arch exits non-zero with a loud message, and a checksum that does not match aborts the step.\\nd2: The install step is reachable in the real workflow job (jobs.gate.steps) and its prerequisites (curl, sha256sum, install, mktemp) are available on the declared runner ubuntu-latest without extra setup.\\nd3: The new test file is hermetic and adds no dependency the CI \\\"install ruff and pytest\\\" step does not already provide (pyyaml), so the gate arm cannot red on a missing import.\\nd4: The fail-loud helper boardctl_or_skip is unchanged in behaviour (still pytest.fail, no pytest.skip) so 4820be8's intent is not weakened by the CI install.\", \"key\": \"derived\"}",
+          "exit_code": 0,
+          "output_sha": "c3c986115d6912a712e262979c9c8a31baf7499a7fe7200f6e812f0e09e5c5b8"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git log --oneline -3 -- tests/test_xml_task_contract.py; echo \"=== boardctl_or_skip history ===\"; git log -S \"boardctl_or_skip\" --oneline -- tests/test_xml_task_contract.py; echo \"=== 4820be8 ===\"; git show --stat 4820be8 2>&1 | head -20",
+          "exit_code": 0,
+          "output_sha": "be5b554fd958feea84f3d7e3c7beb1fc36ff65d893de5d608bdf952b523fab09"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"^import\\|^from\" tests/test_ci_boardctl_install.py; echo \"=== pyyaml in ci install step ===\"; grep -n \"pyyaml\" .github/workflows/ci.yml",
+          "exit_code": 0,
+          "output_sha": "050351930bab005e6dd1c3841834057e8b24926fa611f9de86cf217e2dead9d1"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show 4820be8 -- tests/test_xml_task_contract.py",
+          "exit_code": 0,
+          "output_sha": "59d25c90e8faf24fec9f7054078e90409b35e49beac851fa38a993c516230ae0"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git diff 4820be8 HEAD -- tests/test_xml_task_contract.py | head -40; echo \"=== (empty means unchanged since 4820be8) ===\"",
+          "exit_code": 0,
+          "output_sha": "67491de9b1ee533bd140725dca32c5d56c1e2335dc4572b2f028fccf560b3d9b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && /home/kara/auger/.venv/bin/python3 -c \"\nimport yaml\nd=yaml.safe_load(open('.github/workflows/ci.yml'))\nsteps=d['jobs']['gate']['steps']\nprint('job runs-on:', d['jobs']['gate']['runs-on'])\nfor i,s in enumerate(steps):\n    print(i, s.get('name') or s.get('uses'))\n\"",
+          "exit_code": 0,
+          "output_sha": "a718784de7de0a30cea416f23ae9e632072dd8232ad95bd7ee59505642614f46"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && for t in curl sha256sum install mktemp grep uname; do printf \"%s: \" \"$t\"; command -v $t || echo MISSING; done",
+          "exit_code": 0,
+          "output_sha": "3e86d645bd0d8526770b15440243e67828f12aa7193ed16b9f80a3844276f354"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: Extracted the shipped run body verbatim from ci.yml (2061 chars) and executed it with the install dir NOT on PATH (the real runner shape): `env GITHUB_PATH=/tmp/aug174rev/ghpath BOARDCTL_INSTALL_DIR=/tmp/aug174rev/bin PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin bash run.sh` -> \\\"boardctl_linux_amd64: OK / boardctl: installed v0.5.0 (boardctl_linux_amd64) to /tmp/aug174rev/bin/boardctl / boardctl version v0.5.0\\\", rc=0; ghpath contains \\\"/tmp/aug174rev/bin\\\". Real network download of the public v0.5.0 release succeeded and the absolute-path self-check avoids the `command not found` red documented in evidence/AUG-174/07.\", \"key\": \"verified_derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "40669b247bc20134a171090af214862985e4a9c629d81000ec79b0237a69a05d"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: (a) unknown arch: sed 's/uname -m/echo riscv64/' run.sh -> \\\"boardctl install: no release asset for arch 'riscv64' (supported: x86_64, aarch64)\\\", rc=1. (b) checksum mismatch: replaced the grep pattern with a non-matching asset name -> \\\"sha256sum: 'standard input': no properly formatted checksum lines found\\\", rc=1 (set -euo pipefail aborts). Both refusal paths fail closed, never a silent fallback.\", \"key\": \"verified_derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "86277628b1ce134c72705d3818cf0429cf3fa51c55aab3faf2e9296bb6d5ea4c"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: yaml.safe_load of ci.yml succeeds; jobs.gate.runs-on = ubuntu-latest; step order is 0 checkout, 1 set up python 3.11, 2 install ruff and pytest, 3 install boardctl (pinned release, checksum-verified), 4 run the gate (tests/gate.sh), 5 docs-check, 6 live-arms marker, 7 live arms. The step is a real member of the gate job's step list, not orphaned. All tools it uses (curl, sha256sum, install, mktemp, grep, uname) are present in a standard ubuntu-latest image (verified present on this host at /usr/bin/*).\", \"key\": \"verified_derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "29b6c653cd475a1b91cc19c0411282706fda4841c2d4cf6af891b7b2bf0edc99"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: tests/test_ci_boardctl_install.py imports only stdlib (importlib.util, re, pathlib) plus pytest and yaml. ci.yml:82 installs \\\"ruff==0.15.22\\\" pytest pyyaml \\\"lxml>=5\\\" in the step immediately BEFORE the boardctl install, so pyyaml is available. The file is hermetic: `pytest tests/test_ci_boardctl_install.py -q` -> 9 passed in 0.17s (no network, no substrate).\", \"key\": \"verified_derived_3\"}",
+          "exit_code": 0,
+          "output_sha": "82f68da1cf69818783e09ac9644df57b8fe32061e95eff019b8391ef668aca3f"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `git diff 4820be8 HEAD -- tests/test_xml_task_contract.py` is EMPTY - the file is byte-identical to the fail-loud commit. boardctl_or_skip at tests/test_xml_task_contract.py:391-398 still calls pytest.fail (not pytest.skip) with the original message. Behaviour re-proven by the boardctl-less run: exit=1, 3 failed / 8 passed, each failure raised at line 393. Two tests in test_ci_boardctl_install.py pin this (test_boardctl_or_skip_still_raises_when_the_binary_is_missing, test_boardctl_or_skip_has_no_skip_fallback), both passing in the 9-passed run.\", \"key\": \"verified_derived_4\"}",
+          "exit_code": 0,
+          "output_sha": "8eecfb608126ec4fa2e3615b8afd1d38796af27a98e4132ab12dfe74d6661f33"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && bash -c 'PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_ci_boardctl_install.py tests/test_xml_task_contract.py tests/test_board_evidence_audit.py tests/test_verdict_hygiene.py -q'; echo \"exit=$?\"",
+          "exit_code": 0,
+          "output_sha": "43c5c435523fa3722be5b50e6cf8b0f3d673c0394fc20b96583ce964ef492521"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git stash list; echo \"=== are the board failures pre-existing? check at HEAD~ (before AUG-174 merge) ===\"; git log --oneline -1 f8b175a; git show --stat f8b175a | head -20",
+          "exit_code": 0,
+          "output_sha": "88ec1d69eecaf9b34005c693f13bfb9a062907f236c9c31d6f808f16258bd9e6"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git diff --stat HEAD -- .coding-hermes/board/; echo \"=== board rows modified in working tree ===\"; git diff HEAD -- .coding-hermes/board/tasks.jsonl | head -20",
+          "exit_code": 0,
+          "output_sha": "3a83b804880f5b55bef6253be6beeba1c4ca1c3b4fa412d76214d57de2d90721"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git stash list >/dev/null; git show HEAD:.coding-hermes/board/tasks.jsonl > /tmp/aug174rev/tasks_head.jsonl 2>/dev/null; /home/kara/auger/.venv/bin/python3 - <<'EOF'\nimport json,subprocess\nhead=subprocess.run(['git','show','HEAD:.coding-hermes/board/tasks.jsonl'],capture_output=True,text=True).stdout\nrows=[json.loads(l) for l in head.splitlines() if l.strip()]\ncomp=[r for r in rows if r.get('status')=='complete']\nprint(\"complete rows at HEAD:\",len(comp))\nbad=[r['id'] for r in comp if not (isinstance(r.get('evidence_run_id'),str) and r['evidence_run_id'].strip())]\nprint(\"complete rows with no evidence_run_id at HEAD:\",bad)\nEOF",
+          "exit_code": 0,
+          "output_sha": "6170fe074392f0370ff0b382c23df06ffd853bb1e3f7531d4078e24c256c491a"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git stash push -q -- .coding-hermes/board/tasks.jsonl .coding-hermes/board/events.jsonl 2>&1 && echo stashed; bash -c 'PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_board_evidence_audit.py -q' 2>&1 | tail -5; git stash pop -q && echo restored; git status --short | head -5",
+          "exit_code": 0,
+          "output_sha": "71b58f478aebc31e558058838f0db4887bc907e72c043f44219e7ef74941cec4"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git stash push -q -- .coding-hermes/board/tasks.jsonl .coding-hermes/board/events.jsonl tests/conftest.py && echo stashed; bash -c 'PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_ci_boardctl_install.py tests/test_xml_task_contract.py tests/test_board_evidence_audit.py tests/test_verdict_hygiene.py -q' 2>&1 | tail -5; git stash pop -q && echo restored",
+          "exit_code": 0,
+          "output_sha": "602b6ad82172c6d8cd84946d34ac28c38abfceb3aea86e91af3e638c1d8e1361"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && /home/kara/auger/.venv/bin/python3 -m ruff check tests/test_ci_boardctl_install.py 2>&1 | tail -5; echo \"ruff_exit=$?\"; /home/kara/auger/.venv/bin/python3 -m py_compile tests/test_ci_boardctl_install.py && echo \"py_compile OK\"",
+          "exit_code": 0,
+          "output_sha": "e60a4219bea99b2f187cc05a51a2950d3a3c472cf10692eeb9ac6275a3f9fa49"
+        },
+        {
+          "tool": "read_lsp_diagnostics",
+          "command": "read_lsp_diagnostics {}",
+          "exit_code": 0,
+          "output_sha": "ef420cbeebd549fc8c5438d6ea41a3e521fa58e29563c4cae80f491b9bfe2143"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && (command -v ruff && ruff check tests/test_ci_boardctl_install.py; echo \"rc=$?\") 2>&1 | tail -5",
+          "exit_code": 0,
+          "output_sha": "2296f2104cf3a150b5919717cb751f4217fed34276b9e06945b81e94be559ede"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && bash -c 'PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_ci_boardctl_install.py -q --collect-only' 2>&1 | tail -15",
+          "exit_code": 0,
+          "output_sha": "111d2820995097c4b192358a9e863eb3ade7a7cf1fab9b70a3a7d47c3d949242"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && cp .github/workflows/ci.yml /tmp/aug174rev/ci.yml.bak && /home/kara/auger/.venv/bin/python3 - <<'EOF'\nimport yaml,pathlib\np=pathlib.Path('.github/workflows/ci.yml')\nd=yaml.safe_load(p.read_text())\nsteps=d['jobs']['gate']['steps']\ni=next(i for i,s in enumerate(steps) if 'github.com/coding-hermes/boardctl/releases/download' in (s.get('run') or ''))\nstep=steps.pop(i)\ng=next(j for j,s in enumerate(steps) if 'bash tests/gate.sh' in (s.get('run') or ''))\nsteps.insert(g+1,step)\np.write_text(yaml.safe_dump(d,sort_keys=False))\nprint(\"moved install after gate\")\nEOF\nbash -c 'PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_ci_boardctl_install.py -q' 2>&1 | tail -6; cp /tmp/aug174rev/ci.yml.bak .github/workflows/ci.yml && echo \"restored\"; git diff --stat .github/workflows/ci.yml",
+          "exit_code": 0,
+          "output_sha": "ea754023d68aaaa96d854939069ea205966e14b877feeabd33ad194bb7141e09"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git status --short .github/workflows/ci.yml; echo \"(empty = clean)\"; bash -c 'PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_ci_boardctl_install.py -q'; echo \"exit=$?\"",
+          "exit_code": 0,
+          "output_sha": "3cff7f010bc386566cd07a124aefc9d59450a07579c87e1461f5f283a9fd19b8"
+        }
+      ]
+    }
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "The diff only appends task-board records to .gitreins/tasks.yaml with no code, config, or wiring changes, so there is nothing to flag."
+  },
+  "summary": "Stage tier1: PASS\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 FAILIF: the pinned boardctl install step is absent from .github/workflows/ci.yml, or it is ordered AFTER the gate step, so CI installs the binary too late to help. PROOF: bash -c 'awk \"/name: install boardctl/{i=NR} /name: run the gate/{g=NR} END{printf \\\"install=%d gate=%d\\\\n\\\", i, g; exit !(i && g && i<g)}\" .github/workflows/ci.yml' exits 0 and prints install=97 gate=136.: Ran the exact proof: output `install=97 gate=136`, exit=0. grep confirms .github/workflows/ci.yml:97 `- name: install boardctl (pinned release, checksum-verified)` and :136 `- name: run the gate (tests/gate.sh)`. yaml.safe_load of the workflow shows the step list order: 0 checkout, 1 set up python 3.11, 2 install ruff and pytest, 3 install boardctl, 4 run the gate \u2014 the install is a real member of jobs.gate.steps, positioned immediately before the gate.\n  \u2713 FAILIF: the install-contract regression test file is missing or does not pin the release tag, the sha256sum check, the exact binary name boardctl, the unknown-arch refusal, the step ordering, or the GITHUB_PATH export to later steps. PROOF: bash -c 'PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_ci_boardctl_install.py -q' prints 9 passed and exits 0.: Ran the exact proof: `9 passed in 0.17s`, exit=0. --collect-only lists all 9 node ids. Each required property is pinned in tests/test_ci_boardctl_install.py: pinned tag via `re.search(r\"BOARDCTL_TAG=v\\d+\\.\\d+\\.\\d+\\b\")` + a `latest` rejection (lines 96-99); checksum via `\"SHA256SUMS\" not in text or \"sha256sum -c\" not in text` (line 102); exact binary name via INSTALL_RE requiring `\"${DEST}/boardctl\"` (lines 44-46, 94); unknown-arch refusal via `\"uname -m\" not in text` (line 110); ordering via `if idx >= gate_idx: findings.append(\"install-step-after-gate\")` (line 89); GITHUB_PATH export via `if \"GITHUB_PATH\" not in text` (line 118). Non-vacuity proven live: I moved the install step after the gate in ci.yml and the suite went red (`1 failed, 8 passed`, test_the_real_workflow_satisfies_every_assertion at line 137); ci.yml restored, `git status --short .github/workflows/ci.yml` empty.\n  \u2713 FAILIF: the boardctl-backed plan/board proofs fail on a host that HAS boardctl, i.e. the fix bought nothing. PROOF: bash -c 'PATH=/home/kara/.local/bin:/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_xml_task_contract.py -q' prints 11 passed and exits 0.: Ran the exact proof: `11 passed in 0.38s`, exit=0. boardctl is present at /home/kara/.local/bin/boardctl (12368770 bytes), so the three boardctl-backed proofs really executed rather than being skipped. Combined run with the install-contract file: `20 passed in 0.46s`, exit=0.\n  \u2713 FAILIF: with boardctl absent from PATH the three plan/board proofs pass, are reported as skipped, or the suite prints green coverage it did not run - 4820be8's fail-loud intent must survive. PROOF: bash -c 'PATH=/usr/local/bin:/usr/bin:/bin /home/kara/auger/.venv/bin/python3 -m pytest tests/test_xml_task_contract.py -q' exits 1 with exactly 3 failed / 8 passed, the three failures being the boardctl-backed node ids.: Ran the exact proof: exit=1, `3 failed, 8 passed in 0.27s`. The three failures are exactly the boardctl-backed node ids: test_an_approved_plan_digest_exports_one_board_row, test_an_unapproved_or_stale_digest_leaves_the_board_untouched, test_the_exporter_only_invokes_boardctl_create_and_readback. Each fails at tests/test_xml_task_contract.py:393 via pytest.fail(\"boardctl is not installed on PATH; ... refusing to report skipped coverage as green.\") \u2014 no skip, no green. `git diff 4820be8 HEAD -- tests/test_xml_task_contract.py` is EMPTY, so the fail-loud commit is byte-identical and untouched by this change.\n  \u2713 FAILIF: tests/test_ci_boardctl_install.py is not named in the tests/gate.sh pytest arm, so the suite cannot regress the install contract. PROOF: bash -c 'grep -c test_ci_boardctl_install tests/gate.sh' prints 1.: Ran the exact proof: output `1`, exit=0. tests/gate.sh:218 \u2014 the pytest arm's file list ends with `... tests/test_spec_as_of.py tests/test_ci_boardctl_install.py \"$@\"`, so the new file is inside the gate's pytest invocation (append-only, no reorder or timeout change).\n  \u2713 The install step's shipped run body actually succeeds end-to-end against the real public release when the install dir is NOT already on PATH (the exact runner shape), and exports the dir via GITHUB_PATH.: Extracted the shipped run body verbatim from ci.yml (2061 chars) and executed it with the install dir absent from PATH: `env GITHUB_PATH=/tmp/aug174rev/ghpath BOARDCTL_INSTALL_DIR=/tmp/aug174rev/bin PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin bash run.sh` -> `boardctl_linux_amd64: OK` / `boardctl: installed v0.5.0 (boardctl_linux_amd64) to /tmp/aug174rev/bin/boardctl` / `boardctl version v0.5.0`, rc=0; ghpath contains `/tmp/aug174rev/bin`. The real network download of the public v0.5.0 release succeeded, and the absolute-path self-check (`\"${DEST}/boardctl\" version`) avoids the `command not found` red documented in evidence/AUG-174/07-path-export-absolute-selfcheck.txt.\n  \u2713 The install step fails closed on both refusal paths: unknown arch exits non-zero with a loud message, and a checksum that does not match aborts the step.: (a) unknown arch: ran the shipped body with `uname -m` replaced by `echo riscv64` -> `boardctl install: no release asset for arch 'riscv64' (supported: x86_64, aarch64)`, rc=1. (b) checksum mismatch: replaced the SHA256SUMS grep pattern with a non-matching asset name -> `sha256sum: 'standard input': no properly formatted checksum lines found`, rc=1 (set -euo pipefail aborts before install). Both refusal paths fail closed; neither silently falls back to an unverified asset.\n  \u2713 The install step is reachable in the real workflow job (jobs.gate.steps) and its prerequisites (curl, sha256sum, install, mktemp) are available on the declared runner ubuntu-latest without extra setup.: yaml.safe_load of ci.yml succeeds; jobs.gate.runs-on = `ubuntu-latest`; the install step is index 3 of 8 in jobs.gate.steps (not orphaned, not in a dead branch). Every tool the body uses resolves on a standard image \u2014 verified present on this host: curl /usr/bin/curl, sha256sum /usr/bin/sha256sum, install /usr/bin/install, mktemp /usr/bin/mktemp, grep /usr/bin/grep, uname /usr/bin/uname. The step needs no token: the release URL is the public github.com/coding-hermes/boardctl path.\n  \u2713 The new test file is hermetic and adds no dependency the CI 'install ruff and pytest' step does not already provide (pyyaml), so the gate arm cannot red on a missing import.: tests/test_ci_boardctl_install.py imports only stdlib (importlib.util, re, pathlib) plus pytest and yaml (lines 32-37). ci.yml:82 installs `\"ruff==0.15.22\" pytest pyyaml \"lxml>=5\"` in the step immediately BEFORE the boardctl install, so pyyaml is present. Hermetic: `pytest tests/test_ci_boardctl_install.py -q` -> `9 passed in 0.17s` with no network and no substrate. `ruff check tests/test_ci_boardctl_install.py` -> `All checks passed!`, rc=0; py_compile OK; LSP diagnostics empty.\n  \u2713 The fail-loud helper boardctl_or_skip is unchanged in behaviour (still pytest.fail, no pytest.skip) so 4820be8's intent is not weakened by the CI install.: `git diff 4820be8 HEAD -- tests/test_xml_task_contract.py` is EMPTY \u2014 the file is byte-identical to the fail-loud commit. boardctl_or_skip at tests/test_xml_task_contract.py:391-398 still calls pytest.fail (not pytest.skip) with the original message. Behaviour re-proven by the boardctl-less run (exit=1, 3 failed / 8 passed, each raising at line 393). Two tests in test_ci_boardctl_install.py pin this (test_boardctl_or_skip_still_raises_when_the_binary_is_missing, test_boardctl_or_skip_has_no_skip_fallback), both passing in the 9-passed run.\nAll five given criteria and all five derived criteria pass with executed proof: the pinned checksum-verified boardctl install sits at ci.yml:97 before the gate at :136, its shipped body installs and self-checks the real v0.5.0 release and fails closed on bad arch/checksum, the 9-test install contract is non-vacuous and wired into tests/gate.sh:218, and 4820be8's fail-loud proofs still red 3/8 without boardctl while passing 11/11 with it. [uncovered failure paths: failure mode 0 (The install step depends on a live network fetch of a third-party GitHub release; if the release asset or SHA256SUMS is ever removed or the tag is retagged, the step reds the whole gate before any code is tested.): detected_by is empty \u2014 uncovered failure path]\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-11-16T07:09:33.520665",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-16T07:09:33.538448+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 7342,
+        "truncated": false,
+        "source": "git show f62c6c35d0ea"
+      }
+    ],
+    "task_id": "AUG-174"
+  }
+}
