@@ -1,14 +1,32 @@
 """AUG-176 ingestion: markdown -> XML corpus conversion, coverage and recall battery.
 
 Tests marked HERMETIC run on fixtures in tmp dirs; tests over the SHIPPED corpora in
-corpora/ re-drive the committed XML through auger's own validators and (when the external
-source trees exist on this host) re-check the verbatim contract against the sources.
+corpora/ re-drive the committed XML through auger's own validators and re-verify the
+integrity contract two ways (AUG-179):
+
+  * PORTABLE (runs everywhere, CI included): every shipped block's whitespace-normalized
+    text must still hash to the `text_sha256` digest the converter computed FROM THE
+    SOURCE SPAN at conversion time and committed in the manifest. No external filesystem
+    is needed; a mutated or truncated block refuses with its block id named.
+  * HOST (only where the sources exist): the true verbatim containment assertion against
+    the source files. It runs when the manifest's declared root (or an env override, or
+    this repo's own tree for in-repo sources) resolves on this host; otherwise it SKIPS
+    with a NAMED reason — a missing source root is never a green test that asserted
+    nothing silently.
+
+Env knobs the tests honour:
+  AUGER_CORPORA_ROOT        corpora root override (default: <repo>/corpora)
+  AUGER_SPEC_SOURCE_ROOTS   comma-separated `project=<root>` overrides; naming a project
+                            pins its root for the host leg (a nonexistent pinned root
+                            simulates a CI host where the sources are absent).
 """
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -81,6 +99,47 @@ def _run_auger(*args: str) -> subprocess.CompletedProcess:
         text=True,
         timeout=120,
     )
+
+
+def _corpora_root() -> Path:
+    return Path(os.environ.get("AUGER_CORPORA_ROOT", str(REPO_ROOT / "corpora")))
+
+
+def _load_manifest(corpora: Path, project: str) -> dict:
+    return json.loads((corpora / project / "manifest.json").read_text(encoding="utf-8"))
+
+
+def _source_roots_override() -> dict[str, str]:
+    override = os.environ.get("AUGER_SPEC_SOURCE_ROOTS", "")
+    return dict(part.split("=", 1) for part in override.split(",") if "=" in part)
+
+
+def _resolve_source_file(project: str, manifest: dict, document: dict) -> Path | None:
+    """Resolve a document's source file on THIS host, or None when unavailable.
+
+    Resolution order: the AUGER_SPEC_SOURCE_ROOTS pin for this project (when set, it is
+    authoritative — a missing pinned root means "sources absent", the CI simulation);
+    the source as recorded absolutely at conversion time; the manifest's declared
+    source_root; and finally this repo's own tree, for sources that are committed in
+    it (the auger-docs corpus converts docs/ of THIS repository).
+    """
+    rel_from_root = Path(document["source_abs"]).relative_to(manifest["source_root"])
+    override = _source_roots_override()
+    if project in override:
+        pinned = Path(override[project])
+        if not pinned.exists():
+            return None
+        return pinned / rel_from_root
+    as_recorded = Path(document["source_abs"])
+    if as_recorded.exists():
+        return as_recorded
+    declared_root = Path(manifest["source_root"])
+    if declared_root.exists():
+        return declared_root / rel_from_root
+    in_repo = REPO_ROOT / document["source"]
+    if in_repo.exists():
+        return in_repo
+    return None
 
 
 def test_gate_pytest_arm_names_this_file():
@@ -200,23 +259,67 @@ def test_shipped_corpus_documents_validate_and_check():
     not all((REPO_ROOT / "corpora" / p / "manifest.json").exists() for p in PROJECTS),
     reason="shipped corpora not generated yet",
 )
-def test_shipped_blocks_are_verbatim_and_manifests_reconcile():
+def test_shipped_block_digests_match_manifest():
+    """PORTABLE integrity leg (AUG-179): runs on any host, CI included.
+
+    Every shipped block's whitespace-normalized text must still hash to the
+    `text_sha256` the converter computed from the block's SOURCE SPAN at conversion
+    time and committed in the manifest. No external filesystem is consulted, so a
+    mutated, truncated or reordered block refuses here with its block id named —
+    even on a host where none of the external source trees exist.
+    """
+    corpora = _corpora_root()
     for project in PROJECTS:
-        manifest = json.loads(
-            (REPO_ROOT / "corpora" / project / "manifest.json").read_text(
-                encoding="utf-8"
-            )
-        )
-        ingest.validate_manifest(manifest)
+        manifest = _load_manifest(corpora, project)
+        ingest.validate_manifest(manifest)  # refuses a manifest without valid digests
         for document in manifest["documents"]:
-            source = Path(document["source_abs"])
-            assert source.exists(), f"source vanished: {source}"
+            tree = _parse_with_comments(corpora / project / document["document"])
+            blocks = tree.getroot().findall(f"{NS}section")
+            assert len(blocks) == document["block_count"], document["source"]
+            digests = {b["id"]: b["text_sha256"] for b in document["blocks"]}
+            for block in blocks:
+                block_id = block.get("id")
+                assert block_id in digests, (
+                    f"{project}: block {block_id} is absent from the manifest"
+                )
+                body = " ".join((block.text or "").split())
+                actual = hashlib.sha256(body.encode("utf-8")).hexdigest()
+                assert actual == digests[block_id], (
+                    f"{project}: block {block_id} no longer matches its committed "
+                    "source digest (text_sha256) — the shipped XML drifted from the "
+                    "manifest written by scripts/ingest_markdown_specs.py"
+                )
+
+
+@pytest.mark.skipif(
+    not all((REPO_ROOT / "corpora" / p / "manifest.json").exists() for p in PROJECTS),
+    reason="shipped corpora not generated yet",
+)
+def test_shipped_blocks_are_verbatim_and_manifests_reconcile():
+    """HOST containment leg: the true verbatim assertion against the real sources.
+
+    Skips with a NAMED reason per project whose sources are unavailable on this host —
+    a named skip IS the evidence; the digest leg covered integrity on that host.
+    """
+    corpora = _corpora_root()
+    for project in PROJECTS:
+        manifest = _load_manifest(corpora, project)
+        ingest.validate_manifest(manifest)
+        resolved = _resolve_source_file(project, manifest, manifest["documents"][0])
+        if resolved is None:
+            pytest.skip(
+                f"source root for corpora/{project} not available on this host "
+                f"(manifest declares {manifest['source_root']}); the portable digest "
+                "leg (test_shipped_block_digests_match_manifest) covered corpus "
+                "integrity here"
+            )
+        for document in manifest["documents"]:
+            source = _resolve_source_file(project, manifest, document)
+            assert source is not None and source.exists(), f"source vanished: {source}"
             normalized = " ".join(
                 source.read_text(encoding="utf-8", errors="replace").split()
             )
-            tree = _parse_with_comments(
-                REPO_ROOT / "corpora" / project / document["document"]
-            )
+            tree = _parse_with_comments(corpora / project / document["document"])
             blocks = tree.getroot().findall(f"{NS}section")
             assert len(blocks) == document["block_count"], document["source"]
             for block in blocks:
@@ -224,6 +327,38 @@ def test_shipped_blocks_are_verbatim_and_manifests_reconcile():
                 assert body in normalized, (
                     f"{project}/{block.get('id')} is not a verbatim span of its source"
                 )
+
+
+def test_manifest_blocks_carry_source_span_digests(tmp_path):
+    """HERMETIC (AUG-179): the converter digests each block's SOURCE span, and the
+    digest matches the same normalization applied to the EMITTED block text."""
+    out_root, manifest = _convert_fixture(tmp_path)
+    for document in manifest["documents"]:
+        tree = _parse_with_comments(out_root / document["document"])
+        for block_record, block in zip(
+            document["blocks"], tree.getroot().findall(f"{NS}section"), strict=True
+        ):
+            assert block_record["source"].startswith(document["source"] + "#")
+            body = " ".join((block.text or "").split())
+            expected = hashlib.sha256(body.encode("utf-8")).hexdigest()
+            assert block_record["text_sha256"] == expected, block_record["id"]
+
+
+def test_validate_manifest_refuses_a_block_without_source_digest():
+    manifest = {
+        "documents": [
+            {
+                "source": "fixture/INTRO.md",
+                "section_count": 1,
+                "block_count": 1,
+                "blocks": [{"id": "FIX-X-S000", "text_sha256": ""}],
+                "skipped": [],
+            }
+        ],
+        "totals": {"files": 1, "sections": 1, "blocks": 1, "skipped": 0},
+    }
+    with pytest.raises(SystemExit, match="text_sha256"):
+        ingest.validate_manifest(manifest)
 
 
 def test_recall_hit_requires_target_key_in_hits():

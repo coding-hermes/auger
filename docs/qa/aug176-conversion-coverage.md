@@ -4,13 +4,15 @@ Generated from the committed manifests (corpora/*/manifest.json); counts are rea
 back from the manifests, never hand-typed. Owner directive: convert the
 code-factory, coding-hermes-director and auger residual-prose spec files into the
 auger XML corpus format with zero data loss, so the embedded text returns good
-recall (AUG-176, AC1/AC2).
+recall (AUG-176, AC1/AC2). Regenerate with scripts/gen_coverage_report.py.
 
 ## corpora/code-factory
 
 Source root: /home/kara/code-factory/specs — code-factory repo, specs/ (7 files)
 
 Id scheme: <PREFIX>-<FILE-SLUG>-<HEADING-SLUG>-S<ordinal> (see scripts/ingest_markdown_specs.py module docstring)
+
+Block integrity: text_sha256 = sha256 of the block's whitespace-normalized source-span text (see scripts/ingest_markdown_specs.py module docstring)
 
 | source file | sections | blocks | skipped |
 |---|---|---|---|
@@ -31,9 +33,11 @@ Skipped sections: none — every H2/H3 heading and the preamble converted to exa
 
 ## corpora/auger-docs
 
-Source root: /home/kara/worktrees/auger-AUG-176/docs — auger repo, docs/ residual prose
+Source root: /home/kara/worktrees/auger-AUG-179/docs — auger repo, docs/ residual prose
 
 Id scheme: <PREFIX>-<FILE-SLUG>-<HEADING-SLUG>-S<ordinal> (see scripts/ingest_markdown_specs.py module docstring)
+
+Block integrity: text_sha256 = sha256 of the block's whitespace-normalized source-span text (see scripts/ingest_markdown_specs.py module docstring)
 
 | source file | sections | blocks | skipped |
 |---|---|---|---|
@@ -64,6 +68,8 @@ Skipped sections: none — every H2/H3 heading and the preamble converted to exa
 Source root: /home/kara/specs/coding-hermes-director — coding-hermes-director spec tree (structured set; audit/tickets/handbook/review-evidence excluded with reasons)
 
 Id scheme: <PREFIX>-<FILE-SLUG>-<HEADING-SLUG>-S<ordinal> (see scripts/ingest_markdown_specs.py module docstring)
+
+Block integrity: text_sha256 = sha256 of the block's whitespace-normalized source-span text (see scripts/ingest_markdown_specs.py module docstring)
 
 | source file | sections | blocks | skipped |
 |---|---|---|---|
@@ -101,4 +107,3 @@ Excluded source files (AC2 — each with a named reason):
 - `build-spec/autogen/, acceptance/, integrated/, integration-evidence/, non-markdown files` — generated/derived build artifacts (JSON state machines, inventories, evidence bundles) — the 14 authored markdown volumes and indexes are converted
 
 Skipped sections: none — every H2/H3 heading and the preamble converted to exactly one block (AC1).
-

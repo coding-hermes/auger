@@ -27,6 +27,12 @@ Conversion rules (AUG-176 AC1/AC2/AC5):
     heading slug (upper-case, <=30 chars), NNN the zero-padded ordinal within the file
     (preamble = 000). Ids over 80 chars are shortened by trimming the slugs, then by appending
     a 6-hex md5 digest of the full key. Same inputs -> byte-identical output, always.
+  * Every manifest block also carries `text_sha256`: the SHA-256 of the block's
+    whitespace-normalized text as it was emitted FROM THE SOURCE SPAN (the same
+    normalization the verbatim test applies to the source). The digest is committed in
+    `corpora/*/manifest.json`, so the shipped XML can be re-verified against its
+    conversion-time text WITHOUT the external source trees existing on the host
+    (AUG-179): a mutated or truncated block refuses with the block id named.
 
 The emitted documents are ordinary authored specs: `<spec xmlns="urn:auger:spec:1" ...>` with
 `kind="section"` blocks, validating under `auger spec validate <root>` AND `auger spec check
@@ -234,7 +240,9 @@ def source_files(project: str) -> list[Path]:
 
     def is_excluded(path: Path) -> bool:
         as_given = str(path)
-        return any(as_given == excl or as_given.endswith("/" + excl) for excl in excluded)
+        return any(
+            as_given == excl or as_given.endswith("/" + excl) for excl in excluded
+        )
 
     return sorted({path for path in found if path.is_file() and not is_excluded(path)})
 
@@ -252,13 +260,28 @@ def rel_source(project: str, path: Path) -> str:
     return f"{label}/{path.relative_to(root).as_posix()}"
 
 
+def normalized_digest(text: str) -> str:
+    """SHA-256 of the whitespace-normalized block text (the verbatim contract's unit)."""
+    return hashlib.sha256(" ".join(text.split()).encode("utf-8")).hexdigest()
+
+
 def validate_manifest(manifest: dict) -> None:
     """Refuse a manifest whose bookkeeping cannot prove zero-loss conversion (AC1/AC2).
 
-    Every document must carry a section count equal to its block count, and every skipped
-    section must name a non-empty reason — a skip without a reason is a silent vanish.
+    Every document must carry a section count equal to its block count, every skipped
+    section must name a non-empty reason — a skip without a reason is a silent vanish —
+    and every block must carry a `text_sha256` digest of its source-span text (AUG-179):
+    without it the shipped corpus has no host-independent integrity record.
     """
     for document in manifest["documents"]:
+        for block in document["blocks"]:
+            digest = str(block.get("text_sha256", ""))
+            if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise SystemExit(
+                    f"{document['source']}: block {block.get('id')} carries no valid "
+                    '"text_sha256" source digest — regenerate the manifest with '
+                    "scripts/ingest_markdown_specs.py (AUG-179)"
+                )
         if document["section_count"] != document["block_count"]:
             raise SystemExit(
                 f"{document['source']}: {document['section_count']} section(s) but "
@@ -291,6 +314,8 @@ def convert_project(project: str, out_root: Path) -> dict:
         "source_label": config["source_label"],
         "id_scheme": "<PREFIX>-<FILE-SLUG>-<HEADING-SLUG>-S<ordinal> (see "
         "scripts/ingest_markdown_specs.py module docstring)",
+        "digest_scheme": "text_sha256 = sha256 of the block's whitespace-normalized "
+        "source-span text (see scripts/ingest_markdown_specs.py module docstring)",
         "documents": [],
         "excluded": EXCLUSIONS.get(project, []),
         "totals": {"files": 0, "sections": 0, "blocks": 0, "skipped": 0},
@@ -330,6 +355,10 @@ def convert_project(project: str, out_root: Path) -> dict:
                     "title": section["title"],
                     "anchor": section["anchor"],
                     "source": f"{rel}#{section['anchor']}",
+                    # Digest of the SOURCE span this block was emitted from, whitespace-
+                    # normalized exactly as the verbatim test normalizes both sides. It is
+                    # computed from the source text, never from the emitted XML (AUG-179).
+                    "text_sha256": normalized_digest(section["body"]),
                 }
             )
         document_id = (
@@ -365,7 +394,9 @@ def convert_project(project: str, out_root: Path) -> dict:
     # file's output from an earlier run, say) must not linger in the corpus root — the
     # loader indexes every *.xml under the root, so a stale document silently re-enters
     # the corpus the exclusion list just removed.
-    expected = {Path(d["document"]).name for d in manifest["documents"]} | {"manifest.json"}
+    expected = {Path(d["document"]).name for d in manifest["documents"]} | {
+        "manifest.json"
+    }
     for stale in out_root.glob("*.xml"):
         if stale.name not in expected:
             stale.unlink()
