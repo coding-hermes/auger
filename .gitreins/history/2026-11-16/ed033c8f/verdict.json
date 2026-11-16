@@ -1,0 +1,381 @@
+{
+  "task_id": "AUG-173",
+  "task_title": "AUG-173: the AUG-130 gate-mode case is hermetic to a docs-only HEAD",
+  "task_criteria": [
+    "The AUG-130 probe forces the full gate so a docs-only HEAD cannot take the doc-only fast path. PROOF: `grep -c \"AUGER_GATE_INNER=1 GATE_FULL=1\" tests/test_gate_mode.sh` prints 1. FAILIF: that count is 0 or greater than 1.",
+    "The gate-mode case passes at this head and prints its own verdict line. PROOF: `bash tests/test_gate_mode.sh` exits 0 and its output contains \"AUG-130 skipped-arm policy: PASS\". FAILIF: a non-zero exit, or that line absent from the output.",
+    "GATE_FULL is still the documented override that defeats the doc-only shortcut, and the shortcut still exists. PROOF: `grep -c \"GATE_FULL\" tests/gate.sh` prints 2 and `grep -c \"doc-only fast path\" tests/gate.sh` prints 5. FAILIF: either count drops, meaning the override was removed or the fast path deleted instead of bypassed.",
+    "No weakening of the AUG-130 skipped-arm policy. PROOF: `grep -c \"env -u AUGER_ALLOW_SKIPPED_ARMS\" tests/test_gate_mode.sh` prints 1, `grep -c \"GATE PASS (DEGRADED)\" tests/test_gate_mode.sh` prints 1, and `git diff c461056..HEAD -- tests/gate.sh` prints nothing. FAILIF: the strict leg sets the escape, the DEGRADED assertion disappears, or tests/gate.sh changed in this branch.",
+    "The red-to-green delta is committed as evidence, not asserted in prose. PROOF: `grep -c \"AUG-130: gate exited 0\" evidence/AUG-173/01-prefix-red-docsonly.txt` prints 1, `grep -c \"AUG-130 skipped-arm policy: PASS\" evidence/AUG-173/02-postfix-green-docsonly.txt` prints 1, and `grep -c \"rc=1\" evidence/AUG-173/04-nonvacuity.txt` prints 1. FAILIF: any of the three greps prints 0."
+  ],
+  "passed": true,
+  "worktree": "/home/kara/.hermes/cache/scratch/auger-judge-AUG173",
+  "branch": "",
+  "commit": "b15c4d08e697368cadf486d44fa4d712c3f2b3b3",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "b324dcbde63d449813d54a62dd22641255a6021954433eb903267de25506716a",
+  "working_tree_dirty_path_count": 2,
+  "items": [
+    {
+      "criterion": "The AUG-130 probe forces the full gate so a docs-only HEAD cannot take the doc-only fast path. PROOF: `grep -c \"AUGER_GATE_INNER=1 GATE_FULL=1\" tests/test_gate_mode.sh` prints 1. FAILIF: that count is 0 or greater than 1.",
+      "status": "PASS",
+      "detail": "`grep -c \"AUGER_GATE_INNER=1 GATE_FULL=1\" tests/test_gate_mode.sh` -> 1 (tests/test_gate_mode.sh:423, inside run_inner_gate()). Independently proven load-bearing, not just present: on a fresh detached worktree at docs-only commit c461056 (git diff --name-only HEAD~1 HEAD -> docs/qa/aug172-fix-proof.md), the fixed file exits 0 with 'AUG-130 skipped-arm policy: PASS'; stripping GATE_FULL=1 from line 423 makes the same tree exit 1 with 'AUG-130: gate exited 0 with its pytest arm NOT run:' and '== gate mode: DOC-ONLY fast path (skipping pytest + e2e smoke) =='. The override is what defeats the shortcut."
+    },
+    {
+      "criterion": "The gate-mode case passes at this head and prints its own verdict line. PROOF: `bash tests/test_gate_mode.sh` exits 0 and its output contains \"AUG-130 skipped-arm policy: PASS\". FAILIF: a non-zero exit, or that line absent from the output.",
+      "status": "PASS",
+      "detail": "`bash tests/test_gate_mode.sh` -> EXIT=0; output line 4 is 'AUG-130 skipped-arm policy: PASS' (tail: 'gate prerequisite preflight: PASS / AUG-116: zombie pid 2086627 classified dead / AUG-081 wrapper regression: PASS / AUG-130 skipped-arm policy: PASS'). Also reproduced green on a fresh detached worktree at docs-only c461056 with the fixed file: EXIT=0, same verdict line."
+    },
+    {
+      "criterion": "GATE_FULL is still the documented override that defeats the doc-only shortcut, and the shortcut still exists. PROOF: `grep -c \"GATE_FULL\" tests/gate.sh` prints 2 and `grep -c \"doc-only fast path\" tests/gate.sh` prints 5. FAILIF: either count drops, meaning the override was removed or the fast path deleted instead of bypassed.",
+      "status": "PASS",
+      "detail": "`grep -c \"GATE_FULL\" tests/gate.sh` -> 2 (tests/gate.sh:77 comment 'Override: GATE_FULL=1 forces the full gate regardless of diff', tests/gate.sh:79 `if [ \"${GATE_FULL:-0}\" != \"1\" ]`). `grep -c \"doc-only fast path\" tests/gate.sh` -> 5 (lines 74, 122, 238, 273, 291). The shortcut is intact and bypassed, not deleted: DOC_ONLY detection at gate.sh:78-95, and the two skip sites at gate.sh:237-238 (pytest) and gate.sh:272-273 (e2e-smoke) still exist."
+    },
+    {
+      "criterion": "No weakening of the AUG-130 skipped-arm policy. PROOF: `grep -c \"env -u AUGER_ALLOW_SKIPPED_ARMS\" tests/test_gate_mode.sh` prints 1, `grep -c \"GATE PASS (DEGRADED)\" tests/test_gate_mode.sh` prints 1, and `git diff c461056..HEAD -- tests/gate.sh` prints nothing. FAILIF: the strict leg sets the escape, the DEGRADED assertion disappears, or tests/gate.sh changed in this branch.",
+      "status": "PASS",
+      "detail": "`grep -c \"env -u AUGER_ALLOW_SKIPPED_ARMS\" tests/test_gate_mode.sh` -> 1 (line 423, the strict leg still unsets the escape); `grep -c \"GATE PASS (DEGRADED)\" tests/test_gate_mode.sh` -> 1 (line 461, assertion intact); `git diff c461056..HEAD -- tests/gate.sh` printed nothing (empty output). The DEGRADED leg is still genuine rather than vacuous: with GATE_FULL=1, DOC_ONLY=0, so the pytest arm reaches the `import pytest` probe at gate.sh:240 and skips as a REQUIRED arm, which is exactly what gate.sh:396-398 ('GATE PASS (DEGRADED)' / 'required arms NOT run: pytest' / 'NOT proof the suite ran') asserts."
+    },
+    {
+      "criterion": "The red-to-green delta is committed as evidence, not asserted in prose. PROOF: `grep -c \"AUG-130: gate exited 0\" evidence/AUG-173/01-prefix-red-docsonly.txt` prints 1, `grep -c \"AUG-130 skipped-arm policy: PASS\" evidence/AUG-173/02-postfix-green-docsonly.txt` prints 1, and `grep -c \"rc=1\" evidence/AUG-173/04-nonvacuity.txt` prints 1. FAILIF: any of the three greps prints 0.",
+      "status": "PASS",
+      "detail": "All three greps -> 1 each. The files are committed, not untracked: `git ls-tree -r --name-only HEAD -- evidence/AUG-173/` lists 01-prefix-red-docsonly.txt, 02-postfix-green-docsonly.txt, 03-postfix-green-worktree.txt, 04-nonvacuity.txt, NOTES.md, all added in c46514e (git show --stat: 6 files changed, 119 insertions). The recorded transcripts are reproducible: I re-ran the non-vacuity mutation (sed 'GATE FAIL: required arms did not run' -> 'GATE FAIL: arms did not run (MUTATED)') on a c461056 worktree and got EXIT=1 with 'expected output to contain GATE\\ FAIL:\\ arms\\ did\\ not\\ run\\ \\(MUTATED\\)', matching 04-nonvacuity.txt."
+    },
+    {
+      "criterion": "The GATE_FULL=1 addition is scoped to the AUG-130 probe and does not leak into other legs or make the DEGRADED assertion vacuous.",
+      "status": "PASS",
+      "detail": "`grep -n \"GATE_FULL\" tests/test_gate_mode.sh` -> only line 87 (pre-existing preflight probe, unchanged) and line 423 (the new one, inside run_inner_gate()). Both AUG-130 call sites (line 435 strict, line 452 degraded) route through run_inner_gate, so the change is confined to the two legs it is meant to fix. The DEGRADED leg still exercises the required-skip path: the mutation run printed '== gate mode: FULL gate ==', proving GATE_FULL=1 takes effect and DOC_ONLY=0, so the pytest skip at gate.sh:240 is a required-arm skip rather than a doc-only skip.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "no_concerns_found",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nscanners: nice=nice -n 10\n7:27PM INF scanned ~3627863 bytes (3.63 MB) in 1.74s\n7:27PM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 367 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [  9%]\n........................................................................ [ 18%]\n........................................................................ [ 28%]\n........................................................................ [ 37%]\n............................s........................................... [ 46%]\n..........s............................................................. [ 56%]\n........................................................................ [ 65%]\n........................................................................ [ 74%]\n........................................................................ [ 84%]\n........................................................................ [ 93%]\n...................................................                      [100%]\n769 passed, 2 skipped in 990.41s (0:16:30)\n== wrapper regression (AUG-081) ==\ngate prerequisite preflight: PASS\nAUG-116: zombie pid 2070682 classified dead (kill -0 alone would have said alive)\nAUG-081 wrapper regression: PASS\nAUG-130 skipped-arm policy: PASS\n== end-to-end smoke ==\nnamespace: auger-smoke-2072955\nno stale auger-smoke-*/auger-eval-*/auger-pytest-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n== check: a genuinely new question is NOT answered ==\n  PASS JEV correctly rejects an unanswered question\n== dump --config must NOT mutate stored state ==\n  PASS hypothetical dump left the record untouched\n== the what-if names the contradiction ==\n  PASS marked hypothetical, not written\n  PASS flags contradiction with the reason on file\n  PASS quotes the actual recorded reason\n== toggle writes ==\n\n\u2026 [557 chars omitted \u2014 14 line(s)] \u2026\nspec: 3 document(s), 12 block(s), 7 reference(s) ok\n== prd proofs (AUG-137) ==\nprd proofs: 8 total \u00b7 3 required \u00b7 5 deferred \u2192 PASS\n   P1  deferred not-run   not-run (deferred to AUG-119): auger.py carries no board surface (grep -c boardctl auger.py -> 0): resolving a\n   P2  required pass      corpus=9249B bundle=8131B latency=38.2ms  2 generated view(s) verified byte-identical to the generator's output for specs/; one block edit propagated to\n   P3  deferred not-run   not-run (deferred to AUG-153): the checker half is reachable (`auger spec check --diff-file` reports `trace-mi\n   P4  deferred not-run   not-run (deferred to AUG-119): writing and reading back a canonical boardctl row is boardctl's surface, not au\n   P5  required pass      corpus=1084B bundle=435B latency=1750.3ms  one query returned migration=tests/fixtures/xml/verification/migrations/001_add_marker.sql, fixture=tests/fixt\n   P6  deferred not-run   not-run (deferred to AUG-124): what counts as judge evidence \u2014 excluding the worker summary, refusing a PASS w\n   P7  required pass      corpus=9249B bundle=2944B latency=428.3ms  4/12 blocks selected by `applies-to auger.spec.select`; bundle is 31.8% of the corpus (2944 of 9249 bytes), fl\n   P8  deferred not-run   not-run (deferred to AUG-153): the flag and the process-liveness assertion live in the GitReins hook, which no\nprd-proofs: /home/kara/.hermes/cache/scratch/auger-judge-AUG173/docs/prd/evidence/AUG-137-prd-proofs.json agrees with this run\n== docs check ==\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 The AUG-130 probe forces the full gate so a docs-only HEAD cannot take the doc-only fast path. PROOF: `grep -c \"AUGER_GATE_INNER=1 GATE_FULL=1\" tests/test_gate_mode.sh` prints 1. FAILIF: that count is 0 or greater than 1.: `grep -c \"AUGER_GATE_INNER=1 GATE_FULL=1\" tests/test_gate_mode.sh` -> 1 (tests/test_gate_mode.sh:423, inside run_inner_gate()). Independently proven load-bearing, not just present: on a fresh detached worktree at docs-only commit c461056 (git diff --name-only HEAD~1 HEAD -> docs/qa/aug172-fix-proof.md), the fixed file exits 0 with 'AUG-130 skipped-arm policy: PASS'; stripping GATE_FULL=1 from line 423 makes the same tree exit 1 with 'AUG-130: gate exited 0 with its pytest arm NOT run:' and '== gate mode: DOC-ONLY fast path (skipping pytest + e2e smoke) =='. The override is what defeats the shortcut.\n  \u2713 The gate-mode case passes at this head and prints its own verdict line. PROOF: `bash tests/test_gate_mode.sh` exits 0 and its output contains \"AUG-130 skipped-arm policy: PASS\". FAILIF: a non-zero exit, or that line absent from the output.: `bash tests/test_gate_mode.sh` -> EXIT=0; output line 4 is 'AUG-130 skipped-arm policy: PASS' (tail: 'gate prerequisite preflight: PASS / AUG-116: zombie pid 2086627 classified dead / AUG-081 wrapper regression: PASS / AUG-130 skipped-arm policy: PASS'). Also reproduced green on a fresh detached worktree at docs-only c461056 with the fixed file: EXIT=0, same verdict line.\n  \u2713 GATE_FULL is still the documented override that defeats the doc-only shortcut, and the shortcut still exists. PROOF: `grep -c \"GATE_FULL\" tests/gate.sh` prints 2 and `grep -c \"doc-only fast path\" tests/gate.sh` prints 5. FAILIF: either count drops, meaning the override was removed or the fast path deleted instead of bypassed.: `grep -c \"GATE_FULL\" tests/gate.sh` -> 2 (tests/gate.sh:77 comment 'Override: GATE_FULL=1 forces the full gate regardless of diff', tests/gate.sh:79 `if [ \"${GATE_FULL:-0}\" != \"1\" ]`). `grep -c \"doc-only fast path\" tests/gate.sh` -> 5 (lines 74, 122, 238, 273, 291). The shortcut is intact and bypassed, not deleted: DOC_ONLY detection at gate.sh:78-95, and the two skip sites at gate.sh:237-238 (pytest) and gate.sh:272-273 (e2e-smoke) still exist.\n  \u2713 No weakening of the AUG-130 skipped-arm policy. PROOF: `grep -c \"env -u AUGER_ALLOW_SKIPPED_ARMS\" tests/test_gate_mode.sh` prints 1, `grep -c \"GATE PASS (DEGRADED)\" tests/test_gate_mode.sh` prints 1, and `git diff c461056..HEAD -- tests/gate.sh` prints nothing. FAILIF: the strict leg sets the escape, the DEGRADED assertion disappears, or tests/gate.sh changed in this branch.: `grep -c \"env -u AUGER_ALLOW_SKIPPED_ARMS\" tests/test_gate_mode.sh` -> 1 (line 423, the strict leg still unsets the escape); `grep -c \"GATE PASS (DEGRADED)\" tests/test_gate_mode.sh` -> 1 (line 461, assertion intact); `git diff c461056..HEAD -- tests/gate.sh` printed nothing (empty output). The DEGRADED leg is still genuine rather than vacuous: with GATE_FULL=1, DOC_ONLY=0, so the pytest arm reaches the `import pytest` probe at gate.sh:240 and skips as a REQUIRED arm, which is exactly what gate.sh:396-398 ('GATE PASS (DEGRADED)' / 'required arms NOT run: pytest' / 'NOT proof the suite ran') asserts.\n  \u2713 The red-to-green delta is committed as evidence, not asserted in prose. PROOF: `grep -c \"AUG-130: gate exited 0\" evidence/AUG-173/01-prefix-red-docsonly.txt` prints 1, `grep -c \"AUG-130 skipped-arm policy: PASS\" evidence/AUG-173/02-postfix-green-docsonly.txt` prints 1, and `grep -c \"rc=1\" evidence/AUG-173/04-nonvacuity.txt` prints 1. FAILIF: any of the three greps prints 0.: All three greps -> 1 each. The files are committed, not untracked: `git ls-tree -r --name-only HEAD -- evidence/AUG-173/` lists 01-prefix-red-docsonly.txt, 02-postfix-green-docsonly.txt, 03-postfix-green-worktree.txt, 04-nonvacuity.txt, NOTES.md, all added in c46514e (git show --stat: 6 files changed, 119 insertions). The recorded transcripts are reproducible: I re-ran the non-vacuity mutation (sed 'GATE FAIL: required arms did not run' -> 'GATE FAIL: arms did not run (MUTATED)') on a c461056 worktree and got EXIT=1 with 'expected output to contain GATE\\ FAIL:\\ arms\\ did\\ not\\ run\\ \\(MUTATED\\)', matching 04-nonvacuity.txt.\n  \u2713 The GATE_FULL=1 addition is scoped to the AUG-130 probe and does not leak into other legs or make the DEGRADED assertion vacuous.: `grep -n \"GATE_FULL\" tests/test_gate_mode.sh` -> only line 87 (pre-existing preflight probe, unchanged) and line 423 (the new one, inside run_inner_gate()). Both AUG-130 call sites (line 435 strict, line 452 degraded) route through run_inner_gate, so the change is confined to the two legs it is meant to fix. The DEGRADED leg still exercises the required-skip path: the mutation run printed '== gate mode: FULL gate ==', proving GATE_FULL=1 takes effect and DOC_ONLY=0, so the pytest skip at gate.sh:240 is a required-arm skip rather than a doc-only skip.\nThe one-token GATE_FULL=1 addition at tests/test_gate_mode.sh:423 is committed with reproducible red-to-green evidence, all five proof greps match exactly, tests/gate.sh is untouched, and I independently reproduced both the docs-only red (exit 1, DOC-ONLY fast path) and the post-fix green (exit 0) on a detached worktree at c461056.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 The AUG-130 probe forces the full gate so a docs-only HEAD cannot take the doc-only fast path. PROOF: `grep -c \"AUGER_GATE_INNER=1 GATE_FULL=1\" tests/test_gate_mode.sh` prints 1. FAILIF: that count is 0 or greater than 1.: `grep -c \"AUGER_GATE_INNER=1 GATE_FULL=1\" tests/test_gate_mode.sh` -> 1 (tests/test_gate_mode.sh:423, inside run_inner_gate()). Independently proven load-bearing, not just present: on a fresh detached worktree at docs-only commit c461056 (git diff --name-only HEAD~1 HEAD -> docs/qa/aug172-fix-proof.md), the fixed file exits 0 with 'AUG-130 skipped-arm policy: PASS'; stripping GATE_FULL=1 from line 423 makes the same tree exit 1 with 'AUG-130: gate exited 0 with its pytest arm NOT run:' and '== gate mode: DOC-ONLY fast path (skipping pytest + e2e smoke) =='. The override is what defeats the shortcut.\n  \u2713 The gate-mode case passes at this head and prints its own verdict line. PROOF: `bash tests/test_gate_mode.sh` exits 0 and its output contains \"AUG-130 skipped-arm policy: PASS\". FAILIF: a non-zero exit, or that line absent from the output.: `bash tests/test_gate_mode.sh` -> EXIT=0; output line 4 is 'AUG-130 skipped-arm policy: PASS' (tail: 'gate prerequisite preflight: PASS / AUG-116: zombie pid 2086627 classified dead / AUG-081 wrapper regression: PASS / AUG-130 skipped-arm policy: PASS'). Also reproduced green on a fresh detached worktree at docs-only c461056 with the fixed file: EXIT=0, same verdict line.\n  \u2713 GATE_FULL is still the documented override that defeats the doc-only shortcut, and the shortcut still exists. PROOF: `grep -c \"GATE_FULL\" tests/gate.sh` prints 2 and `grep -c \"doc-only fast path\" tests/gate.sh` prints 5. FAILIF: either count drops, meaning the override was removed or the fast path deleted instead of bypassed.: `grep -c \"GATE_FULL\" tests/gate.sh` -> 2 (tests/gate.sh:77 comment 'Override: GATE_FULL=1 forces the full gate regardless of diff', tests/gate.sh:79 `if [ \"${GATE_FULL:-0}\" != \"1\" ]`). `grep -c \"doc-only fast path\" tests/gate.sh` -> 5 (lines 74, 122, 238, 273, 291). The shortcut is intact and bypassed, not deleted: DOC_ONLY detection at gate.sh:78-95, and the two skip sites at gate.sh:237-238 (pytest) and gate.sh:272-273 (e2e-smoke) still exist.\n\n\u2026 [2002 chars omitted \u2014 2 line(s)] \u2026\n  \u2713 The GATE_FULL=1 addition is scoped to the AUG-130 probe and does not leak into other legs or make the DEGRADED assertion vacuous.: `grep -n \"GATE_FULL\" tests/test_gate_mode.sh` -> only line 87 (pre-existing preflight probe, unchanged) and line 423 (the new one, inside run_inner_gate()). Both AUG-130 call sites (line 435 strict, line 452 degraded) route through run_inner_gate, so the change is confined to the two legs it is meant to fix. The DEGRADED leg still exercises the required-skip path: the mutation run printed '== gate mode: FULL gate ==', proving GATE_FULL=1 takes effect and DOC_ONLY=0, so the pytest skip at gate.sh:240 is a required-arm skip rather than a doc-only skip.\nThe one-token GATE_FULL=1 addition at tests/test_gate_mode.sh:423 is committed with reproducible red-to-green evidence, all five proof greps match exactly, tests/gate.sh is untouched, and I independently reproduced both the docs-only red (exit 1, DOC-ONLY fast path) and the post-fix green (exit 0) on a detached worktree at c461056.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "The AUG-130 probe forces the full gate so a docs-only HEAD cannot take the doc-only fast path. PROOF: `grep -c \"AUGER_GATE_INNER=1 GATE_FULL=1\" tests/test_gate_mode.sh` prints 1. FAILIF: that count is 0 or greater than 1.",
+                "status": "PASS",
+                "detail": "`grep -c \"AUGER_GATE_INNER=1 GATE_FULL=1\" tests/test_gate_mode.sh` -> 1 (tests/test_gate_mode.sh:423, inside run_inner_gate()). Independently proven load-bearing, not just present: on a fresh detached worktree at docs-only commit c461056 (git diff --name-only HEAD~1 HEAD -> docs/qa/aug172-fix-proof.md), the fixed file exits 0 with 'AUG-130 skipped-arm policy: PASS'; stripping GATE_FULL=1 from line 423 makes the same tree exit 1 with 'AUG-130: gate exited 0 with its pytest arm NOT run:' and '== gate mode: DOC-ONLY fast path (skipping pytest + e2e smoke) =='. The override is what defeats the shortcut."
+              },
+              {
+                "criterion": "The gate-mode case passes at this head and prints its own verdict line. PROOF: `bash tests/test_gate_mode.sh` exits 0 and its output contains \"AUG-130 skipped-arm policy: PASS\". FAILIF: a non-zero exit, or that line absent from the output.",
+                "status": "PASS",
+                "detail": "`bash tests/test_gate_mode.sh` -> EXIT=0; output line 4 is 'AUG-130 skipped-arm policy: PASS' (tail: 'gate prerequisite preflight: PASS / AUG-116: zombie pid 2086627 classified dead / AUG-081 wrapper regression: PASS / AUG-130 skipped-arm policy: PASS'). Also reproduced green on a fresh detached worktree at docs-only c461056 with the fixed file: EXIT=0, same verdict line."
+              },
+              {
+                "criterion": "GATE_FULL is still the documented override that defeats the doc-only shortcut, and the shortcut still exists. PROOF: `grep -c \"GATE_FULL\" tests/gate.sh` prints 2 and `grep -c \"doc-only fast path\" tests/gate.sh` prints 5. FAILIF: either count drops, meaning the override was removed or the fast path deleted instead of bypassed.",
+                "status": "PASS",
+                "detail": "`grep -c \"GATE_FULL\" tests/gate.sh` -> 2 (tests/gate.sh:77 comment 'Override: GATE_FULL=1 forces the full gate regardless of diff', tests/gate.sh:79 `if [ \"${GATE_FULL:-0}\" != \"1\" ]`). `grep -c \"doc-only fast path\" tests/gate.sh` -> 5 (lines 74, 122, 238, 273, 291). The shortcut is intact and bypassed, not deleted: DOC_ONLY detection at gate.sh:78-95, and the two skip sites at gate.sh:237-238 (pytest) and gate.sh:272-273 (e2e-smoke) still exist."
+              },
+              {
+                "criterion": "No weakening of the AUG-130 skipped-arm policy. PROOF: `grep -c \"env -u AUGER_ALLOW_SKIPPED_ARMS\" tests/test_gate_mode.sh` prints 1, `grep -c \"GATE PASS (DEGRADED)\" tests/test_gate_mode.sh` prints 1, and `git diff c461056..HEAD -- tests/gate.sh` prints nothing. FAILIF: the strict leg sets the escape, the DEGRADED assertion disappears, or tests/gate.sh changed in this branch.",
+                "status": "PASS",
+                "detail": "`grep -c \"env -u AUGER_ALLOW_SKIPPED_ARMS\" tests/test_gate_mode.sh` -> 1 (line 423, the strict leg still unsets the escape); `grep -c \"GATE PASS (DEGRADED)\" tests/test_gate_mode.sh` -> 1 (line 461, assertion intact); `git diff c461056..HEAD -- tests/gate.sh` printed nothing (empty output). The DEGRADED leg is still genuine rather than vacuous: with GATE_FULL=1, DOC_ONLY=0, so the pytest arm reaches the `import pytest` probe at gate.sh:240 and skips as a REQUIRED arm, which is exactly what gate.sh:396-398 ('GATE PASS (DEGRADED)' / 'required arms NOT run: pytest' / 'NOT proof the suite ran') asserts."
+              },
+              {
+                "criterion": "The red-to-green delta is committed as evidence, not asserted in prose. PROOF: `grep -c \"AUG-130: gate exited 0\" evidence/AUG-173/01-prefix-red-docsonly.txt` prints 1, `grep -c \"AUG-130 skipped-arm policy: PASS\" evidence/AUG-173/02-postfix-green-docsonly.txt` prints 1, and `grep -c \"rc=1\" evidence/AUG-173/04-nonvacuity.txt` prints 1. FAILIF: any of the three greps prints 0.",
+                "status": "PASS",
+                "detail": "All three greps -> 1 each. The files are committed, not untracked: `git ls-tree -r --name-only HEAD -- evidence/AUG-173/` lists 01-prefix-red-docsonly.txt, 02-postfix-green-docsonly.txt, 03-postfix-green-worktree.txt, 04-nonvacuity.txt, NOTES.md, all added in c46514e (git show --stat: 6 files changed, 119 insertions). The recorded transcripts are reproducible: I re-ran the non-vacuity mutation (sed 'GATE FAIL: required arms did not run' -> 'GATE FAIL: arms did not run (MUTATED)') on a c461056 worktree and got EXIT=1 with 'expected output to contain GATE\\ FAIL:\\ arms\\ did\\ not\\ run\\ \\(MUTATED\\)', matching 04-nonvacuity.txt."
+              },
+              {
+                "criterion": "The GATE_FULL=1 addition is scoped to the AUG-130 probe and does not leak into other legs or make the DEGRADED assertion vacuous.",
+                "status": "PASS",
+                "detail": "`grep -n \"GATE_FULL\" tests/test_gate_mode.sh` -> only line 87 (pre-existing preflight probe, unchanged) and line 423 (the new one, inside run_inner_gate()). Both AUG-130 call sites (line 435 strict, line 452 degraded) route through run_inner_gate, so the change is confined to the two legs it is meant to fix. The DEGRADED leg still exercises the required-skip path: the mutation run printed '== gate mode: FULL gate ==', proving GATE_FULL=1 takes effect and DOC_ONLY=0, so the pytest skip at gate.sh:240 is a required-arm skip rather than a doc-only skip.",
+                "derived": true
+              }
+            ],
+            "summary": "The one-token GATE_FULL=1 addition at tests/test_gate_mode.sh:423 is committed with reproducible red-to-green evidence, all five proof greps match exactly, tests/gate.sh is untouched, and I independently reproduced both the docs-only red (exit 1, DOC-ONLY fast path) and the post-fix green (exit 0) on a detached worktree at c461056.",
+            "provenance": {
+              "model": "deepseek-v4-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "deepseek-v4-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-173\"}",
+          "exit_code": 0,
+          "output_sha": "dc1a8c569dde70cf7ab340049d19866d4e60a3ec18232c224c4deafd0a9dc29b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && git log --oneline -5 && git status --short | head -30",
+          "exit_code": 0,
+          "output_sha": "a1faac64d80fe647d2dcdc16b1a63635f88a54c56e399baaae574b0aabe80df6"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && git show --stat c46514e && echo \"=== DIFF ===\" && git show c46514e",
+          "exit_code": 0,
+          "output_sha": "ba640d0d79eb71d9b6977db52ca1e727a3407a0b3181383b87374ff597b4cc6b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && ls evidence/AUG-173/ 2>&1; echo \"---\"; ls tests/ | head -40",
+          "exit_code": 0,
+          "output_sha": "bb36c967c9b9508abcf97bad313aefd709e45773ac6ac2f3a845aab4d37280ef"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && echo \"AC1:\"; grep -c \"AUGER_GATE_INNER=1 GATE_FULL=1\" tests/test_gate_mode.sh; echo \"AC3a:\"; grep -c \"GATE_FULL\" tests/gate.sh; echo \"AC3b:\"; grep -c \"doc-only fast path\" tests/gate.sh; echo \"AC4a:\"; grep -c \"env -u AUGER_ALLOW_SKIPPED_ARMS\" tests/test_gate_mode.sh; echo \"AC4b:\"; grep -c \"GATE PASS (DEGRADED)\" tests/test_gate_mode.sh; echo \"AC4c (git diff):\"; git diff c461056..HEAD -- tests/gate.sh; echo \"[end diff]\"; echo \"AC5a:\"; grep -c \"AUG-130: gate exited 0\" evidence/AUG-173/01-prefix-red-docsonly.txt; echo \"AC5b:\"; grep -c \"AUG-130 skipped-arm policy: PASS\" evidence/AUG-173/02-postfix-green-docsonly.txt; echo \"AC5c:\"; grep -c \"rc=1\" evidence/AUG-173/04-nonvacuity.txt",
+          "exit_code": 0,
+          "output_sha": "c2c67b737b11da8c828ee82fbd5da30b9228dea5333ebf25035b03a9ea176e52"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && sed -n 60,110p tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "da0e2a80b2b45b0c92e8cca8be6d4e7677dab38d88bedc1b2cc9ca7f0d507ac6"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && sed -n 380,520p tests/test_gate_mode.sh",
+          "exit_code": 0,
+          "output_sha": "ad1a91f9824123551dd6d468ee2c87c7c805b2ee04ba9a37ae61a341e069af74"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && cat evidence/AUG-173/01-prefix-red-docsonly.txt; echo \"=== 02 ===\"; cat evidence/AUG-173/02-postfix-green-docsonly.txt; echo \"=== 04 ===\"; cat evidence/AUG-173/04-nonvacuity.txt",
+          "exit_code": 0,
+          "output_sha": "6811229f04ea2389dfe5c53b34c083cd4eed453ac13f533bcfdf1d0f87e1b56a"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && ls .venv/bin/python3 2>/dev/null; cat .gitreins/config.yaml 2>/dev/null | head -40",
+          "exit_code": 0,
+          "output_sha": "90085c515a8f109fe5dbc2a31a30f75f57b44a6b8d91f28203fb8b899807f093"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && sed -n 1,60p tests/test_gate_mode.sh",
+          "exit_code": 0,
+          "output_sha": "23cf3636c5ee2a393e66d54ea677411fab5b2327129ad1006c2b31984dfed948"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && ls -d .venv 2>/dev/null; which python3; python3 -c 'import pytest; print(\"pytest ok\")' 2>&1 | tail -2",
+          "exit_code": 0,
+          "output_sha": "7fd568909c2d2bf0e16bbcbc977f34fed66ca121124d120f811baf40a831ecca"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && sed -n 60,380p tests/test_gate_mode.sh",
+          "exit_code": 0,
+          "output_sha": "abffe459a5f39fefa6a511ce3135b12a787a976683aabb3db58c5e192f81c25e"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && timeout 1800 bash tests/test_gate_mode.sh > /tmp/aug173-review-run.txt 2>&1; echo \"EXIT=$?\"; echo \"--- tail ---\"; tail -20 /tmp/aug173-review-run.txt; echo \"--- verdict line ---\"; grep -n \"AUG-130 skipped-arm policy: PASS\" /tmp/aug173-review-run.txt",
+          "exit_code": 0,
+          "output_sha": "17ec7df2480f6794cbb3a515fcab0da6e135325b088f776c32d0af47ef8cdda0"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && echo \"HEAD files:\"; git diff --name-only HEAD~1 HEAD; echo \"---\"; echo \"c461056 files:\"; git diff --name-only c461056~1 c461056",
+          "exit_code": 0,
+          "output_sha": "1eea27b3ff55825eea82b6526a0f3acb3e5deac3848796911e8ffa2086e5dea2"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && grep -n \"GATE_FULL\\|DOC_ONLY\\|doc-only fast path\" tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "d737c9d6333e0478d2c2f5a4aaf21316ecd2184c895ee3975bac2afd614c11d4"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && rm -rf /tmp/aug173-verify && git worktree add --detach /tmp/aug173-verify c461056 >/dev/null 2>&1 && cp tests/test_gate_mode.sh /tmp/aug173-verify/tests/ && cd /tmp/aug173-verify && git diff --name-only HEAD~1 HEAD && echo \"--- running WITH fix (GATE_FULL=1) ---\" && PATH=/home/kara/auger/.venv/bin:$PATH timeout 1800 bash tests/test_gate_mode.sh > /tmp/aug173-verify-fixed.txt 2>&1; echo \"EXIT=$?\"; tail -5 /tmp/aug173-verify-fixed.txt",
+          "exit_code": 0,
+          "output_sha": "02bfdcc638ad25cf75595cfa6c6d610a15bb3cc3cff362fcd72d65cdd0d0c569"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug173-verify && sed -i 's/AUGER_GATE_INNER=1 GATE_FULL=1/AUGER_GATE_INNER=1/' tests/test_gate_mode.sh && grep -c \"GATE_FULL\" tests/test_gate_mode.sh; echo \"--- running WITHOUT fix ---\"; PATH=/home/kara/auger/.venv/bin:$PATH timeout 1800 bash tests/test_gate_mode.sh > /tmp/aug173-verify-unfixed.txt 2>&1; echo \"EXIT=$?\"; head -12 /tmp/aug173-verify-unfixed.txt",
+          "exit_code": 0,
+          "output_sha": "eca1e2741bbc3dcd045285a4ab3b0baac52d240c6976813d113ba9e2897e7d92"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git worktree remove --force /tmp/aug173-verify 2>&1; git worktree list",
+          "exit_code": 0,
+          "output_sha": "32f7b903c93626adc718a0a04bc3ecc38d86efa4ff25e2abce0d2781f6337366"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && cat evidence/AUG-173/03-postfix-green-worktree.txt; echo \"=== NOTES ===\"; cat evidence/AUG-173/NOTES.md",
+          "exit_code": 0,
+          "output_sha": "82f9dce5e351570660e16fbb52d487fc75bb45ac7148541fe794764f095e9aff"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: grep -c \\\"AUGER_GATE_INNER=1 GATE_FULL=1\\\" tests/test_gate_mode.sh -> 1. Line 423 in run_inner_gate(). Independently confirmed load-bearing: removing GATE_FULL=1 on a docs-only HEAD (c461056) makes the case exit 1 with \\\"AUG-130: gate exited 0 with its pytest arm NOT run\\\" + \\\"== gate mode: DOC-ONLY fast path\\\"; with it, exit 0.\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "0d217798b1a7cfa30587a00b7cb183c06774515cc2062343f399d9f79e2d8883"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: `bash tests/test_gate_mode.sh` EXIT=0; output line 4 \\\"AUG-130 skipped-arm policy: PASS\\\". Also reproduced on a fresh detached worktree at docs-only c461056 with the fixed file: EXIT=0, same verdict line.\", \"key\": \"verified_1\"}",
+          "exit_code": 0,
+          "output_sha": "0a1fd9abcb03f58c67db530fba0749e263b884529eeb366ee63b6cbb504a1aaf"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: grep -c \\\"GATE_FULL\\\" tests/gate.sh -> 2 (lines 77 comment \\\"Override: GATE_FULL=1 forces the full gate regardless of diff\\\", line 79 `if [ \\\"${GATE_FULL:-0}\\\" != \\\"1\\\" ]`). grep -c \\\"doc-only fast path\\\" tests/gate.sh -> 5 (lines 74, 122, 238, 273, 291). Shortcut still present at gate.sh:74-107, 237-238, 272-273; bypassed not deleted.\", \"key\": \"verified_2\"}",
+          "exit_code": 0,
+          "output_sha": "aabdddc7b5752fa06dd82a86b8efda1009cfbd66f2dec2e0fc395c7fcd781d54"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: grep -c \\\"env -u AUGER_ALLOW_SKIPPED_ARMS\\\" tests/test_gate_mode.sh -> 1; grep -c \\\"GATE PASS (DEGRADED)\\\" tests/test_gate_mode.sh -> 1; `git diff c461056..HEAD -- tests/gate.sh` printed nothing (empty). Strict leg still unsets the escape; DEGRADED assertion intact; gate.sh unchanged in branch.\", \"key\": \"verified_3\"}",
+          "exit_code": 0,
+          "output_sha": "0783ee16a710e317320f997875617c8256f6cfa1cf7fad68942a2cbfd75f16fd"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: grep -c \\\"AUG-130: gate exited 0\\\" evidence/AUG-173/01-prefix-red-docsonly.txt -> 1; grep -c \\\"AUG-130 skipped-arm policy: PASS\\\" evidence/AUG-173/02-postfix-green-docsonly.txt -> 1; grep -c \\\"rc=1\\\" evidence/AUG-173/04-nonvacuity.txt -> 1. All four evidence files + NOTES.md are committed in c46514e (git show --stat).\", \"key\": \"verified_4\"}",
+          "exit_code": 0,
+          "output_sha": "c89ab6502e26bceb0796298967b39a438a446e74345ee84bf3c3482a49b8f7de"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && echo \"=== GATE_FULL occurrences in test_gate_mode.sh ===\"; grep -n \"GATE_FULL\" tests/test_gate_mode.sh; echo \"=== run_inner_gate call sites ===\"; grep -n \"run_inner_gate\" tests/test_gate_mode.sh",
+          "exit_code": 0,
+          "output_sha": "3ab75fdf300823a1f9836a71272d82370d2ea9333cbfe4b718fb315edeb83de3"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && grep -n \"GATE PASS (DEGRADED)\\|required arms NOT run\\|NOT proof the suite ran\" tests/gate.sh | head -20",
+          "exit_code": 0,
+          "output_sha": "52873329919b9f9b5679a39014d1c5d3e5e0a4827f222db73091e59c052caa96"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && sed -n 230,300p tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "88b3798d8f15e131cc02ea54bf091ff074f00d726c7c00437f8412cdd162328f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && rm -rf /tmp/aug173-nv && git worktree add --detach /tmp/aug173-nv c461056 >/dev/null 2>&1 && cp tests/test_gate_mode.sh /tmp/aug173-nv/tests/ && cd /tmp/aug173-nv && sed -i \"s/GATE FAIL: required arms did not run/GATE FAIL: arms did not run (MUTATED)/\" tests/test_gate_mode.sh && grep -c \"MUTATED\" tests/test_gate_mode.sh && PATH=/home/kara/auger/.venv/bin:$PATH timeout 1800 bash tests/test_gate_mode.sh > /tmp/aug173-nv-out.txt 2>&1; echo \"EXIT=$?\"; head -6 /tmp/aug173-nv-out.txt",
+          "exit_code": 0,
+          "output_sha": "306bd93ccb1cfb323624d7d571615bf17519256e6b7e6310786a2736b3cb9536"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git worktree remove --force /tmp/aug173-nv 2>&1; echo \"cleaned\"; git status --short | head",
+          "exit_code": 0,
+          "output_sha": "b3f578d33e748653595028ef73c2505147d1306333644cdae02ea788d05c2e57"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: The fix is scoped to run_inner_gate() (tests/test_gate_mode.sh:423) and does not leak. grep -n GATE_FULL tests/test_gate_mode.sh -> only lines 87 (pre-existing preflight probe) and 423 (the new one). Both call sites (435 strict, 452 degraded) go through run_inner_gate. The DEGRADED leg remains genuine: with GATE_FULL=1, DOC_ONLY=0, so the pytest arm reaches the `import pytest` probe at gate.sh:240 and skips as a REQUIRED arm, which is what \\\"GATE PASS (DEGRADED)\\\" + \\\"required arms NOT run: pytest\\\" (gate.sh:396-398) asserts. Confirmed by the mutation run printing \\\"== gate mode: FULL gate ==\\\".\", \"key\": \"verified_derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "6840ec02e8417bbad61eb80b2a468893f4b84b5c78fed536aacf74012da4bb76"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && git show c46514e --stat --format=\"\" ; echo \"=== evidence files tracked at HEAD? ===\"; git ls-tree -r --name-only HEAD -- evidence/AUG-173/",
+          "exit_code": 0,
+          "output_sha": "6643529575c8a7770f4dd4d0fd25419e5605eec30cab00cf25f11282097ff892"
+        }
+      ]
+    }
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "The diff only appends a new task definition (AUG-173) to .gitreins/tasks.yaml with grep-based proof criteria; no code, wiring, or logic is changed, so no defect is evidenced."
+  },
+  "summary": "Stage tier1: PASS\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 The AUG-130 probe forces the full gate so a docs-only HEAD cannot take the doc-only fast path. PROOF: `grep -c \"AUGER_GATE_INNER=1 GATE_FULL=1\" tests/test_gate_mode.sh` prints 1. FAILIF: that count is 0 or greater than 1.: `grep -c \"AUGER_GATE_INNER=1 GATE_FULL=1\" tests/test_gate_mode.sh` -> 1 (tests/test_gate_mode.sh:423, inside run_inner_gate()). Independently proven load-bearing, not just present: on a fresh detached worktree at docs-only commit c461056 (git diff --name-only HEAD~1 HEAD -> docs/qa/aug172-fix-proof.md), the fixed file exits 0 with 'AUG-130 skipped-arm policy: PASS'; stripping GATE_FULL=1 from line 423 makes the same tree exit 1 with 'AUG-130: gate exited 0 with its pytest arm NOT run:' and '== gate mode: DOC-ONLY fast path (skipping pytest + e2e smoke) =='. The override is what defeats the shortcut.\n  \u2713 The gate-mode case passes at this head and prints its own verdict line. PROOF: `bash tests/test_gate_mode.sh` exits 0 and its output contains \"AUG-130 skipped-arm policy: PASS\". FAILIF: a non-zero exit, or that line absent from the output.: `bash tests/test_gate_mode.sh` -> EXIT=0; output line 4 is 'AUG-130 skipped-arm policy: PASS' (tail: 'gate prerequisite preflight: PASS / AUG-116: zombie pid 2086627 classified dead / AUG-081 wrapper regression: PASS / AUG-130 skipped-arm policy: PASS'). Also reproduced green on a fresh detached worktree at docs-only c461056 with the fixed file: EXIT=0, same verdict line.\n  \u2713 GATE_FULL is still the documented override that defeats the doc-only shortcut, and the shortcut still exists. PROOF: `grep -c \"GATE_FULL\" tests/gate.sh` prints 2 and `grep -c \"doc-only fast path\" tests/gate.sh` prints 5. FAILIF: either count drops, meaning the override was removed or the fast path deleted instead of bypassed.: `grep -c \"GATE_FULL\" tests/gate.sh` -> 2 (tests/gate.sh:77 comment 'Override: GATE_FULL=1 forces the full gate regardless of diff', tests/gate.sh:79 `if [ \"${GATE_FULL:-0}\" != \"1\" ]`). `grep -c \"doc-only fast path\" tests/gate.sh` -> 5 (lines 74, 122, 238, 273, 291). The shortcut is intact and bypassed, not deleted: DOC_ONLY detection at gate.sh:78-95, and the two skip sites at gate.sh:237-238 (pytest) and gate.sh:272-273 (e2e-smoke) still exist.\n  \u2713 No weakening of the AUG-130 skipped-arm policy. PROOF: `grep -c \"env -u AUGER_ALLOW_SKIPPED_ARMS\" tests/test_gate_mode.sh` prints 1, `grep -c \"GATE PASS (DEGRADED)\" tests/test_gate_mode.sh` prints 1, and `git diff c461056..HEAD -- tests/gate.sh` prints nothing. FAILIF: the strict leg sets the escape, the DEGRADED assertion disappears, or tests/gate.sh changed in this branch.: `grep -c \"env -u AUGER_ALLOW_SKIPPED_ARMS\" tests/test_gate_mode.sh` -> 1 (line 423, the strict leg still unsets the escape); `grep -c \"GATE PASS (DEGRADED)\" tests/test_gate_mode.sh` -> 1 (line 461, assertion intact); `git diff c461056..HEAD -- tests/gate.sh` printed nothing (empty output). The DEGRADED leg is still genuine rather than vacuous: with GATE_FULL=1, DOC_ONLY=0, so the pytest arm reaches the `import pytest` probe at gate.sh:240 and skips as a REQUIRED arm, which is exactly what gate.sh:396-398 ('GATE PASS (DEGRADED)' / 'required arms NOT run: pytest' / 'NOT proof the suite ran') asserts.\n  \u2713 The red-to-green delta is committed as evidence, not asserted in prose. PROOF: `grep -c \"AUG-130: gate exited 0\" evidence/AUG-173/01-prefix-red-docsonly.txt` prints 1, `grep -c \"AUG-130 skipped-arm policy: PASS\" evidence/AUG-173/02-postfix-green-docsonly.txt` prints 1, and `grep -c \"rc=1\" evidence/AUG-173/04-nonvacuity.txt` prints 1. FAILIF: any of the three greps prints 0.: All three greps -> 1 each. The files are committed, not untracked: `git ls-tree -r --name-only HEAD -- evidence/AUG-173/` lists 01-prefix-red-docsonly.txt, 02-postfix-green-docsonly.txt, 03-postfix-green-worktree.txt, 04-nonvacuity.txt, NOTES.md, all added in c46514e (git show --stat: 6 files changed, 119 insertions). The recorded transcripts are reproducible: I re-ran the non-vacuity mutation (sed 'GATE FAIL: required arms did not run' -> 'GATE FAIL: arms did not run (MUTATED)') on a c461056 worktree and got EXIT=1 with 'expected output to contain GATE\\ FAIL:\\ arms\\ did\\ not\\ run\\ \\(MUTATED\\)', matching 04-nonvacuity.txt.\n  \u2713 The GATE_FULL=1 addition is scoped to the AUG-130 probe and does not leak into other legs or make the DEGRADED assertion vacuous.: `grep -n \"GATE_FULL\" tests/test_gate_mode.sh` -> only line 87 (pre-existing preflight probe, unchanged) and line 423 (the new one, inside run_inner_gate()). Both AUG-130 call sites (line 435 strict, line 452 degraded) route through run_inner_gate, so the change is confined to the two legs it is meant to fix. The DEGRADED leg still exercises the required-skip path: the mutation run printed '== gate mode: FULL gate ==', proving GATE_FULL=1 takes effect and DOC_ONLY=0, so the pytest skip at gate.sh:240 is a required-arm skip rather than a doc-only skip.\nThe one-token GATE_FULL=1 addition at tests/test_gate_mode.sh:423 is committed with reproducible red-to-green evidence, all five proof greps match exactly, tests/gate.sh is untouched, and I independently reproduced both the docs-only red (exit 1, DOC-ONLY fast path) and the post-fix green (exit 0) on a detached worktree at c461056.\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-11-16T00:45:52.268842",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-16T00:45:52.355515+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 1131,
+        "truncated": false,
+        "source": "git show b15c4d08e697"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 2110,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-173"
+  }
+}
