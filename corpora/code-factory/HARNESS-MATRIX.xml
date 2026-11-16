@@ -1,0 +1,265 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from code-factory/specs/HARNESS-MATRIX.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CF-HARNESS-MATRIX-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: code-factory/specs/HARNESS-MATRIX.md#preamble -->
+  <section id="CF-HARNESS-MATRIX-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+# SPEC — harness matrix
+
+Which harness runs which model, what every harness must be given, how the choice is switched, and
+what it must report back.
+
+This is the design authority for the harness work; `specs/HARNESS.md` owns the adapter contract,
+`specs/NODE.md` owns the node, and this file owns the **selection rule**, the **variable contract**
+and the **switching model**.
+
+Measured inputs: `~/code-factory-reports/spec-crier-harness-support-2026-11-05.md` (what
+crier ships, file:line), `~/code-factory-reports/spec-bunker-toolchain-2026-11-05.md` (what
+a node must install), and npm registry metadata read on 2026-11-05 for the versions in §2.
+
+---
+  </section>
+  <!-- source: code-factory/specs/HARNESS-MATRIX.md#1-the-invariants -->
+  <section id="CF-HARNESS-MATRIX-1-THE-INVARIANTS-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 1. The invariants
+
+**I1 — The foreman is always Hermes.** Every lane that grades, closes a row, writes the board, or
+decides "this is done" runs on Hermes, on the node, with the coding-hermes skills loaded. No model
+choice changes this: the foreman owns the evidence chain (`boardctl`, tick accounting, artifact
+digests), and a harness that cannot write the board cannot be the foreman.
+
+**I2 — The harness is a per-lane SETTING, not a property of the model.** Any model may run in any
+harness that can host it (§3). "An OpenAI model in Claude Code" and "a Claude model in Codex" are
+legitimate configurations, not mistakes — an operator may want one harness's editing loop on
+another provider's price, or a sandbox they trust around a model they do not. §2's defaults are
+defaults.
+
+**I3 — Every supported harness reports one canonical record to the same DuckBrain namespace.** The
+record is exactly this object (all values are non-empty strings):
+
+```json
+{"commit":"&lt;sha&gt;","harness":"&lt;name&gt;","harness_version":"&lt;version&gt;","lane":"&lt;lane&gt;","model_requested":"&lt;id&gt;","model_served":"&lt;id-or-unavailable:reason&gt;","namespace":"&lt;project-namespace&gt;","provider_binding":"&lt;native-or-shim/name&gt;","run_id":"&lt;bus-run-id&gt;","tick":"&lt;tick-or-&gt;"}
+```
+
+The key order above is illustrative; the canonical bytes are UTF-8 JSON with sorted keys, compact
+separators and no ASCII escaping. `scripts/harness/harness_memory.py` is the one writer and reader
+used by the conformance fixture (and is a seam for a future DuckBrain adapter). It must be given the
+project namespace explicitly, writes no default, and rejects a missing or mismatched namespace.
+The conformance `memory` leg writes the record and reads those exact bytes back. A harness that
+cannot supply every field — including a real `model_served` or an explicit
+`unavailable:&lt;reason&gt;` — is marked `unsupported` in this matrix and is not silently skipped.
+This is the requirement that makes the matrix worth having: every named harness, one memory.
+
+**Memory support today:** hermes, claude-code, codex, opencode, pi-agent, dsh,
+deepseek, opencode-v2, aider and goose are **unsupported for I3 runtime capture**:
+none of their actual run paths calls the shared writer or exports the complete provenance.
+The conformance memory leg tests a labelled hermetic fixture for each ID, not the live
+harness or DuckBrain. In particular dsh cannot distinguish `model_served` from its request.
+OMH is an operating layer over Hermes and has no independent exporter. These statuses are
+not changed by a fixture PASS; live capture, DuckBrain transport and F3 R1/R2 remain unverified.
+
+**I4 — Nothing is supported because it is installed.** Support means five green legs in the
+conformance battery (`PASS`/`SKIP`/`FAIL` with a measured value), on a real node, for a real turn.
+`--check` alone is not support.
+
+**I5 — The node refuses what it cannot run, and says which kind of "cannot".** An unknown or
+uninstallable harness is `harness_unsupported: &lt;name&gt;; node has: &lt;set&gt;`. A harness that exists but
+cannot reach the model's provider is `harness_cannot_host: &lt;harness&gt; &lt;family&gt;` — a different
+failure, because one is fixed by installing and the other only by changing configuration.
+
+---
+  </section>
+  <!-- source: code-factory/specs/HARNESS-MATRIX.md#2-the-harnesses-measured -->
+  <section id="CF-HARNESS-MATRIX-2-THE-HARNESSES-MEASURED-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 2. The harnesses, measured
+
+| Harness | Package / binary | Version seen | What it is | State in our tree |
+|---|---|---|---|---|
+| **hermes** | `hermes-agent` (pip) / `hermes` | 0.19.0 pin; 0.25.5 live on the control host | model-agnostic agent + gateway; **the foreman** | **MEASURED**: venv install, gateway `/api/status 200`, bus worker READY on `cf-node` |
+| **oh-my-hermes (omh)** | `oh-my-hermes` (npm) / `omh` | **4.0.5**; node ≥18; 8 MB; repo `rlaope/oh-my-hermes` | an **operating layer over Hermes**: workflow skills, the `omh` maintenance CLI, and provider/model setup across 13 providers (OpenAI, Claude, Gemini, Grok, Kimi, DeepSeek, GLM, Qwen, Mistral, Llama, MiniMax, Gemma, Moonshot) | not installed; **five same-named forks exist** → provenance check mandatory |
+| **opencode** | `opencode-ai` (npm) / `opencode` | host runs 1.18.29 | general coding agent, OSS-model friendly | adapter in crier; installer check-only. **No v2 artefact exists** (`opencode2` is a squatted `0.0.1-security`; `opencode-ai@latest` is 1.19.5) |
+| **oh-my-pi (omp)** | `@oh-my-pi/pi-coding-agent` (npm) / `pi` adapter alias | **18.16.0**; engine **bun ≥1.4.4**; ~82 MB; repo `can1357/oh-my-pi` | pi's coding agent with session management | `scripts/harness/install-pi-agent.sh` now has a deterministic fixture-backed, user-space ladder; live upstream install and live turn remain **UNVERIFIED** |
+| **codex** | codex CLI / `codex` | **0.166.0** pin, read back as `codex-cli 0.166.0` | OpenAI's coding agent; **`exec` is the measured surface** (`codex exec --json -s &lt;mode&gt; -c model_provider="openai" -m &lt;model&gt; -- &lt;text&gt;`), app-server is `[experimental]` and unused in crier | **MEASURED install** (`scripts/harness/install-codex.sh`: musl tarball, sha256-pinned, user-space under `$HOME/.local/codex/&lt;pin&gt;`, idempotent; the same ladder installs the sha256-pinned `codex-code-mode-host` sidecar beside the binary — without it every exec tool call fails closed and a turn exits 0 having written no artifact, CF-006); adapter in crier (`internal/harness/codex/`). The conformance smoke turn **pins `-c model_provider="openai" -m &lt;model&gt;` on argv**: an ambient `~/.codex/config.toml` may name a router this repo never installed, and a turn that inherits it measures that router, not codex |
+| **claude-code** | `@anthropic-ai/claude-code` (npm) | **2.1.318 pin**, read back as `2.1.318 (Claude Code)` | Anthropic's coding agent | **MEASURED install ladder** (`scripts/harness/install-claude-code.sh`, CF-225: registry integrity + shasum pinned, user-space npm prefix under `$HOME`, idempotent second `--apply`); **absent from crier entirely** (`CRIER-HARNESS-11`), so it is not a *supported* harness — I4 needs the five legs on a node |
+| **deepseek-harness (dsh)** | `@deepseek-ai/dsh` (npm) / `dsh` | **0.2.1-rc.5** pinned; `latest` on the registry is `0.2.2-rc.1`; repo `deepseek-ai/deepseek-harness` | DeepSeek's own open-source harness: "everything is a plugin" (Cordis); non-interactive surface `dsh headless "&lt;task&gt;"` (`--json` for NDJSON run events) | **MEASURED install ladder** (`scripts/harness/install-dsh.sh`, CF-226: `npm --prefix` under `$HOME/.local/harness/dsh`, registry integrity + shasum pinned, 618 packages / 858 MB, idempotent second `--apply`, version read back `0.2.1-rc.5`) **and one measured turn** (`dsh-turn.txt` carrying a fixed token, `model` read from dsh's own session record, 25 tools registered, `permission/preset=workspace-write`). No crier adapter: the decision is recorded in `specs/HARNESS.md` §"dsh — the adapter decision" |
+
+**Correction recorded, not quietly edited.** The previous revision of this file said "there is no
+deepseek harness". That was measured against *our* two trees and then stated as a fact about the
+world. It is real: `deepseek-ai/deepseek-harness`, CLI `dsh`, npm `@deepseek-ai/dsh`. That it is an
+RC at `0.2.x` is a reason to pin it and re-measure often, not a reason to deny it exists. **CF-226
+replaced the sentence with a measurement:** `scripts/harness/install-dsh.sh` installs
+`@deepseek-ai/dsh@0.2.1-rc.5` under `$HOME`, reads `dsh --version` back, is idempotent, and runs one
+real turn — so the row above no longer says "absent from both repos", it says what was measured.
+The pin is an exact prerelease version, and `install-dsh.sh --pin-status` is the one command that
+re-measures it: the registry must still serve the recorded `dist.integrity`/`dist.shasum`, and a
+newer RC (`0.2.2-rc.1` at the time of writing) is named with the exact three-constant edit that
+adopts it. The `deepseek` row the conformance battery also carries probes a **different** binary
+named `deepseek`; that one is still unmeasured and its adapter still refuses `--apply` by name.
+
+**oh-my-hermes is a layer, not a peer.** It configures Hermes' providers and installs workflow
+skills; it does not replace the agent. That makes it the natural answer to "how do we set up 13
+providers on a node without hand-editing YAML", and the natural risk to pin, because its name is
+shared by five forks.
+
+---
+  </section>
+  <!-- source: code-factory/specs/HARNESS-MATRIX.md#3-what-each-harness-can-host -->
+  <section id="CF-HARNESS-MATRIX-3-WHAT-EACH-HARNESS-CAN-HOST-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 3. What each harness can host
+
+Capability, declared per harness rather than assumed. A harness is usable for a lane when it can
+reach the model's provider — natively, through its own provider list, or through a custom
+`base_url` pointing at the node's router.
+
+| Harness | Native providers | Custom `base_url` | Note |
+|---|---|---|---|
+| hermes | any (gateway is provider-agnostic) | yes | the reason it is the fallback and the foreman |
+| oh-my-hermes | 13 via `omh model setup` | via Hermes | it configures Hermes, so its capability is Hermes' |
+| opencode | many OSS providers via config blocks | yes | provider list is a file |
+| omp (pi) | pi's provider list | yes | needs the bun runtime |
+| codex | OpenAI natively | only if the endpoint speaks the OpenAI shape | cross-provider = proxy or honest refusal |
+| claude-code | Anthropic natively; others via `ANTHROPIC_BASE_URL` shim | yes, with a shim | the shim must be named in the record |
+| dsh | DeepSeek natively; others via plugins | via plugin | plugin layers mean a failure can be at any layer — diagnose per layer |
+
+**The consequence, stated plainly:** cross-provider execution is a capability of the harness *plus a
+shim*, and it must be recorded. A run reporting `model_served: claude-…` that actually went through
+a Codex binary is only useful evidence if `provider_binding: shim/&lt;what&gt;` is on the record too.
+
+---
+  </section>
+  <!-- source: code-factory/specs/HARNESS-MATRIX.md#4-the-resolution-rule -->
+  <section id="CF-HARNESS-MATRIX-4-THE-RESOLUTION-RULE-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 4. The resolution rule
+
+```
+harness = directive.harness                 # explicit wins (a lane or a run may pin one)
+        | lane.harness                      # per-lane setting
+        | matrix[lane.model.family]         # the DEFAULT table
+        | "hermes"                          # policy fallback
+```
+
+Refuse, do not fall back, when: the lane is a foreman lane and the harness is not hermes (I1); the
+harness is installed but cannot host the model's provider and no shim is configured
+(`harness_cannot_host`); the directive names an unknown harness (`harness_unsupported`).
+
+Record the decision on every run: `harness_selected`, `harness_reason`
+(`directive|lane|matrix|fallback`), `model_requested`, `model_served`, `provider_binding`. An
+unrecorded fallback is indistinguishable from a mistake, and an unrecorded shim is worse.
+
+---
+  </section>
+  <!-- source: code-factory/specs/HARNESS-MATRIX.md#5-the-variable-contract-what-an-installer-and-a-harness-are-given -->
+  <section id="CF-HARNESS-MATRIX-5-THE-VARIABLE-CONTRACT-WHAT-A-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 5. The variable contract — what an installer and a harness are given
+
+The same set goes to `scripts/harness/install-&lt;name&gt;.sh --apply` and to the harness at run time
+(from the directive, never from the node's ambient environment). Names are stable; a harness that
+needs an additional input declares it in its adapter section and adds it here.
+
+| Variable | Meaning | Rule |
+|---|---|---|
+| `CF_MODEL` | model id requested by task-router | required |
+| `CF_PROVIDER` | provider lane (`anthropic`, `openai-codex`, `deepseek`, `pi`, `zai`, …) | required |
+| `CF_BASE_URL` | endpoint the harness must talk to (node router, gateway, or shim) | optional; default = node router |
+| `CF_API_KEY_FILE` | **path** to a mode-600 file holding the key | required for a paid provider; **a value in argv is a FAIL** (AGENTS.md r8) |
+| `CF_WORKDIR` | the clone the harness may write in | required; must be inside `$HOME` |
+| `CF_NAMESPACE` | DuckBrain namespace for the run's writes | required (I3) |
+| `CF_RUN_ID` | correlation id from the bus envelope | required; echoed into every memory write |
+| `CF_LANE` | lane name (e.g. `code-factory-qa`) | required; the node serves one project, many lanes |
+| `CF_SKILLS_DIR` | seeded skills root on the node | optional; hermes and omh use it |
+| `CF_HARNESS_OPTS` | harness-specific bag (`key=value,key=value`) | optional, **and recorded** — an unrecorded option makes two runs incomparable |
+| `CF_MAX_TURNS` / `CF_TIMEOUT_S` | budget | optional; default 40 / 1800 |
+
+Two rules that are cheap now and expensive later: **no credential is ever passed as a value**, and
+**no harness may read a model or a key from the node's ambient environment** — the directive is the
+only source, so two lanes on one node cannot contaminate each other.
+
+**Implemented once.** `scripts/harness/harness-vars.sh` is the single implementation of this
+section: each installer accepts every name below as a flag *and* as a CF_ environment variable,
+refuses a credential value (exit 2, the value never echoed) and an ambient provider key, requires
+the workdir to exist inside `$HOME`, bounds the budget, and records every name it accepted — so no
+declared variable can be accepted and then silently ignored. `scripts/node-bus-worker.py` carries
+the same set from the dispatch's `vars` object into the harness child's environment (scrubbing every
+ambient CF_ variable first) and writes name + set/unset + length into the result envelope, which is
+what lets two runs be compared. `tests/harness-conformance.sh`'s `vars` leg and
+`tests/harness/vars-contract-test.sh` are the proofs, per installer.
+
+---
+  </section>
+  <!-- source: code-factory/specs/HARNESS-MATRIX.md#6-switching-and-management-how-it-is-operated -->
+  <section id="CF-HARNESS-MATRIX-6-SWITCHING-AND-MANAGEMENT-HOW-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 6. Switching and management — how it is operated
+
+Switching which harness serves a model is a **configuration change, never a reinstall**:
+
+1. one file per node declares the defaults — `harness.default`, `harness.by_family{…}`,
+   `harness.shims{…}` — the same shape as `config/node.env.example`;
+2. one per-lane override in the scheduler's lane config (`lane.harness`);
+3. one per-run override in the directive (`harness`);
+4. `harness_resolve.py --explain &lt;model&gt; [--lane L]` prints the decision and the reason it won, so
+   "why did this run in Codex?" is answerable without reading code;
+5. changing the file takes effect on the next tick — a swap does not restart the node;
+6. every switch is visible: `harness_reason` changes from `matrix` to `lane`/`directive`, which is
+   how a reviewer sees that a run was pinned.
+
+Management surfaces: `install-&lt;harness&gt;.sh --check` (installed? which pin), `harness_resolve.py
+--explain` (what will run), and the conformance matrix (what actually works).
+
+---
+  </section>
+  <!-- source: code-factory/specs/HARNESS-MATRIX.md#7-what-wired-up-means-per-harness -->
+  <section id="CF-HARNESS-MATRIX-7-WHAT-WIRED-UP-MEANS-PER-HARN-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 7. What "wired up" means, per harness
+
+Five legs. A harness is supported when all five are `PASS` on a real node; `SKIP` is acceptable only
+when the reason is named (no credential, no artefact).
+
+| Leg | Proves |
+|---|---|
+| `check` | the adapter reports absence honestly and a version that was read back |
+| `install` | `--apply` is idempotent, user-space, pinned, and the pin is measured after install |
+| `vars` | the harness accepts the §5 set, and the **negative** cases fail: a value in argv, an ambient key |
+| `turn` | one real turn produces a known artifact (a file with a fixed token) and reports `model_served` |
+| `memory` | the run writes the §1-I3 record to DuckBrain with the right namespace and `run_id`, read back |
+
+`tests/harness-conformance.sh` implements this table; its matrix is the release gate for the word
+"supported".
+
+---
+  </section>
+  <!-- source: code-factory/specs/HARNESS-MATRIX.md#8-backlog-deliberately-not-mvp-filed-so-the-loop-carries-them -->
+  <section id="CF-HARNESS-MATRIX-8-BACKLOG-DELIBERATELY-NOT-MVP-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 8. Backlog — deliberately not MVP, filed so the loop carries them
+
+None of these blocks a first end-to-end run, and all of them are large:
+
+- **cross-provider matrix (§3)** — measure, per harness, which providers it can reach and via which
+  shim; require `provider_binding` on every run;
+- **switching/management surface (§6)** — `--explain` plus a safe node-level config editor;
+- **oh-my-hermes integration** — decide whether OMH becomes the supported way to configure a node's
+  providers (provenance-pinned) or stays optional;
+- **dsh crier adapter** — the installer, the pinned ladder, the per-layer diagnosis and one measured
+  turn land with CF-226; a crier adapter for `deepseek-harness` is a separate decision, recorded in
+  `specs/HARNESS.md` §"dsh — the adapter decision" with what an adapter would have to parse;
+- **per-harness provider probing** — a `--probe-provider` leg that asks the harness what it can
+  reach instead of trusting this table;
+- **harness swap without reprovisioning** — the §6 path proven by a test that flips a family and
+  observes the next run's `harness_reason`.
+
+---
+  </section>
+  <!-- source: code-factory/specs/HARNESS-MATRIX.md#9-non-claims -->
+  <section id="CF-HARNESS-MATRIX-9-NON-CLAIMS-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 9. Non-claims
+
+- **opencode v2** has no artefact (`opencode2` = `0.0.1-security`; `opencode-ai@latest` = 1.19.5).
+- **claude-code is unimplemented in crier** (`CRIER-HARNESS-11`); the matrix cannot promise it.
+- **dsh is an RC** (`0.2.1-rc.5` pinned; `0.2.2-rc.1` is the registry's `latest` at the time of
+  writing): pin it to an exact prerelease version, re-measure it with `install-dsh.sh --pin-status`
+  before promoting it, and expect plugin-layer failures to need the layer-by-layer diagnosis its own
+  startup table describes — `install-dsh.sh --layers` reports package → resolved → enabled → service
+  → tool → permission rather than one verdict about the harness.
+- **aider and goose** stay out of this matrix: unmeasured, unlisted, not promised, and they ship no
+  adapter file at all (`specs/HARNESS.md` names them so the absence is stated, not missing).
+  </section>
+</spec>

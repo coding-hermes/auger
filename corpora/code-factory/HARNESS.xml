@@ -1,0 +1,389 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from code-factory/specs/HARNESS.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CF-HARNESS-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: code-factory/specs/HARNESS.md#preamble -->
+  <section id="CF-HARNESS-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+# SPEC — harness adapters
+
+A **harness** is whatever runs the work inside a node. The factory must not care which.
+
+&gt; **Which harness runs which model, and what it must be given:** `specs/HARNESS-MATRIX.md`.
+&gt; That file is the authority for selection (`directive &gt; model family &gt; policy fallback`), the
+&gt; `CF_*` variable contract, the invariant that the foreman is always Hermes, and the DuckBrain
+&gt; record every harness writes. This file is the per-adapter contract; where they differ, the
+&gt; matrix wins for selection and this file wins for the adapter's own obligations.
+  </section>
+  <!-- source: code-factory/specs/HARNESS.md#the-contract-every-adapter -->
+  <section id="CF-HARNESS-THE-CONTRACT-EVERY-ADAPTER-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## The contract (every adapter)
+
+| Obligation | How |
+|---|---|
+| Install | `scripts/harness/install-&lt;name&gt;.sh --check` reports absence; `--apply` installs user-space and prints the `binary` row it placed, so the node manifest can record where the harness lives (see "A node records the harness it measured"). |
+| Version | `--check` prints the binary's ownership and measured version; a version mismatch names both the measured value and the pin and FAILs, not just "ok". |
+| Invoke | Accepts a directive (text) and a working directory; runs unattended. |
+| Report | Emits the model it actually served (requested vs served), when it has one. |
+| Fail | Non-zero exit on failure; never a silent success. Every adapter ends with the verdict line defined in "The verdict line" below, including a ladder that stops early. |
+| Idempotent | Re-running install changes nothing. |
+
+&lt;a id="verdict-line"&gt;&lt;/a&gt;
+  </section>
+  <!-- source: code-factory/specs/HARNESS.md#the-verdict-line -->
+  <section id="CF-HARNESS-THE-VERDICT-LINE-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+### The verdict line
+
+Every adapter ends its output with **one** verdict line, and that line is decided by the row counts
+it just printed — never by `$FAILED` alone (CF-141):
+
+| Line | When | Exit |
+|---|---|---|
+| `&lt;LABEL&gt;: FAIL (n)` | at least one `  FAIL` row; `n` is that count | 1 |
+| `&lt;LABEL&gt;: UNVERIFIED` | at least one `  WARN` row and no `  FAIL` row | **3** |
+| `&lt;LABEL&gt;: PASS` | no `FAIL` and no `WARN` row — every contract row PASSed | 0 |
+
+`&lt;LABEL&gt;` is the harness name in capitals (`HERMES`, `CODEX`, `CLAUDE-CODE`, `OPENCODE`,
+`PI-AGENT`, `DEEPSEEK`, `DSH`). `UNVERIFIED` exits **3**, not 0: nothing was certified, and a caller that
+reads "exit 0" as support would read an unmeasured ladder as a supported one. It is the same status
+`verify-node.sh` uses for an unverified manifest (`VERIFY: UNVERIFIED`), so a node and an adapter
+answer "measured?" the same way.
+
+There is one implementation — `verdict()` in `scripts/lib.sh` — and `warn()` counts the rows it
+prints, so six adapters cannot drift. A `WARN` row is a measurement of absence (a surface the build
+does not advertise, an install this repo does not own), which is why it cannot sit beside `PASS`:
+before this rule an adapter whose own banner said `UNVERIFIED adapter` printed `OPENCODE: PASS` and
+exited 0 with two `WARN` rows above the verdict. `tests/selftest.sh` §59 keeps the rule falsifiable
+(three arms on one stub adapter, plus the real adapter on the row's probe and the pre-fix adapter
+`d4f2600` as the red control).
+
+The row-count rule is the `--check` rule, because `--check` is the certification claim a caller acts
+on. The modes that DO something (`--apply`, `--turn`, `--app-server`) pass `action` to `verdict()`:
+there a `WARN` is advice about a run that already happened (a `$HOME/.local/bin` PATH hint, a
+`model_served` the harness did not report), so only `FAIL` rows decide and a measured
+install still ends exit 0. Without that split `install-codex.sh --apply` — a harness this repo has
+measured — would report `UNVERIFIED` for a successful install merely because it also warned that
+`$HOME/.local/bin` is not on `PATH`.
+
+Two lines are deliberately **not** verdicts, because nothing was measured: a usage/contract refusal
+exits 2 with a named reason (`CODEX: REFUSED (&lt;leg&gt;)`, `OPENCODE: FAIL (n) — contract refused;
+nothing was installed or run`), and claude-code's `--turn` without a credential exits 3 as
+`CLAUDE-CODE: SKIP (…)`. A ladder that stops early still reaches the verdict for the rows it did
+print: `install-hermes.sh` refusing an out-of-range interpreter prints `FAIL python — …` and then
+`HERMES: FAIL (1)`, not a bare exit with no summary.
+  </section>
+  <!-- source: code-factory/specs/HARNESS.md#which-conditions-are-notes-and-which-are-warns -->
+  <section id="CF-HARNESS-WHICH-CONDITIONS-ARE-NOTES-AND-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## Which conditions are notes, and which are WARNs
+
+The verdict rule above says a `WARN` row cannot sit beside `PASS`. That makes the CLASS of each row a
+substantive decision, and CF-384 settled it for the two codex rows that had been warning about facts
+the adapter does not need — a healthy host therefore could not reach `CODEX: PASS`:
+
+| Row (adapter) | Condition measured | Class | Why |
+|---|---|---|---|
+| `app_server` (codex) | the `[experimental]` app-server subcommand is **present** | `..` note | crier@6422c851 runs **exec** mode and starts no sidecar — its own doc comment names "two verified surfaces: exec create / exec resume", and `grep -rn app-server` over crier returns nothing. A sidecar existing cannot block any run this repo dispatches, so it is an environment FACT the row records (with its text, and the `--app-server` pointer) and it does not move the verdict. |
+| `app_server` (codex) | the subcommand is **absent** | `FAIL` (unchanged) | the mirror case, and strictly stronger than a `WARN`: a consumer that wanted the sidecar could not be served, and the row names that. |
+| `auth` (codex) | no `CF_API_KEY_FILE`, but `$HOME/.codex/auth.json` **exists** | `..` note | an ambient host login. A credential exists, a turn can authenticate, and where the host's login came from is not something this adapter certifies — the row is printed so the provenance stays visible, and it is a note so a working host is not reported unproven for it. |
+| `auth` (codex) | **neither** a key file nor a host login | `WARN` (unchanged) | a genuine blocker: an unattended turn fails at auth, and "nothing to authenticate with" is exactly the absence this row exists to name. It keeps `CODEX: UNVERIFIED` with exit 3. |
+| any other adapter's row | any `WARN` | `WARN` (unchanged) | the rule above applies verbatim: `&lt;LABEL&gt;: UNVERIFIED`, exit 3. |
+
+The question a row answers is **"does the absence of the thing this row reports stop a run of the
+surface the adapter is measured on?"** If it does, the row is a `WARN` and the verdict moves; if the
+row reports a fact the adapter does not need, it is a note. Classification is a **call-site** decision
+per row — `warn()` and `verdict()` in `scripts/lib.sh` are untouched, so a generic `WARN` row still
+makes `--check` `UNVERIFIED` with exit 3, and no other adapter's rows changed. Deleting the warning
+mechanism would be a different change and is not what this table authorises.
+
+CF-006 extended the same call-site decision to three more rows, each measured on the control host
+(`docs/audits/cf006-codex-exec-sidecar-and-check-classification.md`):
+
+| Row (adapter) | Condition measured | Class | Why |
+|---|---|---|---|
+| `code_mode` (codex) | the exec file-write sidecar `codex-code-mode-host` is **present** beside the binary | `PASS` row | it is a measured artefact, not a fact about the environment: it is the binary `codex exec` spawns for every tool call, and the ladder installs it at a recorded digest. |
+| `code_mode` (codex) | the sidecar is **absent** | `WARN` | a genuine blocker of the measured surface. Measured 2026-11-08: every tool call fails closed (`ERROR … failed to spawn code-mode host … No such file or directory`) and the turn exits 0 having written no artifact — a harness that answers but cannot touch the worktree. A binary-only pin therefore ends `CODEX: UNVERIFIED`, never `PASS`. |
+| `auth` (claude-code) | **no** credential (no `CF_API_KEY_FILE`, no `ANTHROPIC_API_KEY`, no `~/.claude/.credentials.json`) | `..` note | `--check` certifies the INSTALL — the adapter's own contract is "Exit 0 only when the pin is installed here" — and a credential is a RUN input. Its absence is reported where it decides something: `--turn` prints `CLAUDE-CODE: SKIP (no credential …)` and exits 3. As a `WARN` it made the check leg unpassable on every host without an Anthropic credential, even with the pin installed and its version read back. |
+| `auth` (claude-code) | `ANTHROPIC_API_KEY` **exported** into the ambient environment | `FAIL contract:ambient` (unchanged) | contamination of the directive: two lanes on one node could inherit each other's key. That is not the same row as an absent credential, and it still refuses the run. |
+| `credential_file` (pi-agent) | `~/.pi/agent/auth.json` present **and** the binary row PASSed | `..` note | with a measured binary the file is host state the check does not need. The pre-fix row warned "a credential file is not a binary — the binary row above is the one that decides" while that binary row had just PASSed: its own text said the binary decides and the verdict said otherwise. |
+| `credential_file` (pi-agent) | the file present and **no** binary | `WARN` (unchanged) | a credential alone certifies nothing, and the named `FAIL binary` beside it is what makes the verdict `FAIL (n)`. |
+
+`tests/harness/adapter-check-classification-test.sh` keeps each decision falsifiable in both
+directions on ONE fixture: the fixed adapter reaches `PASS` where the harness is installed and
+measured, the pre-fix adapter (`dc7641f`) does not, and the negatives (an ambient exported key; a
+credential with no binary) still refuse. `tests/harness/codex-install-test.sh` B8 does the same for
+`code_mode` inside the install ladder, with the pre-fix revision as the red control.
+
+`tests/harness/codex-install-test.sh` keeps the decision falsifiable in both directions, which is why
+the pair exists rather than one arm: **B5** runs `--check` on the pinned binary in a home with a host
+login and requires `CODEX: PASS` with exit 0, both rows printed as notes and **zero** `WARN` rows;
+**B5b** runs the same pinned binary in a home with no credential surface at all and requires the named
+`WARN auth` row and `CODEX: UNVERIFIED` with exit 3. B5 alone would pass an adapter that deleted its
+warnings; B5b alone would pass the defect the row was raised on.
+  </section>
+  <!-- source: code-factory/specs/HARNESS.md#adapters-and-their-measured-state -->
+  <section id="CF-HARNESS-ADAPTERS-AND-THEIR-MEASURED-ST-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## Adapters and their measured state
+
+| Harness | Method | State (each row names its own measurement; re-measured 2026-11-08 for CF-006) |
+|---|---|---|
+| **hermes** | Python `&gt;=3.11,&lt;3.14`; `python3 -m venv` + `pip install hermes-agent==0.19.0`; `hermes serve --host 0.0.0.0 --port P --skip-build` | **MEASURED working**: 32 s install, `/api/status` 200 over tailnet, 133 JSON-RPC methods, `session.create` + `prompt.submit`. Needs a provider key in `~/.hermes/.env`. |
+| **opencode** | standalone binary; `opencode` CLI or server mode | not measured as an INSTALL (no pin, no ladder — `--apply` refuses by name). A real smoke turn WAS measured on the control host by the conformance battery (binary 1.18.29 at `~/.opencode/bin/opencode`, `smoke.txt` carrying the battery's token — `docs/HARNESS-CONFORMANCE.md`, 2026-11-06 run). No v2 artefact exists (matrix §9). |
+| **claude-code** | `npm i -g @anthropic-ai/claude-code` (needs node ≥22) | **MEASURED install ladder** (CF-225, 2026-11-04, `scripts/harness/install-claude-code.sh`): `npm --prefix $HOME/.local/harness/npm` of `@anthropic-ai/claude-code@2.1.318` with the registry's integrity + shasum verified before download, version read back `2.1.318 (Claude Code)`, second `--apply` a no-op. The measured non-interactive surface is `--turn` (`--print --output-format json --bare`); with no credential it prints `CLAUDE-CODE: SKIP (…)` and exits 3. Still not a *supported* harness: crier has no claude adapter (CRIER-HARNESS-11) and matrix I4 needs the five legs on a real node. |
+| **codex** | release tarball `codex-x86_64-unknown-linux-musl.tar.gz` from `rust-v0.166.0`, sha256-pinned, installed under `$HOME/.local/codex/&lt;pin&gt;`; **exec** mode (`codex exec --json -s &lt;mode&gt; -m &lt;model&gt; -- &lt;text&gt;`, `exec resume &lt;id&gt;`) | **MEASURED** (CF-227, 2026-11-04, `scripts/harness/install-codex.sh`): 7 s install, version read back `codex-cli 0.166.0`, idempotent second `--apply`, and one real turn wrote a fixed token with `model_served` read from codex's own rollout record. **CF-006 (re-measured 2026-11-08): the ladder also installs the exec file-write sidecar `codex-code-mode-host`** — a SEPARATE release asset, sha256-pinned, placed beside the binary because codex spawns it from its own directory. Without it every tool call fails closed (`ERROR … failed to spawn code-mode host … No such file or directory`) and the turn exits 0 having written no artifact; with it the turn writes the token and the battery's `codex:smoke` leg PASSes. The **app-server** sidecar is `[experimental]` and **nothing in crier uses it** — `codex.go` names "two verified surfaces: exec create / exec resume", and `grep -rn app-server` over crier is empty; `--app-server` probes it anyway (an `initialize` over stdio answers with a `userAgent`). |
+| **aider** | `scripts/harness/install-aider.sh`; binary `aider`. The documented method is `pip install aider-chat` into a venv — **documented, not measured** | not measured (no pin, no artefact digest, no measured non-interactive surface); the adapter ships a real `--check`/`--contract`, prints the documented method as a `..` note and refuses `--apply` by name, so a harness this spec names can no longer be silent in the battery (CF-006) |
+| **goose** | `scripts/harness/install-goose.sh`; binary `goose`. The documented method is a standalone release binary — **documented, not measured** | not measured (no release tag, no artefact digest, no measured non-interactive surface); the adapter ships a real `--check`/`--contract` and refuses `--apply` by name (CF-006) |
+| **pi-agent** | `scripts/harness/install-pi-agent.sh`; adapter alias `pi`, package `@oh-my-pi/pi-coding-agent`, binary `pi`, runtime Bun; non-interactive surface `pi -p --no-session "&lt;prompt&gt;"` | **Fixture-backed only**: pin `18.16.0`, Bun `1.4.4`, user-space root `$HOME/.local/harness/oh-my-pi/18.16.0`, package/version/runtime readback and idempotence are proven by `tests/harness/pi-agent-install-test.sh`. The fixture is not an upstream artifact, so live install, live node turn, and external credentialless turn remain **UNVERIFIED**; `--apply` refuses without `PI_FIXTURE_DIR`. |
+| **deepseek** | `scripts/harness/install-deepseek.sh`; the conformance row probes the binary `deepseek` | not measured (no `deepseek` binary, no ladder for one); the adapter ships a documented `--check`/`--contract` and refuses `--apply` by name. **This is not DeepSeek's harness** — that is `dsh`, the row above it in the matrix and the `dsh` row below here |
+| **dsh** | `scripts/harness/install-dsh.sh`; npm `@deepseek-ai/dsh` at pin `0.2.1-rc.5`, launcher `$HOME/.local/harness/dsh/bin/dsh`, non-interactive surface `dsh &lt;profile&gt; --json "&lt;task&gt;"` (measured with the `headless` profile) | **MEASURED install + one measured turn** (CF-226, 2026-11-08): registry integrity + shasum pinned before download, version read back `0.2.1-rc.5`, second `--apply` a 0.2 s no-op with a byte-identical tree, one turn wrote `dsh-turn.txt` carrying the fixed token in ~11 s and the model was read from dsh's own session record. The pin is an **RC**, so the version is re-measured from the registry by `--pin-status`, and a plugin-layer failure is reported per layer (`--layers`) instead of as one verdict. No crier adapter — see "dsh — the adapter decision" below |
+
+The pi-agent fixture ladder certifies only the repository-provided fixture tree; it does not certify npm registry bytes. Hermes certifies only `$HOME/hermes-venv/bin/hermes` at `HERMES_PIN` (default `0.19.0`).
+A PATH-provided binary is labelled host-provided and FAILs the binary row, even if its
+version matches. `--apply` creates the venv and installs `hermes-agent==$HERMES_PIN`
+when the venv binary is absent, regardless of PATH. A venv version mismatch is named
+and reinstalls the pin; only a matching venv binary earns "already installed".
+
+**hermes**, **codex**, **claude-code** and **dsh** have measured install ladders in this repo
+(`install-hermes.sh`, `install-codex.sh`, `install-claude-code.sh`, `install-dsh.sh`, each proved by a
+test that can go red). `opencode`, `deepseek`, `aider` and `goose` ship a real `--check` and a
+`--contract` and refuse `--apply` by name because no upstream ladder for them has been measured here.
+`pi-agent` has a deterministic fixture-backed ladder and test, but its upstream install and live turn
+remain explicitly UNVERIFIED.
+`aider`
+and `goose` were the last two with **no adapter file at all** — a harness this spec names and the
+battery cannot see produces no row, which is the failure mode this section exists to forbid; both now
+ship `install-aider.sh`/`install-goose.sh`, so each prints named rows and exactly one verdict line
+(`AIDER: …` / `GOOSE: …`) and the battery's census carries them. What they do **not** gain is a
+ladder: `--apply` refuses by name for both, their conformance `smoke` column is unmeasured, and
+nothing in this repo installs or selects them. An unverified installer is not a supported installer,
+and the script says so out loud.
+  </section>
+  <!-- source: code-factory/specs/HARNESS.md#what-every-adapter-s-check-said-on-the-control-host-2026-11-08 -->
+  <section id="CF-HARNESS-WHAT-EVERY-ADAPTER-S-CHECK-SAI-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+### What every adapter's `--check` said on the control host, 2026-11-08
+
+Recorded so a later reader can tell a leftover red from a regression, and so no row is mistaken for
+support:
+
+| Adapter | `--check` verdict | What decided it |
+|---|---|---|
+| hermes | `FAIL (1)` | `python3` on `PATH` is 3.14.9 and the pin requires `&lt;3.14`; the ladder stops there by design. `HERMES_PYTHON_BIN=python3.12` reaches the binary/version/port rows. |
+| codex | `PASS` | pin 0.166.0 installed, version read back, exec contract advertised, exec sidecar present, app-server present (note), host login (note). |
+| claude-code | `PASS` | pin 2.1.318 installed by this adapter, version read back; no credential is a note, and `--turn` is where one would be required (SKIP, exit 3). |
+| opencode | `UNVERIFIED` (exit 3) | binary 1.18.29 measured and its `run` surface advertised, but `user_space_binary` is a genuine WARN here: no install ladder is measured, so `--apply` refuses. |
+| deepseek | `FAIL (1)` | no `deepseek` binary; no ladder for one. This row measures a DIFFERENT binary from the `dsh` row below — DeepSeek's own harness is `dsh` |
+| dsh | `PASS` | pin `0.2.1-rc.5` installed by this adapter (package identity + `dsh --version` read back), bin symlink resolved into the pinned package, headless profile present, and the composed plugin tree measured (98 entries, 5 disabled); a missing credential is a `..` note, because `--turn` is where one decides. |
+| pi-agent | `UNVERIFIED` (fixture PASS only) | the fixture proves package `@oh-my-pi/pi-coding-agent@18.16.0`, Bun `1.4.4`, user-space install, version readback, idempotence, artifact and `model_served`; upstream registry install, live node turn and external credentialless turn remain UNVERIFIED. |
+| aider | `FAIL (1)` | no `aider` binary on the control host and no ladder this repo measured; the documented method (`pip install aider-chat` into a venv) is printed as a `..` note, and `--apply` refuses by name. |
+| goose | `FAIL (1)` | no `goose` binary and no ladder; the documented method (a standalone release binary) is a `..` note, and `--apply` refuses by name. |
+
+An `UNVERIFIED` or `FAIL` above is a measurement, not a defect: only codex, claude-code, dsh and
+hermes have ladders this repo can reproduce, and the conformance matrix refuses to promote any of
+them to "supported" without the five legs on a real node.
+  </section>
+  <!-- source: code-factory/specs/HARNESS.md#dsh-the-installer-the-layers-and-the-adapter-decision -->
+  <section id="CF-HARNESS-DSH-THE-INSTALLER-THE-LAYERS-A-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## dsh — the installer, the layers, and the adapter decision
+
+DeepSeek's harness is real, and `scripts/harness/install-dsh.sh` is this repo's measurement of it. Two
+things about it are not like the other adapters, and both are decisions this section records rather
+than prose that a reader has to infer.
+
+**1. It is an RC, so the pin is re-measured, not remembered.** `DSH_PIN`, `DSH_SHASUM` and
+`DSH_INTEGRITY` are three constants at the top of the installer, adopted together or not at all. One
+command re-measures them from the registry without installing anything or reading a credential:
+
+```bash
+scripts/harness/install-dsh.sh --pin-status
+#   PASS  dist_tags — latest=0.2.2-rc.1 pin=0.2.1-rc.5 (a NEWER RC exists)
+#   PASS  provenance — … registry integrity + shasum match the recorded pin …
+```
+
+A registry that serves **different bytes for the same version** is a `FAIL`, not a warning: the point
+of pinning is that a version string names one set of bytes. Adopting a newer RC is the edit
+`--pin-status` prints — the three constants together, then `--apply`, `--layers`, `--turn`, and a
+recorded measurement in this file and in the matrix's §2 row.
+
+**2. A failure is reported PER LAYER.** The pin's own startup output already knows where a plugin
+failure happened, and this adapter quotes it rather than flattening it:
+
+| Layer | What the installer measures | Fails as |
+|---|---|---|
+| `package` | npm package identity at the pin, and that each bundle the profile declares is installed | `FAIL layer:package` naming the bundle |
+| `resolved` | the `bin/dsh` symlink resolves inside the pinned package, and `--version` reads the pin back | `FAIL layer:resolved` naming the target or the bundle |
+| `enabled` | the composed plugin tree (`--dump-config`: entry count, disabled ids, bundle layers) | `FAIL layer:enabled` naming the disabled plugin |
+| `service` | one boot: does the tree mount, or does a required plugin wait on a service nothing provides | `FAIL layer:service` naming the service and the plugins waiting on it |
+| `tool` | the tool registry the run was given (`request/header` in dsh's session record) | `SKIP` naming that the run stopped before a model request |
+| `permission` | `permission/preset`, `approval/policy`, `sandbox/mode` from the record | `SKIP` naming the absent events |
+
+Two measured facts make those rows possible, and both are the reason `--check` parses stderr:
+`dsh --dump-config` **exits 0 while a bundle is missing** (it prints `skipping profile bundle … cannot
+resolve profile bundle …` and composes a partial tree), and a required-plugin failure prints a
+`Plugins waiting for services (k)` table (`agent-loop (required)  llm`, …). A boot that fails only at
+the credential seam is a `PASS layer:service`, because a credential is a run input and the plugin tree
+demonstrably mounted.
+
+**The crier adapter: decided, not forgotten.** crier ships no `dsh` adapter, and adding one is a
+change to a different repository's release surface. The decision recorded here is **defer it**, with
+the prerequisites named so the deferral cannot be mistaken for an omission:
+
+- the measured non-interactive surface is `dsh &lt;profile&gt; --json "&lt;task&gt;"`, whose NDJSON stream is
+  `session` / `status` / `thinking` / `tool_call` / `tool_result` / `text` / `final` — enough for a
+  crier adapter to correlate a run and read its final text, but it carries **no model id**, so
+  `model_served` would have to come from dsh's session record (`assistant/message` →
+  `source{kind:"model", provider, model}`), exactly as this installer reads it;
+- the failure taxonomy an adapter must forward is the six-layer one above; an adapter that reported
+  "dsh failed" would lose the only information a plugin harness gives you;
+- and `--session-id` can only ADOPT an existing session, so the run id is a map-only join
+  (`specs/HARNESS-MEMORY.md` §3.6), not a stamp.
+
+Until an adapter exists, `dsh` can only be driven by the node's own worker (the installer's `--turn`,
+which this repo has measured), and the matrix's `memory` leg stays unwritten for it.
+  </section>
+  <!-- source: code-factory/specs/HARNESS.md#conformance-is-measured-not-claimed -->
+  <section id="CF-HARNESS-CONFORMANCE-IS-MEASURED-NOT-CL-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## Conformance is measured, not claimed
+
+`tests/harness-conformance.sh` runs three legs per harness — the adapter's own `--check`, a real
+smoke turn that must leave a file containing a token the battery chose (bytes re-read on the
+control host), and, only with `--install`, the adapter's `--apply` in a throwaway `$HOME` followed
+by a post-apply `--check`. It prints `PASS`/`FAIL`/`SKIP` with the measured value and regenerates
+`docs/HARNESS-CONFORMANCE.md` with `--write-doc`. The pi-agent fixture test is separate from this
+live battery: its fixture proves wiring, while upstream install, real-node execution, and memory remain
+UNVERIFIED residuals.
+
+The smoke leg resolves the binary from the adapter's own measurement (the `PASS binary` row that
+`--check` printed), and falls back to `PATH` only when the adapter names no path, or names one that
+is not executable. A harness binary is not required to be on `PATH`: an installer is free to put it
+under a `$HOME` prefix (claude-code: `~/.local/harness/npm/bin`), and such a binary is owned and
+measured even though `command -v` cannot see it. A battery that re-resolved it with `command -v`
+alone reported `SKIP ... absent from PATH` for a harness this repo had just installed, which is a
+false negative, not a measurement. The row quotes the path it resolved and the rule it used, and the
+turn is launched with that path's directory first on `PATH`, so a binary that is resolved but never
+invoked cannot look green; a genuinely absent binary is still a `SKIP` that names the absence.
+
+A `SKIP` names the exact credential or binary that is missing, and it is not evidence of support:
+this spec's table is a claim about a method, the matrix is a measurement of a host, and only the
+matrix may be quoted as "works here". A harness the BATTERY names with no adapter file is a `FAIL`,
+never a skip. `aider` and `goose` used to be outside the battery's census because they had no adapter
+file; both now ship one, so the battery names them and each prints rows: a missing binary is a named
+`FAIL` in the `check` leg, and their `smoke` columns stay unmeasured (there is no measured
+non-interactive surface to probe for either), which the battery prints as a `SKIP` that says so.
+`tests/selftest.sh` §45 keeps the battery itself able to fail, and §60 holds these two adapters to
+the refusal side.
+
+Codex certifies only `$HOME/.local/codex/&lt;pin&gt;/bin/codex`; the same host-provided-versus-owned
+rule as hermes applies, and `--apply` refuses by name on any arch whose artefact digest it has
+not measured (the pin covers `x86_64-unknown-linux-musl` only). The pin is TWO artefacts of the
+same release — the CLI and the exec file-write sidecar `codex-code-mode-host`, each sha256-pinned
+and each refused on a digest mismatch — because a CLI without the sidecar answers a directive and
+cannot write the artifact the node's work depends on. `tests/harness/codex-install-test.sh`
+is its proof: refusals, the digest floor for both artefacts, idempotence, the version-mismatch
+arm, the sidecar-absent arm (with the pre-fix adapter as the red control), and — when a
+credential exists — one real turn.
+
+An explicit `--generation v2` request to the opencode adapter is refused under CRIER-HARNESS-10;
+the conformance v2 check supplies that request. This is not a live v2 support claim. Capability
+probes for Claude's turn budget and Codex's exec/app-server help also read both streams; their
+fixture regression is `tests/harness/capability-stream-test.py`.
+
+Opencode's adapter measures three things it used to guess at, and `--apply` still refuses by name
+(no ladder is recorded here). It resolves the binary from the `$HOME` prefix its own installer uses
+(`~/.opencode/bin/opencode`) before `PATH`, so an owned binary that `command -v` cannot see is
+named and measured rather than reported absent; it prints `version` only as `PASS` when the probe
+returned a value, and warns by name otherwise, because a `PASS` with no measured value is a lie the
+battery rewrites into a `FAIL`; and it prints a `generation` row (`v1`/`v2` from the measured
+major), because opencode v1 and v2 share a binary name and the conformance table's `opencode-v2`
+row must never be certified by a v1 binary — the battery quotes that row when the generations
+disagree instead of asserting the adapter has no gate. Its `non_interactive` row reads `--help`
+from stdout **and** stderr: the real binary writes help to stderr only (measured on 1.18.29: 4285 B
+on stderr, 0 B on stdout), so a stdout-only probe reported "could not confirm" for a surface the
+same bytes advertised. `tests/harness/opencode-install-test.sh` is the proof, offline: the
+refusals, the absent-binary failure path, a stub whose help goes to stderr only, the v1/v2
+generation rows, an unmeasurable version, a binary advertising no surface, the `--apply` refusal,
+and the owned-prefix resolution — with the pre-fix adapter (`45bd4bd`) run against the same stub as
+the red control that turns the `non_interactive` arm green only because it changed.
+  </section>
+  <!-- source: code-factory/specs/HARNESS.md#a-node-records-the-harness-it-measured -->
+  <section id="CF-HARNESS-A-NODE-RECORDS-THE-HARNESS-IT-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## A node records the harness it measured
+
+The battery above certifies a HOST. The two measurements below are the node's, and both were
+missing: `~/.node/node.json` carried `harness{name, port}` only, and `verify-node.sh` never opened
+it — so a node provisioned with one harness and running another, or with the harness binary gone,
+still printed `VERIFY: PASS`.
+
+**1. The manifest records the build, not the pin.** Layer 20 of `project-node.sh` captures the
+adapter's output; `harness_measurement` reads the adapter's own `PASS version` and `PASS binary`
+rows back out of it (one parser — a second `--version` parse would be a second answer to "which
+build is on this node"), and layer 90 writes them into `node.json`:
+
+```json
+"harness": {"name": "codex", "port": 10800,
+            "adapter": "scripts/harness/install-codex.sh",
+            "version": "0.166.0", "version_row": "0.166.0 (pin 0.166.0)",
+            "version_source": "the adapter's own `PASS version` row in --apply",
+            "binary": "/home/&lt;uid&gt;/.local/codex/0.166.0/bin/codex"}
+```
+
+`version` is the value the adapter MEASURED, never the pin copied from a default. When the adapter
+printed no version row the field is `null` and carries `version_reason`: a null without a reason is
+junk, and a version nobody read is worse than a named absence. Because the manifest is built from
+that log, every adapter's `--apply` prints the `binary` row it placed — a `$HOME`-owned pin
+(codex) or venv binary (hermes) is normally not on `PATH` at all, and a verifier that resolved the
+NAME would measure whatever else the host happens to have.
+
+**2. `verify-node.sh` re-measures it — leg 7, `harness_identity`** (two `bunker exec` round trips:
+the manifest, then the binary it names, taken as a positional argument so a value from the node
+cannot be re-parsed as shell):
+
+| Manifest says | Node answers | Verdict |
+|---|---|---|
+| `codex 0.166.0` at `&lt;path&gt;` | `&lt;path&gt; --version` contains `0.166.0` | `PASS harness_identity — codex 0.166.0 (manifest) measured at &lt;path&gt; — codex-cli 0.166.0` |
+| `codex 0.166.0` at `&lt;path&gt;` | a different version | `FAIL` naming both values; `VERIFY: FAIL` |
+| `codex …` at `&lt;path&gt;` | nothing executable there | `FAIL` — the harness the node claims is not on the node |
+| `codex` with `version: null` and a reason | — | `WARN` + `VERIFY: UNVERIFIED` (exit 3): an unknown build is not a measured one |
+| no `node.json` (unprovisioned) | — | a `..` note naming what was NOT checked — not a `PASS` row |
+
+The last row is why the leg can be added without lying about fixtures: absence is reported as
+absence, and `VERIFY: PASS` is unreachable for a node whose manifest disagrees with its binary.
+
+**The measured / unverified boundary.** `tests/harness-node-e2e.sh` drives this slice offline
+end to end: the real adapters, the real `node-create.sh --harness codex` entry (including its
+staged `harness/harness-vars.sh` dependency), the real `project-node.sh --apply`, the real
+`verify-node.sh`, one stub transport and one stub HTTP probe. Its arms are
+the adapter `--check`/`--help` surface, the three unmeasured ladders refusing `--apply` by name and
+creating no new repo install artifact (host-probe caches are excluded), a codex node whose manifest records name+version+binary measured by the
+adapter and whose `--apply` placed the exec sidecar from a digest-checked local mirror, `VERIFY:
+PASS` with `harness_identity`, four red arms (tampered version, absent binary, null version →
+`UNVERIFIED`, absent manifest → note), and the manifest's own binary answering a directive
+non-interactively with JSONL events and the directive's token in an artifact.
+
+What that does **not** prove, and this file does not claim: the fixture `codex` is a script, not
+the pinned musl artefact, and no model is called. It proves the WIRING — adapter measurement →
+manifest → directive → machine-readable events → verifier — not the real turn. The real turn for a
+foreign harness is the conformance battery's smoke leg (a token the battery chose, bytes re-read on
+the control host) and the CF-227 codex measurement in the table above. Running this slice against
+a real node (`project-node.sh --apply --harness codex`, then `verify-node.sh --agent &lt;id&gt;`) is
+**UNVERIFIED** at this commit: the host that wrote it had no reachable bunker server
+(`bunker: server "bunker-las-03" is offline`). It is a named open leg, not a completed one.
+  </section>
+  <!-- source: code-factory/specs/HARNESS.md#why-hermes-first -->
+  <section id="CF-HARNESS-WHY-HERMES-FIRST-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## Why hermes first
+
+- It needs no node/npm (the backend runs `--skip-build`), and node is absent from the base image.
+- It already exposes a gateway, so the same code path serves "local CLI" and "remote command".
+- Its failure mode is explicit (`No inference provider configured`), not a half-run.
+  </section>
+  <!-- source: code-factory/specs/HARNESS.md#what-a-foreign-harness-must-gain-to-be-first-class -->
+  <section id="CF-HARNESS-WHAT-A-FOREIGN-HARNESS-MUST-GA-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## What a foreign harness must gain to be first-class
+
+1. A way to accept a directive without a human TTY (no interactive prompts).
+2. A machine-readable completion (exit code + files, or a JSON result) — not a pretty-printed
+   transcript.
+3. A deterministic workspace: it must not roam outside the repo it was given.
+4. A version probe that does not require a login.
+
+Until an adapter has those, the node should not be created with it.
+  </section>
+</spec>

@@ -1,0 +1,374 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from code-factory/specs/NODE.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CF-NODE-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: code-factory/specs/NODE.md#preamble -->
+  <section id="CF-NODE-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+# SPEC — NODE
+
+A **node** is the unit of execution: one bunker agent bound to one project and one repo.
+  </section>
+  <!-- source: code-factory/specs/NODE.md#manifest-home-node-node-json -->
+  <section id="CF-NODE-MANIFEST-HOME-NODE-NODE-JSON-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## Manifest (`$HOME/.node/node.json`)
+
+```json
+{
+  "node_id": "&lt;agent id&gt;",
+  "project": "crier",
+  "repo": {"origin": "git@…", "ref": "main", "path": "/home/&lt;uid&gt;/repo"},
+  "harness": {"name": "hermes", "version": "0.19.0", "port": 10800},
+  "bus": {"agent_id": "node-crier", "base": "http://crier.example:8767"},
+  "freshness": {
+    "status": "PASS", "branch": "main", "head": "04fc3986f448", "origin_main": "04fc3986f448",
+    "behind": 0, "dirty_files": [], "differing_files": [],
+    "ladder": "PASS", "reason": "", "measured_at": "2026-11-05T18:40:00Z"
+  },
+  "created_by": "project-node.sh v1",
+  "created_at": "2026-10-29T18:40:00Z"
+}
+```
+
+The manifest is the node's identity: a scheduler target names `node_id`; the control host reads
+the manifest to know where the artifacts are.
+
+`freshness` is the checkout the node will actually work, measured by layer 40 with
+`scripts/node_freshness.py` (`--workdir`) or the node-side fallback when the clone does not carry
+the probe (`scripts/project-node.sh`, `freshness_measure`). `status` is the **check's own**
+verdict — `FAIL` for a dirty checkout, because an uncommitted local edit on a node is a finding —
+while `ladder` is how the provisioning ladder graded it at provision time (`PASS`, `WARN`, `FAIL`).
+`dirty_files` and `differing_files` are the paths an operator has to act on, and they are the
+reason the object exists: the paths belong upstream, not in the node's tree.
+  </section>
+  <!-- source: code-factory/specs/NODE.md#layers-each-has-a-check-that-can-fail -->
+  <section id="CF-NODE-LAYERS-EACH-HAS-A-CHECK-THAT-C-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## Layers (each has a check that can fail)
+
+| Layer | Establishes | Depends on |
+|---|---|---|
+| 00 preflight | arch, disk ≥ floor, memory, and HTTP 200 from the only two endpoints this layer probes — `$CRIER_URL/health` and `https://pypi.org/simple/` (`scripts/project-node.sh:190`). Each is requested with the method that measures it: `https://pypi.org/simple/` with **HEAD**, because the index is ~48 MB and a GET under an 8 s budget reports `000` on a healthy link (measured on `cf-node` 2026-11-05 — GET `000` after 44 MB received, HEAD `200` in 0.29 s); `$CRIER_URL/health` with **GET**, because a HEAD against that GET-only handler answers `405`, which is a method verdict and not a reachability fault (same host, same tick). With `CRIER_URL` unset the reach block is skipped entirely and the layer prints `FAIL crier_url` instead of two probe rows. Reachability to a Go module proxy is **not** measured by this layer: it probes these two endpoints only. The Go proxy is graded one layer later — layer 10 resolves the pinned `rsc.io/quote@v1.5.2` through the node's own `GOPROXY` when the kind set includes Go (`scripts/project-node.sh`, `go_proxy_row`), which supersedes the CF-164 statement that `GOPROXY` / `GOPRIVATE` appeared nowhere under `scripts/` (CF-218). Layer 00 also measures the **footprint** this node will occupy — checkout, Go and Node toolchains, harness home, node state and a declared module cache — and admits the total plus 2 GiB working room against free space, and the total against the resolved floor (`scripts/node_hygiene.py footprint`, CF-003) | — |
+| 10 base | the toolchain the project **kind** needs — `go`: `scripts/install-go.sh` installs the digest-pinned `go1.26.5` user-space archive during `--apply`, reads that binary's `go version` back, and resolves `rsc.io/quote@v1.5.2` through the node's own `GOPROXY` with a cold `GOMODCACHE`, `GOTOOLCHAIN=local`, `GOSUMDB=off`, empty `GOFLAGS`, and a 30 s timeout; `--check` remains read-only and names the absent Go binary as a failure; `rust`: `cargo --version` read back; `node`: `node --version` read back; `python`: `python3` + `venv` — plus the fixed base set (`python3`, `git`, `curl`, `tar`, `sha256sum`) and WARN-only `jq`/`rg`. The kind set comes from evidence, first hit wins, and the `kinds` row names which evidence produced it: **(a)** `--kinds &lt;csv&gt;` / `NODE_KINDS` (`go,rust,node,python,generic`), validated before any layer runs — an empty or unknown element is a named `FAIL kinds` and exits 1; **(b)** the workspace `$HOME/repo` when a clone is already present (`go.mod`→go, `Cargo.toml`→rust, `package.json`→node, `pyproject.toml`\|`setup.py`→python); **(c)** the generic fallback, which the layer **prints as a fallback** (`WARN kinds — generic fallback …`) instead of silently grading the old fixed list. `node` keeps its pre-CF-218 WARN shape only in that fallback; once `node` is a declared or derived kind its absence is `FAIL tool:node`. The layer prints its own census command — `bash scripts/project-node.sh --check --project &lt;p&gt; --layers 10`, one node per run — so the fleet counts it was written against can be re-measured: 61 distinct repo origins, go 27, node 22, python 16, rust 5 (CF-218, CF-219). Under `--apply` a `node` kind is **provisioned**, not only graded: `scripts/install-node.sh` installs the digest-pinned `v22.22.3` archive under `$HOME/node-toolchain`, reads that binary's `--version` back, and the layer grades `$HOME/node-toolchain/current/bin/node` before any PATH runtime. A fresh node had no `node` at all, so a Go repo whose tests shell out to it failed 11 tests while this layer printed a green — the row graded an ambient PATH binary it had never installed (CF-003) | preflight |
+| 20 harness | the harness binary plus the adapter's own gate rows, printed verbatim (`python`, `binary`, `version`, `port`, `inference_key`, and `gateway_start` when that block runs); `gateway_start` is a refusal on any node whose `~/.hermes/config.yaml` does not parse to a non-empty `dashboard.basic_auth` username and password (`scripts/harness/install-hermes.sh:119–266`). Before the adapter runs, this layer stages that block through `scripts/node_gateway_auth.py` (`--apply`) or reports whether it is already there (`--check`; read-only, and an absent block is a FAIL because the consequence is a refused gateway). The password is generated on the node into `$HOME/.node/auth/gateway.pass`, mode 600, and is never printed or passed in argv (CF-150) | base |
+| 30 bus | a crier identity file at `$HOME/.node/crier.json` and its mode 600 | harness |
+| 40 repo | the repo cloned at a pinned ref, and the checkout measured against `origin/main` by `scripts/node_freshness.py` (or its node-side fallback): branch, HEAD, ancestry, lag, uncommitted paths (`scripts/project-node.sh`, `freshness_measure`). With `NODE_DEPLOY_KEY` declared, the clone runs under `GIT_SSH_COMMAND='ssh -F &lt;ssh_config&gt;'` built from a mode-600 per-repo key; a key readable by group/other **blocks the clone** instead of falling back to an ambient identity, and `core.sshCommand` is pinned into that one repository afterwards (CF-003) | base |
+| 90 verify | the node manifest (`$HOME/.node/node.json`), written only when every layer passed | all |
+
+Three capabilities that the design describes are **not** established by any shipped layer, and this
+table no longer claims them:
+
+- **A started gateway on a freshly created node — the gate is satisfied, the start is not
+  certified.** Layer 20 runs the adapter with `--apply`, and the adapter starts `hermes serve` only
+  when `~/.hermes/config.yaml` parses to a non-empty `dashboard.basic_auth` username and password
+  (`scripts/harness/install-hermes.sh:119–266`, gate at `:351–369`); otherwise it prints
+  `FAIL gateway_start — refused: a public bind needs dashboard.basic_auth in ~/.hermes/config.yaml`.
+  The create path now WRITES that block instead of assuming it: `scripts/node-create.sh
+  --staged-files` stages eight files — `project-node.sh`, `install-go.sh`, `lib.sh`,
+  `disk_floor.py`, `reclaim_disk.py`, `node_gateway_auth.py`, `harness/harness-vars.sh` and
+  `harness/install-hermes.sh` — and layer 20 runs `node_gateway_auth.py` before the adapter, which
+  writes the block and a mode-600 `$HOME/.node/auth/gateway.pass` on the node, the password never
+  printed and never in argv (CF-150). What that is worth is measured against a fixture, not a live
+  node: `tests/selftest.sh` §55 shows the same adapter printing the refusal above and never
+  launching `serve` without the block, and `PASS gateway_start — /api/status -&gt; 200` with it. No
+  created node has run this ladder since the change, and `NODE: PASS` still needs every row,
+  including the `inference_key` this repo cannot supply. Whether a bunker agent image already ships
+  that file is **not measured** by this repo.
+- **A node-side bus worker.** Layer 30 starts and checks no process and opens no socket:
+  `scripts/project-node.sh:244-249` tests `-f $STATE/crier.json`, then `stat -c '%a'` against `600`,
+  and prints `crier_identity` / `crier_mode`. Whether a worker is running on the node is unmeasured
+  by this ladder; CF-068 owns the file-existence weakness this layer still has.
+- **A round trip whose digest is recomputed on the control host.** Layer 90 prints `[90] manifest`
+  and writes `$HOME/.node/node.json` (`scripts/project-node.sh:294-312`); it recomputes no artifact
+  digest and consults no control host. That criterion is what the runbook calls NOT YET
+  (`docs/OPERATIONS.md` §6), CF-004 owns building it, and `AGENTS.md` rule 4 keeps it as the proof
+  a node works — it is the standard layer 90 is graded against, not something layer 90 delivers.
+
+Layer 40's cell was narrowed to the clone alone for the same reason (`6f75e28`, CF-032); CF-244
+widened it to the clone plus its measured freshness against `origin/main`, because a clone that is
+behind or dirty is a tree the node cannot fast-forward — the failure `verify-node.sh` had no arm
+for. Every cell in this table now names only something the shipped script measures or prints.
+  </section>
+  <!-- source: code-factory/specs/NODE.md#fixture-scope-layers -->
+  <section id="CF-NODE-FIXTURE-SCOPE-LAYERS-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+### Fixture scope (`--layers`)
+
+A run costs every layer's work, but a test that asserts one layer's row needs that layer only.
+`project-node.sh --layers 00,10,20,30,40` runs only the named check layers: a comma-separated
+subset of `00,10,20,30,40`, where a single value is a list of one. An unknown element, an empty
+list or a stray comma prints the usage line to stderr and exits 2 before any layer runs, so a
+half-applied scope can never reach layer 00.
+
+A scoped run is a **fixture**, never a certification:
+
+- it prints one `SCOPE: layers &lt;list&gt; (fixture mode — not a node certification)` line before
+  layer 00, and `  SKIP  layer NN (out of scope)` in the position each skipped layer would have
+  taken;
+- it never writes `$HOME/.node/node.json`, even under `--apply` with every in-scope layer green:
+  layer 90 reports `  SKIP  layer 90 (fixture mode: no manifest)` instead, so **N-4** holds by
+  construction — no manifest, no node identity;
+- it does not resolve the disk floor when `00` is out of scope, because nothing measures or
+  consumes it and a fixture installs nothing (the fail-closed floor path keeps its coverage on
+  unscoped runs, `tests/selftest.sh` section 13);
+- the summary line keeps its existing shape (`NODE: PASS` / `NODE: FAIL (n)`); the absence of a
+  manifest, not the summary, is what makes a scoped run non-certifying.
+
+An unscoped run is unchanged in every respect: same rows, same order, same manifest behaviour,
+same exit codes.
+  </section>
+  <!-- source: code-factory/specs/NODE.md#laws -->
+  <section id="CF-NODE-LAWS-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## Laws
+
+- **N-1** No root. Any step needing sudo is wrong.
+- **N-2** Idempotent. A second `--apply` changes nothing and exits 0.
+- **N-3** Every check names the measured value.
+- **N-4** The manifest is written only after each layer's check passes.
+- **N-5** A node refuses to start work below the disk floor, and says the number; reap before refusing.
+- **N-6** Destroying the agent destroys the node; the scripts must rebuild it exactly.
+  </section>
+  <!-- source: code-factory/specs/NODE.md#lifecycle-contract-cf-008 -->
+  <section id="CF-NODE-LIFECYCLE-CONTRACT-CF-008-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+### Lifecycle contract (CF-008)
+
+The repository-local lifecycle helper (`scripts/node-lifecycle-supervisor.py`) provides the bounded
+control-host slice of N-6. `supervise` starts the child in a new process group, records its PID/PGID
+and every exit/restart in the state JSON, and writes a completion artifact only after a zero exit.
+A TTL lease renews while the child is active through an injectable clock in the test seam; expiry is
+a refusal and does not renew. A deadline sends SIGTERM, then bounded SIGKILL, to the recorded process
+group only, records `pid`, `pgid` and `killed`, and suppresses completion. `replay` executes the
+recorded destroy and create argv lists, snapshots the configuration, and checks the expected rebuilt
+state. These are deterministic repository fixtures; no live bunker host is certified here.
+
+The existing node bus result battery remains the redelivery/idempotency contract: an interrupted
+result is retried with the dispatch-derived key and the harness is not run twice (`specs/ENVELOPE.md`
+§ Durable delivery, and `tests/test_bus_result_delivery.py`).
+  </section>
+  <!-- source: code-factory/specs/NODE.md#credentials-per-repo-deploy-keys -->
+  <section id="CF-NODE-CREDENTIALS-PER-REPO-DEPLOY-KE-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## Credentials — per-repo deploy keys
+
+A private repo is cloned with a key that belongs to **that repo**, never with an account key and
+never with an identity the agent happens to have. The whole path is `scripts/deploy_key.py`:
+
+```
+scripts/deploy_key.py install --home ~ --repo git@gitlab.example:group/repo.git --key &lt;file&gt;
+scripts/deploy_key.py check   --home ~ --repo git@gitlab.example:group/repo.git
+```
+
+`install` refuses a key that is group/other-readable (`FAIL key_mode — … is 0644`), a public key,
+an HTTPS remote (a deploy key authenticates SSH; it cannot authenticate HTTPS) and a non-SSH path;
+it copies the bytes into `$HOME/.node/keys/&lt;name&gt;.key` at mode 600, regenerates
+`$HOME/.node/keys/ssh_config` (one `Host` block per host, `IdentitiesOnly yes`, `BatchMode yes`,
+`StrictHostKeyChecking accept-new`, one `IdentityFile` per repo) and records the repo→key mapping in
+`$HOME/.node/keys/keys.json`. `check` proves the file mode, the config's agreement with the registry
+and prints the **one** clone command a stranger can paste:
+
+```
+GIT_SSH_COMMAND='ssh -F ~/.node/keys/ssh_config' GIT_TERMINAL_PROMPT=0 git clone --depth 1 --branch main &lt;repo&gt; ~/repo
+```
+
+`scripts/node-create.sh --deploy-key &lt;file&gt;` is the spawn path: the credential is validated on the
+control host **before any agent is spawned** — the file is readable, its mode is 600/400, and it
+must load as an **unencrypted private key** (`ssh-keygen -y`, the same client that will present it),
+with the remote in SSH form. A mode-600 `.pub`, a non-key file, a passphrase-protected key and an
+HTTPS (or local-path) remote are each a named refusal there — `FAIL deploy_key:loadable` /
+`FAIL deploy_key:repo` — so the failure lands before an agent exists instead of after its bytes have
+been copied in. The key is then copied to the node as a file (never an argv value), installed by
+`deploy_key.py`, and the incoming copy is deleted in the same round trip. `project-node.sh`
+layer 40 consumes it as `NODE_DEPLOY_KEY` (+ optional `NODE_SSH_CONFIG`): the clone runs under a
+process-scoped `GIT_SSH_COMMAND`, and `core.sshCommand` is written into that one repository after a
+successful clone so later fetches use the same identity. **Read-only is the key's server-side grant**;
+the client cannot prove it, and this repo does not claim it: what is proven locally is the 0600
+file, the `IdentitiesOnly` config, and that the clone uses them. Cloning the real private GitLab
+from a fresh node with a real read-only key is a live obligation (`tests/test_node_provisioning.py`
+proves the mechanism against a fixture; see "Verification" there).
+  </section>
+  <!-- source: code-factory/specs/NODE.md#disk-floor -->
+  <section id="CF-NODE-DISK-FLOOR-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## Disk floor
+
+Measured components per repo node: 97 MB repo + 656 MB module cache + toolchain + harness. Build cache is not provisioned by shipped scripts and is excluded.
+
+Floor = repo + harness + 2 GB working room. The ladder reads free space and refuses below the floor **with the number in the refusal**.
+
+**Shared module cache.** The 656 MB is the same bytes for every node of a repo, so it is seeded
+once and sealed read-only rather than re-downloaded per node:
+
+```
+scripts/gomodcache.py init  --dir /srv/cf/gomod
+scripts/gomodcache.py seed  --dir /srv/cf/gomod --module &lt;repo&gt;
+scripts/gomodcache.py seal  --dir /srv/cf/gomod     # chmod a-w, record bytes/entries
+scripts/gomodcache.py check --dir /srv/cf/gomod     # FAILs on any write bit or size drift
+scripts/gomodcache.py wire  --dir /srv/cf/gomod     # go env -w GOMODCACHE=&lt;dir&gt;
+```
+
+A sealed cache makes the no-re-download property **checkable**: with the proxy disabled
+(`GOPROXY=off`) a build that touches an already-seeded module succeeds and adds 0 bytes, while a
+module that is absent is refused with `permission denied` instead of silently growing the cache.
+Declaring the cache on a node (`NODE_GOMODCACHE`, passed by `node-create.sh --gomodcache`) makes
+layer 10 print its size and refuse it when it is writable or has drifted; when it is not declared the
+layer says so (`WARN go:modcache — this node keeps a private module cache`) rather than leaving the
+absence unexplained.
+
+**Footprint admission.** Layer 00 measures the components this node will occupy
+(`scripts/node_hygiene.py footprint`: checkout, `node-toolchain`, `go-toolchain`, `.hermes`, `.node`
+and a declared module cache), prints each size, and refuses admission when the total plus 2 GiB of
+working room exceeds free space, or when the total exceeds the resolved floor. An undeclared module
+cache reports `not-declared`, never a silent zero.
+
+**Orphan reaping.** A bunker host accumulates homes and keys whose agent no longer exists. They are
+reaped against the server's own agent list, never against a guess:
+
+```
+BUNKER_HOMES_DIR=&lt;dir&gt; BUNKER_KEYS_DIR=&lt;dir&gt; scripts/bunker-server-install.sh --reap-orphans
+# or, directly:
+scripts/node_hygiene.py reap --homes-dir D --keys-dir D --registry &lt;list&gt; [--apply]
+```
+
+Check mode removes nothing and exits non-zero for every orphan it would remove, so it gates a
+scale-up; apply mode removes only entries whose id is absent from the registry, older than the grace
+window, and directly under the named directory. Symlinks are never followed and the target of one is
+never touched.
+
+Before refusing, `--apply` runs `scripts/reclaim_disk.py run --root "$HOME" --dry-run --json`
+(a rehearsal that prints the projected set and deletes nothing) and then the same call without
+`--dry-run`, against bounded user-space targets: `.cache/pip`, `.cache/uv`, `.cache/pre-commit`,
+`.cache/go-build`, and `.npm/_cacache` are removed only when the **newest mtime anywhere in their
+subtree** exceeds the cache TTL (default 24 hours, configurable with `--cache-ttl-hours`), and
+immediate job directories under `.node/jobs` and stale clones under `.node/clones` are removed only
+when the same measure exceeds the job TTL (default 24 hours, `--job-ttl-hours`). A cache written
+seconds ago is kept, because a directory's own mtime does not move when a file deep inside it is
+rewritten.
+Targets are fixed, resolved inside the real root, and symlinks are never followed.
+The repo and node identity/configuration files are never targets. The reclaimer
+refuses `/` and non-directory roots, supports `--dry-run`, and reports reclaimed bytes
+plus the deleted set. The ladder re-measures free space after reclaim and refuses only if still
+below the floor. `--check` never reclaims: it reports the existing disk failure, explains what
+`--apply` would reap first, and keeps measuring the other layers.
+  </section>
+  <!-- source: code-factory/specs/NODE.md#configurable-floors-roles -->
+  <section id="CF-NODE-CONFIGURABLE-FLOORS-ROLES-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+### Configurable floors (roles)
+
+The floor is operator policy, so it is configurable — and the precedence is fixed, highest first:
+
+| Rung | Source | Example |
+|---|---|---|
+| 1 | `--disk-floor &lt;GiB&gt;` | `project-node.sh --check --disk-floor 8` |
+| 2 | `NODE_DISK_FLOOR` | `NODE_DISK_FLOOR=8G` |
+| 3 | config `[disk] &lt;role&gt;_gib` | `worker_gib = "8"` |
+| 4 | config `[disk] default_gib` | `default_gib = "6"` |
+| 5 | built-in role default | see below |
+
+Role defaults: `worker` 5 GiB, `builder` 10 GiB, `full` 20 GiB. The role is selected with `--role` or `NODE_ROLE`. Accepted value forms: `7`, `7G`, `7GiB`, `1.5G` in GiB, bounded to 1–4096. A decimal is **preserved**, never truncated: `1.5G` is a 1.5 GiB floor and `5.9G` is a 5.9 GiB floor, so admission enforces the number the operator wrote (CF-082); whole values stay whole numbers (`5G` resolves to `5`, not `5.0`).
+
+A malformed value fails closed **before** any install, clone or adapter run: `FAIL disk-floor: NODE_DISK_FLOOR: 'plenty' is not a size…`. A typo never lowers a floor, and a below-floor node refuses admission naming both the measured free space and the configured floor, plus the source that set it.
+
+Config file location: `--config`, `NODE_DISK_FLOOR_CONFIG`, or `$HOME/.node/floor.toml`. See `examples/floor.toml.example`.
+
+Resolver: `python3 scripts/disk_floor.py resolve --role builder --explain` prints `{"role":…,"floor_gib":…,"source":…}`; `python3 scripts/disk_floor.py roles` lists defaults.
+  </section>
+  <!-- source: code-factory/specs/NODE.md#workdir-targets -->
+  <section id="CF-NODE-WORKDIR-TARGETS-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## Workdir targets
+
+A lane's `workdir` is a **target**, not a local directory string. Remote execution means the workdir can live on another host, addressed the way people address remote paths:
+
+| Form | Kind | Example |
+|---|---|---|
+| absolute / `~` path | local | `~/code-factory` |
+| `local:` / `file://` | local | `local:/srv/cf` |
+| `user@host:path` | remote (ssh/scp style) | `builder@node-01:/srv/code-factory` |
+| `ssh://user@host[:port]/path` | remote | `ssh://builder@node-01:2222/srv/cf` |
+| `sftp://` / `ftp://` / `ftps://` / `rsync://` | remote | `sftp://deploy@mirror/srv/cf` |
+| `bunker://&lt;agent&gt;/path` | remote (bunker identity) | `bunker://cf-worker/srv/cf` |
+
+Rules:
+
+- `scripts/lane_target.py parse &lt;target&gt;` structurally validates and emits the components as JSON; unparseable or relative local paths exit 2.
+- `verify` on a **local** target proves it is a real checkout: directory exists, `git rev-parse --show-toplevel` succeeds, the top level is **not `$HOME`** (the stand-in locator defect where a lane reads the home repo's board), the top level matches the target, a remote exists, and HEAD is an attached branch.
+- `verify` on a **remote** target is `remote-structural-only`: reachability and existence are NOT checked locally, and that must be requested explicitly with `--allow-remote` (exit 3 otherwise). A remote target is never silently treated as verified.
+- `verify --exec-bunker [--bunker-server S]` on a **bunker** target proves it against the agent itself: `bunker exec &lt;agent&gt; -- sh -lc 'echo $HOME; test -d &lt;path&gt;'` must return a home and an existing directory. Checks recorded: `bunker_cli`, `agent_reachable`, `path_exists`.
+- `lane_target.py plan &lt;projects.jsonl&gt; --agent &lt;id&gt; --server &lt;server&gt; [--suffix /repo] [--prefix P]` emits the intended `bunker://&lt;agent&gt;/&lt;home&gt;&lt;suffix&gt;` target per lane. The agent's home is **resolved from the agent**, never templated: homes are `/home/bunker-&lt;full-id&gt;`, so a `{agent}` template builds a wrong path that still parses.
+- `lane_target.py scan &lt;projects.jsonl&gt; [--allow-remote]` checks every row and exits nonzero if any target is invalid.
+- `scripts/node_freshness.py --agent A --server S [--path REL]` proves the **checkout** a node will work is the tree `origin/main` has: branch, HEAD, whether HEAD is an ancestor of `origin/main`, the lag count and the files that differ, plus every uncommitted path — gathered in ONE `bunker exec` round trip, with the agent's home resolved from the agent (never templated). `--workdir PATH` measures a local checkout with no bunker, no network and no database; `--json` emits the object layer 90 stores in the manifest. Exit codes: `0` PASS, `1` drift or dirty, `2` usage or unreachable — an unmeasurable node is not a PASS. A repo with no `origin` remote is a FAIL naming that, and the comparison ref falls back to `origin/HEAD` (named in the row) so a `trunk`-default repo is measured instead of mislabelled. `scripts/verify-node.sh` folds the verdict into `VERIFY:` (step 5; unmeasurable is WARN unless `--strict-freshness`).
+- `scripts/node_seed_drift.py --agent A --server S` (or `--home DIR`) proves the **seed** a node carries is still what its digest record pins: it runs `scripts/node_seed.py`'s own `check` — the seeder is staged to a temp path on the node and removed again inside ONE `bunker exec` round trip, because provisioning deletes the node-side copy after it applies — with the record the seed left (`$HOME/.hermes/seed-applied.json`, home `$HOME`), so the verdict is the instrument's own and the wrapper cannot drift from it. The PASS row counts the seeded files and **only a count greater than zero can produce one**: a record whose `files` collection is empty — or absent, or not a list — is refused with `FAIL seed_drift — &lt;record&gt;: the record declares no files (&lt;shape&gt;) — an empty seed certifies nothing` and exit `1`, because nothing it declares could agree with anything on the node, while the seeder's own `check` prints the same `0 files present and matching` row and exits 0 for it (CF-379: `0 files present and matching` certified a node whose seed applied nothing). No reason field on the record rescues it: the probe exists to prove digests, and a record that names none proves nothing; a node that is meant to carry no seed should carry no seed record, which is the absent-record WARN below. The FAIL row names each drifted path with the expected and measured digest prefixes and each path absent on the node; the wrapper never reimplements the digest comparison. Exit codes: `0` matched, `1` drift (or a record that declares no files, or an absent record under `--strict-seed`), `2` usage, `3` could not measure — a node still being provisioned has no seed record, a corrupt record is not a tampered copy, and "cannot measure" is not drift; both are WARN, and `--strict-seed` refuses the unknown. `scripts/verify-node.sh` folds it into `VERIFY:` as step 6: a drifted seed alone drives `VERIFY: FAIL`, a record that declares no files drives `VERIFY: FAIL` the same way (the checker's exit `1` is already the `bad` branch — no new verb), and an unmeasurable seed is WARN (FAIL under `--strict-seed`).
+- Lane writers (`scripts/configure_family.py`) only `mkdir` a **local** target; a remote target is registered verbatim and materialised by the node side.
+  </section>
+  <!-- source: code-factory/specs/NODE.md#verifier-usage-contract-cf-063 -->
+  <section id="CF-NODE-VERIFIER-USAGE-CONTRACT-CF-063-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## Verifier usage contract (CF-063)
+
+`scripts/verify-node.sh` parses `-h`/`--help` before validation, port or transport checks, and any bunker call. The help arm prints the usage line and exits 2 for both `scripts/verify-node.sh --help` and a bare `scripts/verify-node.sh`, regardless of whether `BUNKER_SERVER` is set. After parsing, an explicit `--server &lt;name&gt;` takes precedence; otherwise `SERVER` falls back to `BUNKER_SERVER`. Operational invocations refuse with `set BUNKER_SERVER or pass --server &lt;name&gt;` and exit 2 when neither is provided. The offline regression is `bash tests/selftest.sh` (CF-063 arm); the exact command to verify the script syntax is `bash -n scripts/verify-node.sh`.
+
+ch&#58;trace row=CF-063 spec=specs/NODE.md#verifier-usage test=tests/selftest.sh::cf063-verify-node-usage doc=docs/handbook/chapters/M1-provisioning.md evidence=tests/selftest.sh::cf063-verify-node-usage witness=none:offline-fixture verdict=none:foreman-runs-judge commit=none:worker-sha memory=none:foreman-closeout STATUS=complete TIER=1 EVIDENCE=offline-fixture
+  </section>
+  <!-- source: code-factory/specs/NODE.md#transport-how-the-control-host-reaches-a-node-s-gateway -->
+  <section id="CF-NODE-TRANSPORT-HOW-THE-CONTROL-HOST-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## Transport — how the control host reaches a node's gateway
+
+**A bunker node has no LAN address by default.** The agent runs in its own network namespace, so the
+address `hostname -I` answers inside it (`172.x`, `10.x`) is one the control host cannot route to.
+Any claim that such a node is "reachable" has to name the path the request actually took. On a node
+that shares a LAN with the control host — the original case — the node's own address is that path;
+anywhere else it is not, and a verifier that assumes it will report a green node as unverified (or,
+worse, certify one by probing a loopback address that answers on the control host).
+
+`scripts/verify-node.sh` therefore takes an explicit transport, and **every row it prints names the
+transport that carried the probe, with the HTTP code it measured**:
+
+| `--transport` | What it is | Where the probe runs | Can it produce `VERIFY: PASS`? |
+|---|---|---|---|
+| `node-address` (default) | the node's own address from `hostname -I` | control host | yes — **only** when that address is not loopback and the control host can reach it (the LAN case) |
+| `published-port` | a port published on the bunker host for this agent's gateway (`--transport-address HOST:PORT`) | control host | yes — the request leaves this host and arrives at the node as an outside request |
+| `tunnel` | an SSH forward opened on the control host to the node's gateway (`ssh -N -L 18080:127.0.0.1:10800 …`, then `--transport-address 127.0.0.1:18080`) | control host, into the forward | yes — a loopback endpoint is legal here **because the declaration says what it is**: the request originates on this host and re-enters the node through the tunnel |
+| `bunker-exec` | the probe run through the bunker CLI, INSIDE the node (`curl http://127.0.0.1:&lt;port&gt;/…`) | the node itself | **never** |
+
+Why these three and not a fourth: publishing a port needs no credential in the node and no local
+daemon; a tunnel needs only the SSH access the operator already has to the bunker host; and running
+the probe through the bunker CLI needs nothing but the CLI — but it measures the node's own loopback,
+so it is kept as a diagnostic and graded `FAIL`. `--transport published-port|tunnel` requires
+`--transport-address HOST:PORT` and refuses to invent one; `NODE_TRANSPORT` and
+`NODE_TRANSPORT_ADDRESS` carry the same values into a spawn path (`scripts/node-create.sh` runs the
+verifier as a child, so an exported pair reaches it without new argv).
+
+Two graded consequences:
+
+- **A loopback inside the node is a `FAIL`, not a `PASS`.** `--transport bunker-exec` prints
+  `FAIL gateway_reachable — loopback inside the node -&gt; 200 (transport: bunker-exec) — a request
+  that did not leave the node proves nothing about reachability, so this is a FAIL, not a PASS` and
+  the run ends `VERIFY: FAIL (n)`. It reports the code it measured so the operator can see the
+  harness is up; it still refuses to certify the node.
+- **An unavailable transport is named, never `000`.** When the declared transport answers nothing,
+  the row says which one and to what endpoint — `WARN gateway_reachable — no published port for
+  cf-node:10800 (nothing answered at &lt;host&gt;:10800)` / `no tunnel endpoint for cf-node:10800 …` /
+  `no route from this host to &lt;ip&gt;:10800 (a bunker node has no LAN address by default — pass
+  --transport published-port or --transport tunnel)` — and the run ends `VERIFY: UNVERIFIED`,
+  exit 3. That is distinct from `FAIL` on purpose: nothing is broken and nothing is proven. A
+  *non-200 answer* from the transport (404, 500) stays a `FAIL`, because the node was reached and
+  answered wrongly. A node that reports only a loopback address is refused the same way — probing
+  it from here would measure the control host's own loopback, not the node.
+
+What this still does not prove: that the port or tunnel an operator declares is the node's gateway
+rather than some other listener, and any round trip whose artifact digest is recomputed on the
+control host (that remains CF-004). The transport proves the request came from outside the node,
+not what the node did with it.
+  </section>
+  <!-- source: code-factory/specs/NODE.md#failure-semantics -->
+  <section id="CF-NODE-FAILURE-SEMANTICS-S012" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## Failure semantics
+
+- Gateway unreachable through the declared transport → `VERIFY: UNVERIFIED`, exit 3, naming the
+  transport and the endpoint (`no published port for cf-node:10800`). The node is not called broken
+  and it is not certified; a *non-200 answer* through a working transport is a FAIL instead. A probe
+  that never left the node (`--transport bunker-exec`) is a FAIL, whatever it measured.
+- Harness down → layer 20 FAIL; no work is accepted.
+- Bus identity missing → layer 30 FAIL; the node is invisible, which is worse than empty.
+- Repo dirty at provision time → WARN, not FAIL (the node may be mid-task); `verify` still runs.
+  The uncommitted paths are named and recorded (`$HOME/.node/freshness.json`, and the manifest's
+  `freshness` object), because the edit belongs upstream, not in the node's tree.
+- Repo drifted at provision time (behind or diverged from `origin/main`, i.e. the pull cannot
+  fast-forward) → FAIL under `--apply`: the node would work a tree that no longer matches
+  `origin/main`. Neither condition is repaired silently by the ladder.
+- Round trip fails → the node is quarantined; the scheduler must not send it more work.
+  </section>
+</spec>

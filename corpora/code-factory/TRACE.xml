@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from code-factory/specs/TRACE.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CF-TRACE-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: code-factory/specs/TRACE.md#preamble -->
+  <section id="CF-TRACE-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+# TRACE — the identity ladder: one dispatch, six ids, no gaps
+
+Status: **DESIGN + GAP REGISTER.** `specs/ENVELOPE.md` already defines `corr_id`, `dispatch_id` and
+`idempotency_key` (`specs/ENVELOPE.md:12`, `:61`), and the round-trip probe measured that the chain
+breaks in practice: five unacked replies carried `in_reply_to` and **none** carried `corr_id`
+(`~/code-factory-reports/crier-scheduler-roundtrip-2026-11-05.md:258`). This page fixes the
+whole ladder and names every break.
+  </section>
+  <!-- source: code-factory/specs/TRACE.md#1-the-problem -->
+  <section id="CF-TRACE-1-THE-PROBLEM-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 1. The problem
+
+A board row is **not** a run. `CF-212` can be dispatched on Monday, fail, be re-dispatched Tuesday and
+succeed. Both runs touch the same row, both write the same board file, and today **nothing
+distinguishes them**: the row id is the only identity in play, so "which attempt failed, and what did
+it do differently" is unanswerable from logs.
+
+Every layer mints its own id and none of them are joined on purpose:
+
+| layer | id it has today | minted by | problem |
+|---|---|---|---|
+| board | `CF-nnn` | `boardctl` | identifies the WORK, not an attempt — reuse is normal |
+| scheduler | `corr_id` = `lane-&lt;ts&gt;-&lt;seq&gt;` (`specs/ENVELOPE.md:12`) | scheduler dispatch | not a UUID; two dispatches in one second rely on a sequence counter |
+| crier | message id (24-hex) | crier | unique, but only correlated if the sender sends the key |
+| hermes session | session id | gateway | not told which dispatch it serves |
+| node run | `CF_RUN_ID` (`specs/HARNESS-MATRIX.md`) | envelope | absent in one dispatcher path (G2) |
+| artifact | commit SHA / digest | node | no link back to the run that produced it |
+  </section>
+  <!-- source: code-factory/specs/TRACE.md#2-the-ladder-six-identities-one-chain -->
+  <section id="CF-TRACE-2-THE-LADDER-SIX-IDENTITIES-ON-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 2. The ladder — six identities, one chain
+
+    board row  CF-nnn                      the WORK (many attempts)
+       |
+       +-- attempt  run_id  = UUIDv7       ONE dispatch, minted by the scheduler, never reused
+              |
+              +-- corr_id                  the scheduler's join key  (kept: it is what replies carry)
+              +-- crier message id         the transport
+              +-- session id               the agent that did the work
+              +-- node run record          R1/R2 (specs/FLEET-MEMORY.md)
+              +-- artifacts                commit SHA, file digests
+              +-- board event              the row's own history entry, carrying run_id
+
+**Rules:**
+
+1. **The scheduler mints `run_id` per dispatch attempt**, as a UUIDv7 (time-ordered, so a week's runs
+   sort by id). `CF-nnn` may appear in many `run_id`s; a `run_id` belongs to exactly one row and one
+   attempt.
+2. **Every hop records the ids it received.** A hop that invents an id without carrying the parent is
+   broken, not merely lossy.
+3. **`corr_id` stays** — it is the scheduler's existing join key and replies already speak it. `run_id`
+   is its parent, not its replacement.
+4. **No ids in prose.** If a log line, metric, board event or DuckBrain record names a run, it names
+   `run_id` first.
+5. **An attempt that never reaches the node still gets a `run_id`** — a dispatch that crier rejected is
+   a run that failed, and it must be visible as such rather than as a gap in the numbering.
+  </section>
+  <!-- source: code-factory/specs/TRACE.md#3-propagation-contract-hop-by-hop -->
+  <section id="CF-TRACE-3-PROPAGATION-CONTRACT-HOP-BY-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 3. Propagation contract, hop by hop
+
+| hop | must carry | must record | failure if absent |
+|---|---|---|---|
+| scheduler → crier | `run_id`, `corr_id`, `idempotency_key`, `board_row`, `lane`, `attempt` | its own dispatch log line with all five | a redelivery is indistinguishable from a new attempt |
+| crier → inbox | the payload plus its own message id | message id ↔ `run_id` mapping, readable by the control host | the reply cannot be matched to the request |
+| crier → reply | `in_reply_to` **and** `corr_id` **and** `run_id` | the correlation it used | today: five replies with `in_reply_to` only (`…roundtrip-2026-11-05.md:258`) |
+| control host → hermes session | `run_id` in the session's opening context | session id ↔ `run_id` | a session cannot be traced to the dispatch that caused it |
+| session → node | `CF_RUN_ID` = `run_id`, `CF_LANE`, `CF_NAMESPACE` | echoed into every record it writes | the run's memory writes are unattributable |
+| node → control host | `run_id` in the result envelope | R1 + R2 (`specs/FLEET-MEMORY.md:28`, `:38`) | the fleet index has runs it cannot join |
+| node → git | commit trailer `Run-Id: &lt;run_id&gt;` | commit SHA ↔ `run_id` | an artifact cannot be traced to an attempt |
+| foreman → board | a board event naming `run_id` and the outcome | row history | the row shows a status change with no cause |
+  </section>
+  <!-- source: code-factory/specs/TRACE.md#4-where-it-breaks-today-measured -->
+  <section id="CF-TRACE-4-WHERE-IT-BREAKS-TODAY-MEASUR-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 4. Where it breaks today — measured
+
+| id | break | evidence |
+|---|---|---|
+| T1 | replies carry `in_reply_to`, never `corr_id` | five unacked replies, `…roundtrip-2026-11-05.md:258`; only one `in_reply_to` matched a tick (`:270`) |
+| T2 | one dispatcher path omits `reply_to` and `text` entirely | report §G2, `cmd/scheduler-dispatch/main.go:137-142` |
+| T3 | `reply_to` exists only inside the payload, not as a first-class field | report §G3 |
+| T4 | no `run_id` exists at all: `corr_id` is timestamp+sequence, reused per lane | `specs/ENVELOPE.md:12` |
+| T5 | a session is never told which dispatch it serves | nothing in the session-open path carries `corr_id` or `run_id` |
+| T6 | commits carry no run attribution | no trailer in `scripts/land-node-branch.sh` or the node's commit path |
+| T7 | the board's own history does not distinguish attempts | rows record status, not attempts |
+  </section>
+  <!-- source: code-factory/specs/TRACE.md#5-what-the-operator-can-ask-once-this-holds -->
+  <section id="CF-TRACE-5-WHAT-THE-OPERATOR-CAN-ASK-ON-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 5. What the operator can ask once this holds
+
+1. *"Show every attempt on CF-212, with outcomes."* — `list_keys` prefix on the row, or the board
+   event stream filtered by `board_row`.
+2. *"This commit broke main; which run produced it?"* — `git log --grep 'Run-Id:'`.
+3. *"This session used the wrong model; which dispatch was it?"* — session id → `run_id` → dispatch.
+4. *"Which runs failed at the crier hop last week, and why?"* — R2 records with `outcome: FAIL` whose
+   last hop is transport.
+5. *"How many attempts did the fleet need per completed row this month?"* — the number nobody can
+   compute today, and the one that says whether dispatch is healthy.
+  </section>
+  <!-- source: code-factory/specs/TRACE.md#6-verification-what-must-be-true-before-this-page-says-implemented -->
+  <section id="CF-TRACE-6-VERIFICATION-WHAT-MUST-BE-TR-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 6. Verification — what must be true before this page says "implemented"
+
+1. Two consecutive dispatches of one board row produce **two distinct `run_id`s**, both mapping to the
+   row, and the second is visibly later in a sort.
+2. A reply carries `in_reply_to`, `corr_id` **and** `run_id`; a reply missing either is refused by the
+   scheduler rather than counted as uncorrelated.
+3. A hermes session created for a dispatch can be found from its `run_id` alone (session id recorded
+   against it at open).
+4. A node commit carries `Run-Id: &lt;run_id&gt;` and `git log --grep` finds it.
+5. A dispatch that crier refused still has a `run_id` and a `FAIL` record.
+6. Killing the node after the envelope but before the result leaves a `run_id` with no result — and a
+   query that says so, rather than a run that vanished.
+  </section>
+  <!-- source: code-factory/specs/TRACE.md#7-scope-and-non-goals -->
+  <section id="CF-TRACE-7-SCOPE-AND-NON-GOALS-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 7. Scope and non-goals
+
+In scope: minting, propagation, recording, and the queries in §5. Out of scope: log shipping, sampling,
+and the scheduler's own metrics schema (that is the scheduler repo's spec). This page defines the join
+key; the stores that index it are each store's own business, provided they record it.
+  </section>
+  <!-- source: code-factory/specs/TRACE.md#8-inherited-defects -->
+  <section id="CF-TRACE-8-INHERITED-DEFECTS-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 8. Inherited defects
+
+| id | what |
+|---|---|
+| CF-216 | `specs/ENVELOPE.md` matches neither implementation (timings and fields) |
+| CF-253 | a 1800 s stream timeout makes a stalled request look like a hung job — with `run_id` this is distinguishable |
+| CF-276 | `node-create.sh` does not stage `node-bus-worker.py`, so a fresh node may have no `CF_RUN_ID` consumer at all |
+| CF-208 | the DuckBrain token is not namespace-scoped, so R2 cannot be trusted as a cross-project index until it is |
+  </section>
+</spec>
