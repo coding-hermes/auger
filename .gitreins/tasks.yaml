@@ -2616,3 +2616,42 @@ tasks:
     test_ci_boardctl_install tests/gate.sh'' prints 1.'
   status: in_progress
   created_at: '2026-11-16T06:51:36.718813+00:00'
+- id: AUG-179
+  title: AUG-176 corpus tests were host-bound (CI red 'source vanished'); portable
+    per-block digest leg plus a named-skip host leg
+  criteria:
+  - 'The portable digest leg stays green in the exact CI shape, where both external
+    source roots are pinned to paths that do not exist, and every skip is NAMED. FAILIF:
+    any failed test, a nonzero exit, or a SKIPPED line whose reason does not name
+    the missing source root. PROOF: bash -c ''cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH
+    AUGER_SPEC_SOURCE_ROOTS=code-factory=/nonexistent-aug179/cf,coding-hermes-director=/nonexistent-aug179/chd
+    python3 -m pytest tests/test_spec_ingest.py -q'' must exit 0 with the summary
+    line 15 passed, 2 skipped.'
+  - 'On this host, where all three corpora''s source roots exist, the true verbatim
+    containment assertion executes for every corpus instead of skipping. FAILIF: any
+    skip or failure in the selection, which would mean the host leg silently degraded.
+    PROOF: bash -c ''cd /home/kara/auger && PATH=/home/kara/auger/.venv/bin:$PATH
+    python3 -m pytest tests/test_spec_ingest.py -q -k verbatim_and_manifests_reconcile''
+    must exit 0 with 3 passed, 14 deselected and zero skipped.'
+  - 'A single mutated block body in a throwaway clone turns the digest leg red and
+    names that block, so the portable leg detects drift rather than self-hashing.
+    FAILIF: rc=0 over the mutated corpus, which would mean the digest leg cannot detect
+    drift. PROOF: bash -c ''d=$(mktemp -d); git clone -q --depth 1 file:///home/kara/auger
+    "$d/c"; cd "$d/c"; sed -i "s/correlation/CORRUPTED-TOKEN/" corpora/code-factory/TRACE.xml;
+    PATH=/home/kara/auger/.venv/bin:$PATH python3 -m pytest tests/test_spec_ingest.py
+    -q -k digests_match_manifest; rc=$?; rm -rf "$d"; echo rc=$rc'' must print rc=1
+    and name block CF-TRACE-3-PROPAGATION-CONTRACT-HOP-BY-S003.'
+  - 'The gate''s pytest arm names this test file and the gate transcript for the graded
+    tree records a full pass with no skipped live arms. FAILIF: the arm count is 0
+    (an unnamed test file is unenforced) or the transcript lacks GATE PASS. PROOF:
+    bash -c ''cd /home/kara/auger && grep -c tests/test_spec_ingest.py tests/gate.sh;
+    grep -E "GATE PASS|LIVE ARMS" evidence/AUG-179/05-gate.log'' must print an arm
+    count of 1 or more plus GATE PASS and LIVE ARMS ran 2, skipped 0.'
+  - 'Nothing was weakened to reach green: no escape hatch in CI, corpus XML byte-identical
+    to base 4a8cc94, and only manifests/coverage regenerated. FAILIF: AUGER_ALLOW_SKIPPED_ARMS
+    is present in CI, or any corpus XML block text or id changed. PROOF: bash -c ''cd
+    /home/kara/auger && grep -rl AUGER_ALLOW_SKIPPED_ARMS .github/workflows/ | wc
+    -l; git diff --stat 4a8cc94 HEAD -- corpora/code-factory/ corpora/coding-hermes-director/
+    corpora/auger-docs/ | grep -c xml'' must print 0 for both counts.'
+  status: in_progress
+  created_at: '2026-11-16T18:55:37.382923+00:00'
