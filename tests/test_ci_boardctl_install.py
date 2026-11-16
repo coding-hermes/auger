@@ -15,6 +15,7 @@ proven capable of failing — a checker that cannot go red is decoration, not co
   exact install name ...... test_the_release_binary_is_installed_under_the_exact_name_boardctl
   checksum fail-closed .... test_the_download_is_checksum_verified_and_fails_closed
   arch guard .............. test_the_asset_resolution_refuses_unknown_architectures_loudly
+  path exported ........... test_the_install_dir_is_exported_to_the_following_steps
   fail-loud preserved ..... test_boardctl_or_skip_still_raises_when_the_binary_is_missing
                             test_boardctl_or_skip_has_no_skip_fallback
   non-vacuity ............. test_the_real_workflow_satisfies_every_assertion
@@ -104,6 +105,13 @@ def workflow_findings(path: Path) -> list[str]:
     if "uname -m" not in text:
         findings.append("missing-arch-guard")
 
+    # (e) the install directory must be EXPORTED to the steps that follow. Installing into
+    # ${HOME}/.local/bin is not enough by itself: the runner's default PATH is not ours to
+    # assume, and GITHUB_PATH (guarded, so the same body still runs on a dev host) is the
+    # documented mechanism. Without it the gate step never resolves the binary.
+    if "GITHUB_PATH" not in text:
+        findings.append("path-not-exported")
+
     return findings
 
 
@@ -181,6 +189,19 @@ def test_the_asset_resolution_refuses_unknown_architectures_loudly(tmp_path):
 
     findings = workflow_findings(_mutated_workflow(tmp_path, drop_the_arch_guard))
     assert "missing-arch-guard" in findings, findings
+
+
+def test_the_install_dir_is_exported_to_the_following_steps(tmp_path):
+    """Installing the binary is not enough: the NEXT step must be able to resolve it."""
+
+    def drop_the_path_export(steps):
+        s = steps[_install_step_index(steps)]
+        s["run"] = "\n".join(
+            ln for ln in s["run"].splitlines() if "GITHUB_PATH" not in ln
+        )
+
+    findings = workflow_findings(_mutated_workflow(tmp_path, drop_the_path_export))
+    assert "path-not-exported" in findings, findings
 
 
 # --------------------------------------------------------------------- fail-loud preserved
