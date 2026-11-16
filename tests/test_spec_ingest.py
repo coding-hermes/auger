@@ -295,38 +295,38 @@ def test_shipped_block_digests_match_manifest():
     not all((REPO_ROOT / "corpora" / p / "manifest.json").exists() for p in PROJECTS),
     reason="shipped corpora not generated yet",
 )
-def test_shipped_blocks_are_verbatim_and_manifests_reconcile():
+@pytest.mark.parametrize("project", PROJECTS)
+def test_shipped_blocks_are_verbatim_and_manifests_reconcile(project):
     """HOST containment leg: the true verbatim assertion against the real sources.
 
-    Skips with a NAMED reason per project whose sources are unavailable on this host —
+    Parametrized per project so EACH unavailable root yields its own NAMED skip —
     a named skip IS the evidence; the digest leg covered integrity on that host.
     """
     corpora = _corpora_root()
-    for project in PROJECTS:
-        manifest = _load_manifest(corpora, project)
-        ingest.validate_manifest(manifest)
-        resolved = _resolve_source_file(project, manifest, manifest["documents"][0])
-        if resolved is None:
-            pytest.skip(
-                f"source root for corpora/{project} not available on this host "
-                f"(manifest declares {manifest['source_root']}); the portable digest "
-                "leg (test_shipped_block_digests_match_manifest) covered corpus "
-                "integrity here"
+    manifest = _load_manifest(corpora, project)
+    ingest.validate_manifest(manifest)
+    resolved = _resolve_source_file(project, manifest, manifest["documents"][0])
+    if resolved is None:
+        pytest.skip(
+            f"source root for corpora/{project} not available on this host "
+            f"(manifest declares {manifest['source_root']}); the portable digest "
+            "leg (test_shipped_block_digests_match_manifest) covered corpus "
+            "integrity here"
+        )
+    for document in manifest["documents"]:
+        source = _resolve_source_file(project, manifest, document)
+        assert source is not None and source.exists(), f"source vanished: {source}"
+        normalized = " ".join(
+            source.read_text(encoding="utf-8", errors="replace").split()
+        )
+        tree = _parse_with_comments(corpora / project / document["document"])
+        blocks = tree.getroot().findall(f"{NS}section")
+        assert len(blocks) == document["block_count"], document["source"]
+        for block in blocks:
+            body = " ".join((block.text or "").split())
+            assert body in normalized, (
+                f"{project}/{block.get('id')} is not a verbatim span of its source"
             )
-        for document in manifest["documents"]:
-            source = _resolve_source_file(project, manifest, document)
-            assert source is not None and source.exists(), f"source vanished: {source}"
-            normalized = " ".join(
-                source.read_text(encoding="utf-8", errors="replace").split()
-            )
-            tree = _parse_with_comments(corpora / project / document["document"])
-            blocks = tree.getroot().findall(f"{NS}section")
-            assert len(blocks) == document["block_count"], document["source"]
-            for block in blocks:
-                body = " ".join((block.text or "").split())
-                assert body in normalized, (
-                    f"{project}/{block.get('id')} is not a verbatim span of its source"
-                )
 
 
 def test_manifest_blocks_carry_source_span_digests(tmp_path):
