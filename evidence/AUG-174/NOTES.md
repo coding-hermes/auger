@@ -58,7 +58,21 @@ EVIDENCE (this directory)
                            its assertion — non-vacuity for every checker rule).
 
 FOR THE FOREMAN
-  - The full gate was NOT run locally (per the brief); the new test file is hermetic
+  - SIBLING WRITER LANDED ON TOP OF ME: while the guarded commit's gate was running
+    (guard log 20261116T032618, tests arm 777 passed / 2 skipped), an unknown sibling
+    writer first added, then COMMITTED (2fe06e7, 22:32:12 -0500) two edits to THIS
+    worktree: a GITHUB_PATH export block in the install step (guarded for non-GitHub
+    hosts so the same body runs locally) and a matching 9th test (path-not-exported
+    finding + a mutation leg). They are correct and within this row's file scope, so
+    they stand as committed. Verified on the post-2fe06e7 tree: pytest
+    tests/test_ci_boardctl_install.py 9 passed; spec align fail:0; the install-step
+    simulation re-run green (03-install-step-simulated.txt, 2061-char run body).
+    2fe06e7's own guard failed DEGRADED — its tests arm exited 2 for a missing
+    DUCKBRAIN_URL, the known commit-shell prerequisite, not a tree red. An amend of
+    8acf84d was attempted and was BLOCKED by its own guard before landing (same
+    missing-env cause); it was abandoned so the sibling's commit was never rewritten.
+  - The full gate was NOT re-run on the 2fe06e7 tree locally (per the brief the
+    foreman runs the full gate on the merged tree); the test file is hermetic
     (<1s: yaml parse + regex + one import of test_xml_task_contract.py, no network,
     no substrate) and adds no dependency CI lacks — pyyaml is already installed by the
     "install ruff and pytest" step this step sits behind.
