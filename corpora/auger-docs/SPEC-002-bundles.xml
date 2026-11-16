@@ -1,0 +1,267 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from docs/SPEC-002-bundles.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="AD-SPEC-002-BUNDLES-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: docs/SPEC-002-bundles.md#preamble -->
+  <section id="AD-SPEC-002-BUNDLES-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+# SPEC-002 — project bundles
+
+&gt; Status: **model proposed, membership needs Bane's confirmation.** The model is settleable now;
+&gt; which projects belong to which bundle is Bane's architectural judgement, not an engineering
+&gt; call. Membership below is evidence-based and flagged as confirmed or inferred.
+  </section>
+  <!-- source: docs/SPEC-002-bundles.md#why-this-exists -->
+  <section id="AD-SPEC-002-BUNDLES-WHY-THIS-EXISTS-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## Why this exists
+
+This is the unfinished subgoal. Bane's own words, verbatim:
+
+&gt; "one thing i want to take into account for this stuff right now is how to bundle the projects
+&gt; we have for example crier bunker terminal jail are all things that go together — duckbrain hilo
+&gt; and coding hermes are all related in most times — there is a series of games and benchmarks
+&gt; that we have built pretty much to group these projects"
+
+It matters to auger specifically because it changes what IMPACT means. `SPEC-001` BEAT 3 asks
+"what does this answer affect?" and searches **one namespace**. If projects come in bundles, that
+search is too narrow: a decision about the message envelope in crier is a decision that bunker
+and the harnesses must honour, and tanking it silently breaks siblings.
+  </section>
+  <!-- source: docs/SPEC-002-bundles.md#the-finding-bundle-specs-already-exist-in-the-wrong-place -->
+  <section id="AD-SPEC-002-BUNDLES-THE-FINDING-BUNDLE-SPECS-ALREA-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## The finding: bundle specs already exist, in the wrong place
+
+The fleet already writes spanning contracts — they just live **inside one member's repo**:
+
+| Spec | Lives in | Spans | Precedent of |
+|---|---|---|---|
+| `specs/AGENT-ECOSYSTEM.md` | **crier** | crier ↔ bunker ↔ agent harnesses (Pi Agent, OpenCode, Hermes) | CR-SPEC-003 |
+| `specs/WEBHOOK-DELIVERY.md` | **crier** | the delivery contract every consumer implements | CR-SPEC-001 |
+| `specs/LLM-MESSAGE-GUARD.md` | **crier** | the verdict contract | CR-SPEC-002 |
+
+So Bane's bundle #1 is not a hunch — it is **already documented**, with CI proving the coupling:
+`crier/.github/workflows/bunker-e2e.yml` runs crier's tests against bunker.
+
+The structural problem: **bunker cannot see crier's spec from bunker's repo.** A contract that
+three projects must honour is stored where only one of them reads it. That is the gap auger
+closes — a bundle-scoped decision belongs somewhere every member reads, which is exactly what
+DuckBrain is for.
+
+Evidence of coupling beyond the documented case (grep of each project's own docs):
+
+```
+crier        -&gt; bunker, coding-hermes
+warpfs       -&gt; bunker
+task-router  -&gt; coding-hermes, coding-hermes-scheduler, duckbrain
+bunker       -&gt; coding-hermes
+terminal-jail-&gt; coding-hermes
+```
+  </section>
+  <!-- source: docs/SPEC-002-bundles.md#1-the-model -->
+  <section id="AD-SPEC-002-BUNDLES-1-THE-MODEL-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## 1. The model
+
+Two tables, plus a scope on decisions. Deliberately minimal.
+
+```
+bundle
+  id           varchar   B-01
+  name         varchar   agent-ecosystem
+  description  varchar   one line: what the members share
+  contract     varchar   where the spanning spec lives today (a path), or empty
+  status       varchar   proposed | confirmed | retired
+
+bundle_member
+  id           varchar   BM-0001
+  bundle_id    varchar   B-01
+  project      varchar   bunker
+  role         varchar   owner | consumer | test-target
+  note         varchar   one line: what this member owes or expects
+```
+
+And on `decision`, one new field:
+
+```
+scope        varchar   project | bundle    (-1/empty = project)
+```
+
+- **`scope: project`** — the decision binds only its own project. Default. Unchanged behaviour.
+- **`scope: bundle`** — the decision binds **every** member of the decision's bundle. It is a
+  contract, and a member that violates it is broken, not merely different.
+
+A project may belong to several bundles (a harness is both an ecosystem member and its own
+project), which is why membership is a table and not a column.
+  </section>
+  <!-- source: docs/SPEC-002-bundles.md#1-1-membership-addressing-and-cli -->
+  <section id="AD-SPEC-002-BUNDLES-1-1-MEMBERSHIP-ADDRESSING-AND-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+### 1.1 Membership addressing and CLI
+
+**A member's rows live in the namespace named after the member.** A `bundle_member.project` value
+of `bunker` therefore means auger reads that member's decisions and evidence from namespace
+`bunker`; putting bunker's rows in the bundle owner's namespace will not make them reachable.
+
+Create and populate a bundle without raw API calls:
+
+```
+auger -n crier bundle add agent-ecosystem --contract crier/specs/AGENT-ECOSYSTEM.md
+auger -n crier bundle member B-000001 crier owner
+auger -n crier bundle member B-000001 bunker test-target
+```
+
+Membership validates project names against the scheduler's read-only `projects` table by default.
+For standalone scratch projects only, set `AUGER_ALLOW_SCRATCH_MEMBERS=1`; auger skips that scheduler
+check and prints a visible warning repeating the namespace convention. The escape does not bypass
+role, bundle-existence, or duplicate-membership checks.
+  </section>
+  <!-- source: docs/SPEC-002-bundles.md#2-what-bundling-changes-in-the-engine -->
+  <section id="AD-SPEC-002-BUNDLES-2-WHAT-BUNDLING-CHANGES-IN-THE-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## 2. What bundling changes in the engine
+  </section>
+  <!-- source: docs/SPEC-002-bundles.md#2-1-the-gate-searches-the-whole-bundle-the-biggest-win -->
+  <section id="AD-SPEC-002-BUNDLES-2-1-THE-GATE-SEARCHES-THE-WHOL-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+### 2.1 The GATE searches the whole bundle (the biggest win)
+
+`SPEC-001` BEAT 1 asks "is this question already answered?" against one namespace. With bundles it
+searches **every member's namespace**:
+
+```
+evidence = recall_many([ns(m) for m in bundle_members(project)], Q.text)
+```
+
+Because the members are related "in most times", a question one member already answered is
+usually the same question. This is **cross-project decision dedupe**: if terminal-jail already
+decided how a sandbox isolates the filesystem, bunker should LINK that answer rather than
+re-decide it and drift. Bane's own framing — "duckbrain hilo and coding hermes are all related in
+most times" — is precisely this.
+
+The `satisfies` edge gains a `src_project`, so a reader can see the answer came from a sibling.
+  </section>
+  <!-- source: docs/SPEC-002-bundles.md#2-2-the-impact-pass-crosses-the-boundary -->
+  <section id="AD-SPEC-002-BUNDLES-2-2-THE-IMPACT-PASS-CROSSES-TH-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+### 2.2 The IMPACT pass crosses the boundary
+
+`SPEC-001` BEAT 3 fires when an answer changes a decision. With bundles, an answer to a
+**bundle-scoped** decision additionally walks every member:
+
+```
+for b in active_bundles_of(project_of(answer)):
+    for m in members(b) where m.project != project_of(answer):
+        for D in bundle_scoped_decisions(m.project) where D.id != answer.id:
+            ask JEV: does this answer leave m's decision unchanged | change | invalidate?
+            write affects/breaks(answer -&gt; D) with dst_project = m.project
+```
+
+#### DECISION (AUG-014) — bundle membership, not a decision column
+
+Three shapes were considered:
+
+- **(a) Add a per-decision contract column:** compare its value to the answer. Rejected: §1
+  deliberately adds only `decision.scope`; the contract is already owned by `bundle`, and
+  duplicating it on each decision would introduce another value that can drift.
+- **(b) `bundle.contract`:** compare by the bundle containing the answer and the sibling. Chosen in a
+  refined form: determine active bundle IDs from the answer project's `bundle_member` rows, and walk
+  only sibling projects that are members of one of those same bundle IDs. `decision.scope ==
+  'bundle'` remains the decision-level gate; membership supplies the contract context.
+- **(c) drop the contract clause as implied:** rejected because a project may belong to multiple
+  bundles, and walking every bundle-scoped decision of every sibling would cross unrelated
+  contracts.
+
+Behavioral consequence: a bundle-scoped answer examines decisions in sibling projects connected
+to the answer project through the same active bundle(s); a sibling reachable only through a
+different bundle/contract is not asked of JEV and receives no `affects`/`breaks` edge. If the answer
+project belongs to several active bundles, each shared bundle contributes its members, with each
+sibling project still visited once. The model has no per-decision bundle ID, so this is the narrowest
+consistent interpretation available without changing §1's schema.
+
+Two rules keep it finite and honest:
+- Only **bundle-scoped** decisions cross the boundary. A project-local decision never does — or
+  every answer reaches every project and the pass is quadratic again.
+- A `breaks` edge into a sibling is an **escalation, not a silent change**. The engine does not
+  rewrite another project's spec; it records the break and surfaces it.
+  </section>
+  <!-- source: docs/SPEC-002-bundles.md#2-3-depth-triage-inherits-from-the-bundle -->
+  <section id="AD-SPEC-002-BUNDLES-2-3-DEPTH-TRIAGE-INHERITS-FROM-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+### 2.3 Depth triage inherits from the bundle
+
+A bundle-scoped decision's triage takes the **maximum** blast radius across its members —
+breaking a contract three projects consume is not the same as breaking one. This is the honest
+reading of `blast_radius × uncertainty × irreversibility` at bundle scale.
+  </section>
+  <!-- source: docs/SPEC-002-bundles.md#2-4-bundle-specs-become-readable-by-every-member -->
+  <section id="AD-SPEC-002-BUNDLES-2-4-BUNDLE-SPECS-BECOME-READAB-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+### 2.4 Bundle specs become readable by every member
+
+The spanning spec stops being a file in one repo. `contract` points at where it lives today (for
+migration), and auger's `export` renders the bundle's decisions as one document any member's
+agent can read. A member's agent asks DuckBrain, not its own filesystem.
+  </section>
+  <!-- source: docs/SPEC-002-bundles.md#3-proposed-membership -->
+  <section id="AD-SPEC-002-BUNDLES-3-PROPOSED-MEMBERSHIP-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## 3. Proposed membership
+
+`[confirmed]` = Bane stated it. `[inferred]` = evidence (docs, cross-refs, shared CI) but not
+stated by him. **All of this needs his ruling** — membership is architecture, not engineering.
+  </section>
+  <!-- source: docs/SPEC-002-bundles.md#b-01-agent-ecosystem-confirmed-documented -->
+  <section id="AD-SPEC-002-BUNDLES-B-01-AGENT-ECOSYSTEM-CONFIRMED-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+### B-01 · agent-ecosystem `[confirmed + documented]`
+
+Members: `crier` (owner — the bus), `bunker` (test-target — the deployment host),
+`terminal-jail` (consumer — the isolation the harnesses run inside), and the harness consumers
+`pi-agent`, `opencode`, `hermes`.
+
+Contract: `crier/specs/AGENT-ECOSYSTEM.md` (CR-SPEC-003) + `crier/specs/WEBHOOK-DELIVERY.md`.
+Evidence: the spec itself; `bunker-e2e.yml` CI in crier; crier's docs referencing bunker.
+  </section>
+  <!-- source: docs/SPEC-002-bundles.md#b-02-memory-core-confirmed-by-bane -->
+  <section id="AD-SPEC-002-BUNDLES-B-02-MEMORY-CORE-CONFIRMED-BY-S012" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+### B-02 · memory-core `[confirmed by Bane]`
+
+Members: `duckbrain` (owner), `warpfs` (hilo), `coding-hermes`, `coding-hermes-scheduler`,
+`task-router`, `boardctl`.
+
+Contract: none documented yet — this bundle is real in Bane's head and in the code
+(task-router reads DuckBrain namespaces; the scheduler pins DuckBrain; boardctl writes JSONL
+boards that foremen read) but **has no spanning spec**. That absence is itself a finding: three
+of the fleet's core services share a storage/wire contract that nothing writes down.
+
+Evidence: `task-router` → mentions coding-hermes, coding-hermes-scheduler, duckbrain;
+`warpfs` → bunker. Bane: "duckbrain hilo and coding hermes are all related in most times".
+  </section>
+  <!-- source: docs/SPEC-002-bundles.md#b-03-games-and-benchmarks-confirmed-by-bane-membership-inferred -->
+  <section id="AD-SPEC-002-BUNDLES-B-03-GAMES-AND-BENCHMARKS-CONF-S013" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+### B-03 · games-and-benchmarks `[confirmed by Bane, membership inferred]`
+
+Members: `Kobayashi-Maru`, `ai-plays-poke`, `temple-runner`, `mafia-ai-benchmark`, `off-by-one`,
+`ring-runner`, `bankai`.
+
+What they share: an agent is pitted against a task and **scored**. They are benchmarks that
+happen to be games and games that happen to be benchmarks — which is why Bane groups them.
+
+Contract: none. Candidate: a shared "scoring + run-record" contract (every one of these needs a
+run record and a score, and each re-invents it).
+  </section>
+  <!-- source: docs/SPEC-002-bundles.md#named-by-bane-but-not-in-his-three-examples -->
+  <section id="AD-SPEC-002-BUNDLES-NAMED-BY-BANE-BUT-NOT-IN-HIS-T-S014" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+### Named by Bane but not in his three examples
+
+`h3` / `h3-protocol` / `h3-sdk-{go,python,typescript}` / `h3-shim` / `h3-umbrella` clearly form a
+bundle (7 projects, one protocol, several SDKs) — **inferred, not stated**. Same for the
+`dexdat` product family and the `mythos` family. **Question for Bane: are those bundles too, or
+just naming conventions?**
+  </section>
+  <!-- source: docs/SPEC-002-bundles.md#4-open-questions -->
+  <section id="AD-SPEC-002-BUNDLES-4-OPEN-QUESTIONS-S015" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## 4. Open questions
+
+1. **Confirm B-01/B-02/B-03 membership**, and rule on whether `h3`, `dexdat`, `mythos` are
+   bundles.
+2. **Should a bundle get its own DuckBrain namespace** (e.g. `bundle-agent-ecosystem`) holding
+   the shared contracts, with members reading it? Leaning: **yes** — it is the only place a
+   contract is visible to every member, and it is how the "spec lives where one member reads it"
+   problem actually gets fixed.
+3. **Who owns a bundle-scoped decision** — the owner member, or the bundle? Affects who answers
+   the escalation when a sibling breaks.
+4. **Does a bundle-scoped decision block all members' ticks** until answered, or proceed on a
+   default? Feeds the same autonomy question as `SPEC-001` Q5.
+  </section>
+</spec>

@@ -1,0 +1,767 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from docs/VERBS.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="AD-VERBS-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: docs/VERBS.md#preamble -->
+  <section id="AD-VERBS-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+# The verbs
+
+One entry per verb the CLI ships: its arguments, what it writes, and what it must never
+write. This is the contract — the verb names are public, and every argument listed here
+exists in the verb's `add_parser` definition in `auger.py`. If the code and this file
+disagree, the code wins and this file is a bug.
+
+The 18 top-level verbs — one `add_parser` registration each in `auger.py`, and the count here is
+the registry's own, not a hand-kept tally — in the order `auger --help` lists them:
+
+```
+init  start  bundle  ask  answer  check  status  toggle  dump  export  propagate  feedback  recall  serve  api  verdict  record  spec
+```
+
+Conventions every verb shares:
+
+- `--namespace/-n` selects the DuckBrain namespace (default `$AUGER_NS`, else `auger`);
+  `--project-id/-p` names the project row. Verbs that need a project resolve it from
+  `--project-id`, or use the only project in the namespace implicitly. Once a namespace has
+  multiple projects, an implicit project-targeted verb refuses instead of silently following the
+  newest project: the refusal names the project it would have selected and tells the user to pass
+  `-p`.
+- "Writes" means rows in the declared tables and/or entries in DuckBrain's embedded
+  memory store (`/auger/&lt;project&gt;/&lt;thing&gt;` keys). Nothing is ever stored in this repo.
+- A refused write exits non-zero and says why. A model call that fails is fail-closed:
+  no verdict is invented, no question is made up, nothing is written on an answer the
+  model did not give.
+- Every verb talks to the configured DuckBrain substrate: `DUCKBRAIN_URL` (default
+  `http://127.0.0.1:3000`) selects the HTTP endpoint, `DUCKBRAIN_API_KEY` supplies the
+  `x-api-key` credential (with the documented token-file fallback), and
+  `DUCKBRAIN_NAMESPACES_PATH` selects the declaration tree used by `init`. When the URL points
+  at an isolated substrate, also set `DUCKBRAIN_NAMESPACES_PATH` (or `DUCKBRAIN_DATA_DIR`, whose
+  `namespaces/` child is the fallback); otherwise `init` refuses before writing to the legacy
+  default tree and names the missing path knob. On a shared host, set the URL to the port you
+  actually booted — see README, *Substrate port on shared hosts*.
+- Every verb authenticates to DuckBrain the same way: the `DUCKBRAIN_API_KEY` environment
+  variable wins; if it is unset or empty, the token files `~/.duckbrain/foreman-status.token`
+  then `~/.duckbrain/token` are tried in that order and the first non-empty one is used.
+  Nothing creates these files for you — a fresh install does not ship with
+  `~/.duckbrain/foreman-status.token` (AUG-039: on a fresh boot the first command dies),
+  so set the env var or write one of the token files yourself. When nothing resolves,
+  the command exits non-zero with
+  `no DuckBrain token: set DUCKBRAIN_API_KEY or ~/.duckbrain/foreman-status.token`.
+- Every JEV call picks its OpenRouter key in this order: `OPENROUTER_API_KEY` first, then
+  `OR_API_KEY`, then every `sk-or-v1-` key found in `~/.hermes/.env` (in file order, keys
+  deduplicated, earlier sources win) — an env var always overrides the `.env` scan.
+
+---
+  </section>
+  <!-- source: docs/VERBS.md#init -->
+  <section id="AD-VERBS-INIT-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## init
+
+Create (or verify) the namespace and declare the SDM tables. The namespace list is only a fast
+path: `init` verifies the namespace resource itself and treats a confirmed create conflict as
+`existing`.
+
+**Arguments:** `--seed-domains` (also seed the 44-domain grid as `domain` rows). Without it
+there is nothing beyond the top-level `--namespace`.
+
+**Writes:** the namespace itself, when it does not exist yet, and one declaration file
+per table in `COLS` — 14 today — under `&lt;ns&gt;/tables/&lt;table&gt;.table.json` inside the
+namespaces base. Resolution is `DUCKBRAIN_NAMESPACES_PATH` when it is set and non-empty,
+then `DUCKBRAIN_DATA_DIR/namespaces`, then the legacy `~/duckbrain/namespaces` for the
+plain default substrate. The substrate must read the same tree: when `DUCKBRAIN_URL` points
+at an isolated substrate and neither path knob is set, `init` refuses before any namespace or
+file write and names the missing knob. Idempotent: a declaration file whose content
+already matches is not rewritten. The run states the tally itself (`declared: 14/14
+tables -&gt; ...`), which is how the count the README repeats is checked against the code
+rather than trusted. A 0/N tally — no declared table visible to the API at all — refuses
+and rolls back any files changed by this invocation, naming the resolved directory and the
+path remedy: `start` on such a namespace would die on its first insert anyway. A partial
+tally keeps the WARNING, on the assumption the API has not caught up yet.
+With `--seed-domains`, a further 44 `domain` rows — one per domain of the method's grid,
+4.01-4.44 — read from the skill's own `design/02-domains/` files (the default path is the
+dogfood artifact under `~/.hermes/skills/`; `AUGER_DOMAIN_GRID` moves it) rather than copied
+into this repo, because a copy would drift while the skill's grid does not. Each row carries
+the grid's `num`, `name`, triage score, ring floor and terminating ring, and starts
+`NOT-REACHED` — owner `unassigned`, trigger `first question in domain`, containment `none`
+(the `domain` table has no `reason` column; the reason for every seeded row is the same
+sentence, so the report states it rather than the table holding 44 copies). Rows are bound to
+the project that already exists, or left unbound when `init` runs before `start`. Idempotent
+the same way: a domain number already stored is skipped, never written twice. A grid that is
+not exactly the canonical 44, or a file whose header cannot be read, is REFUSED by name — a
+seeded 43 would be the silent-domain failure the rule exists to forbid.
+
+**Never writes:** without `--seed-domains`, no rows in any table at all; and nothing in the
+memory store either way. `init` shapes the namespace — its declarations, plus the grid's 44
+`NOT-REACHED` rows when asked — and it never records an answer, a decision, or a question.
+A number that already carries a decision/question row for the bound project seeds `REACHED`
+(AUG-059) instead of one answer stale; every other row starts `NOT-REACHED`.
+  </section>
+  <!-- source: docs/VERBS.md#start -->
+  <section id="AD-VERBS-START-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## start
+
+Register the project and store + embed its seed.
+
+**Arguments:** `--name` (defaults to the namespace), `--id` (defaults to
+`P-&lt;timestamp&gt;`), `--seed` (inline text), `--seed-file` (path; wins over `--seed`).
+
+**Writes:** one `project` row (id, name, seed, status `open`), and one embedded memory
+under `/auger/&lt;pid&gt;/seed`. A duplicate `--name` is refused before the row or memory write,
+and the refusal names the existing project id.
+
+**Never writes:** nothing else — no question, decision, or edge rows. A project that has
+only run `start` has exactly one table row and one memory.
+  </section>
+  <!-- source: docs/VERBS.md#bundle -->
+  <section id="AD-VERBS-BUNDLE-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## bundle
+
+Create a bundle or add one of its project members. This top-level verb has two subcommands:
+
+- `auger bundle add &lt;name&gt; [--contract PATH]`
+- `auger bundle member &lt;bundle-id&gt; &lt;project&gt; &lt;role&gt;` where role is `owner`, `consumer`, or
+  `test-target`.
+
+**Namespace convention:** a member's rows live in the namespace named after the member. A member
+whose project value is `bunker` is read from namespace `bunker`, even when the `bundle` and
+`bundle_member` rows themselves live in another namespace selected by `-n`.
+
+**Writes:** `bundle add` writes one proposed `bundle` row and prints its generated id.
+`bundle member` writes one `bundle_member` row after confirming that the bundle exists, the role is
+valid, the membership is not duplicated, and — by default — the project exists in the fleet
+scheduler's read-only `projects` table.
+
+**Scratch escape:** `AUGER_ALLOW_SCRATCH_MEMBERS=1 auger ... bundle member ...` skips only the
+scheduler project check. It prints a visible warning naming the skipped validation and the member's
+same-named namespace. This is for standalone/scratch projects; fleet membership remains validated
+by default.
+
+**Scheduler DB:** the read-only `projects` table `bundle member` validates against is found at
+`AUGER_SCHEDULER_DB` when that variable is set — the override is exclusive (no other location is
+tried) and must point at a scheduler.db with a readable `projects` table — otherwise the first
+readable of `~/coding-hermes-scheduler/coding-herms-scheduler/scheduler.db` and
+`~/.hermes/coding-hermes/scheduler.db` wins. With no readable DB anywhere, membership is refused
+rather than guessed, and the refusal names the variable. Example:
+`AUGER_SCHEDULER_DB=~/alt/scheduler.db auger bundle member B-000001 my-project owner -n auger`.
+
+**Never writes:** a member for a missing bundle, an unknown role, a duplicate membership, or an
+unknown/unverifiable scheduler project without the explicit scratch escape. Neither subcommand
+writes project decisions, evidence, edges, or memories.
+  </section>
+  <!-- source: docs/VERBS.md#ask -->
+  <section id="AD-VERBS-ASK-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## ask
+
+Surface the next questions: JEV's pick, plus every low-confidence decision.
+
+**Arguments:** none.
+
+**Writes:** one `question` row for the question JEV picks — `status=open`,
+`qclass=ask_proposed`, `ring=1`, the proposal's text, and the two JEV values the table
+declares columns for: `jev_already_answered` (the gate's noul for exactly that question)
+and `jev_checked_at` — plus a full set of `facet` rows for it. Its id follows the table's
+own convention (`next_id`: `Q-000001`), and it is printed as `stored question: &lt;id&gt;`. That
+row is what makes the next move in the README's loop (`answer --question-id Q-...`) a real
+one: before it, ask named a question no verb could store.
+
+**Never writes:** a question when the proposal is below `T_SUBJECT`, when the gate scores
+it already answered (`noul &gt;= T_ANSWERED`), when the gate returns no verdict for it
+(unknown is not "genuinely new"), or when the same text is already open in this project
+(said out loud, not stored twice). No decision, no option, no edge, no memory entry: an
+`opens` edge would name a decision the proposal does not come from. A refused row insert
+stores nothing (fail-closed); a failure after the row landed is reported as a partial
+store instead of being printed as a clean one. `ask` stays a report — exit 0 for every
+storage outcome, and exit non-zero only when JEV itself is unreachable (`JEV unavailable`,
+nothing stored).
+  </section>
+  <!-- source: docs/VERBS.md#answer -->
+  <section id="AD-VERBS-ANSWER-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## answer
+
+Record a decision with its rejected alternatives.
+
+**Arguments:** `--chosen` (required; when `--option` is supplied it must resolve to exactly
+one supplied option by full option id, option label, or bare option suffix such as `O2`),
+`--id` (defaults to the next `D-` number), `--option` (repeatable — every alternative,
+chosen ones included), `--why-not REASON` (optional; one reason for all rejected options),
+`--domain`, `--question-id`, `--reversal-cost`, `--confidence` (float), `--status`
+(defaults `decided`), `--scope` (`project` | `bundle`, default `project`), `--invalidates`
+(repeatable decision id), `--invalidates-why` (alias `--why`; only with `--invalidates`),
+`--supersedes` (repeatable decision id), `--supersedes-why`.
+
+`--why-not REASON` may be supplied once as a shared reason, preserving the legacy behavior. To
+record separate reasons, repeat it exactly once for each rejected option, in the order those
+rejected options appear among the repeatable `--option` values (the chosen option is skipped).
+Each repeated reason is stored with that generated option ID and label, and `dump` renders the
+pair as `D-###-O# (label) — reason`; the chosen option is never rendered as rejected. A repeated
+count that does not equal the number of rejected options is refused by name before any rows are
+written, rather than silently retaining only the last value.
+
+A supplied `--chosen` that matches no option, or matches more than one option label, is
+refused before any decision or option row is written. The resolver does not guess between
+ambiguous values. Omitting `--option` remains valid and records a decision with no option
+rows; its success report states `0 of 0 active`.
+
+**Crash consistency:** DuckBrain does not provide a transaction spanning table rows and memory. `answer` therefore writes the decision with a repairable `pending_memory:&lt;encoded repair metadata&gt;` status and its options before embedding the evidence. That provisional pair is explicitly marked pending, excluded from the active configuration, from the status confidence aggregates, and absent from memory recall; `status` and `dump` still count the stored row and name it under a `PENDING MEMORY REPAIR` warning with the retry instruction. If embedding or finalization fails, retrying the same answer (with or without its original `--id` when it is the only pending answer) repairs that decision and finalizes its requested status; a retry with different answer or graph-side-effect fields is refused. A successful answer still ends with its requested status (normally `decided`), its options, and its memory as before.
+
+**Writes:** one `decision` row; one `option` row per `--option` (id `&lt;D-###&gt;-O&lt;n&gt;`,
+`active` on exactly the chosen one); one embedded memory under
+`/auger/&lt;pid&gt;/&lt;did&gt;` stating the choice, the rejected alternatives, and the reason —
+never listing the chosen option as rejected. With a `--domain` whose seeded `domain` row
+still reads `NOT-REACHED`, that row's status advances to `REACHED` (AUG-059) and the run
+says so — never a row already past the seed word, and never fatal when the grid was not
+seeded. With `--question-id`: a `closes` edge
+(`decision` → `question`) and the question moved to `answered`, its reason recorded on
+its `facet` rows. With `--scope bundle` (as stored): the bundle impact pass — `affects`
+or `breaks` edges naming each sibling's bundle-scoped decision the answer touches, and
+an `escalation` row for every break, recorded with a default action. With `--invalidates`,
+one local `breaks` edge per target, the reason recorded on the edge's note — see below.
+With `--supersedes`,
+one local `supersedes` edge per target, the old decision's status is patched to
+`superseded`, and the old decision's answered questions have their facet rows refreshed
+with the new decision and reason.
+
+**Invalidating an earlier decision.** `--invalidates D-00X` records that the answer being
+written kills a decision that is ALREADY on this project's record, by writing one LOCAL
+`breaks` edge (source `human`, the default asserted confidence, note
+"`&lt;did&gt; invalidates &lt;target&gt;`") per target. The flag is repeatable, but every target must
+already be stored in this project's namespace: a decision that is not stored is refused by
+name, a sibling's decision is refused (ids are per namespace — a break reaching a sibling's
+decision belongs to the bundle impact pass, whose edge carries `dst_project`), and a
+decision cannot invalidate itself (the walk would moot the questions the answer just
+closed). A `--invalidates-why` with no `--invalidates` target is refused too — the reason
+belongs on a break edge. Nothing is rewritten: the target's rows keep their status, options,
+and answered questions; the trigger sits on the record instead. `propagate` performs the
+cascade — it moots the questions the invalidated decision answered and reopens their stale
+children. The refusals happen before anything is stored, so a refused run leaves the whole
+invocation — the answer included — unwritten. Example:
+
+```
+auger answer --id D-003 --chosen O2 --invalidates D-001 --invalidates-why 'new evidence rules out the earlier decision'
+```
+
+This records D-003 plus the local break edge `D-003 invalidates D-001: new evidence rules
+out the earlier decision`, and prints the trigger line naming `propagate` as the walk that
+fires it. D-001 must already exist on this project's record — the command refuses with
+`refused: decision 'D-001' does not exist in project &lt;pid&gt; — a LOCAL break names a decision
+this project already recorded` otherwise — and D-001 itself is not rewritten; run
+`auger propagate` afterwards to moot the questions D-001 answered and reopen their stale
+children. `--invalidates-why` is valid only together with `--invalidates` (`--why` is the
+same option); the reason is recorded on the break edge's note, never on the dead decision.
+
+**Never writes:** anything into a sibling project's namespace — a break in a member's
+contract is recorded as an edge and an escalation HERE, naming the sibling there; the
+sibling's rows are read, never rewritten. A supersession never rewrites the prior
+decision's chosen option or the question's own state; it only records the edge, status,
+and facet reason described above. Invalid supersession arguments are refused before any
+answer or option write. A same-domain detection line is only a warning and never
+auto-supersedes a decision. Without `--question-id` it never touches `question`,
+`facet`, or `edge` rows at all, except for explicit `--supersedes` or `--invalidates`.
+  </section>
+  <!-- source: docs/VERBS.md#check -->
+  <section id="AD-VERBS-CHECK-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## check
+
+Is this question already answered by what we hold?
+
+**Arguments:** `question` (positional), `--limit` (retrieval depth, default 5).
+
+**Writes:** nothing. It retrieves the nearest stored evidence and makes one JEV call.
+
+**The verdict:** the model returns one `noul`; `noul &gt;= T_ANSWERED` (0.55) answers ALREADY
+ANSWERED and below it NOT YET ANSWERED — except within `T_ANSWERED_BAND` (0.03) of the threshold,
+where the score is too noisy to decide the verdict at all (run 10 read 0.55 and then 0.53 for
+identical evidence, AUG-086). There the stored `question` rows decide instead: a settled question
+(`answered` or `linked`) whose text matches this one — case and surrounding whitespace ignored —
+reads ALREADY ANSWERED, and with no settled match it reads NOT YET ANSWERED. The line under the
+verdict names which of the two grounds decided it. A question that is still `open`, or
+`moot`/`budget_thin` (closed without ever being answered), is not a settled match.
+
+**Never writes:** anything. On a JEV failure it prints UNKNOWN and exits non-zero —
+"unknown" is never turned into "already answered" or "new". The same holds for the
+store itself (AUG-075): when the memory substrate cannot be read, `check` prints
+the substrate error and exits non-zero — a dead store never reads as "no stored
+evidence matched — treat as a new question".
+  </section>
+  <!-- source: docs/VERBS.md#status -->
+  <section id="AD-VERBS-STATUS-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## status
+
+The confidence map: coverage by domain, what is thin, what is contradictory — and what the
+44-domain grid does not have at all.
+
+**Arguments:** none.
+
+**Writes:** nothing. Reads decisions, options, escalations, unknowns, domains, and the
+question/edge rows, and prints the report. Two coverage blocks come out of that: the decisions
+grouped by the domain string they carry, and — from the stored `domain` rows — the method's
+grid walked domain by domain, one line each, with the row's state, the grid's triage score and
+ring floor, the TERMINATING RING, and how many decision/question rows carry that number
+(the evidence half of "answered vs NOT-REACHED"). The two halves are the same sentence on one
+line — `answered N (a decision or question row carries the num) | NOT-REACHED N (a seeded row
+with no decision or question row carrying the num)` — and each counts exactly what its own
+gloss says: the NOT-REACHED half names rows that ARE stored and hold no evidence (AUG-114; it
+used to read "(no such row)", the absence claim, while the header on the line above said the
+rows were seeded). Absence is a separate class, and a grid domain with no stored row prints
+`ABSENT` and is repeated by number in an explicit list: absence is a claim of its own, and
+"we have no row for 4.21" is not the same sentence as "4.21 does not apply". A grid domain
+that HOLDS evidence (a decision or question row carries its number) but has no stored row is
+not absent at all: it is counted in `answered`, its line prints `answered` with an explicit
+no-`domain`-row note, and it is named again in a list of its own — `init` without
+`--seed-domains` is a path the README permits, so the report must never answer "0" for a
+domain the store holds an answer for. A stored number
+the grid does not define prints as off-grid. When the grid cannot be read at all, `status`
+says so and claims nothing about absence — with no expected set there is nothing to be absent
+against — instead of printing a silent zero.
+
+**Never writes:** anything. A drifted record (a decision with zero or several active
+options) is named in the output, not "fixed" — and a `domain` row still reading `NOT-REACHED`
+while a decision carries its number is reported as exactly that, not quietly promoted. That
+contradiction should not occur on a record this program writes: `answer` advances the row
+(AUG-059), so the note now names drift a pre-AUG-059 record, a skipped advance, or a hand-made
+row — the one line still says both words so the disagreement is never smoothed over.
+
+**Unreachable store:** a substrate read that does not answer fails closed (AUG-101). The verb
+exits non-zero with the same named refusal `recall` prints — `... — a failed read is NOT an
+empty store` — naming the read that died and the transport's own words, instead of the raw
+transport dict it used to print. A dead store never renders as a project with nothing in it,
+and `status` is not the one read verb whose failure a script has to parse differently.
+  </section>
+  <!-- source: docs/VERBS.md#toggle -->
+  <section id="AD-VERBS-TOGGLE-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## toggle
+
+Turn options on/off — the what-if switch, one active option per decision by default.
+
+**Arguments:** `--on OPTION` (repeatable), `--off OPTION` (repeatable),
+`--set OPTION=on|off` (repeatable), `--additive` (do NOT deactivate the target's siblings).
+`OPTION` is a full option id such as `D-001-O2`, a label such as `Postgres`,
+or a bare index such as `O2`. An unresolvable or ambiguous token is refused by name
+before any PATCH is attempted; it is never reported as a successful zero-row toggle.
+
+**Writes:** `option.active` flags only, via PATCH. By default turning an option on
+turns its siblings off, so the decision keeps exactly one active option — and the flips
+are part of the printed report, not a silent side effect.
+
+**Never writes:** any other table, any new row, any deletion. `toggle` selects between
+existing options; it cannot create or remove one.
+  </section>
+  <!-- source: docs/VERBS.md#dump -->
+  <section id="AD-VERBS-DUMP-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## dump
+
+Render the system as it looks with the current set — or a `--config` hypothesis.
+
+**Arguments:** `--config D-001=OPTION` (repeatable; the value may be the option's full id,
+`D-001-O2`, its label matched case-insensitively, or its bare index `O2`), `--out FILE` (write the markdown there
+instead of stdout). Every `--config` entry must name an existing decision and exactly one
+option. An unresolvable or ambiguous entry is refused by name before anything is rendered;
+there is no ignored-entry warning and a typo can never fall back to the current stored state.
+
+**Writes:** nothing in the namespace — not in the current mode, not in hypothesis mode.
+With `--out`, a local file. That is the whole write surface.
+
+**Never writes:** any table or memory entry, ever. A hypothesis that contradicts the
+recorded reasons is named in the output ("CONTRADICTIONS WITH THE RECORD"), not repaired.
+
+**Unreachable store:** as in `status` (AUG-101) — the first read is strict, so a substrate that
+cannot answer exits non-zero with the shared fail-closed refusal, never the raw transport dict.
+  </section>
+  <!-- source: docs/VERBS.md#export -->
+  <section id="AD-VERBS-EXPORT-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## export
+
+Render the whole namespace as one readable spec document. Unlike `dump`, this is not a
+configuration projection: it includes every declared register, including empty ones.
+
+**Arguments:** none beyond the shared `--namespace/-n` and optional `--project-id/-p`.
+`-p` is printed as reader context only; it never filters rows, because the export contract is
+the whole selected namespace.
+
+**Output contract:** sections have a fixed order — projects, domains, questions, decisions,
+options, break records, escalations, assumptions, unknowns, graph edges, facets, bundles,
+bundle members, and verdicts. Rows are ordered by id; each row prints every column declared in
+`COLS`; an empty table is rendered as `### (none stored)`. No generation timestamp is included,
+so repeated exports of unchanged rows are byte-identical.
+
+**Example:**
+
+```
+auger -n crier export &gt; crier-spec.md
+```
+
+**Writes:** nothing. It reads every table through the namespace HTTP table API and prints the
+render to stdout.
+
+**Never writes:** any namespace table, memory entry, or local output file. Shell redirection in
+the example is outside auger.
+  </section>
+  <!-- source: docs/VERBS.md#propagate -->
+  <section id="AD-VERBS-PROPAGATE-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## propagate
+
+Run the graph walks: moot what a dead decision answered, reopen what went stale,
+cascade down the `derives_from` tree, and re-gate the children of closed questions.
+
+**Arguments:** `--no-gate` (rule walk only: no retrieval, no model call), `--recheck`
+(re-gate questions the gate has already examined).
+
+**Writes:** question `status` changes and their reasons on the `facet` rows (a question
+with no facet rows gets the full set first); `jev_already_answered` / `jev_checked_at`
+on every question the gate examines; `satisfies` edges (`decision` → `question`) for
+questions the gate links to stored evidence — `source=gate`, the noul confidence on the
+edge, and `src_project` naming the sibling whose namespace held the answer, when it did.
+
+**Never writes:** a state change without its reason (facets are written before the
+status flips); a link to a decision that cannot be read where it lives; anything on a
+gate failure — the question stays open and the verb exits non-zero. The rule walk never
+calls a model; the gate walk never invents an answer.
+  </section>
+  <!-- source: docs/VERBS.md#feedback -->
+  <section id="AD-VERBS-FEEDBACK-S012" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## feedback
+
+Turn low-confidence decisions into the next question batch, bounded by a governor.
+
+**Arguments:** `--budget N` — how many questions ONE run may ask (default 3, env
+`AUGER_QUESTION_BUDGET`). A question the ceiling stopped is recorded, not dropped.
+
+**Proposer model:** the model that proposes follow-up questions is `AUGER_PROPOSER_MODEL` when
+set (whitespace-stripped; an empty or unset value falls through), otherwise the configured
+default `deepseek/deepseek-v3.2` via OpenRouter. An unreachable model is fail-closed — `feedback`
+refuses with no question written — and the chosen model is recorded in `derives_from` edge notes.
+Example: `AUGER_PROPOSER_MODEL=deepseek/deepseek-chat auger feedback -p my-project -n auger`.
+
+**Writes:** follow-up `question` rows (`qclass=follow_up`, the gate's verdict and check
+timestamp carried on the row); a full set of `facet` rows per new question; `opens`
+edges (`decision` → question) and `derives_from` edges (question → the parent question)
+that make the branch trackable; `escalation` rows — one per decision thin enough to be
+a priority judgment, plus the run-level `budget-thin: true` marker when the ceiling was
+hit; and, for questions the gate REFUSES as already answered: the row recorded `linked`
+to the decision that answers it plus a `satisfies` edge, never asked.
+
+**Never writes:** a question when the proposer failed (no question is invented without
+the model); a question whose gate verdict is unknown (not asked, not stored); a question
+the gate scores as answered but whose evidence names no decision (not asked, not linked,
+not stored — said out loud instead).
+
+**Unreachable store:** the run's own reads are fail-closed like every other verb's (AUG-101) —
+a non-zero exit with the shared refusal (`... — a failed read is NOT an empty store`) rather
+than a raw transport dict, so a batch is never reported off a store that could not be asked.
+  </section>
+  <!-- source: docs/VERBS.md#recall -->
+  <section id="AD-VERBS-RECALL-S013" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## recall
+
+Semantic search over everything the namespace has embedded.
+
+**Arguments:** `query` (positional), `--limit` (default 5).
+
+**Writes:** nothing. One GET against the memory store.
+
+**Cold start:** the first recall in a process embeds the query, which can take
+~20s (the provider round-trip); a progress line is printed to stderr while it
+runs. Later recalls in the same process are fast (~2s).
+
+**Never writes:** anything. When the store cannot be read (AUG-075) it fails
+closed: the substrate error is printed and the exit is non-zero — an unreachable
+store is never printed as an empty result.
+  </section>
+  <!-- source: docs/VERBS.md#serve -->
+  <section id="AD-VERBS-SERVE-S014" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## serve
+
+Serve the embedding store over HTTP, so an external agent can run the same semantic search
+`recall` runs without a shell (AUG-046). Long-lived and read-only: it binds a socket, answers
+until interrupted, and never writes a row, a table, or a memory. The route returns the store's
+ranked hits as JSON, each tagged with the kind of row its key names, plus the retrieval tier
+read from the substrate's own `/health` (AUG-092) — so a caller can tell a bounded similarity
+from a raw keyword/BM25 score instead of comparing the two by accident.
+
+**Arguments:** `--host` (default `127.0.0.1` — reachable only from the host it runs on; there is
+no authentication on this surface, so do not bind it to a wider address without one in front),
+`--port` (default `8765`; `0` binds an ephemeral port and the boot banner names the real one).
+The namespace default is the same `--namespace/-n` every other verb takes.
+
+**Routes** (all `GET`, all JSON; anything else is refused). Boot prints this list, and so does
+a 404, so a caller who guessed a path is told the real one:
+
+```
+GET /api/ns/&lt;namespace&gt;/embeddings/search?q=&lt;query&gt;&amp;limit=&lt;n&gt;[&amp;project=&lt;id&gt;]
+GET /api/embeddings/search?q=&lt;query&gt;&amp;limit=&lt;n&gt;[&amp;project=&lt;id&gt;]   # the server's -n namespace
+GET /health                                                     # the substrate's embedding status
+```
+
+- `q` is required. Missing or blank is refused with `400` naming the route — the search never
+  runs with nothing to search for, and no request reaches the store.
+- `limit` defaults to 5, and is a validated integer from 1 to 1000 (the store's own page cap).
+  Anything else is refused with `400` naming the limit; an oversized limit is refused rather
+  than silently clamped, because a caller cannot count rows it never sees.
+- `project` narrows the search to one project's own evidence (`/auger/&lt;project&gt;/…` keys). A
+  prefix with no hits answers `200` with `count: 0` — an honest empty answer, not an error.
+- The response is `{namespace, query, limit, project, tier, embedding_healthy, count, results}`,
+  with `results` ranked by score, highest first, and each row carrying `key`, `kind`
+  (`decision` | `seed` | `memory`), `decision_id`, `score`, `domain`, `content`, `snippet`,
+  `timestamp`. `tier` is `semantic` (the embedding leg answered), `lexical` (the substrate's
+  keyword-only fallback answered, and its scores are NOT bounded by 1.0), or `unknown` (the
+  substrate's `/health` did not report `embedding.healthy`, so which ranker answered is
+  unattributable).
+- A store that **cannot be asked** answers `502` with the substrate's own error and NO `results`
+  key (AUG-075): "unaskable" is never reported as "nothing similar". A store that genuinely
+  holds nothing answers `200` with `count: 0`.
+- `POST`/`PUT`/`PATCH`/`DELETE` are refused with `405` and `Allow: GET`. This surface reads.
+  `HEAD` is answered like `GET` with no body, so a monitor probing `/health` gets this surface's
+  response headers rather than a bare `501`.
+
+**Writes:** nothing, ever. It is the same retrieval `recall` performs, over a socket instead of
+stdout; every write still goes through the verbs above (and over the declared tables).
+
+**Never writes:** any row, table, namespace, or memory entry; and it never sends a request that
+could write one — the handler issues only the two reads the search needs (the substrate's
+`/health` and `/api/memories?q=`).
+  </section>
+  <!-- source: docs/VERBS.md#api -->
+  <section id="AD-VERBS-API-S015" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## api
+
+Serve the separately versioned, read-first HTTP API described by `docs/openapi.yaml` (AUG-067).
+It runs independently of the embedding-only `serve` endpoint. The OpenAPI generator takes its
+base URL from `AUGER_API_BASE_URL` in `auger.py`, whose default port is `8768`.
+
+**Arguments:** `--host` (default `127.0.0.1`) and `--port` (default `8768`). There is no
+`api --namespace` option: each API request names its namespace in the route. The HTTP surface
+has no authentication, so keep it on loopback unless an authenticated access-control proxy is
+in front. A bind conflict exits non-zero and names the requested host and port.
+
+**Routes:** eight operations, all read-only with respect to auger's rows:
+
+```
+GET  /health
+GET  /api/ns/&lt;namespace&gt;/status
+GET  /api/ns/&lt;namespace&gt;/dump
+GET  /api/ns/&lt;namespace&gt;/export
+GET  /api/ns/&lt;namespace&gt;/recall?q=&lt;query&gt;&amp;limit=&lt;n&gt;
+GET  /api/ns/&lt;namespace&gt;/embeddings/search?q=&lt;query&gt;&amp;limit=&lt;n&gt;
+GET  /api/ns/&lt;namespace&gt;/verdicts
+POST /api/ns/&lt;namespace&gt;/check
+```
+
+`check` performs retrieval and a JEV judgment and can incur provider cost; it does not write a
+verdict or any other row. Unknown namespaces and substrate failures are returned as errors,
+never converted into empty successful data. Mutating verbs such as `init`, `start`, `answer`,
+`toggle`, `record`, and verdict-recording forms are not present in the OpenAPI/MCP surface.
+
+**Writes:** none. The complete operation registry and byte-generated contract are parity-gated by
+`tests/test_openapi_parity.py`; the live consumer proof is in
+`docs/dogfood/2026-10-10-muster-e2e-integration.md`.
+  </section>
+  <!-- source: docs/VERBS.md#verdict -->
+  <section id="AD-VERBS-VERDICT-S016" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## verdict
+
+Judge a configuration — good or bad, with the reasons — and put that judgment on the
+record (DESIGN R11). Two shapes, one row shape: a verdict ON FILE (you or another model
+judged it elsewhere), or `--ask-jev`, where JEV judges the dump itself — rendered exactly
+as `dump` renders it, so the model judges the real artifact, not a summary string.
+
+**Arguments:** exactly one of `--good [CONFIG]` / `--bad [CONFIG]` (the configuration
+string that was judged); `--reasons TEXT` (why); `--ask-jev` (JEV judges the dump first);
+`--config D-001=Postgres` (repeatable — judge a hypothetical option set instead of the active
+one, requires `--ask-jev`; the value is the option's full id, `D-001-O2`, its bare index
+`O2`, or its label, case-insensitive); `--judged-by NAME` (default `human`; `--ask-jev` forces
+`jev`); `--confidence X`; `--note TEXT`; `--list` (show every recorded verdict, newest
+first).
+
+**Writes:** one `verdict` row per call (`id` V-prefixed, `config_summary`, the word,
+`reasons`, `judged_by`, `confidence` when given). `--ask-jev` is fail-closed: no key, no
+score, NO row. `status` reads verdicts to tally good/bad per project.
+
+**What `config_summary` holds — the `--config` semantics.** The row names the artifact that
+was judged, and the two arms name it differently:
+
+- With `--ask-jev`, `config_summary` is the `ACTIVE CONFIGURATION:` line of the render JEV
+  judged — the first line of the dump that starts with those words, read back off the rendered
+  artifact, never off the flags. A HYPOTHETICAL render still summarizes the ACTIVE
+  CONFIGURATION line. `verdict --ask-jev --config D-001=Postgres` renders
+  `mode: HYPOTHETICAL (nothing written)` and closes with
+  `ACTIVE CONFIGURATION: D-001=Postgres, D-002=staging table` — the decisions you overrode
+  carry the option you named, every other decision keeps its stored active option — and that
+  whole line, prefix included, is what the row stores. The line names options by LABEL, so a
+  hypothesis given as an option id (`--config D-001=D-001-O2`) is recorded as
+  `ACTIVE CONFIGURATION: D-001=Postgres`: the verdict reads as evidence about a configuration
+  even when the caller quoted an id, and even after that configuration is toggled away.
+- Without `--ask-jev` (a verdict ON FILE) there is no render at all, so `config_summary` is
+  the CONFIG string passed to `--good`/`--bad`, verbatim; a bare `--good` with no string and
+  no `--ask-jev` therefore records an empty summary. That is also why `--config` without
+  `--ask-jev` is refused by name: a hypothesis is a render, and only the rendering arm can
+  name it.
+
+**Never writes:** anything when both or neither of `--good`/`--bad` is given; anything
+when an invalid word is named (the word set is closed in code — `good`, `bad`); a verdict
+row when `--ask-jev` cannot reach JEV; a `--config` hypothetical without `--ask-jev`.
+  </section>
+  <!-- source: docs/VERBS.md#record -->
+  <section id="AD-VERBS-RECORD-S017" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## record
+
+Write the declared registers — `break`, `assumption`, `unknown`, and an option's
+`costs`/`breaks` columns — which the CLI declared and `status`/`dump`/`export` read, but no
+verb could previously write (AUG-019). One verb with four subcommands, the `bundle` shape:
+
+- `auger record break --decision D-001 --breaks-what TEXT --consequence TEXT [--applied]`
+- `auger record assumption --text TEXT --falsifier TEXT [--monitoring TEXT]`
+- `auger record unknown --text TEXT [--owner X] [--trigger Y] [--containment Z]`
+- `auger record option OPTION [--costs TEXT] [--breaks TEXT]`
+
+**Writes:** `record break` inserts one `break` row (id `BR-000001`…) naming a decision that
+must ALREADY be on this project's record — a break pointing at a decision that is not stored
+is refused by name, and the refusal happens before the id is minted, so nothing partial
+remains. `record assumption` inserts one `assumption` row (id `A-000001`…) bound to the
+project; `--falsifier` is required (an unfalsifiable assumption is a wish, per DESIGN's
+"what we are resting on, with a falsifier"), and every required text field is refused when
+empty or whitespace-only. `record unknown` inserts one `unknown` row (id `U-000001`…) bound
+to the project, with owner/trigger/containment optional. `record option` PATCHes the
+`costs`/`breaks` columns of an EXISTING option row — the option rows themselves still come
+from `answer`. Its OPTION token grammar is `toggle`'s (full id `D-001-O2`, label, or bare
+index `O2`); an unresolvable or ambiguous token is refused before any PATCH, the option's
+decision must belong to this project, and a call whose values are already stored is refused
+as the no-op it is — a successful-looking record must never be a silent zero-row write. All
+four subcommands go through the shared DuckBrain helpers (`select`/`insert`/`patch`/
+`next_id`), so the 429-retry and failure behaviour is the transport's own.
+
+**Never writes:** a break row for a decision that is not on this project's record; a row
+with an empty required field; an assumption without a falsifier; a `record option` call with
+neither `--costs` nor `--breaks`; a PATCH that changes nothing; anything in any other table —
+`record` never touches decisions, questions, edges, facets, or the `active` selection flags
+(a costs/breaks record is not a toggle).
+  </section>
+  <!-- source: docs/VERBS.md#spec -->
+  <section id="AD-VERBS-SPEC-S018" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## spec
+
+Author, validate and assemble XML specifications (AUG-118). This verb is the one verb that
+reads NO DuckBrain state: it works on a directory of XML documents in the repository and
+writes nothing back to them. Subcommands:
+
+- `auger spec validate ROOT [--repo-root DIR]` — the whole verdict: the published grammar is loadable (a real XSD 1.0
+  processor is required — `pip install -e '.[dev]'` or `auger[xsd]`; without it every `spec` verb
+  refuses with `xsd-processor-missing`), root shape and namespace, schema version, stable IDs, typed
+  metadata, reference/include graph, verification methods, every test obligation a block points at
+  (tracked path, selector, migration, fixture, assertions), and conformance of every document to
+  `specs/schema/auger-spec-1.0.xsd` (`schema-invalid`).
+- `auger spec check ROOT [--repo-root DIR]` — the same verdict from the same loaded corpus, printing the
+  obligation node ids as JSON instead of the document/block/reference counts.
+- `auger spec bundle ROOT REQUIREMENT-ID [--repo-root DIR]` — one requirement's verification
+  bundle as JSON (registered runner argv vector, path, selector, migration, fixture, assertions).
+  Obligations are collected from BOTH directions of the `verifies` edge — the refs the requirement
+  names (`verifies=`, `&lt;verification-ref&gt;`) and the blocks that name the requirement
+  (`&lt;verification&gt;`, `&lt;test&gt;`, `&lt;acceptance&gt;`) — deduped by id and emitted in source order. The
+  payload keeps `id` and `verifications` and adds `status`/`count`: `status: no-obligations` (with
+  an empty array) means the requirement genuinely has none, and the same fact is printed on stderr
+  as `spec note (no-obligations): …` so an empty bundle is never mistaken for a failed lookup. An
+  id that is not a requirement refuses `unknown-requirement` (exit 2), not `invalid-spec-graph`.
+- `auger spec align --repo-root DIR --spec-root DIR --protocol-version N --diff-stdin`
+  — the staged-diff checker GitReins invokes (AUG-120/AUG-135). Reads the exact staged patch, reports
+  which spec blocks scope it, whether the change carries a `ch&#58;trace` marker whose values resolve in
+  THIS repository, and whether the sections it cites are still active, as ONE JSON line
+  (`protocol`, `version`, `status` = `pass|warn|fail`, `scope` = `scoped|unscoped|empty`,
+  `referenced`, `findings`). Exit 0 pass/warn, 1 fail, 2 a typed refusal —
+  `unsupported-protocol-version` when the requested protocol is not the one this checker speaks.
+  `--diff-file PATH` replays a diff and `--max-diff-bytes N` bounds the read. It writes nothing. The
+  full contract, the finding codes and the ch&#58;trace rules are docs/XML-SPEC-SCHEMA.md § The
+  staged-diff checker. `auger spec check [ROOT]` carries the same flags and routes into the same
+  implementation when `--diff-stdin`/`--diff-file` is present (identical payload); without a diff it
+  remains the obligation verdict.
+- `auger spec list ROOT [--id ID] [--kind K] [--applies-to SCOPE] [--status S] [--version X.Y.Z]`
+- `auger spec assemble ROOT &lt;the same selectors&gt; [--no-deps] [--format markdown|json] [--out PATH]`
+  — add `--measure` to the JSON form for the MEASURED report (AUG-140, PRD AC-14):
+  `report_schema_version` (the report's own 1.1, distinct from the corpus `schema_version`),
+  `input_bytes` (sum of the documents read), `output_bytes` (the emitted document's own length,
+  settled to a fixpoint), `documents_read`, `blocks_indexed`, `blocks_parsed` (bodies materialized —
+  matched + closure only) and `elapsed_ms` (a wall clock, read through `auger._spec_clock`). It is
+  opt-in because AC-4 pins two runs of the unmeasured document to byte-identical bytes, and it is
+  JSON-only because the Markdown assembly is a byte-pinned golden. `list`/`assemble` index every
+  block's ATTRIBUTES and materialize only the selected bodies; `validate`/`check`/`bundle` stay
+  corpus-wide and eager, so no proof weakens to buy the saving.
+- `auger spec render ROOT --out DIR` — write every generated view of the corpus (AUG-139):
+  `SPEC-CORPUS-VIEW.md` and `SPEC-CORPUS-VIEW.html`, both rendered from the ONE loaded corpus
+  (`auger.render_spec_view_document`), so the two views cannot disagree about what the XML says. The
+  XML is the source and a view is derived; `DIR` must already exist and must be OUTSIDE `ROOT`
+  (`render-into-corpus`), because a view written back into the source tree is exactly the second,
+  editable copy PRD R1 forbids. Two runs over one corpus are byte-identical, the corpus is never
+  written, and a source edit moves the edited block's section in BOTH views while every untouched
+  block stays byte-identical (`tests/test_spec_render.py`).
+
+`--repo-root DIR` is the repository a corpus' `path`/`migration`/`fixture` values are relative
+to (AUG-127), and it must be a git work tree's top level. It defaults to
+`git rev-parse --show-toplevel` resolved FROM THE SPEC ROOT; with neither, the verb refuses
+`unresolvable-repo-root` rather than resolving obligations against auger's own checkout. See
+docs/XML-SPEC-SCHEMA.md § The repository root.
+
+Corpus: every `*.xml` under ROOT. Selection is AND across different flags and OR within one
+flag's repeated values (the `--option`/`--on` shape). Assembly emits the matched blocks plus
+their explicit dependency closure — forward `depends-on`, and INVERSE `verifies` (a block that
+declares it verifies a selected block is part of that block's closure) — in corpus order, each
+with a `source: &lt;file&gt;#&lt;id&gt;` citation. `refs`/`implements`/`supersedes` must resolve but never
+expand. `--no-deps` emits the matched set alone.
+
+**The corpus is a FLAT CORPUS, and `&lt;include&gt;` is an assertion-only edge (AUG-147).** Membership
+is decided by the file system: every `*.xml` under ROOT contributes blocks and is selectable,
+whether or not any other document includes it, and deleting an `&lt;include&gt;` changes no id that a
+selector can reach. What `&lt;include src&gt;` owns is (a) the SPLICE POSITION — the fragment's blocks are
+expanded at the include site, so they take that document's place in corpus order rather than the
+fragment file's own sorted position — and (b) an ASSERTION: the target must exist, must not carry
+a scheme, an absolute path or `..`, must resolve inside ROOT, must not form a cycle, and a
+fragment may be spliced at exactly ONE site (`unresolved-include`, `remote-reference-rejected`,
+`include-outside-root`, `include-cycle`, `duplicate-include`). Use a shared block by ID reference
+(`depends-on`/`verifies`) when it must appear in more than one document. There is deliberately no
+"root document" declaration: a document that no other file includes is not a root, it is simply a
+document, so an un-included file cannot be told apart from a root and include edges therefore
+cannot gate participation without a new declaration surface. Ordering, not membership, is the
+include's job.
+
+**Discovery stays inside the root (AUG-148).** A document enters the corpus because it is a
+`*.xml` file under ROOT whose RESOLVED path is still under ROOT. A symlink that resolves outside
+the root is refused (`symlink-outside-root`) by the corpus-wide verbs and skipped-and-counted by
+the selection-scoped ones — the same rule `&lt;include src&gt;` already enforced
+(`remote-reference-rejected`, `include-outside-root`), now enforced at the one point where a
+document enters the corpus instead of on one mechanism only. A symlink that resolves INSIDE the
+root is an ordinary document. The diagnostic carries paths, never a byte of the target's content;
+a dangling `*.xml` symlink is `unreadable-document`, not a silent disappearance. Note that a
+`*.xml` symlink to another `*.xml` in the corpus is discovered twice and refused as a
+`duplicate-id` — reuse a block by ID reference instead of aliasing the file.
+
+**Corpus-wide vs selection-scoped (AUG-146).** `validate`, `check` and `bundle` are
+CORPUS-WIDE verdicts: every document must parse and conform, and one malformed file refuses the
+whole run, naming it (`invalid-xml`, exit 2). `list` and `assemble` are SELECTION-scoped: a
+document that is not well-formed as XML is skipped and COUNTS — the count and the file go to
+stderr, and `assemble --format json` carries `corpus.documents_discovered` /
+`documents_parsed` / `documents_unreadable` / `documents_selected`, so "a selection reads no
+unselected document body" (PRD AC-14) is measurable rather than asserted. The tolerance is exactly
+one code wide and never corpus-wide: a wrong namespace, a wrong root element, an unsupported
+schema version, an include cycle or a DOCTYPE/ENTITY declaration is refused on EVERY verb, and a
+reference into a skipped document refuses too, because an edge into a file that could not be read
+cannot be proved. `list`/`assemble` still parse every readable document today (no index-only
+pass); `documents_parsed` is what shows that gap.
+
+**Writes:** nothing in DuckBrain and nothing in the corpus. `--out PATH` writes the assembled
+document through a sibling temp file plus `os.replace`, so a refusal never leaves a partial
+document — the file is created only after the whole corpus has validated. Success prints
+`wrote N block(s) to PATH`; without `--out` the document goes to stdout. The parent directory
+must already exist: `--out` never creates it, and a missing parent refuses
+`missing-out-directory` (exit 2) while a `PATH` that is a directory refuses `invalid-out-path`;
+an unwritable directory or file refuses `unwritable-out`. Every `--out` failure is one of those
+typed refusals — never a traceback — and leaves no temporary or partial file behind.
+
+**Never writes:** a row, a namespace, a table declaration, an embedded memory, or any XML file
+it read. A refusal (typed `spec error (&lt;code&gt;): &lt;detail&gt;`, exit 2) prints nothing on stdout and
+creates no `--out` file. An empty selector is refused — assembly is never a silent whole-corpus
+dump. A selector that matches nothing is NOT a refusal: it is a reported empty selection (exit 0,
+`spec note (no-match): &lt;selection&gt; matched no block` on stderr, stdout still whatever the verb
+renders — for `assemble --format json`, a valid document with `counts.total` 0). `spec list` with
+no selector lists the whole corpus (its default); `spec assemble` with no selector refuses
+`empty-selector`. Both verbs state these three exit-code shapes in their `--help` epilogue. The
+design record, the schema (`specs/schema/auger-spec-1.0.xsd`) and the refusal-code table live in
+[docs/SPEC-003-xml-specs.md](SPEC-003-xml-specs.md).
+  </section>
+</spec>

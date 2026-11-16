@@ -57,11 +57,6 @@ EXCLUSIONS: dict[str, list[dict]] = {
             "authored prose — converting it would snapshot a derived artifact and drift on every "
             "regeneration",
         },
-        {
-            "path": "docs/XML-SPEC-COVERAGE.md",
-            "reason": "converted: it is authored prose and lands in the corpus like every other "
-            "docs/*.md file",
-        },
     ],
     "coding-hermes-director": [
         {
@@ -236,9 +231,12 @@ def source_files(project: str) -> list[Path]:
     for pattern in config["globs"]:
         found.extend(root.glob(pattern))
     excluded = set(config.get("exclude_paths", set()))
-    return sorted(
-        {path for path in found if path.is_file() and str(path) not in excluded}
-    )
+
+    def is_excluded(path: Path) -> bool:
+        as_given = str(path)
+        return any(as_given == excl or as_given.endswith("/" + excl) for excl in excluded)
+
+    return sorted({path for path in found if path.is_file() and not is_excluded(path)})
 
 
 def rel_source(project: str, path: Path) -> str:
