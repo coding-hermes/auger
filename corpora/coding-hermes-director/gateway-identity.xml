@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/contracts/gateway-identity.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-GATEWAY-IDENTITY-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/contracts/gateway-identity.md#preamble -->
+  <section id="CHD-GATEWAY-IDENTITY-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# Gateway identity binding — integration revision 1
+
+This contract supersedes W-D11 in the authored wire candidate and the old send-only key in VOL-B/VOL-C. It refines [request-attempt-lifecycle.md](request-attempt-lifecycle.md), not the native Hermes API. Native adapter transport/version and unknown-allocation lookup remain OPEN G-04.
+  </section>
+  <!-- source: coding-hermes-director/contracts/gateway-identity.md#persisted-identity-and-encoding -->
+  <section id="CHD-GATEWAY-IDENTITY-PERSISTED-IDENTITY-AND-ENCODIN-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Persisted identity and encoding
+
+Use RFC8785 JSON canonicalization, UTF-8 and SHA-256. No normalization of identifiers, profile references or credential-scope references; secrets never enter keys or logs. All fields below are required in the identity object:
+
+```json
+{"gateway_ref":"gw-main","agent_id":"mgr-a","profile_ref":"profile-a","native_session_id":"session-a","session_allocation_id":null,"room_id":"room-a","thread_root":null,"work_uid":null}
+```
+
+Exactly one of `native_session_id` and `session_allocation_id` is a non-empty string; the other is null. Before a native allocation, use its durable allocation ID. For a delivery turn, use the committed native session ID. `thread_root` is null or a positive exact integer; `work_uid` is null or a non-empty string. Other members are non-empty strings.
+
+1. `target_digest = lowerhex(SHA256(RFC8785(target_identity)))`.
+2. `gateway_request_key = "gw-" + lowerhex(SHA256(RFC8785([profile_ref, send_id, attempt_id, target_digest, credential_scope])))`.
+3. Persist the target object, canonical request digest, credential scope, attempt and key before sending. Retain canonical request bytes; the key does not authorize changing them.
+4. Replays use the same identity, bytes and scope. Any changed target/profile/credential/successor needs a new attempt after reconciliation or proven-stop authority. Revocation is `credential_scope_unavailable`, not permission to replay with a replacement credential.
+5. Native provisioning and its first delivery are separate retained operations. The allocation identity is not rewritten into a session identity after success: retain that ledger; create the delivery attempt after allocation response is durably bound. The first delivery targets the returned session, including for a NEW-labelled send. A headerless request is not proof of allocation.
+
+`NEW`/`REUSE` describe CHD delivery context, not whether the controller may omit `X-Hermes-Session-Id`. This header targets the committed native session on all turns. Same-profile fork and cross-profile authorized context-reference transfer remain different operations. Lost create/fork/import response must be resolved by allocation identity; no speculative second creation.
+  </section>
+  <!-- source: coding-hermes-director/contracts/gateway-identity.md#gate -->
+  <section id="CHD-GATEWAY-IDENTITY-GATE-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Gate
+
+The integration identity probe checks repeatability and changed profile, credential, agent, gateway, room, thread, work, session and allocation identities. It is an offline algorithm probe, not proof that a native gateway accepts these operations. G-04 remains blocking until a pinned native adapter demonstrates create/fork/resolve/first-turn traces.
+  </section>
+</spec>

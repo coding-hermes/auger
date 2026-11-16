@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/sections/9-multi-host.top.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-9-MULTI-HOST-TOP-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/sections/9-multi-host.top.md#9-multi-host-deployment-topology -->
+  <section id="CHD-9-MULTI-HOST-TOP-9-MULTI-HOST-DEPLOYMENT-TOPOLO-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 9. Multi-host deployment topology
+
+**Requirement (owner directive):** the config knows which manager or supervisor lives on which
+host. The harness is a service that can be deployed on a network with MULTIPLE Hermes systems
+running — its job is to orchestrate wide numbers of Hermes instances across host boundaries,
+not merely to fan out inside one machine.
+  </section>
+  <!-- source: coding-hermes-director/sections/9-multi-host.top.md#9-1-what-counts-as-a-host -->
+  <section id="CHD-9-MULTI-HOST-TOP-9-1-WHAT-COUNTS-AS-A-HOST-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 9.1 What counts as a host
+
+A **host** is anything that runs one Hermes gateway addressable at an endpoint:
+
+- a separate machine on the network (reachable by direct port rule, LAN IP, reverse SSH tunnel,
+  or Tailscale address — this fleet already runs Tailscale with one address per host),
+- a different **profile** on the same machine (each profile has its own gateway, skills, cron and
+  memories, so two profiles on one box are two hosts as far as the harness is concerned),
+- the harness's own machine (the trivial case: a loopback gateway).
+
+The point of the abstraction is that these are all the same thing. A manager on the bunker host,
+its supervisor on a second bunker box, and a supervisor running under a second profile on the
+director's own machine are three rows in one config with three endpoints.
+  </section>
+  <!-- source: coding-hermes-director/sections/9-multi-host.top.md#9-2-config-surface -->
+  <section id="CHD-9-MULTI-HOST-TOP-9-2-CONFIG-SURFACE-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 9.2 Config surface
+
+Each agent row gains endpoint fields; everything else about the agent (role, grants, report key,
+wake triggers, channels) is unchanged:
+
+```toml
+[[agents]]
+id          = "crier-manager"
+role        = "manager"
+report_key  = "/reports/director/crier"          # DuckBrain key, host-independent
+gateway     = "http://crier-host.tailnet:8642"    # the Hermes gateway that runs this agent
+transport   = "tailscale"                         # tailscale | ssh-tunnel | direct | loopback
+auth_token_ref = "crier-gw"                       # a name; the harness resolves the secret
+max_wake_concurrency = 1
+```
+
+Transport semantics:
+
+| transport | how the harness dials | when it breaks |
+|---|---|---|
+| `loopback` | `http://127.0.0.1:&lt;port&gt;` | only if the local gateway is down |
+| `tailscale` | node address on the tailnet; identity comes from the tailnet, not from the config | tailnet down, node offline |
+| `ssh-tunnel` | a local forward the harness (or systemd) holds open to a remote gateway | tunnel process death — detected as connection refused, restated in §9.4 |
+| `direct` | hostname:port over the LAN, gated by port rules | firewall/port rules; requires the network to be trusted |
+
+The harness MUST NOT fall back silently to a different transport than the one named: a config
+that says `tailscale` must fail loudly when the tailnet is down, not quietly leak traffic to a
+LAN route.
+  </section>
+  <!-- source: coding-hermes-director/sections/9-multi-host.top.md#9-3-routing-the-harness-is-the-only-cross-host-hop -->
+  <section id="CHD-9-MULTI-HOST-TOP-9-3-ROUTING-THE-HARNESS-IS-THE-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 9.3 Routing: the harness is the only cross-host hop
+
+All inter-agent traffic routes **through the harness**, never host-to-host directly:
+
+- a manager on host B sending a legwork request to its supervisor on host C hands the message to
+  the harness, which delivers it to C's gateway as that supervisor's wake prompt;
+- this is what keeps the read-scoping rule (§4.2) and the report contract (§4.6) enforceable at
+  ONE point — a host that could talk directly to another host's gateway could also impersonate
+  its agents, which the single-hop design refuses by construction;
+- it also means a supervisor's host needs credentials for exactly one thing: its own gateway.
+  No supervisor ever holds another host's token (least privilege across the boundary).
+
+```mermaid
+flowchart LR
+    D[director&lt;br/&gt;host A] -- wake/chat --&gt; H[director-harness]
+    H -- "gw: crier-host:8642" --&gt; M1[manager crier&lt;br/&gt;host B]
+    H -- "gw: bunker-host:8642" --&gt; M2[manager bunker&lt;br/&gt;host C]
+    M1 -- chat --&gt; H
+    H -- "gw: .55 profile b" --&gt; S1[supervisor&lt;br/&gt;host B, profile b]
+    M2 -- chat --&gt; H
+    H -- "gw: 100.x.y.z:8642" --&gt; S2[supervisor&lt;br/&gt;host D]
+```
+  </section>
+  <!-- source: coding-hermes-director/sections/9-multi-host.top.md#9-4-network-partitions-are-a-report-shape-not-an-error-state -->
+  <section id="CHD-9-MULTI-HOST-TOP-9-4-NETWORK-PARTITIONS-ARE-A-R-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 9.4 Network partitions are a REPORT shape, not an error state
+
+A host going offline is the fleet's normal weather, so its absence must be legible:
+
+- an agent whose gateway is unreachable produces **MISSING reports** — the harness records
+  `&lt;agent&gt;: last report &lt;ts&gt;, MISSING since &lt;ts&gt;` in its status, and the director's sync read
+  sees a missing row, never silence-as-health. This is the dead-man rule from the observability
+  doctrine applied to the hierarchy: the absence of a report is itself the alert.
+- the verify ladder (§5.1) does not spin on a partition: connection-refused is classified as
+  *host down*, which pauses that host's wake rows (state `paused:unreachable`) instead of
+  burning re-prompt attempts against a socket that cannot answer. Restores are also explicit:
+  the first successful gateway health check flips the rows back to `ready`.
+- a wave that includes hosts on several networks fans out per-host concurrently but is capped by
+  the global backpressure budget (§3.4); one slow host cannot starve the others' slots forever —
+  a host exceeding its slot budget is skipped this wave and reported as skipped, not silently
+  dropped.
+  </section>
+  <!-- source: coding-hermes-director/sections/9-multi-host.top.md#9-5-security-across-the-boundary -->
+  <section id="CHD-9-MULTI-HOST-TOP-9-5-SECURITY-ACROSS-THE-BOUNDA-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 9.5 Security across the boundary
+
+- per-gateway auth: the harness holds one token per endpoint, resolved from a local secret store
+  (never inside the config file itself); tokens are least-privileged for that host's role set;
+- the director's grants travel with the message, not with the network: a supervisor on host D can
+  do only what its role grant says, no matter which host asked it;
+- no host learns the topology beyond its own endpoint: an agent's config view contains its own
+  gateway and its DuckBrain keys, never the fleet map;
+- the scheduler/registry endpoints on remote hosts are read-only to the harness unless that host's
+  config grants otherwise.
+  </section>
+  <!-- source: coding-hermes-director/sections/9-multi-host.top.md#9-6-scale-statement -->
+  <section id="CHD-9-MULTI-HOST-TOP-9-6-SCALE-STATEMENT-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 9.6 Scale statement
+
+One harness orchestrates dozens of Hermes gateways. The design limits are the wake-schedule row
+count, the concurrent-session cap, and DuckBrain write throughput — not the number of hosts.
+Host count is bounded only by the owner's network; adding a host is one config block plus a
+reachable gateway.
+  </section>
+  <!-- source: coding-hermes-director/sections/9-multi-host.top.md#9-7-open-questions-multi-host -->
+  <section id="CHD-9-MULTI-HOST-TOP-9-7-OPEN-QUESTIONS-MULTI-HOST-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 9.7 Open questions (multi-host)
+
+- Does the harness hold the SSH tunnels itself (child processes) or rely on systemd units owned
+  by the host? (Owner decision; default: systemd units, harness only dials.)
+- Cross-host DuckBrain: one shared ledger instance (current design), or per-host ledgers with the
+  harness replicating reports? (Current design: one shared ledger; a partitioned deployment is a
+  milestone-3 concern, not a day-one one.)
+- Does a remote host's foreman get its own manager, or is it a supervisor of the director's
+  manager for that area? (Default: one manager per AREA, supervisors per host — areas cut across
+  hosts, hosts never cut across areas.)
+  </section>
+</spec>
