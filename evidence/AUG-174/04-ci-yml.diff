@@ -1,0 +1,57 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index c979cd2..5a861a0 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -87,6 +87,52 @@ jobs:
+         # step with the host gate: the lint verdict must mean the same thing in
+         # both places.
+ 
++      # AUG-174: the board proofs in tests/test_xml_task_contract.py (AC3/AC4/AC6) are
++      # FAIL-LOUD by design (4820be8): on a runner with no boardctl binary they raise
++      # instead of skipping, so the pytest arm reds the whole gate. This step installs the
++      # pinned PUBLIC release so a CI failure is always about the code under test, never
++      # about a missing tool. The binary is pinned to an exact tag and checksum-verified
++      # so the CI verdict means the same thing it did the day it was green. The repo and
++      # its releases are public: no token, no credential.
++      - name: install boardctl (pinned release, checksum-verified)
++        run: |
++          set -euo pipefail
++          BOARDCTL_TAG=v0.5.0
++          BASE_URL="https://github.com/coding-hermes/boardctl/releases/download/${BOARDCTL_TAG}"
++          # Resolve the release asset from the runner's architecture — a LOUD refusal for
++          # anything else, never a silent fallback to an asset that would not run.
++          case "$(uname -m)" in
++            x86_64)  BOARDCTL_ASSET=boardctl_linux_amd64 ;;
++            aarch64) BOARDCTL_ASSET=boardctl_linux_arm64 ;;
++            *) echo "boardctl install: no release asset for arch '$(uname -m)' (supported: x86_64, aarch64)" >&2
++               exit 1 ;;
++          esac
++          WORK="$(mktemp -d)"
++          curl -fsSL --retry 3 -o "${WORK}/${BOARDCTL_ASSET}" "${BASE_URL}/${BOARDCTL_ASSET}"
++          curl -fsSL --retry 3 -o "${WORK}/SHA256SUMS" "${BASE_URL}/SHA256SUMS"
++          # Fail closed: no matching checksum line, or any mismatch, aborts the step (set -e).
++          (cd "${WORK}" && grep -E "^[0-9a-f]{64}[[:space:]]+${BOARDCTL_ASSET}\$" SHA256SUMS | sha256sum -c -)
++          # Install under the EXACT name the tests resolve with shutil.which("boardctl") —
++          # the asset filename itself left on PATH under its own name is NOT enough
++          # (measured at the AUG-174 base).
++          DEST="${BOARDCTL_INSTALL_DIR:-${HOME}/.local/bin}"
++          mkdir -p "${DEST}"
++          install -m 0755 "${WORK}/${BOARDCTL_ASSET}" "${DEST}/boardctl"
++          # And make the directory VISIBLE to the steps that follow. Do not assume the
++          # runner's default PATH contains ${HOME}/.local/bin: GITHUB_PATH is the documented
++          # way to add a step-scoped PATH entry, and it is what makes the gate step resolve
++          # the binary. Guarded so this same body also runs on a developer host, where
++          # GITHUB_PATH is unset and `set -u` would otherwise abort the step.
++          if [ -n "${GITHUB_PATH:-}" ]; then
++            echo "${DEST}" >> "${GITHUB_PATH}"
++          fi
++          echo "boardctl: installed ${BOARDCTL_TAG} (${BOARDCTL_ASSET}) to ${DEST}/boardctl"
++          # Self-check by ABSOLUTE path: this step must not depend on ${DEST} already being
++          # on the current PATH (it is exported for the FOLLOWING steps, not this one), and
++          # `set -e` would turn a bare `boardctl version` into a red step on a runner whose
++          # default PATH lacks the install dir.
++          "${DEST}/boardctl" version
++
+       - name: run the gate (tests/gate.sh)
+         run: bash tests/gate.sh
+ 

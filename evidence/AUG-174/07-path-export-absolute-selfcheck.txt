@@ -1,0 +1,40 @@
+AUG-174 — foreman follow-up: PATH export + absolute-path self-check
+Measured 2026-11-16T03:45Z on the worker's tree (commit 8acf84d) by the goal driver, after the
+worker's own simulation ran the step with the install dir ALREADY on PATH (which masked this).
+
+WHY: the install step ends in `boardctl version` and runs under `set -euo pipefail`. On a runner
+whose default PATH does NOT contain ${HOME}/.local/bin, that bare call is `command not found`
+→ the STEP goes red before the gate even runs. Independently, nothing told the FOLLOWING steps
+where the binary went, so the gate would have lacked it. Both were assumptions, not measurements.
+
+BEFORE (worker tree 8acf84d, DEST deliberately NOT on the current PATH):
+  $ env GITHUB_PATH=/tmp/aug174-gp/ghpath BOARDCTL_INSTALL_DIR=/tmp/aug174-gp/bin \
+        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin bash run.sh
+  boardctl_linux_amd64: OK
+  boardctl: installed v0.5.0 (boardctl_linux_amd64) to /tmp/aug174-gp/bin/boardctl
+  /home/kara/.hermes/cache/scratch/aug174-install-step/run.sh: line 32: boardctl: command not found
+  (exit non-zero under set -e — a red step)
+
+AFTER (this commit): the step exports ${DEST} through GITHUB_PATH when it is set (guarded so a
+developer host with GITHUB_PATH unset still runs) and self-checks with "${DEST}/boardctl" version.
+  $ env GITHUB_PATH=/tmp/aug174-gp2/ghpath BOARDCTL_INSTALL_DIR=/tmp/aug174-gp2/bin \
+        PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin bash run.sh
+  boardctl_linux_amd64: OK
+  boardctl: installed v0.5.0 (boardctl_linux_amd64) to /tmp/aug174-gp2/bin/boardctl
+  boardctl version v0.5.0
+  rc=0
+  ghpath contents: /tmp/aug174-gp2/bin          # what the NEXT step receives
+NEXT-STEP PROOF (simulating the runner applying GITHUB_PATH):
+  $ env PATH="$(cat /tmp/aug174-gp2/ghpath):/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+        bash -c 'command -v boardctl && boardctl version'
+  /tmp/aug174-gp2/bin/boardctl
+  boardctl version v0.5.0
+
+DEV-HOST SHAPE (GITHUB_PATH unset, `set -u` must not abort):
+  boardctl_linux_amd64: OK
+  boardctl: installed v0.5.0 (boardctl_linux_amd64) to /tmp/aug174-gp2/bin/boardctl
+  boardctl version v0.5.0
+  rc=0
+
+The run.sh bodies above are EXTRACTED from .github/workflows/ci.yml by
+evidence/AUG-174/extract_install_step.py (never retyped), so the proof is about the shipped text.
