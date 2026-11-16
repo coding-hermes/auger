@@ -361,6 +361,14 @@ def convert_project(project: str, out_root: Path) -> dict:
         manifest["totals"]["sections"] += len(sections)
         manifest["totals"]["blocks"] += len(blocks)
         manifest["totals"]["skipped"] += len(skipped)
+    # Regeneration hygiene: an XML document that no longer maps to a source (an excluded
+    # file's output from an earlier run, say) must not linger in the corpus root — the
+    # loader indexes every *.xml under the root, so a stale document silently re-enters
+    # the corpus the exclusion list just removed.
+    expected = {Path(d["document"]).name for d in manifest["documents"]} | {"manifest.json"}
+    for stale in out_root.glob("*.xml"):
+        if stale.name not in expected:
+            stale.unlink()
     validate_manifest(manifest)
     (out_root / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
