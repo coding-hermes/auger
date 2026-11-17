@@ -1,0 +1,39 @@
+AUG-178 root cause, named by measurement — a pid-less rebuild lock + a missing sidecar
+The row's original hypothesis (oversized single-line PART rows at the AUG-176 ingest) is REFUTED.
+
+Live namespace root is /home/kara/duckbrain/namespaces (NOT ~/.duckbrain-live, which is a stale copy).
+Before the fix, /home/kara/duckbrain/namespaces/auger held:
+  .search.rebuild.lock   0 bytes, mtime 2026-11-01 03:28:45
+  .search/               fts.duckdb.tmp (12288 B, 2026-10-30 12:43) + rows.tmp.jsonl (1864145 B, same minute)
+                         -> no fts.duckdb, no meta.json: the sidecar was never completed
+
+Engine code, src/search/index.ts:tryAcquireRebuildLock():
+    if (ageMs > REBUILD_LOCK_STALE_MS && pid !== null && !pidAlive(pid)) { steal }
+A lock file with EMPTY content parses to pid === null, so the condition is false forever:
+the lock is never stolen, no matter its age. rebuildNamespaceIndex() then waits for the lock
+to vanish, which never happens -> every ?q= and ?contains= request on that namespace hangs
+(client rc=124) while prefix reads, which never touch the sidecar, stay fast (17-157 ms).
+
+Serial reproduction of the mechanism (no mutation): the same class of hang is reachable on any
+namespace that is BOTH lock-blocked and sidecar-less. Fleet census on the live root (318 namespaces):
+  with a usable sidecar (fts.duckdb) ................ 249
+  with a pid-less / 0-byte rebuild lock ............. 68   (all mtime 2026-11-01 03:28:45-47, one bulk sweep)
+  pid-less lock AND no sidecar (search hangs) ....... 17
+    ai-plays-poke apocalyptic asce auger auger-aug114-gridless auger-aug114-repro
+    auger-nasa-demo-2114906 boardctl code-factory coding-hermes-tools crier df18
+    eduos eduos.dexdat.com.co gr2-probe-1793214725 project terminal-jail-review
+
+Second, independent defect measured on the same path (auto-build guard counts LINES as rows):
+namespace `cos` (63 memories) refuses keyword search with
+  "auto-build skipped: namespace 'cos' has more than 5000 source rows (DUCKBRAIN_SEARCH_AUTOBUILD_MAX_ROWS=5000)"
+because countSourceRowsUpTo() counts 0x0a bytes across every *.jsonl (cos: 43 files / 36,062 lines
+for 63 rows). Any namespace whose source files exceed 5000 lines can therefore never auto-build its
+sidecar from a read: keyword search returns 500 until an operator runs
+`duckbrain search-index rebuild --namespace=<ns>`.
+
+Fix applied for `auger` (reversible, housekeeping):
+  mv /home/kara/duckbrain/namespaces/auger/.search.rebuild.lock \
+     /home/kara/.hermes/goals/auger-stale-locks/auger-live.search.rebuild.lock.20261117T043217Z
+  the next ?contains= request rebuilt the sidecar in 15.6s:
+  .search/fts.duckdb 20,197,376 B + meta.json {"rowCount":2559,"sourceFiles":24,"durationMs":3550,"indexedAt":"2026-11-17T04:32:21.438Z"}
+  no lock was recreated.

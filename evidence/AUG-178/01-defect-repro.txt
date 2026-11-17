@@ -1,0 +1,16 @@
+AUG-178 defect reproduction — namespace `auger` search hang
+Measured 2026-11-17T04:14Z (host loadavg 44-80; DuckBrain server pid 1986129, up 1d13h)
+Endpoint http://127.0.0.1:3000, auth x-api-key from ~/.duckbrain/foreman-status.token
+
+Route health (fast, no search leg):
+  PROBE prefix-auger  rc=0  out=[200 0.157976] bytes=5049   GET /api/memories?namespace=auger&prefix=/auger/AUG176-code-factory/&limit=3
+  prefix row counts    code-factory=160  auger-docs=314  coding-hermes-director=1000 (page cap)
+
+Defect arms BEFORE the fix (both hang until the client gives up):
+  PROBE q-auger        rc=124 (timeout 40s)  GET /api/memories?namespace=auger&q=<novel text>&limit=3
+  PROBE contains-auger rc=124 (timeout 45s)  GET /api/memories?namespace=auger&contains=inbox&limit=3
+  PROBE q-cos          rc=0   out=[200 2.557508]  same query, namespace cos (63 memories)
+
+Namespace census: GET /api/memories?namespace=auger&limit=1 -> total=2336 (cos total=63).
+Server CPU while a request hung: 13 CPU-seconds over 30s wall, threads steady at 11,
+no sidecar write, no lock recreation -> the request burns CPU, it is not blocked on I/O alone.
