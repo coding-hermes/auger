@@ -618,7 +618,7 @@ writes nothing back to them. Subcommands:
   an empty array) means the requirement genuinely has none, and the same fact is printed on stderr
   as `spec note (no-obligations): …` so an empty bundle is never mistaken for a failed lookup. An
   id that is not a requirement refuses `unknown-requirement` (exit 2), not `invalid-spec-graph`.
-- `auger spec align --repo-root DIR --spec-root DIR --protocol-version N --diff-stdin`
+- `auger spec align --repo-root DIR --spec-root DIR --protocol-version N --diff-stdin [--semantic]`
   — the staged-diff checker GitReins invokes (AUG-120/AUG-135). Reads the exact staged patch, reports
   which spec blocks scope it, whether the change carries a `ch:trace` marker whose values resolve in
   THIS repository, and whether the sections it cites are still active, as ONE JSON line
@@ -630,8 +630,27 @@ writes nothing back to them. Subcommands:
   staged-diff checker. `auger spec check [ROOT]` carries the same flags and routes into the same
   implementation when `--diff-stdin`/`--diff-file` is present (identical payload); without a diff it
   remains the obligation verdict.
-- `auger spec list ROOT [--id ID] [--kind K] [--applies-to SCOPE] [--status S] [--version X.Y.Z]`
-- `auger spec assemble ROOT <the same selectors> [--no-deps] [--format markdown|json] [--out PATH]`
+- `--semantic` on `auger spec align` — and on `auger spec check` in the diff form, which routes into
+  the same implementation — the OPT-IN semantic pass (AUG-142). Default OFF: without the flag the
+  payload is byte-identical to the legacy shape, so the flag can only ADD findings, never move an
+  existing one. With it, the checker also runs one rule over the corpus' own metadata — no LLM call,
+  no network, no embedding, so two runs over one corpus answer byte-identically — and emits a
+  finding whose `class` is `semantic` for every `active` block that still cites (`depends-on`,
+  `verifies`, `refs`, `implements`) a block this same corpus marks `deprecated` or `superseded`: the
+  contract the active block leans on has been retired by the corpus that declares it. Each finding
+  carries the literal source text it judged (`evidence_excerpt`), that text's `source_digest` and an
+  `uncertainty` band and score, so a contradiction is never asserted without the prose it came from;
+  a rule that cannot quote its source refuses instead of guessing. A status-consistent corpus emits
+  nothing extra, and the shipped `specs/` corpus is one — the semantic run answers the same payload
+  as the plain run there. It reads only: no `.git` write, no corpus write, no network call. Example:
+
+  ```
+  git diff --cached | auger spec align --repo-root . --spec-root specs --diff-stdin --semantic
+  ```
+- `auger spec list ROOT [--id ID] [--kind K] [--applies-to SCOPE] [--status S] [--version X.Y.Z]
+  [--as-of REF]`
+- `auger spec assemble ROOT <the same selectors> [--no-deps] [--format markdown|json] [--out PATH]
+  [--as-of REF]`
   — add `--measure` to the JSON form for the MEASURED report (AUG-140, PRD AC-14):
   `report_schema_version` (the report's own 1.1, distinct from the corpus `schema_version`),
   `input_bytes` (sum of the documents read), `output_bytes` (the emitted document's own length,
@@ -641,6 +660,24 @@ writes nothing back to them. Subcommands:
   JSON-only because the Markdown assembly is a byte-pinned golden. `list`/`assemble` index every
   block's ATTRIBUTES and materialize only the selected bodies; `validate`/`check`/`bundle` stay
   corpus-wide and eager, so no proof weakens to buy the saving.
+- `--as-of REF` on the SELECTION verbs only — `auger spec list` and `auger spec assemble` (AUG-167).
+  The corpus is read AS IT EXISTED at `REF` (a commit, a tag or a branch) instead of as it sits in
+  the working tree: auger resolves `REF` inside the repository the corpus is committed in, extracts
+  that subtree with `git archive` into a temporary directory, and runs the ordinary selection path
+  over that tree. `--as-of HEAD` is therefore a real query and not a no-op: it answers byte-identical
+  to plain selection. It never mutates `.git` and never writes the corpus — the git calls are reads
+  (`rev-parse`, `cat-file`, `archive`) — and the temporary subtree is removed when the dispatch
+  returns, a refusal included, so a refused run leaves nothing behind. There is NO fallback to
+  current-day content: an unknown `REF` refuses `as-of-unknown-ref`, a corpus outside any git work
+  tree refuses `as-of-not-a-repository`, a corpus path absent at `REF` refuses `as-of-corpus-missing`
+  and a host without git refuses `as-of-git-unavailable` — each exit 2 with nothing on stdout,
+  because a silently-current answer on a valid-looking ref is exactly the lie the flag exists to
+  prevent. The corpus-wide verbs (`validate`, `check`, `bundle`, `render`) do not take it: a verdict
+  about the repository's corpus today is not a verdict about some other tree. Example:
+
+  ```
+  auger spec list specs --as-of HEAD --id SPEC-VERBS-SELECTION
+  ```
 - `auger spec render ROOT --out DIR` — write every generated view of the corpus (AUG-139):
   `SPEC-CORPUS-VIEW.md` and `SPEC-CORPUS-VIEW.html`, both rendered from the ONE loaded corpus
   (`auger.render_spec_view_document`), so the two views cannot disagree about what the XML says. The
@@ -649,6 +686,25 @@ writes nothing back to them. Subcommands:
   editable copy PRD R1 forbids. Two runs over one corpus are byte-identical, the corpus is never
   written, and a source edit moves the edited block's section in BOTH views while every untouched
   block stays byte-identical (`tests/test_spec_render.py`).
+- `auger spec context ROOT --task ID | --code PATH | --symbol NAME [--search-root DIR]
+  [--repo-root DIR]` — ONE query, the MINIMAL context for it (AUG-122). It answers with only the
+  blocks that govern the query — the task's in-scope blocks plus their declared closure, or the block
+  a source file's trace marker names — and lists the blocks it left out explicitly WITH their
+  exclusion reasons, so a reader sees what was considered and rejected instead of trusting a silent
+  filter. The answer is measured: `counts.selected`/`counts.dependencies` plus `input_bytes` and
+  `output_bytes`, which is what keeps "a context, not a dump" checkable. It never falls back to a
+  whole-document or whole-corpus dump, and it writes nothing — no corpus write, no `.git` write, no
+  DuckBrain write. A query that matches nothing is a RESULT, not an error: an unknown symbol, a file
+  whose trace resolves to no corpus block, an inactive block or an ambiguous match answers with a
+  structured `status` (`unscoped`/`ambiguous`/`inactive`), a `reason`, an empty `selected` and exit 0
+  — do not read that zero as a failure. Exit 2 is reserved for a typed refusal: no selector, two
+  selectors, or a corpus that does not load. Example (the shipped `specs/` corpus scopes no block to
+  `auger.py`, so this answers `unscoped` with `selected: 0` and exit 0 — the honest no-match answer
+  is the point):
+
+  ```
+  auger spec context specs --code auger.py
+  ```
 
 `--repo-root DIR` is the repository a corpus' `path`/`migration`/`fixture` values are relative
 to (AUG-127), and it must be a git work tree's top level. It defaults to
