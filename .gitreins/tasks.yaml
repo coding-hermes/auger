@@ -2683,3 +2683,47 @@ tasks:
     prints 1.'
   status: in_progress
   created_at: '2026-11-17T07:03:44.892107+00:00'
+- id: AUG-178
+  title: The `auger` DuckBrain namespace was unsearchable (pid-less .search.rebuild.lock,
+    sidecar never built) - fixed by housekeeping, recall battery measured, code fix
+    routed to AUG-180
+  criteria:
+  - 'AC1 the `auger` namespace answers a novel semantic query instead of hanging.
+    FAILIF: the HTTP code is not 200 or the request exceeds the row''s 5.0s bound.
+    PROOF: bash -c ''TOK=$(cat "$HOME/.duckbrain/foreman-status.token"); out=$(timeout
+    120 curl -s -o /dev/null -w "%{http_code} %{time_total}" -H "x-api-key: $TOK"
+    "http://127.0.0.1:3000/api/memories?namespace=auger&q=trailing%20whitespace%20normalisation&limit=3");
+    echo "$out"; set -- $out; [ "$1" = "200" ] && awk -v t="$2" "BEGIN{exit !(t <
+    5.0)}"'' prints a `200 <seconds>` line with seconds below 5.0 and exits 0. Measured
+    at authoring: 200 2.090150.'
+  - 'AC2 the same namespace answers a substring search instead of hanging. FAILIF:
+    the HTTP code is not 200 or the request exceeds the row''s 5.0s bound. PROOF:
+    bash -c ''TOK=$(cat "$HOME/.duckbrain/foreman-status.token"); out=$(timeout 120
+    curl -s -o /dev/null -w "%{http_code} %{time_total}" -H "x-api-key: $TOK" "http://127.0.0.1:3000/api/memories?namespace=auger&contains=inbox&limit=3");
+    echo "$out"; set -- $out; [ "$1" = "200" ] && awk -v t="$2" "BEGIN{exit !(t <
+    5.0)}"'' prints a `200 <seconds>` line with seconds below 5.0 and exits 0. Measured
+    at authoring: 200 0.149640.'
+  - 'AC3 the root cause is a built search sidecar and the absence of the pid-less
+    rebuild lock, so the fix is housekeeping plus a routed code fix, not a substrate
+    rewrite. FAILIF: the sidecar files are missing, the rebuild lock is back, or the
+    recorded row counts differ. PROOF: bash -c ''cd /home/kara/auger && ls -la /home/kara/duckbrain/namespaces/auger/.search/fts.duckdb
+    /home/kara/duckbrain/namespaces/auger/.search/meta.json && ! test -e /home/kara/duckbrain/namespaces/auger/.search.rebuild.lock
+    && grep -q "\"rowCount\":2559" /home/kara/duckbrain/namespaces/auger/.search/meta.json
+    && grep -q "\"sourceFiles\":24" /home/kara/duckbrain/namespaces/auger/.search/meta.json
+    && echo "sidecar present, rowCount=2559 sourceFiles=24, no rebuild lock"'' prints
+    that confirmation line and exits 0.'
+  - 'AC4 the recall battery ran to completion and its report carries a numeric per-project
+    hit rate plus each residual named, not averaged away. FAILIF: any of the three
+    greps returns 0. PROOF: bash -c ''cd /home/kara/auger && grep -c "### Residuals,
+    each named" evidence/AUG-176/06-recall-battery.md; grep -c "\*\*27 / 36\*\*" evidence/AUG-176/06-recall-battery.md;
+    grep -c "| code-factory | 11 / 12 |" evidence/AUG-176/06-recall-battery.md'' prints
+    1, 1 and 1.'
+  - 'AC5 evidence is read back by command rather than asserted: the probe transcripts
+    are tracked in the tree and the registration count comes from a live prefix read.
+    FAILIF: fewer than 3 tracked transcripts, or no `total` in the prefix response.
+    PROOF: bash -c ''cd /home/kara/auger && git ls-files evidence/AUG-178 | wc -l;
+    TOK=$(cat "$HOME/.duckbrain/foreman-status.token"); timeout 60 curl -s -H "x-api-key:
+    $TOK" "http://127.0.0.1:3000/api/memories?namespace=auger&prefix=/auger/AUG176-code-factory/&limit=1000"
+    | grep -o "\"total\":[0-9]*" | head -1'' prints 3 and a `total` of at least 160.'
+  status: in_progress
+  created_at: '2026-11-17T10:38:54.442626+00:00'
