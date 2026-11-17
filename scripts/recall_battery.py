@@ -34,6 +34,10 @@ NAMESPACE = "auger"
 PROJECT_KEY_PREFIX = "AUG176"
 CORPORA_ROOT = REPO_ROOT / "corpora"
 TOP_K = 5
+#: Rows requested per query. The namespace stores every block at least twice (see
+#: `_distinct_keys`), so the window must be wider than TOP_K for "top-5 BLOCKS" to be
+#: measurable; the report records how many distinct blocks the window actually held.
+CANDIDATE_ROWS = 25
 #: One memory row's text budget; larger blocks split into -Pnn PART rows at line
 #: boundaries (the substrate's embed path 500s on very large payloads).
 ROW_CHAR_BUDGET = 24000
@@ -162,7 +166,7 @@ QUERIES: dict[str, list[tuple[str, str]]] = {
         ),
         (
             "what is backpressure per gateway",
-            "CHD-DESIGN-3-4-BACKPRESSURE-IS-PER-GATEWAY-S016",
+            "CHD-DESIGN-3-4-BACKPRESSURE-IS-PER-GATEWA-S016",
         ),
         (
             "what rules do the operation cards follow",
@@ -181,17 +185,39 @@ def project_key(project: str) -> str:
     return f"/auger/{PROJECT_KEY_PREFIX}-{project}/"
 
 
+def _distinct_keys(hits: list) -> list[str]:
+    """Distinct keys of `hits`, in substrate order, with PART rows attributed to their block.
+
+    AUG-178 follow-up (measured 2026-11-17): the namespace holds EVERY block twice (the
+    register action ran twice, and a memory write appends rather than upserts), so asking the
+    substrate for 5 rows yields only 2-4 distinct blocks and "target in top-5" silently became
+    "target in top-2..4". A hit must be measured over five distinct BLOCKS, so the candidate
+    window is CANDIDATE_ROWS rows and the keys are de-duplicated here.
+    """
+    keys: list[str] = []
+    for h in hits:
+        if not isinstance(h, dict):
+            continue
+        key = str(h.get("key", "")).rsplit("/", 1)[-1]
+        if key and key not in keys:
+            keys.append(key)
+    return keys
+
+
+def _rank(hits: list, target_block_id: str) -> int | None:
+    """1-based rank of the target block among the DISTINCT keys of `hits`, else None.
+
+    A PART row (`<target>-P01`) is the same block, so it counts at the block's rank.
+    """
+    for idx, key in enumerate(_distinct_keys(hits), start=1):
+        if key == target_block_id or key.startswith(f"{target_block_id}-P"):
+            return idx
+    return None
+
+
 def _hit(hits: list, target_block_id: str) -> bool:
     """True when the target block's row (or any PART row of it) is among the hits."""
-    for suffix in ("/" + target_block_id, "/" + target_block_id + "-P"):
-        for h in hits:
-            if isinstance(h, dict):
-                key = str(h.get("key", ""))
-                if key.endswith(suffix) or (
-                    suffix.endswith("-P") and f"{target_block_id}-P" in key
-                ):
-                    return True
-    return False
+    return _rank(hits, target_block_id) is not None
 
 
 def load_blocks(project: str) -> list[dict]:
@@ -292,7 +318,7 @@ def run_battery(project: str, queries: list[dict]) -> dict:
                 found = auger.recall(
                     NAMESPACE,
                     entry["query"],
-                    TOP_K,
+                    CANDIDATE_ROWS,
                     project_id=f"{PROJECT_KEY_PREFIX}-{project}",
                     timeout=180,
                 )
@@ -306,14 +332,19 @@ def run_battery(project: str, queries: list[dict]) -> dict:
                     )
                 else:
                     time.sleep(5)
-        hit = _hit(found, entry["target"])
+        distinct = _distinct_keys(found)
+        rank = _rank(found, entry["target"])
+        hit = rank is not None and rank <= TOP_K
         hits += hit
         rows.append(
             {
                 "query": entry["query"],
                 "target": entry["target"],
                 "hit": hit,
-                "top5": [str(h.get("key", "")).rsplit("/", 1)[-1] for h in found[:5]],
+                # rank among DISTINCT blocks (None = the target was not in the window at all)
+                "rank": rank,
+                "distinct_in_window": len(distinct),
+                "top5": distinct[:TOP_K],
             }
         )
     return {

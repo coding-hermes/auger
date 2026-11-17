@@ -377,6 +377,63 @@ def test_recall_hit_requires_target_key_in_hits():
     assert recall_battery._hit([{"key": "no keys at all"}], target) is False
 
 
+def test_recall_hit_counts_distinct_blocks_not_rows():
+    """AUG-178 follow-up: the store returns every key twice, so top-5 ROWS was top-2..4 BLOCKS."""
+    target = "FIX-INTRO-SETUP-S001"
+    dup = [
+        {"key": "/auger/AUG176-fixture/A"},
+        {"key": "/auger/AUG176-fixture/A"},
+        {"key": "/auger/AUG176-fixture/B"},
+        {"key": "/auger/AUG176-fixture/B"},
+        {"key": f"/auger/AUG176-fixture/{target}"},
+        {"key": f"/auger/AUG176-fixture/{target}"},
+    ]
+    assert recall_battery._distinct_keys(dup) == ["A", "B", target]
+    assert recall_battery._rank(dup, target) == 3
+    # A PART row is the same block: it ranks with its block, it does not add a slot.
+    parts = [
+        {"key": "/auger/AUG176-fixture/A"},
+        {"key": f"/auger/AUG176-fixture/{target}-P01"},
+        {"key": f"/auger/AUG176-fixture/{target}-P02"},
+    ]
+    assert recall_battery._rank(parts, target) == 2
+    assert recall_battery._hit(parts, target) is True
+
+
+def test_recall_battery_hit_is_top_five_blocks_and_wide_window(tmp_path, monkeypatch):
+    """A target at distinct position 6 is a MISS; at 5 a HIT — and the window is CANDIDATE_ROWS."""
+    _out_root, _manifest = _convert_fixture(tmp_path)
+    monkeypatch.setattr(recall_battery, "CORPORA_ROOT", _out_root.parent)
+    monkeypatch.setattr(
+        recall_battery,
+        "load_blocks",
+        lambda project: [
+            {"id": "FIX-INTRO-SETUP-S001", "text": "x", "status": "active"}
+        ],
+    )
+    queries = [{"query": "q", "target": "FIX-INTRO-SETUP-S001"}]
+    seen: dict = {}
+
+    def fake_recall(ns, q, limit, **kwargs):
+        seen["limit"] = limit
+        keys = [f"/auger/AUG176-fixture/FILLER-{i:02d}" for i in range(1, 6)]
+        if seen.pop("tailed", False):
+            return [{"key": k} for k in keys] + [
+                {"key": "/auger/AUG176-fixture/FIX-INTRO-SETUP-S001"}
+            ]
+        seen["tailed"] = True
+        return [{"key": k} for k in keys[:4]] + [
+            {"key": "/auger/AUG176-fixture/FIX-INTRO-SETUP-S001"}
+        ]
+
+    monkeypatch.setattr(recall_battery.auger, "recall", fake_recall)
+    report = recall_battery.run_battery("fixture", queries)
+    assert seen["limit"] == recall_battery.CANDIDATE_ROWS
+    assert report["rows"][0]["rank"] == 5 and report["hits"] == 1
+    report = recall_battery.run_battery("fixture", queries)
+    assert report["rows"][0]["rank"] == 6 and report["hits"] == 0
+
+
 def test_recall_battery_reports_misses_instead_of_passing(tmp_path, monkeypatch):
     out_root, _manifest = _convert_fixture(tmp_path)
     monkeypatch.setattr(recall_battery, "CORPORA_ROOT", out_root.parent)
