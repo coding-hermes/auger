@@ -18,6 +18,30 @@ Tagged v0.3.0 on 2026-10-22.
 
 ## Unreleased
 
+- markdown spec sets convert into `auger spec` XML corpora with no loss:
+  `scripts/ingest_markdown_specs.py` emits one `<section>` block per H2/H3 heading plus the
+  preamble, verbatim prose with per-block provenance, and a `manifest.json` carrying the
+  per-file section/block counts and reasoned skips; three corpora ship converted
+  (code-factory, auger-docs, coding-hermes-director), every one validating and checking clean.
+  `scripts/recall_battery.py` registers those blocks in the substrate and scores 36
+  named-target queries by top-5 hit rate per project (AUG-176)
+- `spec list` and `spec assemble` gain `--as-of REF`: the corpus is read as it existed at a
+  commit, tag or branch, so a query can be answered against a past state of the specs instead
+  of the working tree. `--as-of HEAD` is byte-identical to plain selection, the read touches
+  neither the corpus nor `.git`, and an unknown ref / non-repository / missing corpus is a
+  typed refusal rather than an empty result (AUG-167)
+- `spec align` gains an opt-in `--semantic` pass (default OFF, also reachable as
+  `spec check --diff-stdin`): it reports active blocks that cite a block the corpus itself
+  marks deprecated or superseded, as findings of class `semantic` that quote the literal
+  source text they judged and carry an uncertainty band. The pass is deterministic — no LLM,
+  no network — a finding that cannot quote its evidence is refused rather than emitted,
+  severity stays warn/info, and without the flag the payload is byte-identical to before
+  (AUG-142)
+- a worker brief can now carry the governing spec blocks for its task:
+  `scripts/brief_spec_context.py` resolves a board row through auger's own `spec context`
+  selection and emits the selected blocks verbatim as a Markdown section of the brief. A row
+  with no spec context writes zero bytes plus one honest stderr line (never a placeholder
+  heading), and an ambiguous row exits 3 with its candidate ids instead of guessing (AUG-165)
 - `status`'s coverage summary no longer calls a seeded NOT-REACHED domain a missing row: the
   `NOT-REACHED N` half now carries the gloss its counter implements — "a seeded row with no
   decision or question row carrying the num" — instead of "(no such row)", the ABSENT claim the
