@@ -1,0 +1,216 @@
+commit 43b703d8cc9c4ae98567948953ef8181a2641ea6
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Tue Nov 17 16:35:48 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Tue Nov 17 16:40:44 2026 -0500
+
+    fix(spec-alignment): treat an unreadable GitReins checkout as absent, not an error
+    
+    QA-AUGER-17: the cross-repo leg guarded the checkout with Path.is_file() — existence, not readability. A present-but-unreadable checkout (root-owned ~/gitreins on a bunker) passed the guard and then raised PermissionError at import, ERRORing three battery cells instead of skipping. Probe os.R_OK and skip with a reason that names the path and the failed condition; add arms proving unreadable-present skips and readable still runs.
+---
+ tests/test_spec_alignment_check.py | 171 +++++++++++++++++++++++++++++++++++--
+ 1 file changed, 165 insertions(+), 6 deletions(-)
+
+diff --git a/tests/test_spec_alignment_check.py b/tests/test_spec_alignment_check.py
+index bcdc27c..88a7295 100644
+--- a/tests/test_spec_alignment_check.py
++++ b/tests/test_spec_alignment_check.py
+@@ -22,6 +22,12 @@ What each test proves:
+   AUG-135 AC-3 protocol mismatch fails closed ..... test_a_protocol_version_mismatch_fails_closed_without_orphans
+   bounded run ..................................... test_an_oversized_diff_is_refused_with_a_typed_error
+   AUG-135 AC-2 GitReins' REAL argv, real binary ... test_gitreins_real_invocation_against_the_real_auger_binary
++  an UNREADABLE checkout is ABSENT, not an error . test_the_cross_repo_guard_treats_an_unreadable_checkout_as_absent
++  ... and the real-argv leg then SKIPS ............ test_the_cross_repo_leg_skips_on_an_unreadable_checkout
++  a readable checkout is NOT treated as absent ... test_the_cross_repo_guard_lets_a_readable_checkout_run
++  the probe is a READ, not a bare existence test . test_the_readability_probe_asks_os_access_for_r_ok
++  absence keeps its OWN reason, distinct ......... test_the_cross_repo_guard_reports_an_absent_checkout_as_absent
++  a REAL mode-000 module skips too (not uid 0) ... test_a_real_chmod_to_zero_is_reported_as_unreadable
+   AUG-120 AC-1 documented machine-readable surface . test_the_checker_contract_is_documented
+   the arm runs this file .......................... test_gate_arm_runs_this_file
+ 
+@@ -61,6 +67,50 @@ SCRATCH_GIT_ENV = {
+     "GIT_CONFIG_SYSTEM": os.devnull,
+ }
+ 
++# ------------------------------------------------------- the cross-repo availability guard
++#: The one module the cross-repo leg imports, relative to the checkout root. Named once so the
++#: guard and the leg cannot drift apart.
++GITREINS_MODULE = Path("engine") / "spec_alignment.py"
++
++
++def _readable(path: Path) -> bool:
++    """Can the RUNNING user actually READ ``path``?
++
++    ``Path.is_file()`` proves existence, not usability: a checkout owned by another user (a
++    root-owned ``~/gitreins`` on a bunker agent, a umask-077 directory) passes it, and then
++    ``from engine import spec_alignment`` raises ``PermissionError`` at IMPORT time — an ERROR in
++    three battery cells (tests, ci-pass, chaos-resource) for one root cause. This probe is the
++    real read check, not a stat.
++    """
++    try:
++        return os.access(path, os.R_OK)
++    except OSError:  # a path this process cannot even resolve is not readable
++        return False
++
++
++def gitreins_cross_repo_skip_reason(checkout: Path) -> str:
++    """``""`` when the real-argv leg can run; otherwise the reason it must SKIP.
++
++    The reason names the path AND which condition failed — absent or unreadable — because it is
++    quoted verbatim in QA evidence, and a skip with no cause is indistinguishable from a proof
++    that was quietly disabled.
++    """
++    module_path = checkout / GITREINS_MODULE
++    if not module_path.is_file():
++        return (
++            f"cross-repo proof: no GitReins checkout at {checkout} (set GITREINS_REPO); "
++            f"{module_path} is ABSENT, so the real-argv leg runs only on a host that has both "
++            "repositories"
++        )
++    if not _readable(module_path):
++        return (
++            f"cross-repo proof: the GitReins checkout at {checkout} is present but "
++            f"{module_path} is UNREADABLE by uid {os.geteuid()}; the real-argv leg skips instead "
++            "of raising PermissionError on import"
++        )
++    return ""
++
++
+ MARKER_TEST = '"""Marker test cited by the contract corpus."""\n\n\ndef test_marker():\n    assert True\n'
+ 
+ #: A corpus in the shipped grammar with four blocks:
+@@ -585,12 +635,9 @@ def test_gitreins_real_invocation_against_the_real_auger_binary(tmp_path: Path)
+     handshake and status. This test imports that module from the GitReins checkout and asserts
+     both directions — a valid marker passes, a markerless scoped change FAILS the guard.
+     """
+-    module_path = GITREINS / "engine" / "spec_alignment.py"
+-    if not module_path.is_file():
+-        pytest.skip(
+-            f"cross-repo proof: no GitReins checkout at {GITREINS} (set GITREINS_REPO); the "
+-            "real-argv leg runs on a host that has both repositories"
+-        )
++    skip_reason = gitreins_cross_repo_skip_reason(GITREINS)
++    if skip_reason:
++        pytest.skip(skip_reason)
+     if str(GITREINS) not in sys.path:
+         sys.path.insert(0, str(GITREINS))
+     from engine import spec_alignment
+@@ -642,6 +689,118 @@ def test_gitreins_real_invocation_against_the_real_auger_binary(tmp_path: Path)
+     assert "trace-missing" in blocked.error, blocked.error
+ 
+ 
++# ------------------------------------------------- QA-AUGER-17: an unreadable checkout is ABSENT
++def fake_checkout(base: Path) -> Path:
++    """A directory that LOOKS like a GitReins checkout: the guarded module exists."""
++    checkout = base / "gitreins"
++    (checkout / "engine").mkdir(parents=True)
++    (checkout / GITREINS_MODULE).write_text("", encoding="utf-8")
++    return checkout
++
++
++def test_the_cross_repo_guard_treats_an_unreadable_checkout_as_absent(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """QA-AUGER-17: a PRESENT but UNREADABLE checkout must be a SKIP, never a PermissionError.
++
++    uid-independent by construction: the readability probe is forced to False instead of relying
++    on a chmod, which root ignores (root passes every mode bit, so a chmod-only arm silently
++    proves nothing on a root-run battery).
++    """
++    checkout = fake_checkout(tmp_path)
++    assert (checkout / GITREINS_MODULE).is_file(), (
++        "premise: the module EXISTS — this arm is about readability, not absence"
++    )
++    assert os.access(checkout / GITREINS_MODULE, os.R_OK) is True, (
++        "premise: unpatched, this checkout IS readable — the skip below comes from the injection"
++    )
++
++    monkeypatch.setattr(sys.modules[__name__], "_readable", lambda path: False)
++
++    reason = gitreins_cross_repo_skip_reason(checkout)
++    assert reason, (
++        "an unreadable checkout must produce a skip reason, not an empty string"
++    )
++    assert str(checkout) in reason, f"the skip reason must name the path: {reason}"
++    assert "UNREADABLE" in reason, f"the skip reason must say unreadable: {reason}"
++    assert "PermissionError" in reason, (
++        f"the reason must name what it prevents: {reason}"
++    )
++
++
++def test_the_cross_repo_guard_reports_an_absent_checkout_as_absent(
++    tmp_path: Path,
++) -> None:
++    """The absent arm keeps its own distinct reason — the two causes must not collapse."""
++    missing = tmp_path / "nonexistent-checkout"
++    reason = gitreins_cross_repo_skip_reason(missing)
++    assert str(missing) in reason, f"the skip reason must name the path: {reason}"
++    assert "ABSENT" in reason, f"the skip reason must say absent: {reason}"
++    assert "UNREADABLE" not in reason, reason
++
++
++def test_the_cross_repo_guard_lets_a_readable_checkout_run(tmp_path: Path) -> None:
++    """The other direction: a READABLE checkout must NOT be reported as unavailable.
++
++    Without this arm a guard that always skips would satisfy every unreadable-checkout assertion.
++    """
++    checkout = fake_checkout(tmp_path)
++    assert gitreins_cross_repo_skip_reason(checkout) == "", (
++        "a readable checkout must run — a guard that skips here silently disables the proof"
++    )
++
++
++def test_the_cross_repo_leg_skips_on_an_unreadable_checkout(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """The real-argv leg ITSELF skips (with the reason) instead of raising PermissionError."""
++    checkout = fake_checkout(tmp_path)
++    monkeypatch.setattr(sys.modules[__name__], "GITREINS", checkout)
++    monkeypatch.setattr(sys.modules[__name__], "_readable", lambda path: False)
++
++    with pytest.raises(pytest.skip.Exception) as raised:
++        test_gitreins_real_invocation_against_the_real_auger_binary(tmp_path)
++    reason = str(raised.value)
++    assert str(checkout) in reason, f"the leg's skip must name the path: {reason}"
++    assert "UNREADABLE" in reason, f"the leg's skip must say unreadable: {reason}"
++
++
++@pytest.mark.skipif(
++    os.geteuid() == 0,
++    reason="root passes every mode bit, so a chmod arm can prove nothing on uid 0",
++)
++def test_a_real_chmod_to_zero_is_reported_as_unreadable(tmp_path: Path) -> None:
++    """A REAL unreadable file (not an injection) also skips — never errors. Guarded off uid 0."""
++    checkout = fake_checkout(tmp_path)
++    module = checkout / GITREINS_MODULE
++    module.chmod(0o000)
++    try:
++        reason = gitreins_cross_repo_skip_reason(checkout)
++    finally:
++        module.chmod(0o600)
++    assert "UNREADABLE" in reason, (
++        f"a mode-000 module must skip as unreadable: {reason!r}"
++    )
++
++
++def test_the_readability_probe_asks_os_access_for_r_ok(
++    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
++) -> None:
++    """Pin the probe's SHAPE: it is a READ check (os.R_OK), not a bare existence test."""
++    seen: list[tuple[Path, int]] = []
++
++    def fake_access(path, mode):
++        seen.append((Path(path), mode))
++        return False
++
++    monkeypatch.setattr(os, "access", fake_access)
++    target = fake_checkout(tmp_path) / GITREINS_MODULE
++    assert _readable(target) is False
++    assert seen == [(target, os.R_OK)], (
++        f"the probe must ask os.access(path, os.R_OK) — got {seen}"
++    )
++
++
+ # ---------------------------------------------------------------- AUG-120 AC-1: documented
+ def test_the_checker_contract_is_documented() -> None:
+     """AC-1: the machine-readable surface is DOCUMENTED where a consumer reads it."""

@@ -1,0 +1,352 @@
+{
+  "task_id": "QA-AUGER-17",
+  "task_title": "Treat an unreadable GitReins checkout as absent in the spec_alignment cross-repo proof",
+  "task_criteria": [
+    "grep -c os.access tests/test_spec_alignment_check.py >= 1; GITREINS_REPO=/nonexistent python3 -m pytest tests/test_spec_alignment_check.py -q => 0 failed 0 errors with the leg skipped and reasoned; readable GITREINS_REPO runs the leg; unreadable-but-present also skips"
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "43b703d8cc9c4ae98567948953ef8181a2641ea6",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "4f89ba220946dab27d08fc878fe055b9a6ebda7cc9ea362d3f519db1bc9f2b20",
+  "working_tree_dirty_path_count": 699,
+  "items": [
+    {
+      "criterion": "grep -c os.access tests/test_spec_alignment_check.py >= 1; GITREINS_REPO=/nonexistent python3 -m pytest tests/test_spec_alignment_check.py -q => 0 failed 0 errors with the leg skipped and reasoned; readable GITREINS_REPO runs the leg; unreadable-but-present also skips",
+      "status": "PASS",
+      "detail": "grep -c os.access tests/test_spec_alignment_check.py => 5 (lines 86, 714, 786, 800, plus docstring line 28). `GITREINS_REPO=/nonexistent python3 -m pytest tests/test_spec_alignment_check.py -q -rs` => exit 0, \"28 passed, 1 skipped in 7.09s\" with \"SKIPPED [1] tests/test_spec_alignment_check.py:640: cross-repo proof: no GitReins checkout at /nonexistent (set GITREINS_REPO); /nonexistent/engine/spec_alignment.py is ABSENT, so the real-argv leg runs only on a host that has both repositories\" \u2014 0 failed, 0 errors, leg skipped AND reasoned. Readable checkout: default run `python3 -m pytest tests/test_spec_alignment_check.py -v` => \"29 passed in 9.13s\", test_gitreins_real_invocation_against_the_real_auger_binary PASSED [72%] (leg actually runs against /home/kara/gitreins). Unreadable-but-present: test_the_cross_repo_guard_treats_an_unreadable_checkout_as_absent PASSED, test_the_cross_repo_leg_skips_on_an_unreadable_checkout PASSED, test_a_real_chmod_to_zero_is_reported_as_unreadable PASSED (uid 1000, not root, so the chmod arm is live). Independent probe of the guard: readable -> '', mode-000 module -> '... is present but .../engine/spec_alignment.py is UNREADABLE by uid 1000; the real-argv leg skips instead of raising PermissionError on import', absent -> '... is ABSENT ...'. `python3 -m ruff check tests/test_spec_alignment_check.py` => \"All checks passed!\"."
+    },
+    {
+      "criterion": "The readability guard is wired into the real-argv leg itself (not just a helper): test_gitreins_real_invocation_against_the_real_auger_binary calls gitreins_cross_repo_skip_reason(GITREINS) and pytest.skip()s before `from engine import spec_alignment`, so an unreadable checkout can no longer raise PermissionError at import.",
+      "status": "PASS",
+      "detail": "tests/test_spec_alignment_check.py:638-640 \u2014 `skip_reason = gitreins_cross_repo_skip_reason(GITREINS); if skip_reason: pytest.skip(skip_reason)` executes before `from engine import spec_alignment` at line 643, closing the PermissionError-at-import path the commit message describes. test_the_cross_repo_leg_skips_on_an_unreadable_checkout drives the real leg function and asserts pytest.skip.Exception carrying the path and \"UNREADABLE\" \u2014 PASSED in the `-k \"cross_repo or chmod or readability\"` run (6 passed, 23 deselected).",
+      "derived": true
+    },
+    {
+      "criterion": "A guard that always skips (silently disabling the cross-repo proof) must be caught: a readable checkout must yield an empty reason and the real leg must actually run.",
+      "status": "PASS",
+      "detail": "tests/test_spec_alignment_check.py:757-766 test_the_cross_repo_guard_lets_a_readable_checkout_run asserts gitreins_cross_repo_skip_reason(fake_checkout) == \"\" \u2014 PASSED. The real leg is not silently disabled: default run `python3 -m pytest tests/test_spec_alignment_check.py -v` shows test_gitreins_real_invocation_against_the_real_auger_binary PASSED [72%] with 29 passed and no skip. Manual probe: readable -> ''.",
+      "derived": true
+    },
+    {
+      "criterion": "The absent and unreadable causes must stay distinguishable in the skip reason, and the probe must be a read check (os.R_OK) rather than a bare existence test.",
+      "status": "PASS",
+      "detail": "tests/test_spec_alignment_check.py:88-108 \u2014 the absent branch returns a reason containing \"ABSENT\", the unreadable branch one containing \"UNREADABLE by uid <euid>\". test_the_cross_repo_guard_reports_an_absent_checkout_as_absent asserts \"ABSENT\" in reason and \"UNREADABLE\" not in reason (PASSED); test_the_cross_repo_guard_treats_an_unreadable_checkout_as_absent asserts \"UNREADABLE\" and \"PermissionError\" (PASSED); test_the_readability_probe_asks_os_access_for_r_ok pins seen == [(target, os.R_OK)] (PASSED). Manual probe produced three distinct results: readable -> '', mode000 -> '... UNREADABLE by uid 1000 ...', absent -> '... is ABSENT ...'.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "no_concerns_found",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": false,
+      "any_failed": true,
+      "summary": "  \u2717 tests: scanners: nice=nice -n 10\n  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check",
+      "steps": [
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": false,
+          "output": "scanners: nice=nice -n 10\nERROR: DuckBrain URL missing \u2014 set DUCKBRAIN_URL before running the live gate (or use AUGER_CI=1 on hosted CI).\n",
+          "error": "",
+          "data": {
+            "exit_code": 2,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261117T212132.005252Z.log"
+          }
+        },
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261117T212132.005252Z.log"
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nscanners: nice=nice -n 10\n4:41PM INF scanned ~6698719 bytes (6.70 MB) in 2.35s\n4:41PM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 460 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "guard_log": "/home/kara/auger/.gitreins/logs/guard-20261117T212132.005252Z.log",
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 grep -c os.access tests/test_spec_alignment_check.py >= 1; GITREINS_REPO=/nonexistent python3 -m pytest tests/test_spec_alignment_check.py -q => 0 failed 0 errors with the leg skipped and reasoned; readable GITREINS_REPO runs the leg; unreadable-but-present also skips: grep -c os.access tests/test_spec_alignment_check.py => 5 (lines 86, 714, 786, 800, plus docstring line 28). `GITREINS_REPO=/nonexistent python3 -m pytest tests/test_spec_alignment_check.py -q -rs` => exit 0, \"28 passed, 1 skipped in 7.09s\" with \"SKIPPED [1] tests/test_spec_alignment_check.py:640: cross-repo proof: no GitReins checkout at /nonexistent (set GITREINS_REPO); /nonexistent/engine/spec_alignment.py is ABSENT, so the real-argv leg runs only on a host that has both repositories\" \u2014 0 failed, 0 errors, leg skipped AND reasoned. Readable checkout: default run `python3 -m pytest tests/test_spec_alignment_check.py -v` => \"29 passed in 9.13s\", test_gitreins_real_invocation_against_the_real_auger_binary PASSED [72%] (leg actually runs against /home/kara/gitreins). Unreadable-but-present: test_the_cross_repo_guard_treats_an_unreadable_checkout_as_absent PASSED, test_the_cross_repo_leg_skips_on_an_unreadable_checkout PASSED, test_a_real_chmod_to_zero_is_reported_as_unreadable PASSED (uid 1000, not root, so the chmod arm is live). Independent probe of the guard: readable -> '', mode-000 module -> '... is present but .../engine/spec_alignment.py is UNREADABLE by uid 1000; the real-argv leg skips instead of raising PermissionError on import', absent -> '... is ABSENT ...'. `python3 -m ruff check tests/test_spec_alignment_check.py` => \"All checks passed!\".\n  \u2713 The readability guard is wired into the real-argv leg itself (not just a helper): test_gitreins_real_invocation_against_the_real_auger_binary calls gitreins_cross_repo_skip_reason(GITREINS) and pytest.skip()s before `from engine import spec_alignment`, so an unreadable checkout can no longer raise PermissionError at import.: tests/test_spec_alignment_check.py:638-640 \u2014 `skip_reason = gitreins_cross_repo_skip_reason(GITREINS); if skip_reason: pytest.skip(skip_reason)` executes before `from engine import spec_alignment` at line 643, closing the PermissionError-at-import path the commit message describes. test_the_cross_repo_leg_skips_on_an_unreadable_checkout drives the real leg function and asserts pytest.skip.Exception carrying the path and \"UNREADABLE\" \u2014 PASSED in the `-k \"cross_repo or chmod or readability\"` run (6 passed, 23 deselected).\n  \u2713 A guard that always skips (silently disabling the cross-repo proof) must be caught: a readable checkout must yield an empty reason and the real leg must actually run.: tests/test_spec_alignment_check.py:757-766 test_the_cross_repo_guard_lets_a_readable_checkout_run asserts gitreins_cross_repo_skip_reason(fake_checkout) == \"\" \u2014 PASSED. The real leg is not silently disabled: default run `python3 -m pytest tests/test_spec_alignment_check.py -v` shows test_gitreins_real_invocation_against_the_real_auger_binary PASSED [72%] with 29 passed and no skip. Manual probe: readable -> ''.\n  \u2713 The absent and unreadable causes must stay distinguishable in the skip reason, and the probe must be a read check (os.R_OK) rather than a bare existence test.: tests/test_spec_alignment_check.py:88-108 \u2014 the absent branch returns a reason containing \"ABSENT\", the unreadable branch one containing \"UNREADABLE by uid <euid>\". test_the_cross_repo_guard_reports_an_absent_checkout_as_absent asserts \"ABSENT\" in reason and \"UNREADABLE\" not in reason (PASSED); test_the_cross_repo_guard_treats_an_unreadable_checkout_as_absent asserts \"UNREADABLE\" and \"PermissionError\" (PASSED); test_the_readability_probe_asks_os_access_for_r_ok pins seen == [(target, os.R_OK)] (PASSED). Manual probe produced three distinct results: readable -> '', mode000 -> '... UNREADABLE by uid 1000 ...', absent -> '... is ABSENT ...'.\nThe cross-repo leg now probes os.R_OK before importing the GitReins module, so an absent checkout skips with an ABSENT reason (28 passed, 1 skipped under GITREINS_REPO=/nonexistent), a readable checkout runs the leg (29 passed), and a present-but-unreadable checkout skips with an UNREADABLE reason instead of erroring.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 grep -c os.access tests/test_spec_alignment_check.py >= 1; GITREINS_REPO=/nonexistent python3 -m pytest tests/test_spec_alignment_check.py -q => 0 failed 0 errors with the leg skipped and reasoned; readable GITREINS_REPO runs the leg; unreadable-but-present also skips: grep -c os.access tests/test_spec_alignment_check.py => 5 (lines 86, 714, 786, 800, plus docstring line 28). `GITREINS_REPO=/nonexistent python3 -m pytest tests/test_spec_alignment_check.py -q -rs` => exit 0, \"28 passed, 1 skipped in 7.09s\" with \"SKIPPED [1] tests/test_spec_alignment_check.py:640: cross-repo proof: no GitReins checkout at /nonexistent (set GITREINS_REPO); /nonexistent/engine/spec_alignment.py is ABSENT, so the real-argv leg runs only on a host that has both repositories\" \u2014 0 failed, 0 errors, leg skipped AND reasoned. Readable checkout: default run `python3 -m pytest tests/test_spec_alignment_check.py -v` => \"29 passed in 9.13s\", test_gitreins_real_invocation_against_the_real_auger_binary PASSED [72%] (leg actually runs against /home/kara/gitreins). Unreadable-but-present: test_the_cross_repo_guard_treats_an_unreadable_checkout_as_absent PASSED, test_the_cross_repo_leg_skips_on_an_unreadable_checkout PASSED, test_a_real_chmod_to_zero_is_reported_as_unreadable PASSED (uid 1000, not root, so the chmod arm is live). Independent probe of the guard: readable -> '', mode-000 module -> '... is present but .../engine/spec_alignment.py is UNREADABLE by uid 1000; the real-argv leg skips instead of raising PermissionError on import', absent -> '... is ABSENT ...'. `python3 -m ruff check tests/test_spec_alignment_check.py` => \"All checks passed!\".\n\n\u2026 [1444 chars omitted \u2014 2 line(s)] \u2026\n  \u2713 The absent and unreadable causes must stay distinguishable in the skip reason, and the probe must be a read check (os.R_OK) rather than a bare existence test.: tests/test_spec_alignment_check.py:88-108 \u2014 the absent branch returns a reason containing \"ABSENT\", the unreadable branch one containing \"UNREADABLE by uid <euid>\". test_the_cross_repo_guard_reports_an_absent_checkout_as_absent asserts \"ABSENT\" in reason and \"UNREADABLE\" not in reason (PASSED); test_the_cross_repo_guard_treats_an_unreadable_checkout_as_absent asserts \"UNREADABLE\" and \"PermissionError\" (PASSED); test_the_readability_probe_asks_os_access_for_r_ok pins seen == [(target, os.R_OK)] (PASSED). Manual probe produced three distinct results: readable -> '', mode000 -> '... UNREADABLE by uid 1000 ...', absent -> '... is ABSENT ...'.\nThe cross-repo leg now probes os.R_OK before importing the GitReins module, so an absent checkout skips with an ABSENT reason (28 passed, 1 skipped under GITREINS_REPO=/nonexistent), a readable checkout runs the leg (29 passed), and a present-but-unreadable checkout skips with an UNREADABLE reason instead of erroring.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "grep -c os.access tests/test_spec_alignment_check.py >= 1; GITREINS_REPO=/nonexistent python3 -m pytest tests/test_spec_alignment_check.py -q => 0 failed 0 errors with the leg skipped and reasoned; readable GITREINS_REPO runs the leg; unreadable-but-present also skips",
+                "status": "PASS",
+                "detail": "grep -c os.access tests/test_spec_alignment_check.py => 5 (lines 86, 714, 786, 800, plus docstring line 28). `GITREINS_REPO=/nonexistent python3 -m pytest tests/test_spec_alignment_check.py -q -rs` => exit 0, \"28 passed, 1 skipped in 7.09s\" with \"SKIPPED [1] tests/test_spec_alignment_check.py:640: cross-repo proof: no GitReins checkout at /nonexistent (set GITREINS_REPO); /nonexistent/engine/spec_alignment.py is ABSENT, so the real-argv leg runs only on a host that has both repositories\" \u2014 0 failed, 0 errors, leg skipped AND reasoned. Readable checkout: default run `python3 -m pytest tests/test_spec_alignment_check.py -v` => \"29 passed in 9.13s\", test_gitreins_real_invocation_against_the_real_auger_binary PASSED [72%] (leg actually runs against /home/kara/gitreins). Unreadable-but-present: test_the_cross_repo_guard_treats_an_unreadable_checkout_as_absent PASSED, test_the_cross_repo_leg_skips_on_an_unreadable_checkout PASSED, test_a_real_chmod_to_zero_is_reported_as_unreadable PASSED (uid 1000, not root, so the chmod arm is live). Independent probe of the guard: readable -> '', mode-000 module -> '... is present but .../engine/spec_alignment.py is UNREADABLE by uid 1000; the real-argv leg skips instead of raising PermissionError on import', absent -> '... is ABSENT ...'. `python3 -m ruff check tests/test_spec_alignment_check.py` => \"All checks passed!\"."
+              },
+              {
+                "criterion": "The readability guard is wired into the real-argv leg itself (not just a helper): test_gitreins_real_invocation_against_the_real_auger_binary calls gitreins_cross_repo_skip_reason(GITREINS) and pytest.skip()s before `from engine import spec_alignment`, so an unreadable checkout can no longer raise PermissionError at import.",
+                "status": "PASS",
+                "detail": "tests/test_spec_alignment_check.py:638-640 \u2014 `skip_reason = gitreins_cross_repo_skip_reason(GITREINS); if skip_reason: pytest.skip(skip_reason)` executes before `from engine import spec_alignment` at line 643, closing the PermissionError-at-import path the commit message describes. test_the_cross_repo_leg_skips_on_an_unreadable_checkout drives the real leg function and asserts pytest.skip.Exception carrying the path and \"UNREADABLE\" \u2014 PASSED in the `-k \"cross_repo or chmod or readability\"` run (6 passed, 23 deselected).",
+                "derived": true
+              },
+              {
+                "criterion": "A guard that always skips (silently disabling the cross-repo proof) must be caught: a readable checkout must yield an empty reason and the real leg must actually run.",
+                "status": "PASS",
+                "detail": "tests/test_spec_alignment_check.py:757-766 test_the_cross_repo_guard_lets_a_readable_checkout_run asserts gitreins_cross_repo_skip_reason(fake_checkout) == \"\" \u2014 PASSED. The real leg is not silently disabled: default run `python3 -m pytest tests/test_spec_alignment_check.py -v` shows test_gitreins_real_invocation_against_the_real_auger_binary PASSED [72%] with 29 passed and no skip. Manual probe: readable -> ''.",
+                "derived": true
+              },
+              {
+                "criterion": "The absent and unreadable causes must stay distinguishable in the skip reason, and the probe must be a read check (os.R_OK) rather than a bare existence test.",
+                "status": "PASS",
+                "detail": "tests/test_spec_alignment_check.py:88-108 \u2014 the absent branch returns a reason containing \"ABSENT\", the unreadable branch one containing \"UNREADABLE by uid <euid>\". test_the_cross_repo_guard_reports_an_absent_checkout_as_absent asserts \"ABSENT\" in reason and \"UNREADABLE\" not in reason (PASSED); test_the_cross_repo_guard_treats_an_unreadable_checkout_as_absent asserts \"UNREADABLE\" and \"PermissionError\" (PASSED); test_the_readability_probe_asks_os_access_for_r_ok pins seen == [(target, os.R_OK)] (PASSED). Manual probe produced three distinct results: readable -> '', mode000 -> '... UNREADABLE by uid 1000 ...', absent -> '... is ABSENT ...'.",
+                "derived": true
+              }
+            ],
+            "summary": "The cross-repo leg now probes os.R_OK before importing the GitReins module, so an absent checkout skips with an ABSENT reason (28 passed, 1 skipped under GITREINS_REPO=/nonexistent), a readable checkout runs the leg (29 passed), and a present-but-unreadable checkout skips with an UNREADABLE reason instead of erroring.",
+            "provenance": {
+              "model": "deepseek-v4-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "deepseek-v4-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"QA-AUGER-17\"}",
+          "exit_code": 0,
+          "output_sha": "d0ca7089dc23c12505383312628ab5f9b7245fc31b077f39d8f9270f7080bfa4"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && git status --short && git log --oneline -5",
+          "exit_code": 0,
+          "output_sha": "bb7d08ed43128ed1c7fdf5b7fc6c54062e35a52baac4ed22201cb93365bc02c9"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && git show --stat 43b703d",
+          "exit_code": 0,
+          "output_sha": "95a4059b167f23a25cc82b8054d039c35e7f323311f0d70365817e1eff99ea43"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && grep -c os.access tests/test_spec_alignment_check.py",
+          "exit_code": 0,
+          "output_sha": "a58315b1450a48f43c0cf06032cb62336b94c3f86f7c19d8919924f5c9f293ae"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"tests/test_spec_alignment_check.py\"}",
+          "exit_code": 0,
+          "output_sha": "17376fedc75f233d9070b42ff5f45245f77a2171f7b8e0867f4573b6ba07c2ba"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 460, \"offset\": 400, \"path\": \"tests/test_spec_alignment_check.py\"}",
+          "exit_code": 0,
+          "output_sha": "6579c6d988cdcf1e54dba649f32cc18833a305efdded013212fad5be85917e4b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && GITREINS_REPO=/nonexistent python3 -m pytest tests/test_spec_alignment_check.py -q 2>&1 | tail -20",
+          "exit_code": 0,
+          "output_sha": "93905ed5614c048eae7e11866cebd71f889209cfbbe813c3c13caa40a2967460"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && ls -la /home/kara/gitreins 2>&1 | head -5; id -u",
+          "exit_code": 0,
+          "output_sha": "8d7054c8fa1065ab3d9b0403fbdbbf7f8ba07055f1f6aa81debf535bdc532f77"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && GITREINS_REPO=/nonexistent python3 -m pytest tests/test_spec_alignment_check.py -q -rs 2>&1 | tail -8",
+          "exit_code": 0,
+          "output_sha": "61d59141056e45938899297e53dbe055efd8ad845d83da4e7810142198aa511a"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && python3 -m pytest tests/test_spec_alignment_check.py -q -rs 2>&1 | tail -8",
+          "exit_code": 0,
+          "output_sha": "f57c2ad6ac425991e6322be58236db989c3f204383f138f3db78f2a6e3821cc5"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && python3 -m pytest tests/test_spec_alignment_check.py -q -k \"cross_repo or chmod or readability\" -v 2>&1 | tail -15",
+          "exit_code": 0,
+          "output_sha": "3d2d8285741ef4edb1aea2427be5e210caaaf9815713a69a9f97f5fa4929cd2d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && grep -n \"test_spec_alignment_check\" tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "152da96416ced724719d62484cbe8304e981f13a80013e10b06ffc24bcfcbb27"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && python3 -m pytest tests/test_spec_alignment_check.py -v 2>&1 | grep -E \"cross_repo|chmod|readability|real_invocation\"",
+          "exit_code": 0,
+          "output_sha": "a4923f86548b3a1b8b9b59997bd31fc7e569f6620654cd5a717d17494257ea0a"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && git show 43b703d -- tests/test_spec_alignment_check.py | head -80",
+          "exit_code": 0,
+          "output_sha": "dede295f757dd1ec137257a66159882882e65c7e721079cc7308a09dd4d88587"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && git show 43b703d -- tests/test_spec_alignment_check.py | sed -n '80,140p'",
+          "exit_code": 0,
+          "output_sha": "6d28e21cd7070f5b9c356dd41bb58580af77ff0a914a856ecf3b353adec7a9c2"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && grep -n \"GITREINS_REPO\\|gitreins_cross_repo_skip_reason\\|_readable\" -r --include=*.py --include=*.sh --include=*.md . | grep -v \"^./tests/test_spec_alignment_check.py\" | head -20",
+          "exit_code": 0,
+          "output_sha": "5fe8d0ee6df2f456c28740d6850d869d9fccb060ebe4405bde6fdcf67850207d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && python3 -m pytest tests/test_spec_alignment_check.py -q -k \"cross_repo or chmod or readability\" -v 2>&1 | grep -E \"PASSED|FAILED|SKIPPED|passed|failed\"",
+          "exit_code": 0,
+          "output_sha": "b5d656518fd7096e2c9b9d72e1c73629011ae9b8545a583e8bddf8b7d1c75f54"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && python3 -m pytest tests/test_spec_alignment_check.py -v 2>&1 | grep -E \"PASSED|FAILED|SKIPPED\" | head -40",
+          "exit_code": 0,
+          "output_sha": "b8275588fa42cdc98cee69029f000001b67fd618982d2be41c76c548d2ff9ac7"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && python3 -m pytest tests/test_spec_alignment_check.py -v -k \"cross_repo or chmod or readability\" 2>&1 | grep -E \"PASSED|FAILED|SKIPPED|passed|failed\"",
+          "exit_code": 0,
+          "output_sha": "289b41a93634c8ad2fe50ec49e762419a92171130c981a8e5e53f38c3f632400"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && grep -n \"os.access\" tests/test_spec_alignment_check.py",
+          "exit_code": 0,
+          "output_sha": "d4ec70d93e2741052796622e31562b23c4f12a9ea430c71573942cfb3adb4a2a"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && python3 - <<'EOF'\nimport os, sys, tempfile, pathlib\nsys.path.insert(0, \"tests\")\nimport test_spec_alignment_check as t\nbase = pathlib.Path(tempfile.mkdtemp())\nco = t.fake_checkout(base)\nprint(\"readable ->\", repr(t.gitreins_cross_repo_skip_reason(co)))\nm = co / t.GITREINS_MODULE\nm.chmod(0o000)\nprint(\"mode000 ->\", repr(t.gitreins_cross_repo_skip_reason(co)))\nm.chmod(0o600)\nprint(\"absent ->\", repr(t.gitreins_cross_repo_skip_reason(base/\"nope\")))\nEOF",
+          "exit_code": 0,
+          "output_sha": "fc2a1cd8e0c9e79edaa51f650453d99943e8a726f444f8eb221e37efef027da1"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: grep -c os.access tests/test_spec_alignment_check.py = 5 (lines 86, 714, 786, 800 + docstring 28). GITREINS_REPO=/nonexistent python3 -m pytest tests/test_spec_alignment_check.py -q -rs => \\\"28 passed, 1 skipped in 7.09s\\\", SKIPPED [1] tests/test_spec_alignment_check.py:640: cross-repo proof: no GitReins checkout at /nonexistent ... is ABSENT. Default run (real /home/kara/gitreins) => \\\"29 passed in 9.13s\\\", test_gitreins_real_invocation_against_the_real_auger_binary PASSED (leg runs). Unreadable-but-present: test_the_cross_repo_guard_treats_an_unreadable_checkout_as_absent PASSED, test_the_cross_repo_leg_skips_on_an_unreadable_checkout PASSED, test_a_real_chmod_to_zero_is_reported_as_unreadable PASSED (uid 1000, not root). Manual probe: mode-000 module -> reason contains \\\"UNREADABLE by uid 1000\\\"; readable -> ''; absent -> \\\"ABSENT\\\". Guard wired into the leg at tests/test_spec_alignment_check.py:638-640.\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "76af0d6654c8616f54c149cb35e4379b7175c4836cf9991510b5244892fc00a4"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"The readability guard is wired into the real-argv leg itself (not just a helper): test_gitreins_real_invocation_against_the_real_auger_binary calls gitreins_cross_repo_skip_reason(GITREINS) and pytest.skip()s before `from engine import spec_alignment`, so an unreadable checkout can no longer raise PermissionError at import.\", \"key\": \"derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "28ff651891a922583d116a6c5137e2fe14393cab32caaaf6f18bf5ea951e11ea"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: tests/test_spec_alignment_check.py:638-640 \\u2014 `skip_reason = gitreins_cross_repo_skip_reason(GITREINS); if skip_reason: pytest.skip(skip_reason)` executes BEFORE `from engine import spec_alignment` (line 643), so the PermissionError-at-import path is closed. test_the_cross_repo_leg_skips_on_an_unreadable_checkout drives the real leg function and asserts pytest.skip.Exception with the path + \\\"UNREADABLE\\\" in the reason \\u2014 PASSED in run (6 passed, 23 deselected).\", \"key\": \"verified_derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "5a963530a96719db3124020840cea74795d988c1904d48ce65e66d3433c89c3a"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"A guard that always skips (silently disabling the cross-repo proof) must be caught: a readable checkout must yield an empty reason and the real leg must actually run.\", \"key\": \"derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "238fbac8029b22c7eed8b2e892f27b65cbb73bbf39a24680663ec407a1a7642b"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: test_the_cross_repo_guard_lets_a_readable_checkout_run (tests/test_spec_alignment_check.py:757-766) asserts gitreins_cross_repo_skip_reason(fake_checkout) == \\\"\\\" \\u2014 PASSED. And the real leg actually runs on a readable checkout: default run `python3 -m pytest tests/test_spec_alignment_check.py -v` => test_gitreins_real_invocation_against_the_real_auger_binary PASSED [72%], 29 passed in 9.13s (no skip). Manual probe: readable -> '' .\", \"key\": \"verified_derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "018762355f8a02baea8e1dbba346b8822c0f718e376dbe128be3a2a8c430e7ff"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"The absent and unreadable causes must stay distinguishable in the skip reason (a skip with no cause is indistinguishable from a quietly disabled proof), and the probe must be a read check (os.R_OK) rather than a bare existence test.\", \"key\": \"derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "d19a9097e2d9648eefe4dcec63a76eca705ea889c7c44f4b6b7169e9c5f3dc48"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: tests/test_spec_alignment_check.py:88-108 \\u2014 absent branch returns a reason containing \\\"ABSENT\\\", unreadable branch returns one containing \\\"UNREADABLE by uid <euid>\\\". test_the_cross_repo_guard_reports_an_absent_checkout_as_absent asserts \\\"ABSENT\\\" in reason and \\\"UNREADABLE\\\" not in reason (PASSED); test_the_cross_repo_guard_treats_an_unreadable_checkout_as_absent asserts \\\"UNREADABLE\\\" and \\\"PermissionError\\\" (PASSED). test_the_readability_probe_asks_os_access_for_r_ok pins seen == [(target, os.R_OK)] (PASSED). Manual probe output confirms three distinct results: readable -> '', mode000 -> '... UNREADABLE by uid 1000 ...', absent -> '... is ABSENT ...'.\", \"key\": \"verified_derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "98cb9b69f45b97155ecf5793415242d131f56726d701822f9bc990647bb88531"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd . && python3 -m pytest tests/test_spec_alignment_check.py -q 2>&1 | tail -2 && python3 -m ruff check tests/test_spec_alignment_check.py 2>&1 | tail -3",
+          "exit_code": 0,
+          "output_sha": "83585c55ad68bdd03f30401bca0437b13ee84e8444d7bdb18efa6ec4f976b05e"
+        }
+      ]
+    }
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "The diff only appends two board events and flips one task's status to complete with a completed_at timestamp; no code, wiring, or test changes are present, so no evidenced defects."
+  },
+  "summary": "Stage tier1: FAIL\n    \u2717 tests: scanners: nice=nice -n 10\n  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 grep -c os.access tests/test_spec_alignment_check.py >= 1; GITREINS_REPO=/nonexistent python3 -m pytest tests/test_spec_alignment_check.py -q => 0 failed 0 errors with the leg skipped and reasoned; readable GITREINS_REPO runs the leg; unreadable-but-present also skips: grep -c os.access tests/test_spec_alignment_check.py => 5 (lines 86, 714, 786, 800, plus docstring line 28). `GITREINS_REPO=/nonexistent python3 -m pytest tests/test_spec_alignment_check.py -q -rs` => exit 0, \"28 passed, 1 skipped in 7.09s\" with \"SKIPPED [1] tests/test_spec_alignment_check.py:640: cross-repo proof: no GitReins checkout at /nonexistent (set GITREINS_REPO); /nonexistent/engine/spec_alignment.py is ABSENT, so the real-argv leg runs only on a host that has both repositories\" \u2014 0 failed, 0 errors, leg skipped AND reasoned. Readable checkout: default run `python3 -m pytest tests/test_spec_alignment_check.py -v` => \"29 passed in 9.13s\", test_gitreins_real_invocation_against_the_real_auger_binary PASSED [72%] (leg actually runs against /home/kara/gitreins). Unreadable-but-present: test_the_cross_repo_guard_treats_an_unreadable_checkout_as_absent PASSED, test_the_cross_repo_leg_skips_on_an_unreadable_checkout PASSED, test_a_real_chmod_to_zero_is_reported_as_unreadable PASSED (uid 1000, not root, so the chmod arm is live). Independent probe of the guard: readable -> '', mode-000 module -> '... is present but .../engine/spec_alignment.py is UNREADABLE by uid 1000; the real-argv leg skips instead of raising PermissionError on import', absent -> '... is ABSENT ...'. `python3 -m ruff check tests/test_spec_alignment_check.py` => \"All checks passed!\".\n  \u2713 The readability guard is wired into the real-argv leg itself (not just a helper): test_gitreins_real_invocation_against_the_real_auger_binary calls gitreins_cross_repo_skip_reason(GITREINS) and pytest.skip()s before `from engine import spec_alignment`, so an unreadable checkout can no longer raise PermissionError at import.: tests/test_spec_alignment_check.py:638-640 \u2014 `skip_reason = gitreins_cross_repo_skip_reason(GITREINS); if skip_reason: pytest.skip(skip_reason)` executes before `from engine import spec_alignment` at line 643, closing the PermissionError-at-import path the commit message describes. test_the_cross_repo_leg_skips_on_an_unreadable_checkout drives the real leg function and asserts pytest.skip.Exception carrying the path and \"UNREADABLE\" \u2014 PASSED in the `-k \"cross_repo or chmod or readability\"` run (6 passed, 23 deselected).\n  \u2713 A guard that always skips (silently disabling the cross-repo proof) must be caught: a readable checkout must yield an empty reason and the real leg must actually run.: tests/test_spec_alignment_check.py:757-766 test_the_cross_repo_guard_lets_a_readable_checkout_run asserts gitreins_cross_repo_skip_reason(fake_checkout) == \"\" \u2014 PASSED. The real leg is not silently disabled: default run `python3 -m pytest tests/test_spec_alignment_check.py -v` shows test_gitreins_real_invocation_against_the_real_auger_binary PASSED [72%] with 29 passed and no skip. Manual probe: readable -> ''.\n  \u2713 The absent and unreadable causes must stay distinguishable in the skip reason, and the probe must be a read check (os.R_OK) rather than a bare existence test.: tests/test_spec_alignment_check.py:88-108 \u2014 the absent branch returns a reason containing \"ABSENT\", the unreadable branch one containing \"UNREADABLE by uid <euid>\". test_the_cross_repo_guard_reports_an_absent_checkout_as_absent asserts \"ABSENT\" in reason and \"UNREADABLE\" not in reason (PASSED); test_the_cross_repo_guard_treats_an_unreadable_checkout_as_absent asserts \"UNREADABLE\" and \"PermissionError\" (PASSED); test_the_readability_probe_asks_os_access_for_r_ok pins seen == [(target, os.R_OK)] (PASSED). Manual probe produced three distinct results: readable -> '', mode000 -> '... UNREADABLE by uid 1000 ...', absent -> '... is ABSENT ...'.\nThe cross-repo leg now probes os.R_OK before importing the GitReins module, so an absent checkout skips with an ABSENT reason (28 passed, 1 skipped under GITREINS_REPO=/nonexistent), a readable checkout runs the leg (29 passed), and a present-but-unreadable checkout skips with an UNREADABLE reason instead of erroring.\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-11-17T21:42:38.909610",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-17T21:42:38.944687+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 10646,
+        "truncated": false,
+        "source": "git show 43b703d8cc9c"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 1823,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "QA-AUGER-17"
+  }
+}
