@@ -9,9 +9,8 @@ XML source model, the selector/assembler, and the refusal contract.
 
 Slice 2 (typed verification/test obligations, `AUG-123`) landed on top of this model and is
 documented separately in `docs/XML-SPEC-SCHEMA.md` — read that for `<test>` nodes, runner
-selectors and migration obligations. Task packets, one-pass context retrieval and the staged-diff
-checker are still **not built**: for requirement-by-requirement implementation status (and which
-test proves each one), use `docs/XML-SPEC-COVERAGE.md` rather than this design record.
+selectors and migration obligations. For requirement-by-requirement implementation status and
+the tests that prove it, use `docs/XML-SPEC-COVERAGE.md` alongside this design record.
 
 ## Rationale
 
@@ -127,6 +126,58 @@ verdict, commit) belongs to later slices (`AUG-123`, `AUG-124`).
 `auger spec list <root>` prints the same metadata without assembling, so an author can inspect
 the corpus (`id`, `kind`, `status`, `version`, citation, scopes) before selecting.
 
+## CLI commands and exit codes
+
+The following examples use the repository's `specs` corpus. Run `python3 auger.py spec VERB
+--help` for the options for each verb. Exit codes below describe the indicated operation; argument
+parsing errors also exit 2.
+
+### Validate
+
+`auger spec validate specs` validates the corpus and prints document, block and reference counts.
+Exit 0 means validation succeeded; exit 2 means a typed refusal, such as an invalid corpus or a
+missing repository root.
+
+### Check
+
+`auger spec check specs` checks the corpus including its verification obligations and emits a JSON
+verdict. Exit 0 means valid; exit 2 means a typed refusal. With diff-checker options, `check`
+also exposes the staged-diff alignment protocol described below.
+
+### Bundle
+
+`auger spec bundle specs SPEC-GRAPH-CORPUS` emits the requirement's verification obligations as
+JSON. Exit 0 means the bundle was emitted (including a valid empty bundle); exit 2 means a typed
+refusal, including an unknown requirement.
+
+### Align
+
+`git diff --cached | auger spec align --repo-root . --spec-root specs --diff-stdin` checks the
+diff against the corpus and emits one JSON line. Exit 0 means pass or advisory warn; exit 1 means
+the alignment verdict is fail; exit 2 means a typed refusal, such as an invalid corpus or protocol.
+An empty diff is a passing empty scope, not evidence that changed files were checked.
+
+### List
+
+`auger spec list specs` lists the whole corpus; selectors narrow it. Exit 0 means the list was
+produced, including an empty no-match result (with a note on stderr); exit 2 means a typed refusal.
+
+### Assemble
+
+`auger spec assemble specs --kind requirement --format json --measure` emits selected blocks and
+their dependency closure. Exit 0 means the assembly was emitted, including an empty no-match
+selection with a note on stderr; exit 2 means a typed refusal, including no selector. `--measure`
+is opt-in and JSON-only: it adds a measured report with `report_schema_version` `1.1`, byte and
+block counts, and elapsed time. Without it the measured report is absent, preserving the default
+byte-reproducible document.
+
+### Render
+
+`auger spec render specs --out /path/to/existing/output` writes both `SPEC-CORPUS-VIEW.md` and
+`SPEC-CORPUS-VIEW.html` into an existing directory outside the corpus root. Exit 0 means both views
+were written; exit 2 means a typed refusal, including `render-into-corpus` when `--out` is inside
+the corpus root. Create the output directory outside the corpus before running the example.
+
 ### Includes versus references
 
 Both cross-document mechanisms exist, and they are different tools:
@@ -147,8 +198,9 @@ billion-laughs or entity-substitution surface.
 
 ## Refusal contract
 
-Every failure is a typed `SpecError(code, detail)`; the CLI prints
-`spec error (<code>): <detail>` to **stderr** and exits **2**. Nothing is written to stdout, and
+For typed corpus refusals the CLI prints `spec error (<code>): <detail>` to **stderr** and exits
+**2**. Alignment findings can instead produce a JSON verdict and exit 1 (see above). For a typed
+refusal, no result document is written to stdout, and
 `--out` is created only after the whole corpus has validated and the document has rendered (a
 sibling temp file plus `os.replace`, so even an I/O failure cannot leave a truncated document).
 
@@ -170,7 +222,7 @@ sibling temp file plus `os.replace`, so even an I/O failure cannot leave a trunc
 | `unresolved-reference`, `invalid-reference-type` | an edge naming a missing block, or `verifies` naming a non-`requirement` |
 | `reference-cycle` | a cycle over the typed reference graph (including a self-reference) |
 | `invalid-include`, `unresolved-include`, `remote-reference-rejected`, `include-outside-root`, `duplicate-include`, `include-cycle`, `unknown-element` | include instruction and traversal failures |
-| `empty-selector`, `no-match` | assembly without a selector, or a selector that matches nothing |
+| `empty-selector` | assembly without a selector; a no-match selection instead exits 0 with a note |
 | `unsupported-format` | a format other than `markdown`/`json` (also refused by argparse choices) |
 
 Cycles are refused at validation time, not discovered during assembly, so a cyclic corpus can
