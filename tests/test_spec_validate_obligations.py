@@ -99,6 +99,49 @@ def test_a_resolving_obligation_still_passes_validate() -> None:
     assert "spec: 1 document(s), 2 block(s), 1 reference(s) ok" in out, out
 
 
+def _go_corpus(tmp_path: Path, selector: str) -> tuple[Path, Path]:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / "example_test.go").write_text(
+        'package example\nimport "testing"\n'
+        "func TestPresent(t *testing.T) {}\n"
+        "// func TestCommented(t *testing.T) {}\n"
+        "var example = `\nfunc TestInString(t *testing.T) {}\n`\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "-C", str(repo), "add", "example_test.go"], check=True)
+    specs = repo / "specs"
+    specs.mkdir()
+    (specs / "test.xml").write_text(
+        '<spec xmlns="urn:auger:spec:1" id="GO-SPEC" version="1.0.0" '
+        'schema-version="1.0">'
+        '<verification id="GO-VER" kind="verification" status="active" '
+        'version="1.0.0" method="test" type="test" runner="go" '
+        f'path="example_test.go" selector="{selector}" />'
+        "</spec>",
+        encoding="utf-8",
+    )
+    return repo, specs
+
+
+def test_go_existing_selector_is_accepted(tmp_path: Path) -> None:
+    repo, specs = _go_corpus(tmp_path, "TestPresent")
+    rc, out, err = run_spec("check", str(specs), "--repo-root", str(repo))
+    assert rc == 0, err
+    assert '"status": "valid"' in out
+
+
+def test_go_missing_selector_is_stale(tmp_path: Path) -> None:
+    for selector in ("TestMissing", "TestCommented", "TestInString"):
+        case = tmp_path / selector
+        case.mkdir()
+        repo, specs = _go_corpus(case, selector)
+        rc, out, err = run_spec("check", str(specs), "--repo-root", str(repo))
+        assert rc == 2, (out, err)
+        assert "stale-test-ref" in err and selector in err
+
+
 def test_gate_arm_runs_this_file() -> None:
     """A proof outside tests/gate.sh's pytest arm is never executed by CI or the guard."""
     arm = [

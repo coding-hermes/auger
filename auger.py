@@ -13312,7 +13312,7 @@ class SpecUnknownRequirement(SpecValidationError):
     """
 
 
-SPEC_RUNNERS = {"pytest": (sys.executable, "-m", "pytest")}
+SPEC_RUNNERS = {"pytest": (sys.executable, "-m", "pytest"), "go": ("go", "test")}
 SPEC_BLOCK_TAGS = {"requirement", "verification", "test"}
 
 
@@ -13816,19 +13816,43 @@ def validate_xml_specs(
             raise SpecValidationError(
                 f"untracked-test-ref: {rel}: {node_id}: {test_path}"
             )
-        try:
-            tree = ast.parse(
-                resolved.read_text(encoding="utf-8"), filename=str(resolved)
+        if runner == "go":
+            try:
+                source = resolved.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                raise SpecValidationError(
+                    f"stale-test-ref: {rel}: {node_id}: {test_path} ({exc})"
+                ) from exc
+            # Ignore comments and literals so examples cannot masquerade as declarations.
+            source = re.sub(
+                r'//[^\n]*|/\*[\s\S]*?\*/|`[^`]*`|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'',
+                " ",
+                source,
             )
-        except (SyntaxError, OSError) as exc:
-            raise SpecValidationError(
-                f"stale-test-ref: {rel}: {node_id}: {test_path} ({exc})"
-            ) from exc
-        if not any(
-            isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and item.name == selector
-            for item in ast.walk(tree)
-        ):
+            found = (
+                re.search(
+                    r"(?m)^\s*func\s+"
+                    + re.escape(selector)
+                    + r"\s*\(\s*[A-Za-z_]\w*\s+\*\s*testing\s*\.\s*T\s*\)\s*\{",
+                    source,
+                )
+                is not None
+            )
+        else:
+            try:
+                tree = ast.parse(
+                    resolved.read_text(encoding="utf-8"), filename=str(resolved)
+                )
+            except (SyntaxError, OSError) as exc:
+                raise SpecValidationError(
+                    f"stale-test-ref: {rel}: {node_id}: {test_path} ({exc})"
+                ) from exc
+            found = any(
+                isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and item.name == selector
+                for item in ast.walk(tree)
+            )
+        if not found:
             # Name the file that was parsed, not just the selector: with the root now coming
             # from the caller (AUG-127) "which file did you look in?" is the first question a
             # consumer asks, and the answer is not derivable from the path alone.
