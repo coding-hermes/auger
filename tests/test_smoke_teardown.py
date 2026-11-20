@@ -201,6 +201,34 @@ def test_teardown_settles_a_transient_409_and_removes_both_halves(rig):
     )
 
 
+def test_teardown_reenters_after_429_and_removes_directory(rig):
+    ns = "auger-smoke-171-settled"
+    _set_state(rig, listing=[ns], delete_statuses=[429, 200])
+    directory = _make_ns(rig, ns)
+
+    proc = _run(rig, "teardown", ns)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert [call["status"] for call in _deletes(rig, ns)] == [429, 200]
+    assert not directory.exists()
+    assert f"namespace {ns} removed" in proc.stdout
+    assert "teardown skipped" not in proc.stdout
+
+
+def test_teardown_stops_after_persistent_429_and_keeps_directory(rig):
+    ns = "auger-smoke-171-persistent"
+    _set_state(rig, listing=[ns], delete_statuses=[429])
+    directory = _make_ns(rig, ns)
+
+    proc = _run(rig, "teardown", ns)
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert [call["status"] for call in _deletes(rig, ns)] == [429, 429]
+    assert (directory / "tables" / "decision.json").read_text(encoding="utf-8") == "[]"
+    assert "teardown skipped: DELETE returned HTTP 429" in proc.stdout
+    assert " removed" not in proc.stdout
+
+
 def test_teardown_survives_a_persistent_409_with_the_directory_intact(rig):
     """A 409 that outlives the budget keeps the directory AND the row — both or neither.
 
