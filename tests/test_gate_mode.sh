@@ -355,16 +355,16 @@ set -e
 # helper — never a bare pytest.
 # ---------------------------------------------------------------------
 gate_src="$(cat "$GATE")"
-raw_count="$(printf '%s\n' "$gate_src" | grep -cE 'python3 -m pytest tests/test_auger\.py' || true)"
+raw_count="$(printf '%s\n' "$gate_src" | grep -cE '"\$GATE_PYTHON" -m pytest tests/test_auger\.py' || true)"
 [[ "$raw_count" -eq 1 ]] || {
   printf 'expected exactly 1 raw pytest invocation in gate.sh (inside run_pytest_arm), found %s\n' "$raw_count" >&2
   exit 1
 }
-wrapped_count="$(printf '%s\n' "$gate_src" | grep -cE 'setsid timeout --kill-after=.*python3 -m pytest tests/test_auger\.py' || true)"
+wrapped_count="$(printf '%s\n' "$gate_src" | grep -cE 'setsid timeout --kill-after=.*"\$GATE_PYTHON" -m pytest tests/test_auger\.py' || true)"
 [[ "$wrapped_count" -eq 1 ]] || {
   printf 'the pytest invocation is not wrapped with "setsid timeout --kill-after=..." on one line\n' >&2
   printf 'gate.sh pytest lines:\n'
-  printf '%s\n' "$gate_src" | grep -nE 'python3 -m pytest tests/test_auger\.py' >&2
+  printf '%s\n' "$gate_src" | grep -nE '"\$GATE_PYTHON" -m pytest tests/test_auger\.py' >&2
   exit 1
 }
 call_count="$(printf '%s\n' "$gate_src" | grep -cE '(^|[[:space:]])run_pytest_arm -q' || true)"
@@ -412,6 +412,11 @@ if "$skiparms_dir/python3" -c 'import pytest' 2>/dev/null; then
   exit 1
 fi
 
+# Isolate the controls from any checkout-local interpreter in the outer tree.
+git clone -q --shared "$HERE" "$skiparms_dir/repo"
+cp "$GATE" "$skiparms_dir/repo/tests/gate.sh"
+INNER_GATE="$skiparms_dir/repo/tests/gate.sh"
+
 run_inner_gate(){
   local output status
   set +e
@@ -423,7 +428,7 @@ run_inner_gate(){
   output="$(env -u AUGER_ALLOW_SKIPPED_ARMS AUGER_CI=1 GITHUB_ACTIONS=true AUGER_GATE_INNER=1 GATE_FULL=1 \
             AUG130_REAL_PYTHON="$real_python" \
             PATH="$skiparms_dir:$PATH" "$@" \
-            timeout 900 bash "$GATE" 2>&1)"
+            timeout 900 bash "$INNER_GATE" 2>&1)"
   status=$?
   set -e
   printf '%s\n' "$output"
@@ -441,6 +446,7 @@ set -e
 }
 assert_contains "$strict_out" "GATE FAIL: required arms did not run"
 assert_contains "$strict_out" "pytest"
+assert_contains "$strict_out" "gate pytest interpreter: $skiparms_dir/python3"
 [[ "$strict_out" != *"GATE PASS"* ]] || {
   printf 'AUG-130: gate printed GATE PASS while a required arm was skipped:\n%s\n' "$strict_out" >&2
   exit 1
@@ -462,3 +468,21 @@ assert_contains "$degraded_out" "required arms NOT run: pytest"
 assert_contains "$degraded_out" "NOT proof the suite ran"
 
 printf 'AUG-130 skipped-arm policy: PASS\n'
+
+# Local Python wins over the broken ambient candidate and actually runs pytest.
+mkdir -p "$skiparms_dir/repo/.venv/bin"
+cat >"$skiparms_dir/repo/.venv/bin/python" <<'SHIM'
+#!/usr/bin/env bash
+if [ "${1:-}" = "-m" ] && [ "${2:-}" = "pytest" ]; then
+  printf 'invoked\n' > "$AUG189_MARKER"
+  exit 0
+fi
+exec "$AUG130_REAL_PYTHON" "$@"
+SHIM
+chmod +x "$skiparms_dir/repo/.venv/bin/python"
+ln -s python "$skiparms_dir/repo/.venv/bin/python3"
+export AUG189_MARKER="$skiparms_dir/pytest-invoked"
+selection_out="$(run_inner_gate AUGER_ALLOW_SKIPPED_ARMS=1)"
+assert_contains "$selection_out" "gate pytest interpreter: $skiparms_dir/repo/.venv/bin/python"
+[[ -s "$AUG189_MARKER" ]] || { printf 'local interpreter never ran pytest\n' >&2; exit 1; }
+printf 'AUG-189 interpreter selection: PASS\n'
