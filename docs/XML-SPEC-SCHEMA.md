@@ -65,14 +65,17 @@ ch:trace row=AUG-129 spec=docs/XML-SPEC-SCHEMA.md#installed-layout test=tests/te
 Example migration obligation — the shape `spec validate` and `spec check` both read (one loader reads
 the root and the blocks for both). The paths below are illustrative: a corpus is only valid if they
 exist in the repository and are tracked in git, and `tests/fixtures/xml/verification/migration.xml` is
-the same shape with paths that resolve.
+the same shape with paths that resolve. The spec `id` must also satisfy the grammar's
+`[A-Z][A-Z0-9]*(-[A-Z0-9]+)+` facet, so a bare `EXAMPLE` is refused (`spec error (schema-invalid)`).
+
+The `verifies` edge is declared on ONE side of a pair: here the requirement names its obligation (`verifies="TEST-MIG-1"`). Naming the requirement from the verification is equally valid, but declaring both for the same pair is a cycle, refused as `spec error (reference-cycle): REQ-MIG-1 -> TEST-MIG-1 -> REQ-MIG-1` (rc 2). `tests/test_xml_specs.py::test_the_documented_migration_example_validates` extracts the block below and validates it with these illustrative paths substituted for paths that resolve here, so the worked example cannot drift back to a shape the loader refuses.
 
 ```xml
-<spec xmlns="urn:auger:spec:1" id="EXAMPLE" version="1.0.0" schema-version="1.0">
+<spec xmlns="urn:auger:spec:1" id="EXAMPLE-MIGRATION" version="1.0.0" schema-version="1.0">
   <requirement id="REQ-MIG-1" kind="requirement" status="active" version="1.0.0"
                verification="test" verifies="TEST-MIG-1">Add a marker row.</requirement>
   <verification id="TEST-MIG-1" kind="verification" status="active" version="1.0.0"
-      method="test" verifies="REQ-MIG-1"
+      method="test"
       runner="pytest" path="tests/test_migrations.py"
       selector="test_marker_migration"
       migration="migrations/001_marker.sql"

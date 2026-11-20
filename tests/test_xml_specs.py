@@ -33,6 +33,7 @@ import contextlib
 import hashlib
 import io
 import os
+import re
 import sqlite3
 import json
 import subprocess
@@ -1472,3 +1473,101 @@ def test_a_symlinked_directory_resolving_outside_the_root_is_refused(
     assert code == 0, (out, err)
     assert "matched: 0" in out, out
     assert sentinel not in out and sentinel not in err
+
+
+# ------------------------------------------------- AUG-151: the DOCUMENTED example must validate
+# docs/XML-SPEC-SCHEMA.md is where an author copies a spec from, so its worked migration example is
+# load-bearing. It declared `verifies` on BOTH sides of the requirement/verification pair, which the
+# loader refuses as a reference cycle: following the documentation produced a refusal with no hint
+# that the documentation caused it. The example is one-directional now (the requirement names its
+# obligation), and these tests EXTRACT the fenced block out of the document — never a copy of it —
+# so the doc cannot drift back to a shape the loader refuses.
+#
+# Choice stated for the record (AUG-151): extraction WITH path substitution. The document's paths are
+# deliberately illustrative, so the test rewrites exactly those four literals to paths that resolve in
+# this repository and then demands a clean validate; a doc edit that renames them fails here by name
+# instead of surfacing as a puzzling unresolved-path refusal.
+SCHEMA_DOC = REPO_ROOT / "docs" / "XML-SPEC-SCHEMA.md"
+
+DOCUMENTED_PATHS = {
+    'path="tests/test_migrations.py"': 'path="tests/test_xml_specs.py"',
+    'selector="test_marker_migration"': (
+        'selector="test_migration_obligation_applies_named_file_and_detects_noop"'
+    ),
+    'migration="migrations/001_marker.sql"': (
+        'migration="tests/fixtures/xml/verification/migrations/001_add_marker.sql"'
+    ),
+    'fixture="tests/fixtures/prior_schema.sql"': (
+        'fixture="tests/fixtures/xml/verification/prior_schema.sql"'
+    ),
+}
+
+QUOTED_REFUSAL = re.compile(r"spec error \(reference-cycle\): [^`\n]+")
+
+
+def documented_migration_example() -> str:
+    """The one fenced ```xml block in docs/XML-SPEC-SCHEMA.md that carries REQ-MIG-1."""
+    blocks = re.findall(
+        r"```xml[ \t]*\n(.*?)```", SCHEMA_DOC.read_text(encoding="utf-8"), re.S
+    )
+    matches = [block for block in blocks if 'id="REQ-MIG-1"' in block]
+    assert len(matches) == 1, (
+        "docs/XML-SPEC-SCHEMA.md must hold exactly one worked migration example (a ```xml block "
+        f"with REQ-MIG-1); found {len(matches)}"
+    )
+    return matches[0]
+
+
+def resolving_example() -> str:
+    """The documented example with its illustrative paths swapped for paths that resolve here."""
+    example = documented_migration_example()
+    absent = [literal for literal in DOCUMENTED_PATHS if literal not in example]
+    assert not absent, (
+        "the documented example no longer names the illustrative paths this test substitutes: "
+        f"{absent!r} — update DOCUMENTED_PATHS together with the document"
+    )
+    for literal, real in DOCUMENTED_PATHS.items():
+        example = example.replace(literal, real)
+    return example
+
+
+def test_the_documented_migration_example_validates(tmp_path: Path) -> None:
+    """AUG-151 PASS: the worked example, path-substituted, is a document `spec validate` accepts."""
+    corpus = write_document_corpus(
+        tmp_path / "documented", "example.xml", resolving_example()
+    )
+    code, out, err = run_spec("validate", str(corpus), "--repo-root", str(REPO_ROOT))
+    assert code == 0, (
+        "the worked example in docs/XML-SPEC-SCHEMA.md is refused by the loader — an author who "
+        f"copies it gets:\n{err}"
+    )
+    assert err == "", err
+    assert out.strip() == "spec: 1 document(s), 2 block(s), 1 reference(s) ok", out
+
+
+def test_a_mutual_verifies_pair_is_the_refusal_the_document_quotes(tmp_path: Path) -> None:
+    """AUG-151 PASS: the doc states the one-side rule and quotes the loader's REAL refusal text."""
+    doc = SCHEMA_DOC.read_text(encoding="utf-8")
+    assert "declared on ONE side" in doc, (
+        "docs/XML-SPEC-SCHEMA.md no longer states that `verifies` is declared on one side only"
+    )
+    quoted = QUOTED_REFUSAL.findall(doc)
+    assert len(quoted) == 1, (
+        "docs/XML-SPEC-SCHEMA.md must quote the loader's refusal for a mutual pair exactly once; "
+        f"found {quoted!r}"
+    )
+
+    # Add the missing half of the pair to the documented example: same document, one attribute.
+    example = resolving_example()
+    mutual = example.replace('method="test"', 'method="test" verifies="REQ-MIG-1"', 1)
+    assert mutual != example, (
+        "could not build the mutual variant: the documented verification no longer carries "
+        'method="test"'
+    )
+    corpus = write_document_corpus(tmp_path / "mutual", "example.xml", mutual)
+    code, out, err = run_spec("validate", str(corpus), "--repo-root", str(REPO_ROOT))
+    assert code == 2, (out, err)
+    assert out == "", out
+    assert quoted[0] in err, (
+        f"the document quotes {quoted[0]!r} but the loader now emits {err!r}"
+    )
