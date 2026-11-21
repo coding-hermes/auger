@@ -15,9 +15,8 @@ XML source model, the selector/assembler, and the refusal contract.
 
 Slice 2 (typed verification/test obligations, `AUG-123`) landed on top of this model and is
 documented separately in `docs/XML-SPEC-SCHEMA.md` — read that for `&lt;test&gt;` nodes, runner
-selectors and migration obligations. Task packets, one-pass context retrieval and the staged-diff
-checker are still **not built**: for requirement-by-requirement implementation status (and which
-test proves each one), use `docs/XML-SPEC-COVERAGE.md` rather than this design record.
+selectors and migration obligations. For requirement-by-requirement implementation status and
+the tests that prove it, use `docs/XML-SPEC-COVERAGE.md` alongside this design record.
   </section>
   <!-- source: docs/SPEC-003-xml-specs.md#rationale -->
   <section id="AD-SPEC-003-XML-SPECS-RATIONALE-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
@@ -139,8 +138,76 @@ verdict, commit) belongs to later slices (`AUG-123`, `AUG-124`).
 `auger spec list &lt;root&gt;` prints the same metadata without assembling, so an author can inspect
 the corpus (`id`, `kind`, `status`, `version`, citation, scopes) before selecting.
   </section>
+  <!-- source: docs/SPEC-003-xml-specs.md#cli-commands-and-exit-codes -->
+  <section id="AD-SPEC-003-XML-SPECS-CLI-COMMANDS-AND-EXIT-CODES-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+## CLI commands and exit codes
+
+The following examples use the repository's `specs` corpus. Run `python3 auger.py spec VERB
+--help` for the options for each verb. Exit codes below describe the indicated operation; argument
+parsing errors also exit 2.
+  </section>
+  <!-- source: docs/SPEC-003-xml-specs.md#validate -->
+  <section id="AD-SPEC-003-XML-SPECS-VALIDATE-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+### Validate
+
+`auger spec validate specs` validates the corpus and prints document, block and reference counts.
+Exit 0 means validation succeeded; exit 2 means a typed refusal, such as an invalid corpus or a
+missing repository root.
+  </section>
+  <!-- source: docs/SPEC-003-xml-specs.md#check -->
+  <section id="AD-SPEC-003-XML-SPECS-CHECK-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+### Check
+
+`auger spec check specs` checks the corpus including its verification obligations and emits a JSON
+verdict. Exit 0 means valid; exit 2 means a typed refusal. With diff-checker options, `check`
+also exposes the staged-diff alignment protocol described below.
+  </section>
+  <!-- source: docs/SPEC-003-xml-specs.md#bundle -->
+  <section id="AD-SPEC-003-XML-SPECS-BUNDLE-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+### Bundle
+
+`auger spec bundle specs SPEC-GRAPH-CORPUS` emits the requirement's verification obligations as
+JSON. Exit 0 means the bundle was emitted (including a valid empty bundle); exit 2 means a typed
+refusal, including an unknown requirement.
+  </section>
+  <!-- source: docs/SPEC-003-xml-specs.md#align -->
+  <section id="AD-SPEC-003-XML-SPECS-ALIGN-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+### Align
+
+`git diff --cached | auger spec align --repo-root . --spec-root specs --diff-stdin` checks the
+diff against the corpus and emits one JSON line. Exit 0 means pass or advisory warn; exit 1 means
+the alignment verdict is fail; exit 2 means a typed refusal, such as an invalid corpus or protocol.
+An empty diff is a passing empty scope, not evidence that changed files were checked.
+  </section>
+  <!-- source: docs/SPEC-003-xml-specs.md#list -->
+  <section id="AD-SPEC-003-XML-SPECS-LIST-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+### List
+
+`auger spec list specs` lists the whole corpus; selectors narrow it. Exit 0 means the list was
+produced, including an empty no-match result (with a note on stderr); exit 2 means a typed refusal.
+  </section>
+  <!-- source: docs/SPEC-003-xml-specs.md#assemble -->
+  <section id="AD-SPEC-003-XML-SPECS-ASSEMBLE-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+### Assemble
+
+`auger spec assemble specs --kind requirement --format json --measure` emits selected blocks and
+their dependency closure. Exit 0 means the assembly was emitted, including an empty no-match
+selection with a note on stderr; exit 2 means a typed refusal, including no selector. `--measure`
+is opt-in and JSON-only: it adds a measured report with `report_schema_version` `1.1`, byte and
+block counts, and elapsed time. Without it the measured report is absent, preserving the default
+byte-reproducible document.
+  </section>
+  <!-- source: docs/SPEC-003-xml-specs.md#render -->
+  <section id="AD-SPEC-003-XML-SPECS-RENDER-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+### Render
+
+`auger spec render specs --out /path/to/existing/output` writes both `SPEC-CORPUS-VIEW.md` and
+`SPEC-CORPUS-VIEW.html` into an existing directory outside the corpus root. Exit 0 means both views
+were written; exit 2 means a typed refusal, including `render-into-corpus` when `--out` is inside
+the corpus root. Create the output directory outside the corpus before running the example.
+  </section>
   <!-- source: docs/SPEC-003-xml-specs.md#includes-versus-references -->
-  <section id="AD-SPEC-003-XML-SPECS-INCLUDES-VERSUS-REFERENCES-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+  <section id="AD-SPEC-003-XML-SPECS-INCLUDES-VERSUS-REFERENCES-S012" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
 ### Includes versus references
 
 Both cross-document mechanisms exist, and they are different tools:
@@ -160,11 +227,12 @@ is refused before any element is built (`external-entity-forbidden`), which also
 billion-laughs or entity-substitution surface.
   </section>
   <!-- source: docs/SPEC-003-xml-specs.md#refusal-contract -->
-  <section id="AD-SPEC-003-XML-SPECS-REFUSAL-CONTRACT-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+  <section id="AD-SPEC-003-XML-SPECS-REFUSAL-CONTRACT-S013" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
 ## Refusal contract
 
-Every failure is a typed `SpecError(code, detail)`; the CLI prints
-`spec error (&lt;code&gt;): &lt;detail&gt;` to **stderr** and exits **2**. Nothing is written to stdout, and
+For typed corpus refusals the CLI prints `spec error (&lt;code&gt;): &lt;detail&gt;` to **stderr** and exits
+**2**. Alignment findings can instead produce a JSON verdict and exit 1 (see above). For a typed
+refusal, no result document is written to stdout, and
 `--out` is created only after the whole corpus has validated and the document has rendered (a
 sibling temp file plus `os.replace`, so even an I/O failure cannot leave a truncated document).
 
@@ -186,14 +254,14 @@ sibling temp file plus `os.replace`, so even an I/O failure cannot leave a trunc
 | `unresolved-reference`, `invalid-reference-type` | an edge naming a missing block, or `verifies` naming a non-`requirement` |
 | `reference-cycle` | a cycle over the typed reference graph (including a self-reference) |
 | `invalid-include`, `unresolved-include`, `remote-reference-rejected`, `include-outside-root`, `duplicate-include`, `include-cycle`, `unknown-element` | include instruction and traversal failures |
-| `empty-selector`, `no-match` | assembly without a selector, or a selector that matches nothing |
+| `empty-selector` | assembly without a selector; a no-match selection instead exits 0 with a note |
 | `unsupported-format` | a format other than `markdown`/`json` (also refused by argparse choices) |
 
 Cycles are refused at validation time, not discovered during assembly, so a cyclic corpus can
 never produce a partial bundle.
   </section>
   <!-- source: docs/SPEC-003-xml-specs.md#alternatives-considered -->
-  <section id="AD-SPEC-003-XML-SPECS-ALTERNATIVES-CONSIDERED-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+  <section id="AD-SPEC-003-XML-SPECS-ALTERNATIVES-CONSIDERED-S014" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
 ## Alternatives considered
 
 1. **XSD validation via `lxml` versus a stdlib strict validator (chosen: BOTH — the XSD as the
@@ -237,7 +305,7 @@ never produce a partial bundle.
    reuse belongs to ID references, and the refusal message says so.
   </section>
   <!-- source: docs/SPEC-003-xml-specs.md#verification -->
-  <section id="AD-SPEC-003-XML-SPECS-VERIFICATION-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+  <section id="AD-SPEC-003-XML-SPECS-VERIFICATION-S015" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
 ## Verification
 
 | Acceptance criterion | Proof |
@@ -269,7 +337,7 @@ python3 -m pytest tests/test_xml_specs.py -q
 ```
   </section>
   <!-- source: docs/SPEC-003-xml-specs.md#ch-trace -->
-  <section id="AD-SPEC-003-XML-SPECS-CH-TRACE-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
+  <section id="AD-SPEC-003-XML-SPECS-CH-TRACE-S016" kind="section" status="active" version="1.0.0" applies-to="ingest.auger-docs">
 ## ch&#58;trace
 
 `ch&#58;trace row=AUG-118 spec=docs/SPEC-003-xml-specs.md#assembly-and-selection test=tests/test_xml_specs.py doc=docs/SPEC-003-xml-specs.md evidence=tests/fixtures/xml/expected wave=none:no-wave-single-worker prompt=none:worker-brief-issued-out-of-band witness=none:self-verified verdict=none:not-judged commit=none:this-commit memory=/project/auger/spec/xml-spec-graph-2026-10-30`
