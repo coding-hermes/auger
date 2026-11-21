@@ -1,0 +1,929 @@
+commit f10ca2957240c1d4cd1eb11ccde064279ceadc30
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Sat Nov 21 11:14:13 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Sat Nov 21 11:30:53 2026 -0500
+
+    feat(board): refuse board shrink on the commit path (AUG-194)
+    
+    Commit 45a29b9 (a lane close-out) rewrote .coding-hermes/board/tasks.jsonl
+    from 297 rows to 2 and the commit path waved it through: boardctl validate
+    grades a short board as VALID, so only a row-count comparison against HEAD
+    can see row loss.
+    
+    - scripts/board_shrink_check.py: stdlib checker comparing the staged board
+      against HEAD:<board>; refuses a shrink, names both counts and the lost
+      ids, honours BOARD_ALLOW_SHRINK=1 as a loud override, fails closed (naming
+      --deepen) when the baseline blob is unreadable. Header states the honest
+      limit: a same-count wholesale replacement is not detected.
+    - scripts/install_board_guard.py: installs the checker as a marked managed
+      block in .git/hooks/pre-commit, mirroring the boardctl block convention.
+    - .github/workflows/ci.yml: --recent check on the checked-out commit plus a
+      pytest step for the new suite.
+    - tests/test_board_shrink_check.py: 19 tests, incl. the 45a29b9 replay.
+    - tests/gate.sh: pytest arm covers the new suite.
+    
+    AC4: the writer behind 45a29b9 lives outside this repo, so the deliverable
+    is the quarantine (the rewrite can no longer land without the override),
+    documented in the checker header and proven by the replay test.
+    
+    Co-authored-by: Alexis Okuwa <wojonstech@gmail.com>
+---
+ .github/workflows/ci.yml         |  15 ++
+ scripts/board_shrink_check.py    | 217 +++++++++++++++++++
+ scripts/install_board_guard.py   | 154 +++++++++++++
+ tests/gate.sh                    |   2 +-
+ tests/test_board_shrink_check.py | 456 +++++++++++++++++++++++++++++++++++++++
+ 5 files changed, 843 insertions(+), 1 deletion(-)
+
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index 5a861a0..f1038f8 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -58,6 +58,18 @@ jobs:
+           # faster — it turns a real proof into a CI-only red.
+           fetch-depth: 0
+ 
++      # AUG-194: the board is a JSONL row store, and a commit that DROPS rows from it is
++      # invisible to `boardctl validate` (a short board is a VALID board). Commit 45a29b9 kept
++      # 2 of 297 rows that way. This step compares the checked-out commit against its parent
++      # with the same checker the repo's pre-commit hook runs, so a wholesale rewrite cannot
++      # land: `--recent` grades HEAD:<board> against HEAD^:<board>, which is why the checkout
++      # above must carry the parent commit. fetch-depth: 0 (full history) satisfies that need
++      # and is kept for the trace battery below — depth 2 would also do, but 0 is what the
++      # battery needs, so 0 is what stays. A deliberate prune is still legal and loud:
++      # BOARD_ALLOW_SHRINK=1 turns the refusal into a printed notice.
++      - name: reject board shrink in the checked-out commit (AUG-194)
++        run: python3 scripts/board_shrink_check.py --recent
++
+       - name: set up python 3.11
+         uses: actions/setup-python@v5
+         with:
+@@ -133,6 +145,9 @@ jobs:
+           # default PATH lacks the install dir.
+           "${DEST}/boardctl" version
+ 
++      - name: test board shrink guard
++        run: python3 -m pytest -q tests/test_board_shrink_check.py
++
+       - name: run the gate (tests/gate.sh)
+         run: bash tests/gate.sh
+ 
+diff --git a/scripts/board_shrink_check.py b/scripts/board_shrink_check.py
+new file mode 100644
+index 0000000..c5b0059
+--- /dev/null
++++ b/scripts/board_shrink_check.py
+@@ -0,0 +1,217 @@
++#!/usr/bin/env python3
++"""Refuse a commit that DROPS task rows from the JSONL board (AUG-194).
++
++Commit 45a29b9 (a lane close-out) rewrote .coding-hermes/board/tasks.jsonl from 297 rows to 2 —
++the two survivors were exactly the rows that commit closed. 295 rows went invisible for about
++three minutes (261 complete, 28 pending, 2 blocked, 4 legacy "done"). The pre-commit gate did not
++catch it because `boardctl validate` grades a 2-row board as VALID: a short board is a valid
++board. Only a ROW-COUNT comparison against a baseline blob can see row loss, and at HEAD nothing
++on the commit path made that comparison.
++
++Modes
++  staged (default)  `git show :<board>`            vs `git show HEAD:<board>`
++                    the stage-0 INDEX blob — byte for byte what the commit will contain.
++  --recent          `git show HEAD:<board>`        vs `git show HEAD^:<board>`
++                    post-commit mode for CI, where nothing is staged.
++
++Row counting
++  One JSON object per line; blank lines are ignored. A line that does not parse — invalid JSON, a
++  non-object, or no string `id` — is a PARSE FAILURE: counted and reported separately, never
++  folded into the row count, so a torn line can never masquerade as a shrink and a shrink can
++  never hide behind one. Rows are counted, not deduplicated.
++
++Refusals (exit 1)
++  * candidate rows < baseline rows — the commit would lose rows; the message prints BOTH counts
++    and the ids that disappeared.
++  * a parse failure on either side — the counts cannot be trusted.
++  * the baseline cannot be resolved or read — FAIL CLOSED, naming `git fetch --deepen=1`: a
++    shallow clone that cannot see the parent commit must deepen, never pass a gate it did not run.
++
++Override
++  BOARD_ALLOW_SHRINK=1|true|yes turns the refusal into an explicit NOTICE that still prints both
++  counts and every lost id and exits 0. A deliberate prune is reviewable precisely because it has
++  to say so out loud.
++
++HONEST LIMIT — this is the contract, not a to-do list
++  A SAME-COUNT wholesale replacement is NOT detected. Replace all 297 rows with 297 different rows
++  and this check compares equal, because the only invariant evaluated here is the row COUNT. A
++  same-count rewrite has to be caught by reading the diff. What this check exists to stop is the
++  failure that actually happened (297 rows became 2) and that no other gate could see.
++
++AC4 — the truncating writer
++  The writer behind 45a29b9 lives OUTSIDE this repository and is not any tracked fleet helper, so
++  it cannot be patched here; it was an ad-hoc lane-session close snippet that persisted its own
++  two-row set over the whole file. Evidence: every writer in this repo and in
++  ~/.hermes/skills/coding-hermes-foreman/scripts/ that opens tasks.jsonl either writes LINE-WISE
++  (scripts that only touch the matching line) or rewrites the WHOLE loaded row list
++  (append_board_task_dispatched.py, update_board_task_notes.py, close_tick_jsonl_board.py), and
++  `grep -rn 'tasks.jsonl' --include='*.py' --include='*.sh' .` finds no writer here that persists
++  a filtered subset. What the incident needed is therefore a quarantine, not a patch: a wholesale
++  rewrite can no longer LAND without BOARD_ALLOW_SHRINK, wherever it comes from.
++
++Usage
++  python3 scripts/board_shrink_check.py          # staged index vs HEAD (pre-commit hook)
++  python3 scripts/board_shrink_check.py --recent # HEAD vs HEAD^ (CI)
++  BOARD_ALLOW_SHRINK=1 git commit ...            # deliberate prune
++
++Exit codes: 0 append / unchanged count / explicit override; 1 shrink, parse failure, or an
++impossible comparison (fail closed).
++"""
++
++import argparse
++import json
++import os
++import subprocess
++import sys
++
++BOARD = ".coding-hermes/board/tasks.jsonl"
++ALLOW_ENV = "BOARD_ALLOW_SHRINK"
++TRUTHY = ("1", "true", "yes")
++DEEPEN_HINT = "git fetch --deepen=1"
++
++
++def git(*args):
++    return subprocess.run(["git", *args], capture_output=True, text=True)
++
++
++def resolve(revision):
++    """Full sha for `revision` when it names a commit, else None."""
++    result = git("rev-parse", "--verify", "--quiet", f"{revision}^{{commit}}")
++    return result.stdout.strip() if result.returncode == 0 else None
++
++
++def having_commits():
++    return resolve("HEAD") is not None
++
++
++def unmerged(path):
++    return bool(git("ls-files", "-u", "--", path).stdout.strip())
++
++
++def read_blob(revision, path):
++    """Text of `<revision>:<path>`, where revision "" means the staged index.
++
++    Returns "" when the board is simply absent at that revision (it is being added or deleted) —
++    an absent board has 0 rows, it is not an error. Raises ValueError only when the blob cannot
++    be READ, which is the fail-closed case.
++    """
++    if revision:
++        if resolve(revision) is None:
++            if revision == "HEAD" and not having_commits():
++                # A repository's first commit has no baseline to shrink from.
++                return ""
++            raise ValueError(
++                f"cannot resolve {revision}:{path}; the row count has no baseline to compare "
++                f"against (a shallow clone must run {DEEPEN_HINT} and re-run — this check must "
++                f"not pass blind)"
++            )
++    result = git("show", f"{revision}:{path}")
++    if result.returncode == 0:
++        return result.stdout
++    if unmerged(path):
++        raise ValueError(
++            f"{path} is unmerged in the index; resolve the conflict before committing"
++        )
++    return ""
++
++
++def rows(text, label):
++    ids = set()
++    count = errors = 0
++    for number, line in enumerate(text.splitlines(), 1):
++        if not line.strip():
++            continue
++        try:
++            row = json.loads(line)
++            if not isinstance(row, dict):
++                raise ValueError("not a JSON object")
++            ident = row.get("id")
++            if not isinstance(ident, str) or not ident:
++                raise ValueError("missing string id")
++        except (ValueError, TypeError) as exc:
++            print(
++                f"board-shrink: {label} line {number}: invalid task row: {exc}",
++                file=sys.stderr,
++            )
++            errors += 1
++            continue
++        count += 1
++        ids.add(ident)
++    return count, ids, errors
++
++
++def summary(old, new, lost):
++    return (
++        f"baseline={old} candidate={new} "
++        f"lost ids={', '.join(lost) if lost else '(none)'}"
++    )
++
++
++def main():
++    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
++    parser.add_argument(
++        "--recent",
++        action="store_true",
++        help="compare HEAD^ to HEAD (CI, nothing staged)",
++    )
++    parser.add_argument("--path", default=BOARD, help=f"board path (default: {BOARD})")
++    args = parser.parse_args()
++    path = args.path
++
++    try:
++        old = rows(read_blob("HEAD^" if args.recent else "HEAD", path), "baseline")
++        new = rows(read_blob("HEAD" if args.recent else "", path), "candidate")
++    except (ValueError, OSError) as exc:
++        print(f"board-shrink: {exc}", file=sys.stderr)
++        return 1
++
++    lost = sorted(old[1] - new[1])
++    report = summary(old[0], new[0], lost)
++
++    if old[2] or new[2]:
++        print(
++            f"board-shrink: parse failures baseline={old[2]} candidate={new[2]}; "
++            f"fix invalid rows ({report})",
++            file=sys.stderr,
++        )
++        return 1
++
++    if new[0] < old[0]:
++        override = os.environ.get(ALLOW_ENV, "").strip().lower()
++        if override in TRUTHY:
++            print(f"board-shrink: NOTICE {ALLOW_ENV} override: {report}")
++            print(
++                f"board-shrink: SHRINK ACCEPTED — {old[0] - new[0]} task row(s) dropped "
++                f"({old[0]} -> {new[0]}); the ids above are gone from the board."
++            )
++            return 0
++        print(f"board-shrink: REFUSED {report}", file=sys.stderr)
++        print(
++            f"board-shrink: the commit would drop {old[0] - new[0]} task row(s) "
++            f"({old[0]} -> {new[0]}); {BOARD} must be updated in place (append, or rewrite only "
++            f"the changed lines) — never replaced with a filtered row set.",
++            file=sys.stderr,
++        )
++        if lost:
++            print(
++                f"board-shrink: lost ids ({len(lost)}): {', '.join(lost)}",
++                file=sys.stderr,
++            )
++        print(
++            f"board-shrink: deliberate prune? re-run with {ALLOW_ENV}=1 and say why.",
++            file=sys.stderr,
++        )
++        return 1
++
++    if new[0] > old[0]:
++        print(f"board-shrink: OK {report} — {new[0] - old[0]} row(s) appended")
++    else:
++        print(
++            f"board-shrink: OK {report} — row count unchanged (a same-count wholesale "
++            f"replacement is NOT detected; read the diff)"
++        )
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/scripts/install_board_guard.py b/scripts/install_board_guard.py
+new file mode 100644
+index 0000000..4561284
+--- /dev/null
++++ b/scripts/install_board_guard.py
+@@ -0,0 +1,154 @@
++#!/usr/bin/env python3
++"""Install the board shrink check into a repository's pre-commit hook (AUG-194).
++
++The hook installed here is the QUARANTINE for the bug behind commit 45a29b9: a lane close helper
++that persisted its own two row set over `.coding-hermes/board/tasks.jsonl`, dropping 295 of 297
++rows. `boardctl validate` cannot see that (a short board is a valid board), so the commit path
++itself has to refuse a row loss.
++
++What this installer guarantees
++  * the checker is only installed when it exists — an installer never leaves behind a hook that
++    fails every commit;
++  * only a MARKED block is replaced (`# >>> board-shrink managed block >>>` … `# <<< board-shrink
++    managed block <<<`), so every other block in the hook (boardctl's board-lint block, the
++    gitreins guard, local edits) survives untouched, and re-running is idempotent;
++  * the block is inserted after the shebang and is POSIX `sh`, so it works in a bash or sh hook;
++  * the block SKIPS the check when the commit does not touch the board (an unrelated commit must
++    not pay for it), and runs the checker — failing closed — as soon as the board is staged.
++
++Usage
++    python3 scripts/install_board_guard.py                    # this repository
++    python3 scripts/install_board_guard.py --repo /path/to/repo
++    python3 scripts/install_board_guard.py --print             # show the block, change nothing
++
++Exit codes: 0 installed (or printed); 1 refused (missing checker, malformed existing block).
++"""
++
++import argparse
++import os
++import subprocess
++import sys
++from pathlib import Path
++
++BEGIN = "# >>> board-shrink managed block >>>"
++END = "# <<< board-shrink managed block <<<"
++CHECKER = "scripts/board_shrink_check.py"
++
++BLOCK_TEMPLATE = """{begin}
++# AUG-194: a commit must never DROP task rows from the JSONL board. A short board is a VALID
++# board, so boardctl validate cannot see row loss — only a row-count comparison can. A deliberate
++# prune is legal and loud: BOARD_ALLOW_SHRINK=1.
++board_shrink_paths="$(git diff --cached --name-only -- .coding-hermes/board/tasks.jsonl)" || board_shrink_paths="__unreadable__"
++if [ "$board_shrink_paths" = "__unreadable__" ] || [ -n "$board_shrink_paths" ]; then
++\tpython3 "{checker}" || exit 1
++fi
++{end}
++"""
++
++
++def render_block(checker_spec):
++    """The managed block, pinned to the checker path as written in the hook."""
++    return BLOCK_TEMPLATE.format(begin=BEGIN, end=END, checker=checker_spec)
++
++
++def git(repo, *args):
++    return subprocess.run(
++        ["git", "-C", str(repo), *args], capture_output=True, text=True, check=False
++    )
++
++
++def main(argv=None):
++    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
++    parser.add_argument(
++        "--repo", default=".", help="repository to install into (default: .)"
++    )
++    parser.add_argument(
++        "--checker",
++        default=None,
++        help=f"checker path, absolute or repo-relative (default: <repo>/{CHECKER})",
++    )
++    parser.add_argument(
++        "--hooks-dir",
++        default=None,
++        help="hooks directory (default: `git rev-parse --git-path hooks`)",
++    )
++    parser.add_argument("--print", action="store_true", help="print the block and exit")
++    args = parser.parse_args(argv)
++
++    if args.print:
++        print(render_block(CHECKER), end="")
++        return 0
++
++    repo = Path(args.repo).expanduser().resolve()
++    if git(repo, "rev-parse", "--git-dir").returncode != 0:
++        print(f"board-shrink: {repo} is not a git repository", file=sys.stderr)
++        return 1
++
++    checker = Path(args.checker).expanduser() if args.checker else repo / CHECKER
++    if not checker.is_absolute():
++        checker = repo / checker
++    if not checker.is_file():
++        print(
++            f"board-shrink: refusing to install — checker not found at {checker}. "
++            f"Install from a tree that carries {CHECKER}.",
++            file=sys.stderr,
++        )
++        return 1
++
++    if args.hooks_dir:
++        hooks_dir = Path(args.hooks_dir).expanduser()
++        if not hooks_dir.is_absolute():
++            hooks_dir = repo / hooks_dir
++    else:
++        resolved = git(repo, "rev-parse", "--git-path", "hooks").stdout.strip()
++        if not resolved:
++            print("board-shrink: cannot resolve the hooks directory", file=sys.stderr)
++            return 1
++        hooks_dir = Path(resolved)
++        if not hooks_dir.is_absolute():
++            hooks_dir = repo / hooks_dir
++    hook = hooks_dir / "pre-commit"
++
++    hooks_dir.mkdir(parents=True, exist_ok=True)
++    content = hook.read_text() if hook.exists() else "#!/bin/sh\n"
++
++    if content.count(BEGIN) != content.count(END) or content.count(BEGIN) > 1:
++        print(
++            "board-shrink: malformed managed block in the pre-commit hook "
++            f"(BEGIN={content.count(BEGIN)} END={content.count(END)}); repair or remove it, "
++            "then re-run this installer",
++            file=sys.stderr,
++        )
++        return 1
++
++    if BEGIN in content:
++        start = content.index(BEGIN)
++        end = content.index(END, start) + len(END)
++        tail = content[end:]
++        if tail.startswith("\n") and content[:start].endswith("\n"):
++            tail = tail[1:]
++        content = content[:start] + tail
++
++    if not content.startswith("#!") or "\n" not in content:
++        print(
++            "board-shrink: the existing pre-commit hook needs a shebang line and a newline "
++            "after it; refusing to guess where to insert the block",
++            file=sys.stderr,
++        )
++        return 1
++
++    try:
++        spec = checker.relative_to(repo).as_posix()
++    except ValueError:
++        spec = str(checker)
++    block = render_block(spec)
++
++    first, rest = content.split("\n", 1)
++    hook.write_text(first + "\n" + block + rest)
++    os.chmod(hook, hook.stat().st_mode | 0o111)
++    print(f"board-shrink: installed {hook}")
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/tests/gate.sh b/tests/gate.sh
+index 53d5204..58a8d60 100755
+--- a/tests/gate.sh
++++ b/tests/gate.sh
+@@ -241,7 +241,7 @@ run_pytest_arm(){
+   # selection on the shipped corpus, and the four typed refusals (unknown-ref,
+   # not-a-repository, corpus-missing, git-unavailable) answer rc 2 on empty stdout.
+   # The run is read-only over specs/ and leaves no temp litter. Hermetic (~3s).
+-  setsid timeout --kill-after="$kill_after" "$budget" "$GATE_PYTHON" -m pytest tests/test_auger.py tests/test_openapi_parity.py tests/test_api_service.py tests/test_upgrade_path.py tests/test_xml_specs.py tests/test_verification_graph.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_spec_obligation_gate.py tests/test_spec_decision_ref.py tests/test_spec_rollback.py tests/test_spec_render.py tests/test_spec_assembly_report.py tests/test_trace_artifact.py tests/test_smoke_teardown.py tests/test_xsd_conformance.py tests/test_spec_repository_root.py tests/test_spec_alignment_check.py tests/test_spec_semantic_findings.py tests/test_spec_corpus_view.py tests/test_xml_task_contract.py tests/test_spec_context.py tests/test_plan_approval.py tests/test_task_context.py tests/test_task_packet.py tests/test_brief_spec_context.py tests/test_prd_proofs.py tests/test_usage_skill.py tests/test_packaging.py tests/test_packaging_wheel.py tests/test_teardown_resilience.py tests/test_board_evidence_audit.py tests/test_verdict_hygiene.py tests/test_executable_path_robustness.py tests/test_spec_as_of.py tests/test_ci_boardctl_install.py tests/test_spec_ingest.py "$@" || rc=$? # python3 -m pytest: source-inventory marker
++  setsid timeout --kill-after="$kill_after" "$budget" "$GATE_PYTHON" -m pytest tests/test_auger.py tests/test_openapi_parity.py tests/test_api_service.py tests/test_upgrade_path.py tests/test_xml_specs.py tests/test_verification_graph.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_spec_obligation_gate.py tests/test_spec_decision_ref.py tests/test_spec_rollback.py tests/test_spec_render.py tests/test_spec_assembly_report.py tests/test_trace_artifact.py tests/test_smoke_teardown.py tests/test_xsd_conformance.py tests/test_spec_repository_root.py tests/test_spec_alignment_check.py tests/test_spec_semantic_findings.py tests/test_spec_corpus_view.py tests/test_xml_task_contract.py tests/test_spec_context.py tests/test_plan_approval.py tests/test_task_context.py tests/test_task_packet.py tests/test_brief_spec_context.py tests/test_prd_proofs.py tests/test_usage_skill.py tests/test_packaging.py tests/test_packaging_wheel.py tests/test_teardown_resilience.py tests/test_board_evidence_audit.py tests/test_verdict_hygiene.py tests/test_executable_path_robustness.py tests/test_spec_as_of.py tests/test_ci_boardctl_install.py tests/test_board_shrink_check.py tests/test_spec_ingest.py "$@" || rc=$? # python3 -m pytest: source-inventory marker
+   if [ "$rc" -eq 124 ]; then
+     echo "GATE TIMEOUT: the pytest arm exceeded ${budget} and was killed as a process group (setsid+timeout, AUG-081) — investigate hung tests; failing the gate" >&2
+     exit 1
+diff --git a/tests/test_board_shrink_check.py b/tests/test_board_shrink_check.py
+new file mode 100644
+index 0000000..87df8ec
+--- /dev/null
++++ b/tests/test_board_shrink_check.py
+@@ -0,0 +1,456 @@
++"""AUG-194: the commit path must REFUSE a board shrink.
++
++Commit 45a29b9 rewrote ``.coding-hermes/board/tasks.jsonl`` from 297 rows to 2 — the two rows it
++had just closed. 295 rows vanished for ~3 minutes and nothing on the commit path noticed, because
++``boardctl validate`` grades a short board as VALID. Only a row-count comparison against a
++baseline blob can see row loss; ``scripts/board_shrink_check.py`` makes that comparison and
++``scripts/install_board_guard.py`` puts it in the pre-commit hook.
++
++Every arm here runs against a SCRATCH repository (its own ``git init``, its own
++``core.hooksPath``) — never against this worktree's commit path, and never against the shared
++``.git/hooks`` of the primary checkout:
++
++  AC1 shrink is refused ................ test_shrink_is_refused_and_the_commit_does_not_land
++                                        test_deleting_the_board_is_refused
++  AC2 legit traffic passes ............. test_append_and_same_count_edit_pass
++                                        test_adding_the_board_for_the_first_time_passes
++                                        test_same_count_replacement_is_the_documented_blind_spot
++  AC3 override is explicit ............. test_override_lands_and_still_names_counts_and_ids
++                                        test_override_does_not_excuse_a_parse_failure
++  AC4 quarantine + attribution ......... test_the_hook_only_checks_when_the_board_is_staged
++                                        test_the_real_297_row_board_rewrite_is_quarantined
++  AC5 boardctl still grades it ......... (verified out of band: `boardctl validate` on the real
++                                          board and on a scratch copy — see the AUG-194 report)
++  post-commit mode (CI) ................ test_recent_mode_compares_a_commit_to_its_parent
++  fail closed on a shallow clone ....... test_missing_parent_fails_closed_naming_the_deepen_hint
++  wiring, not decoration ............... test_the_gate_pytest_arm_names_this_file
++                                        test_the_real_workflow_runs_the_check
++                                        (plus four mutation legs on a copy of ci.yml)
++
++ch:trace row=AUG-194 spec=none:no-spec-block-covers-a-commit-path-guard test=tests/test_board_shrink_check.py evidence=none:board-declares-evidence-git-verdict verdict=none:not-judged commit=none:proof-is-this-file
++"""
++
++from __future__ import annotations
++
++import json
++import os
++import re
++import shutil
++import subprocess
++import sys
++from pathlib import Path
++
++import pytest
++import yaml
++
++ROOT = Path(__file__).resolve().parents[1]
++BOARD = Path(".coding-hermes/board/tasks.jsonl")
++CHECKER = Path("scripts/board_shrink_check.py")
++INSTALLER = Path("scripts/install_board_guard.py")
++GATE_SH = ROOT / "tests" / "gate.sh"
++CI_YML = ROOT / ".github" / "workflows" / "ci.yml"
++GATE_STEP_MARKER = "bash tests/gate.sh"
++SHRINK_STEP_MARKER = "scripts/board_shrink_check.py"
++
++# A scratch repository must not inherit this host's git identity, hooks, or safe.directory list:
++# every arm below would otherwise grade the machine instead of the change.
++BASE_ENV = {
++    "GIT_CONFIG_GLOBAL": os.devnull,
++    "GIT_CONFIG_SYSTEM": os.devnull,
++    "GIT_TERMINAL_PROMPT": "0",
++    "GIT_AUTHOR_NAME": "Test",
++    "GIT_AUTHOR_EMAIL": "test@example.invalid",
++    "GIT_COMMITTER_NAME": "Test",
++    "GIT_COMMITTER_EMAIL": "test@example.invalid",
++}
++
++
++def env(**extra):
++    clean = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
++    clean.update(BASE_ENV)
++    clean.update(extra)
++    return clean
++
++
++def run(repo, *args, env_extra=None):
++    return subprocess.run(
++        args,
++        cwd=repo,
++        text=True,
++        capture_output=True,
++        env=env(**(env_extra or {})),
++        timeout=120,
++    )
++
++
++def git(repo, *args, env_extra=None):
++    return run(repo, "git", *args, env_extra=env_extra)
++
++
++def write_board(repo, ids, extra=None):
++    board = repo / BOARD
++    board.parent.mkdir(parents=True, exist_ok=True)
++    lines = []
++    for ident in ids:
++        row = {"id": ident}
++        row.update(extra or {})
++        lines.append(json.dumps(row))
++    board.write_text("".join(line + "\n" for line in lines))
++
++
++def make_repo(tmp_path, ids=("A", "B", "C"), board=True, install=True):
++    """A scratch repository with the checker copied in and, optionally, the hook installed."""
++    repo = tmp_path / "repo"
++    repo.mkdir()
++    assert git(repo, "init", "-q").returncode == 0
++    (repo / "scripts").mkdir()
++    for name in (CHECKER, INSTALLER):
++        shutil.copy(ROOT / name, repo / name)
++    (repo / "README.md").write_text("scratch\n")
++    if board:
++        write_board(repo, ids)
++    assert git(repo, "add", ".").returncode == 0
++    assert git(repo, "commit", "-qm", "initial").returncode == 0
++    if install:
++        hooks = repo / "hooks"
++        assert git(repo, "config", "core.hooksPath", str(hooks)).returncode == 0
++        installed = run(repo, sys.executable, str(INSTALLER))
++        assert installed.returncode == 0, installed.stderr
++    return repo
++
++
++def stage_board(repo, ids, extra=None):
++    write_board(repo, ids, extra=extra)
++    assert git(repo, "add", str(BOARD)).returncode == 0
++
++
++def head(repo):
++    return git(repo, "rev-parse", "HEAD").stdout.strip()
++
++
++@pytest.fixture
++def repo(tmp_path):
++    return make_repo(tmp_path)
++
++
++@pytest.fixture
++def repo_without_hook(tmp_path):
++    return make_repo(tmp_path, install=False)
++
++
++# --------------------------------------------------------------------------- AC1: refuse a shrink
++
++
++def test_shrink_is_refused_and_the_commit_does_not_land(repo):
++    before = head(repo)
++    stage_board(repo, ("A",))
++    result = git(repo, "commit", "-m", "shrink")
++    assert result.returncode == 1, result.stdout + result.stderr
++    # BOTH counts, and the ids that disappeared.
++    assert "baseline=3 candidate=1 lost ids=B, C" in result.stderr
++    assert "REFUSED" in result.stderr
++    assert head(repo) == before
++
++
++def test_deleting_the_board_is_refused(repo):
++    before = head(repo)
++    assert git(repo, "rm", "-q", str(BOARD)).returncode == 0
++    result = git(repo, "commit", "-m", "delete the board")
++    assert result.returncode == 1, result.stdout + result.stderr
++    assert "baseline=3 candidate=0" in result.stderr
++    assert head(repo) == before
++
++
++# ------------------------------------------------------------------- AC2: legitimate traffic
++
++
++def test_append_and_same_count_edit_pass(repo):
++    stage_board(repo, ("A", "B", "C", "D"))
++    appended = git(repo, "commit", "-m", "append")
++    assert appended.returncode == 0, appended.stdout + appended.stderr
++    assert "OK" in appended.stdout or "OK" in appended.stderr
++
++    stage_board(repo, ("A", "B", "C", "D"), extra={"updated": True})
++    edited = git(repo, "commit", "-m", "edit one row in place")
++    assert edited.returncode == 0, edited.stdout + edited.stderr
++
++
++def test_adding_the_board_for_the_first_time_passes(tmp_path):
++    """A board that does not exist at the baseline has 0 rows — adding it is growth, not shrink."""
++    repo = make_repo(tmp_path, board=False)
++    stage_board(repo, ("A", "B"))
++    result = git(repo, "commit", "-m", "first board rows")
++    assert result.returncode == 0, result.stdout + result.stderr
++
++
++def test_same_count_replacement_is_the_documented_blind_spot(repo):
++    """The honest limit is stated in the header AND is really a limit — both are asserted."""
++    source = (ROOT / CHECKER).read_text(encoding="utf-8")
++    assert "SAME-COUNT wholesale replacement is NOT detected" in source, (
++        "the checker must state its blind spot plainly in its header comment"
++    )
++    stage_board(repo, ("X", "Y", "Z"))  # 3 different rows, same count
++    result = git(repo, "commit", "-m", "wholesale same-count replacement")
++    assert result.returncode == 0, result.stdout + result.stderr
++
++
++# ------------------------------------------------------------------------- AC3: explicit override
++
++
++def test_override_lands_and_still_names_counts_and_ids(repo):
++    stage_board(repo, ("A",))
++    result = git(
++        repo, "commit", "-m", "deliberate prune", env_extra={"BOARD_ALLOW_SHRINK": "1"}
++    )
++    assert result.returncode == 0, result.stdout + result.stderr
++    output = result.stdout + result.stderr
++    assert "NOTICE" in output
++    assert "baseline=3 candidate=1 lost ids=B, C" in output
++    rows = (repo / BOARD).read_text().splitlines()
++    assert [json.loads(line)["id"] for line in rows if line.strip()] == ["A"]
++
++
++def test_override_does_not_excuse_a_parse_failure(repo):
++    before = head(repo)
++    (repo / BOARD).write_text("{not json\n")
++    assert git(repo, "add", str(BOARD)).returncode == 0
++    result = git(
++        repo, "commit", "-m", "torn row", env_extra={"BOARD_ALLOW_SHRINK": "1"}
++    )
++    assert result.returncode == 1, result.stdout + result.stderr
++    assert "parse failures baseline=0 candidate=1" in result.stderr
++    assert head(repo) == before
++
++
++def test_missing_parent_fails_closed_naming_the_deepen_hint(repo):
++    """Shallow clone: nothing staged, no HEAD^ — the check must fail closed, never pass blind."""
++    result = run(repo, sys.executable, str(CHECKER), "--recent")
++    assert result.returncode == 1
++    assert "git fetch --deepen=1" in result.stderr
++
++
++# ------------------------------------------------------------------- AC4: quarantine, end to end
++
++
++def test_the_hook_only_checks_when_the_board_is_staged(tmp_path):
++    """The block is not decoration: it skips unrelated commits and blocks a board write."""
++    repo = make_repo(tmp_path, install=False)
++    stub = repo / "scripts" / "stub_checker.py"
++    marker = repo / "scripts" / "stub.ran"
++    stub.write_text(
++        "import pathlib, sys\n"
++        f"pathlib.Path({str(marker)!r}).write_text('ran')\n"
++        "sys.exit(1)\n"
++    )
++    installed = run(
++        repo, sys.executable, str(INSTALLER), "--checker", "scripts/stub_checker.py"
++    )
++    assert installed.returncode == 0, installed.stderr
++
++    (repo / "notes.txt").write_text("unrelated\n")
++    assert git(repo, "add", "notes.txt").returncode == 0
++    unrelated = git(repo, "commit", "-m", "unrelated change")
++    assert unrelated.returncode == 0, unrelated.stdout + unrelated.stderr
++    assert not marker.exists(), (
++        "the hook ran the checker for a commit that does not touch the board"
++    )
++
++    stage_board(repo, ("A", "B", "C", "D"))
++    blocked = git(repo, "commit", "-m", "board append")
++    assert blocked.returncode != 0
++    assert marker.exists(), "the hook did not run the checker for a staged board write"
++
++
++def test_the_real_297_row_board_rewrite_is_quarantined(repo):
++    """The incident, replayed: 45a29b9 kept 2 of 297 rows."""
++    board_text = (ROOT / BOARD).read_text(encoding="utf-8")
++    lines = [line for line in board_text.splitlines() if line.strip()]
++    assert len(lines) >= 297, (
++        f"the tracked board should hold ~298 rows, found {len(lines)}"
++    )
++
++    (repo / BOARD).write_text(board_text)
++    assert git(repo, "add", str(BOARD)).returncode == 0
++    assert git(repo, "commit", "-m", "real board").returncode == 0, (
++        "growing the board must pass"
++    )
++
++    before = head(repo)
++    (repo / BOARD).write_text("\n".join(lines[:2]) + "\n")
++    assert git(repo, "add", str(BOARD)).returncode == 0
++    result = git(repo, "commit", "-m", "45a29b9 replay")
++    assert result.returncode == 1, result.stdout + result.stderr
++    assert f"baseline={len(lines)} candidate=2" in result.stderr
++    assert head(repo) == before
++
++
++def test_recent_mode_compares_a_commit_to_its_parent(repo_without_hook):
++    """CI has nothing staged, so it grades HEAD against HEAD^. Both directions are proven."""
++    repo = repo_without_hook
++    stage_board(repo, ("A", "B", "C", "D"))
++    assert git(repo, "commit", "-qm", "append").returncode == 0
++    ok = run(repo, sys.executable, str(CHECKER), "--recent")
++    assert ok.returncode == 0, ok.stdout + ok.stderr
++    assert "baseline=3 candidate=4" in ok.stdout
++
++    stage_board(repo, ("A",))
++    assert (
++        git(
++            repo, "commit", "-qm", "shrink", env_extra={"BOARD_ALLOW_SHRINK": "1"}
++        ).returncode
++        == 0
++    )
++    refused = run(repo, sys.executable, str(CHECKER), "--recent")
++    assert refused.returncode == 1, refused.stdout + refused.stderr
++    assert "baseline=4 candidate=1" in refused.stderr
++
++
++def test_installer_is_idempotent_and_preserves_existing_hook(repo):
++    hook = repo / "hooks" / "pre-commit"
++    hook.write_text(hook.read_text() + "echo preserved\n")
++    for _ in range(2):
++        assert run(repo, sys.executable, str(INSTALLER)).returncode == 0
++    content = hook.read_text()
++    assert content.count("# >>> board-shrink managed block >>>") == 1
++    assert content.count("# <<< board-shrink managed block <<<") == 1
++    assert content.count("echo preserved") == 1
++    assert content.startswith("#!"), "the block must never displace the shebang"
++
++
++def test_installer_refuses_when_the_checker_is_missing(tmp_path):
++    repo = make_repo(tmp_path, install=False)
++    (repo / CHECKER).unlink()
++    result = run(repo, sys.executable, str(INSTALLER))
++    assert result.returncode == 1
++    assert "checker not found" in result.stderr.lower()
++    assert not (repo / "hooks" / "pre-commit").exists(), (
++        "a refused install must not leave a hook behind that fails every commit"
++    )
++
++
++# ---------------------------------------------------------------------------- wiring: CI + gate
++
++
++def test_the_gate_pytest_arm_names_this_file():
++    """A proof outside gate.sh's pytest arm is never executed by the gate or by CI."""
++    arm = [
++        line
++        for line in GATE_SH.read_text(encoding="utf-8").splitlines()
++        if "python3 -m pytest" in line
++    ]
++    assert arm, "tests/gate.sh must have a pytest arm"
++    assert "tests/test_board_shrink_check.py" in arm[0], (
++        "tests/test_board_shrink_check.py is not in the gate's pytest arm — AC1-AC4 would be "
++        "an unrun proof"
++    )
++    named = [token for token in arm[0].split() if token.startswith("tests/test_")]
++    missing = [name for name in named if not (ROOT / name).is_file()]
++    assert not missing, (
++        f"tests/gate.sh's pytest arm names files that do not exist: {missing}"
++    )
++
++
++def load_steps(path: Path) -> list[dict]:
++    data = yaml.safe_load(path.read_text(encoding="utf-8"))
++    steps = data["jobs"]["gate"]["steps"]
++    assert isinstance(steps, list) and steps, f"no steps found in {path}"
++    return steps
++
++
++def workflow_findings(path: Path) -> list[str]:
++    """Finding codes for one workflow file; empty means the shrink gate is wired and runnable."""
++    steps = load_steps(path)
++    findings: list[str] = []
++
++    gate_idx = next(
++        (i for i, s in enumerate(steps) if GATE_STEP_MARKER in (s.get("run") or "")),
++        None,
++    )
++    if gate_idx is None:
++        findings.append("missing-gate-step")
++        gate_idx = len(steps)
++
++    hits = [
++        (i, s)
++        for i, s in enumerate(steps)
++        if SHRINK_STEP_MARKER in (s.get("run") or "")
++    ]
++    if not hits:
++        findings.append("missing-shrink-step")
++    else:
++        if len(hits) > 1:
++            findings.append("duplicate-shrink-steps")
++        idx, step = hits[0]
++        text = step["run"] or ""
++        # CI has nothing staged: only the post-commit comparison can see a landed shrink.
++        if "--recent" not in text:
++            findings.append("not-post-commit-mode")
++        if idx >= gate_idx:
++            findings.append("shrink-step-after-gate")
++
++    # The post-commit comparison needs HEAD^; checkout must not be depth-1.
++    checkout = steps[0]
++    with_block = checkout.get("with") or {}
++    depth = with_block.get("fetch-depth")
++    if depth is None:
++        findings.append("checkout-default-depth")
++    elif not isinstance(depth, int) or (depth != 0 and depth < 2):
++        # 0 is git's "full history" — strictly more than the two commits the check needs.
++        findings.append("checkout-too-shallow")
++    return findings
++
++
++def mutated(tmp_path: Path, mutate) -> Path:
++    data = yaml.safe_load(CI_YML.read_text(encoding="utf-8"))
++    mutate(data["jobs"]["gate"]["steps"])
++    out = tmp_path / "ci-mutated.yml"
++    out.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
++    return out
++
++
++def shrink_step_index(steps):
++    return next(
++        i for i, s in enumerate(steps) if SHRINK_STEP_MARKER in (s.get("run") or "")
++    )
++
++
++def test_the_real_workflow_runs_the_check():
++    assert workflow_findings(CI_YML) == [], (
++        "ci.yml must run scripts/board_shrink_check.py --recent before the gate, from a "
++        "checkout that carries the parent commit"
++    )
++
++
++def test_the_checkout_keeps_the_parent_commit(tmp_path):
++    def too_shallow(steps):
++        steps[0].setdefault("with", {})["fetch-depth"] = 1
++
++    assert "checkout-too-shallow" in workflow_findings(mutated(tmp_path, too_shallow))
++
++
++def test_the_shrink_step_runs_before_the_gate(tmp_path):
++    def move_after_gate(steps):
++        step = steps.pop(shrink_step_index(steps))
++        gate_i = next(
++            i for i, s in enumerate(steps) if GATE_STEP_MARKER in (s.get("run") or "")
++        )
++        steps.insert(gate_i + 1, step)
++
++    assert "shrink-step-after-gate" in workflow_findings(
++        mutated(tmp_path, move_after_gate)
++    )
++
++
++def test_the_shrink_step_uses_post_commit_mode(tmp_path):
++    def drop_recent(steps):
++        step = steps[shrink_step_index(steps)]
++        step["run"] = re.sub(r"\s*--recent\b", "", step["run"])
++
++    assert "not-post-commit-mode" in workflow_findings(mutated(tmp_path, drop_recent))
++
++
++def test_removing_the_shrink_step_is_a_finding(tmp_path):
++    def drop_step(steps):
++        steps.pop(shrink_step_index(steps))
++
++    assert "missing-shrink-step" in workflow_findings(mutated(tmp_path, drop_step))

@@ -1,0 +1,497 @@
+{
+  "task_id": "AUG-194",
+  "task_title": "Board shrink check on the commit path (tasks.jsonl row-loss guard)",
+  "task_criteria": [
+    "AC1: commit refuses a board shrink (exit 1, both counts + lost ids, commit not landed). AC2: legitimate append/in-place edit passes. AC3: BOARD_ALLOW_SHRINK=1 override passes and still names counts+lost ids. AC4: the truncating lane close writer is fixed or quarantined so it never reduces rows. AC5: boardctl validate RESULT OK on repaired board and scratch copy."
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "f10ca2957240c1d4cd1eb11ccde064279ceadc30",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "ccd862861f19aab8a0f330755eaef641863bbc04223ceea9781dac4a694c3df7",
+  "working_tree_dirty_path_count": 676,
+  "items": [
+    {
+      "criterion": "AC1: commit refuses a board shrink (exit 1, both counts + lost ids, commit not landed). AC2: legitimate append/in-place edit passes. AC3: BOARD_ALLOW_SHRINK=1 override passes and still names counts+lost ids. AC4: the truncating lane close writer is fixed or quarantined so it never reduces rows. AC5: boardctl validate RESULT OK on repaired board and scratch copy.",
+      "status": "FAIL",
+      "detail": "AC1 PASS: scripts/board_shrink_check.py:170-186 prints 'REFUSED baseline=3 candidate=1 lost ids=B, C' and returns 1; proven live in a scratch repo (install hook, stage 3->1 row shrink, `git commit` exit=1, HEAD unchanged at 2cd742d) and by tests/test_board_shrink_check.py::test_shrink_is_refused_and_the_commit_does_not_land + test_deleting_the_board_is_refused. AC2 PASS: live replay \u2014 append commit exit=0 ('OK baseline=1 candidate=2 ... 1 row(s) appended'), same-count in-place edit exit=0; test_append_and_same_count_edit_pass. AC3 PASS: live replay \u2014 BOARD_ALLOW_SHRINK=1 commit exit=0 printing 'NOTICE BOARD_ALLOW_SHRINK override: baseline=3 candidate=1 lost ids=B, C' + 'SHRINK ACCEPTED \u2014 2 task row(s) dropped (3 -> 1)'; test_override_lands_and_still_names_counts_and_ids. AC5 PASS: `boardctl validate -C .` => 'RESULT: OK (439 warning(s))' exit=0 on the repaired board (298 rows, verified superset of the 297 rows restored by 9a9d987 \u2014 only AUG-194 added, none missing); scratch copy in mktemp dir => 'RESULT: OK (440 warning(s))' exit=0. Full new suite: `python3 -m pytest tests/test_board_shrink_check.py -q` => 19 passed in 8.03s. AC4 FAIL (the quarantine is not installed where the incident happened): the truncating writer was an ad-hoc lane-session snippet outside the repo (restore commit 9a9d987 message: hand-built key order, 'a lane-scoped close writer ... not a boardctl write'), so the fix arm is impossible here and the deliverable is the quarantine. I verified every tracked writer never reduces rows (board_row_closeout.py:104-132 line-wise byte-preserving; append_board_task_completed.py:163-182, update_board_task_notes.py:100-115, close_tick_jsonl_board.py:62-65 rewrite the full loaded row list; create_board_tasks.py:180 append-only). BUT the quarantine itself is only half-wired: `grep -n 'board-shrink' .git/hooks/pre-commit` exits 1 \u2014 the managed block was NEVER installed into this repository's own pre-commit hook, no core.hooksPath redirect exists, and nothing in the repo runs scripts/install_board_guard.py locally. On this checkout a repeat of the 45a29b9 truncation commits locally with zero refusal; only the CI step (ci.yml:71 `python3 scripts/board_shrink_check.py --recent`) catches it after push. A quarantine that exists as an opt-in installer nobody ran does not make the commit path refuse row loss on the machine where 295 rows were lost."
+    },
+    {
+      "criterion": "The guard is wired into the repo's own commit path: the pre-commit hook carries the managed block (or the checker is otherwise guaranteed to run on local commits), not merely shipped as an opt-in installer.",
+      "status": "FAIL",
+      "detail": "grep 'board-shrink' .git/hooks/pre-commit => exit=1 (absent); `git config core.hooksPath` empty; scripts/install_board_guard.py is never invoked by any in-repo automation (no Makefile target, no CI local-install step \u2014 CI runs the checker directly via --recent). The incident commit 45a29b9 was created on this host; today the same local commit path has no shrink check.",
+      "derived": true
+    },
+    {
+      "criterion": "The new test suite is wired into the repo's gate (tests/gate.sh pytest arm) and CI so the proof actually runs.",
+      "status": "PASS",
+      "detail": "tests/gate.sh:244 pytest arm names tests/test_board_shrink_check.py; ci.yml adds the --recent step before the gate step plus a pytest step; wiring tests test_the_gate_pytest_arm_names_this_file, test_the_real_workflow_runs_the_check and 4 ci.yml mutation legs all pass (19 passed in 8.03s).",
+      "derived": true
+    },
+    {
+      "criterion": "Fail-closed: an unreadable/missing baseline (shallow clone, unmerged board, torn row) exits 1 rather than passing blind.",
+      "status": "PASS",
+      "detail": "board_shrink_check.py:96-103 raises ValueError naming 'git fetch --deepen=1' when the baseline cannot be resolved; lines 108-111 refuse an unmerged board; lines 162-168 exit 1 on parse failures even with the override. Covered by test_missing_parent_fails_closed_naming_the_deepen_hint and test_override_does_not_excuse_a_parse_failure in the passing 19-test run.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "changes_required",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": false,
+      "any_failed": true,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2717 tests: FAIL (tests/test_auger.py::test_reseeding_the_grid_adds_no_second_copy [first failing id])",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nsecrets: gitleaks bound=timeout 600s (0=off)\nscanners: nice=nice -n 10\n11:31AM INF scanned ~10967913 bytes (10.97 MB) in 2.21s\n11:31AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 474 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": false,
+          "output": "scanners: nice=nice -n 10\ngate pytest interpreter: /home/kara/auger/.venv/bin/python\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n  SKIPPED [pytest-live]: cases needing the live DuckBrain/JEV APIs SKIP \u2014 reasons in the summary\n........................................................................ [  8%]\n........................................................................ [ 17%]\n........................................................................ [ 26%]\n............................................E.E.E....E.E.E.E.E.E.E.E.E.E [ 33%]\n.......E.E.E.E...............................s.......................... [ 41%]\n...........................s............................................ [ 50%]\n........................................................................ [ 58%]\n........................................................................ [ 67%]\n........................................................................ [ 76%]\n........................................................................ [ 84%]\n........................................................................ [ 93%]\n.......................................................                  [100%]\n==================================== ERRORS ====================================\n_ ERROR at teardown of test_feedback_live_proposes_gates_and_asks_a_real_question _\n\nlive_service = 'http://127.0.0.1:3000'\n\n    @pytest.fixture\n    def ns_created(live_service: str) -> str:\n        \"\"\"A fresh ephemeral namespace, removed in a finalizer even when the test fails.\n    \n        Depends on `live_service`, so the cross-process substrate lock is held for the whole\n        namespace lifecycle (create, test body, teardown) and the timeout headroom applies to\n        every call the fixture and the test make against the live substrate.\n        \"\"\"\n        ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]\n        status, body, _ = auger.db(\"/api/namespaces\", \"POST\", {\"name\": ns})\n        if status not in (200, 201):\n            pytest.fail(f\"could not create test namespace {ns} ({status}): {body}\")\n        CREATED.append(ns)\n        try:\n            yield ns\n        finally:\n            problems = teardown_namespace(ns)\n            if problems:\n                if any(\"429\" in p for p in problems):\n\n\u2026 [52813 chars omitted \u2014 744 line(s)] \u2026\n\u2026 [14 further FAILED/ERROR line(s) not hoisted] \u2026\nERROR tests/test_auger.py::test_reseeding_the_grid_adds_no_second_copy - Failed: teardown of auger-pytest-4b56a14b-aa933e9b0632 was incomplete: DELETE /api/namespaces/auger-pytest-4b56a14b-aa933e9b0632 returned 409: {'error': \"Push in flight for 'auger-pytest-4b56a14b-aa933e9b0632' (native sync lock held by pid 2418343 (since 2026-11-21T16:55:37.871Z)). Retry after it completes.\", 'code': 'CONFLICT'}; namespace auger-pytest-4b56a14b-aa933e9b0632 is still listed by /api/namespaces\nERROR tests/test_auger.py::test_the_grid_is_bound_to_the_project_that_already_exists - Failed: teardown of auger-pytest-4b56a14b-3b049e564821 was incomplete: DELETE /api/namespaces/auger-pytest-4b56a14b-3b049e564821 returned 409: {'error': \"Push in flight for 'auger-pytest-4b56a14b-3b049e564821' (native sync lock held by pid 2418343 (since 2026-11-21T16:58:02.150Z)). Retry after it completes.\", 'code': 'CONFLICT'}; namespace auger-pytest-4b56a14b-3b049e564821 is still listed by /api/namespaces\nERROR tests/test_auger.py::test_status_names_every_absent_grid_domain_when_no_row_is_stored - Failed: teardown of auger-pytest-4b56a14b-d0589d1a709b was incomplete: DELETE /api/namespaces/auger-pytest-4b56a14b-d0589d1a709b returned 409: {'error': \"Push in flight for 'auger-pytest-4b56a14b-d0589d1a709b' (native sync lock held by pid 2418343 (since 2026-11-21T16:59:05.751Z)). Retry after it completes.\", 'code': 'CONFLICT'}; namespace auger-pytest-4b56a14b-d0589d1a709b is still listed by /api/namespaces\n828 passed, 2 skipped, 17 errors in 1967.27s (0:32:47)\n",
+          "error": "",
+          "data": {
+            "exit_code": 1
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": false,
+      "any_failed": true,
+      "summary": "INCOMPLETE\n  \u2717 AC1: commit refuses a board shrink (exit 1, both counts + lost ids, commit not landed). AC2: legitimate append/in-place edit passes. AC3: BOARD_ALLOW_SHRINK=1 override passes and still names counts+lost ids. AC4: the truncating lane close writer is fixed or quarantined so it never reduces rows. AC5: boardctl validate RESULT OK on repaired board and scratch copy.: AC1 PASS: scripts/board_shrink_check.py:170-186 prints 'REFUSED baseline=3 candidate=1 lost ids=B, C' and returns 1; proven live in a scratch repo (install hook, stage 3->1 row shrink, `git commit` exit=1, HEAD unchanged at 2cd742d) and by tests/test_board_shrink_check.py::test_shrink_is_refused_and_the_commit_does_not_land + test_deleting_the_board_is_refused. AC2 PASS: live replay \u2014 append commit exit=0 ('OK baseline=1 candidate=2 ... 1 row(s) appended'), same-count in-place edit exit=0; test_append_and_same_count_edit_pass. AC3 PASS: live replay \u2014 BOARD_ALLOW_SHRINK=1 commit exit=0 printing 'NOTICE BOARD_ALLOW_SHRINK override: baseline=3 candidate=1 lost ids=B, C' + 'SHRINK ACCEPTED \u2014 2 task row(s) dropped (3 -> 1)'; test_override_lands_and_still_names_counts_and_ids. AC5 PASS: `boardctl validate -C .` => 'RESULT: OK (439 warning(s))' exit=0 on the repaired board (298 rows, verified superset of the 297 rows restored by 9a9d987 \u2014 only AUG-194 added, none missing); scratch copy in mktemp dir => 'RESULT: OK (440 warning(s))' exit=0. Full new suite: `python3 -m pytest tests/test_board_shrink_check.py -q` => 19 passed in 8.03s. AC4 FAIL (the quarantine is not installed where the incident happened): the truncating writer was an ad-hoc lane-session snippet outside the repo (restore commit 9a9d987 message: hand-built key order, 'a lane-scoped close writer ... not a boardctl write'), so the fix arm is impossible here and the deliverable is the quarantine. I verified every tracked writer never reduces rows (board_row_closeout.py:104-132 line-wise byte-preserving; append_board_task_completed.py:163-182, update_board_task_notes.py:100-115, close_tick_jsonl_board.py:62-65 rewrite the full loaded row list; create_board_tasks.py:180 append-only). BUT the quarantine itself is only half-wired: `grep -n 'board-shrink' .git/hooks/pre-commit` exits 1 \u2014 the managed block was NEVER installed into this repository's own pre-commit hook, no core.hooksPath redirect exists, and nothing in the repo runs scripts/install_board_guard.py locally. On this checkout a repeat of the 45a29b9 truncation commits locally with zero refusal; only the CI step (ci.yml:71 `python3 scripts/board_shrink_check.py --recent`) catches it after push. A quarantine that exists as an opt-in installer nobody ran does not make the commit path refuse row loss on the machine where 295 rows were lost.\n  \u2717 The guard is wired into the repo's own commit path: the pre-commit hook carries the managed block (or the checker is otherwise guaranteed to run on local commits), not merely shipped as an opt-in installer.: grep 'board-shrink' .git/hooks/pre-commit => exit=1 (absent); `git config core.hooksPath` empty; scripts/install_board_guard.py is never invoked by any in-repo automation (no Makefile target, no CI local-install step \u2014 CI runs the checker directly via --recent). The incident commit 45a29b9 was created on this host; today the same local commit path has no shrink check.\n  \u2713 The new test suite is wired into the repo's gate (tests/gate.sh pytest arm) and CI so the proof actually runs.: tests/gate.sh:244 pytest arm names tests/test_board_shrink_check.py; ci.yml adds the --recent step before the gate step plus a pytest step; wiring tests test_the_gate_pytest_arm_names_this_file, test_the_real_workflow_runs_the_check and 4 ci.yml mutation legs all pass (19 passed in 8.03s).\n  \u2713 Fail-closed: an unreadable/missing baseline (shallow clone, unmerged board, torn row) exits 1 rather than passing blind.: board_shrink_check.py:96-103 raises ValueError naming 'git fetch --deepen=1' when the baseline cannot be resolved; lines 108-111 refuse an unmerged board; lines 162-168 exit 1 on parse failures even with the override. Covered by test_missing_parent_fails_closed_naming_the_deepen_hint and test_override_does_not_excuse_a_parse_failure in the passing 19-test run.\n  \u2717 Coverage FAILED \u2014 not passing: AC1: commit refuses a board shrink (exit 1, both counts + lost ids, commit not landed). AC2: legitimate append/in-place edit passes. AC3: BOARD_ALLOW_SHRINK=1 override passes and still names counts+lost ids. AC4: the truncating lane close writer is fixed or quarantined so it never reduces rows. AC5: boardctl validate RESULT OK on repaired board and scratch copy.\nThe checker, override, fail-closed paths, tests, CI step and board repair all verify green (19/19 tests, live scratch-repo replays of AC1/AC2/AC3, boardctl RESULT OK on real and scratch boards), but the quarantine was never installed into this repo's own pre-commit hook \u2014 the commit path where the 45a29b9 truncation happened still has no shrink refusal locally, so AC4's 'quarantined so it never reduces rows' is not delivered on the machine that needed it. [uncovered failure paths: failure mode 0 (A lane close-out re-truncates tasks.jsonl (297->2 style) and the commit lands locally with no refusal; the loss is only caught by CI after push, requiring another emergency restore commit like 9a9d987): detected_by is empty \u2014 uncovered failure path; failure mode 1 (Same-count wholesale row replacement passes the check (all 298 rows swapped for 298 different rows)): detected_by cites tests/test_board_shrink_check.py::test_same_count_replacement_is_the_documented_blind_spot but no tool result in this run shows it ran \u2014 uncovered failure path]",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": false,
+          "output": "INCOMPLETE\n\n\u2026 [4237 chars omitted \u2014 4 line(s)] \u2026\n  \u2717 Coverage FAILED \u2014 not passing: AC1: commit refuses a board shrink (exit 1, both counts + lost ids, commit not landed). AC2: legitimate append/in-place edit passes. AC3: BOARD_ALLOW_SHRINK=1 override passes and still names counts+lost ids. AC4: the truncating lane close writer is fixed or quarantined so it never reduces rows. AC5: boardctl validate RESULT OK on repaired board and scratch copy.\nThe checker, override, fail-closed paths, tests, CI step and board repair all verify green (19/19 tests, live scratch-repo replays of AC1/AC2/AC3, boardctl RESULT OK on real and scratch boards), but the quarantine was never installed into this repo's own pre-commit hook \u2014 the commit path where the 45a29b9 truncation happened still has no shrink refusal locally, so AC4's 'quarantined so it never reduces rows' is not delivered on the machine that needed it. [uncovered failure paths: failure mode 0 (A lane close-out re-truncates tasks.jsonl (297->2 style) and the commit lands locally with no refusal; the loss is only caught by CI after push, requiring another emergency restore commit like 9a9d987): detected_by is empty \u2014 uncovered failure path; failure mode 1 (Same-count wholesale row replacement passes the check (all 298 rows swapped for 298 different rows)): detected_by cites tests/test_board_shrink_check.py::test_same_count_replacement_is_the_documented_blind_spot but no tool result in this run shows it ran \u2014 uncovered failure path]",
+          "error": "",
+          "data": {
+            "verdict": "INCOMPLETE",
+            "items": [
+              {
+                "criterion": "AC1: commit refuses a board shrink (exit 1, both counts + lost ids, commit not landed). AC2: legitimate append/in-place edit passes. AC3: BOARD_ALLOW_SHRINK=1 override passes and still names counts+lost ids. AC4: the truncating lane close writer is fixed or quarantined so it never reduces rows. AC5: boardctl validate RESULT OK on repaired board and scratch copy.",
+                "status": "FAIL",
+                "detail": "AC1 PASS: scripts/board_shrink_check.py:170-186 prints 'REFUSED baseline=3 candidate=1 lost ids=B, C' and returns 1; proven live in a scratch repo (install hook, stage 3->1 row shrink, `git commit` exit=1, HEAD unchanged at 2cd742d) and by tests/test_board_shrink_check.py::test_shrink_is_refused_and_the_commit_does_not_land + test_deleting_the_board_is_refused. AC2 PASS: live replay \u2014 append commit exit=0 ('OK baseline=1 candidate=2 ... 1 row(s) appended'), same-count in-place edit exit=0; test_append_and_same_count_edit_pass. AC3 PASS: live replay \u2014 BOARD_ALLOW_SHRINK=1 commit exit=0 printing 'NOTICE BOARD_ALLOW_SHRINK override: baseline=3 candidate=1 lost ids=B, C' + 'SHRINK ACCEPTED \u2014 2 task row(s) dropped (3 -> 1)'; test_override_lands_and_still_names_counts_and_ids. AC5 PASS: `boardctl validate -C .` => 'RESULT: OK (439 warning(s))' exit=0 on the repaired board (298 rows, verified superset of the 297 rows restored by 9a9d987 \u2014 only AUG-194 added, none missing); scratch copy in mktemp dir => 'RESULT: OK (440 warning(s))' exit=0. Full new suite: `python3 -m pytest tests/test_board_shrink_check.py -q` => 19 passed in 8.03s. AC4 FAIL (the quarantine is not installed where the incident happened): the truncating writer was an ad-hoc lane-session snippet outside the repo (restore commit 9a9d987 message: hand-built key order, 'a lane-scoped close writer ... not a boardctl write'), so the fix arm is impossible here and the deliverable is the quarantine. I verified every tracked writer never reduces rows (board_row_closeout.py:104-132 line-wise byte-preserving; append_board_task_completed.py:163-182, update_board_task_notes.py:100-115, close_tick_jsonl_board.py:62-65 rewrite the full loaded row list; create_board_tasks.py:180 append-only). BUT the quarantine itself is only half-wired: `grep -n 'board-shrink' .git/hooks/pre-commit` exits 1 \u2014 the managed block was NEVER installed into this repository's own pre-commit hook, no core.hooksPath redirect exists, and nothing in the repo runs scripts/install_board_guard.py locally. On this checkout a repeat of the 45a29b9 truncation commits locally with zero refusal; only the CI step (ci.yml:71 `python3 scripts/board_shrink_check.py --recent`) catches it after push. A quarantine that exists as an opt-in installer nobody ran does not make the commit path refuse row loss on the machine where 295 rows were lost."
+              },
+              {
+                "criterion": "The guard is wired into the repo's own commit path: the pre-commit hook carries the managed block (or the checker is otherwise guaranteed to run on local commits), not merely shipped as an opt-in installer.",
+                "status": "FAIL",
+                "detail": "grep 'board-shrink' .git/hooks/pre-commit => exit=1 (absent); `git config core.hooksPath` empty; scripts/install_board_guard.py is never invoked by any in-repo automation (no Makefile target, no CI local-install step \u2014 CI runs the checker directly via --recent). The incident commit 45a29b9 was created on this host; today the same local commit path has no shrink check.",
+                "derived": true
+              },
+              {
+                "criterion": "The new test suite is wired into the repo's gate (tests/gate.sh pytest arm) and CI so the proof actually runs.",
+                "status": "PASS",
+                "detail": "tests/gate.sh:244 pytest arm names tests/test_board_shrink_check.py; ci.yml adds the --recent step before the gate step plus a pytest step; wiring tests test_the_gate_pytest_arm_names_this_file, test_the_real_workflow_runs_the_check and 4 ci.yml mutation legs all pass (19 passed in 8.03s).",
+                "derived": true
+              },
+              {
+                "criterion": "Fail-closed: an unreadable/missing baseline (shallow clone, unmerged board, torn row) exits 1 rather than passing blind.",
+                "status": "PASS",
+                "detail": "board_shrink_check.py:96-103 raises ValueError naming 'git fetch --deepen=1' when the baseline cannot be resolved; lines 108-111 refuse an unmerged board; lines 162-168 exit 1 on parse failures even with the override. Covered by test_missing_parent_fails_closed_naming_the_deepen_hint and test_override_does_not_excuse_a_parse_failure in the passing 19-test run.",
+                "derived": true
+              }
+            ],
+            "summary": "The checker, override, fail-closed paths, tests, CI step and board repair all verify green (19/19 tests, live scratch-repo replays of AC1/AC2/AC3, boardctl RESULT OK on real and scratch boards), but the quarantine was never installed into this repo's own pre-commit hook \u2014 the commit path where the 45a29b9 truncation happened still has no shrink refusal locally, so AC4's 'quarantined so it never reduces rows' is not delivered on the machine that needed it. [uncovered failure paths: failure mode 0 (A lane close-out re-truncates tasks.jsonl (297->2 style) and the commit lands locally with no refusal; the loss is only caught by CI after push, requiring another emergency restore commit like 9a9d987): detected_by is empty \u2014 uncovered failure path; failure mode 1 (Same-count wholesale row replacement passes the check (all 298 rows swapped for 298 different rows)): detected_by cites tests/test_board_shrink_check.py::test_same_count_replacement_is_the_documented_blind_spot but no tool result in this run shows it ran \u2014 uncovered failure path]",
+            "provenance": {
+              "model": "accounts/fireworks/models/kimi-k3",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "accounts/fireworks/models/kimi-k3",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-194\"}",
+          "exit_code": 0,
+          "output_sha": "eefba37d667904168504a3f5509fb7180d4c8e77f0cbf53155839086e94ec631"
+        },
+        {
+          "tool": "run_command",
+          "command": "git log --oneline -10 && git status --short | head -30",
+          "exit_code": 0,
+          "output_sha": "5ecfab2266fae5df9a4cbdba174125d76fee05ec4130d2d92fb6bec26934c4b8"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show --stat f10ca29 && echo '---' && git show f10ca29 | head -300",
+          "exit_code": 0,
+          "output_sha": "1f30a1e9ec8cd21630ffa4a0dbff3d6b1e2055768df075227c4df1c5f0e3f425"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"scripts/board_shrink_check.py\"}",
+          "exit_code": 0,
+          "output_sha": "fb8aac84aae5204bdbab90c1075d7203d78db46f3891fe23626f57bd58ed3673"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"scripts/install_board_guard.py\"}",
+          "exit_code": 0,
+          "output_sha": "408a44b21b2db59e3ea61f95af8a8896155b040ccd55b111114d2c846e06f043"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"tests/test_board_shrink_check.py\"}",
+          "exit_code": 0,
+          "output_sha": "becf9729eeeb5bd9e9dccb7c249ca4cf785dc0c97740a0020c5e72aeb402c347"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show f10ca29 -- .github/workflows/ci.yml tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "426ec18265dc33d0044e96c1e51310db4c62355bce3e716f0b1f843a38c347cb"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"offset\": 400, \"path\": \"tests/test_board_shrink_check.py\"}",
+          "exit_code": 0,
+          "output_sha": "b236a821161a4454af6473fc2d185c8895567de19d2da045df022889f8b01c1f"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '40,110p' .github/workflows/ci.yml",
+          "exit_code": 0,
+          "output_sha": "182e7e68836d6fd64e656d0c33280e2be84063d6e8a9a651a8ad69ee5cd67c8a"
+        },
+        {
+          "tool": "run_command",
+          "command": "cat .git/hooks/pre-commit 2>/dev/null | head -60; echo '==='; git config core.hooksPath; echo '==='; ls .git/hooks/ 2>/dev/null | head",
+          "exit_code": 0,
+          "output_sha": "8b3732b8f29da331242647b9eea96f3462e3fce1e1d5c7ed303aaaa881211678"
+        },
+        {
+          "tool": "run_command",
+          "command": "which boardctl; boardctl --help 2>&1 | head -20",
+          "exit_code": 0,
+          "output_sha": "7b29399055f8b3bac94902cd74f4e6b7146626f95e543d325e693d129c5135f5"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n 'board-shrink' .git/hooks/pre-commit; echo \"exit=$?\"",
+          "exit_code": 0,
+          "output_sha": "bdb47e67cd84d84e6eb528968fc00641bc1696b309f1a999dd60b8d474a662d4"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n 'pytest\\|test_board_shrink' tests/gate.sh | head; echo '==='; cat .gitreins/config.yaml 2>/dev/null | head -40",
+          "exit_code": 0,
+          "output_sha": "276980411c3fef1f46d8fc6eb666e6b8bf6c2fde7f09df96d169ea51bf93e5bc"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n 'test_board_shrink_check' tests/gate.sh; echo \"exit=$?\"; grep -c 'python3 -m pytest' tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "6014c8d9d5c4ab75f916bba1d09313f0b0f0bb89678320a7258e35e9730b646a"
+        },
+        {
+          "tool": "run_command",
+          "command": "python3 -m pytest tests/test_board_shrink_check.py -q 2>&1 | tail -15",
+          "exit_code": 0,
+          "output_sha": "eb9e52288ea4fb31e65200d3bf56d42818a53c0a25e79e5fc8fbd6536ce01888"
+        },
+        {
+          "tool": "run_command",
+          "command": "boardctl validate -C . 2>&1 | tail -5; echo \"exit=$?\"",
+          "exit_code": 0,
+          "output_sha": "e536ee4381700c720d3de7b9cf5cf3bbb27743558b7d91d633809f5ec35d1fc9"
+        },
+        {
+          "tool": "run_command",
+          "command": "wc -l .coding-hermes/board/tasks.jsonl; head -2 .coding-hermes/board/tasks.jsonl",
+          "exit_code": 0,
+          "output_sha": "18b118c680cb3b5eba06046250c2eda6a72730e561b06786b127b5c736e3501d"
+        },
+        {
+          "tool": "run_command",
+          "command": "SCRATCH=$(mktemp -d) && mkdir -p \"$SCRATCH/.coding-hermes/board\" && cp .coding-hermes/board/tasks.jsonl \"$SCRATCH/.coding-hermes/board/\" && cp .coding-hermes/board/events.jsonl \"$SCRATCH/.coding-hermes/board/\" 2>/dev/null; boardctl validate -C \"$SCRATCH\" 2>&1 | tail -3; echo \"exit=$?\"; rm -rf \"$SCRATCH\"",
+          "exit_code": 0,
+          "output_sha": "507f914bd45c68f3f1f629fe5c4bb8cfd6dfc5f2cd77ccc98934b3ff0d012021"
+        },
+        {
+          "tool": "run_command",
+          "command": "python3 scripts/board_shrink_check.py --recent; echo \"exit=$?\"",
+          "exit_code": 0,
+          "output_sha": "5323bd4fb81e995c4c055b8c2ea9fc26c1ac3d157d90605c7bee1a2e48581937"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 45a29b9 --stat | head -20; echo '==='; git show 45a29b9 -- .coding-hermes/board/tasks.jsonl | head -5; echo '==='; git show 45a29b9^:.coding-hermes/board/tasks.jsonl | wc -l; git show 45a29b9:.coding-hermes/board/tasks.jsonl | wc -l",
+          "exit_code": 0,
+          "output_sha": "46c760eff57b6f3c4032f162fb5b893e0415ed8d36ab0bba3c1744c2da6ad06a"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -rln 'tasks.jsonl' --include='*.py' --include='*.sh' . 2>/dev/null | grep -v '.git/' | head -20",
+          "exit_code": 0,
+          "output_sha": "d12a9c6780c6db4473105bc875d0909053bbc13734339ca56bf90b26d0a7bca8"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n 'tasks.jsonl' auger.py | head -10; echo '==='; grep -n 'tasks.jsonl' scripts/audit_board_evidence.py scripts/gen_trace_artifact.py | head -10",
+          "exit_code": 0,
+          "output_sha": "363e286f192f6955f1e7132f93f597e70eb15b477be242e9bc23a9e2de63de0a"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -rn 'open.*tasks.jsonl.*[\"'\"'\"']w\\|write_text\\|writelines' auger.py scripts/*.py 2>/dev/null | grep -i 'board\\|tasks' | head -10",
+          "exit_code": 0,
+          "output_sha": "56e3e098b50d14658dac3fa91edcf535715387d5986a65bfa68143247d6d1177"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '12250,12270p' auger.py; echo '==='; grep -n \"open(\" scripts/audit_board_evidence.py scripts/gen_trace_artifact.py | head",
+          "exit_code": 0,
+          "output_sha": "41338edcae6954f1af8205064f08744ed7ea4e00dd4a3f413e4c671740612a7f"
+        },
+        {
+          "tool": "run_command",
+          "command": "ls ~/.hermes/skills/coding-hermes-foreman/scripts/ 2>/dev/null | head -20; echo '==='; grep -ln 'tasks.jsonl' ~/.hermes/skills/coding-hermes-foreman/scripts/* 2>/dev/null | head",
+          "exit_code": 0,
+          "output_sha": "98dd13319ef6c0bc1953e2b5652ca63a42bbe763b0f692dd183d8ed04f0837df"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n 'def \\|write_text\\|open(\\|writelines\\|\\.write(' ~/.hermes/skills/coding-hermes-foreman/scripts/board_row_closeout.py | head -30",
+          "exit_code": 0,
+          "output_sha": "57a4303e976c5fca90105fedbddd5bfc2ab4a4fe834fc1c23a8d386b0113cac7"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '100,135p' ~/.hermes/skills/coding-hermes-foreman/scripts/board_row_closeout.py",
+          "exit_code": 0,
+          "output_sha": "5c2c116296dd6ea3890e305da7aba44f8ca43c81c1fe9ce78996ae4ee3c4e44f"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n 'tasks.jsonl' ~/.hermes/skills/coding-hermes-foreman/scripts/append_board_task_completed.py ~/.hermes/skills/coding-hermes-foreman/scripts/append_board_task_dispatched.py ~/.hermes/skills/coding-hermes-foreman/scripts/update_board_task_notes.py ~/.hermes/skills/coding-hermes-foreman/scripts/create_board_tasks.py 2>/dev/null | head; echo '==='; grep -n 'open(.*tasks\\|write' ~/.hermes/skills/coding-hermes-foreman/scripts/append_board_task_completed.py | head",
+          "exit_code": 0,
+          "output_sha": "06369e735431438185ba7fcfa3ce543f0fb9892ab2ba2970f169502dfd42adbd"
+        },
+        {
+          "tool": "run_command",
+          "command": "ls ~/.hermes/skills/coding-hermes-foreman/scripts/ | grep -i 'close\\|tick'",
+          "exit_code": 0,
+          "output_sha": "1e155ff75010308671ab97e64f2f43bf4211c9128017b0bd3a8381c5d3e00607"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '160,195p' ~/.hermes/skills/coding-hermes-foreman/scripts/append_board_task_completed.py",
+          "exit_code": 0,
+          "output_sha": "b85655e609f8135431c020ce707129748dc541554e587ab16009faf37557acb1"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n 'def \\|tasks.jsonl\\|open(\\|write' ~/.hermes/skills/coding-hermes-foreman/scripts/update_board_task_notes.py | head -20; echo '==='; grep -n 'def \\|tasks.jsonl\\|open(\\|write' ~/.hermes/skills/coding-hermes-foreman/scripts/create_board_tasks.py | head -20",
+          "exit_code": 0,
+          "output_sha": "67163f7598dd96e528ea7d31bed5c55648e4a08f9af895e375e74702e751be8b"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '95,116p' ~/.hermes/skills/coding-hermes-foreman/scripts/update_board_task_notes.py",
+          "exit_code": 0,
+          "output_sha": "6f942eae50cbaa36d7e81ace8b9352134ce5ecc3682ac240b516eb781da89918"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -rn 'close_tick_jsonl_board' ~/.hermes/skills/ 2>/dev/null | head -5; find ~/.hermes -name 'close_tick_jsonl_board*' 2>/dev/null | head -3",
+          "exit_code": -15,
+          "output_sha": "f1d12de8c4f4e073cb694eddb890eb913a1ade8fe62fefdca01e11c4aa884ce0"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n 'open(\\|write\\|tasks.jsonl' ~/.hermes/skills/database/coding-hermes-jsonl-board-append/scripts/close_tick_jsonl_board.py | head -20",
+          "exit_code": 0,
+          "output_sha": "48ccc8ee44acda73ab5a236d9389ee3cb0cc700ee239741588799ef22b0515d6"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '50,70p' ~/.hermes/skills/database/coding-hermes-jsonl-board-append/scripts/close_tick_jsonl_board.py",
+          "exit_code": 0,
+          "output_sha": "a214f15479c89702110099864ff3911ba301355b7a91769d4a9c4a00e46ed1c3"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 9a9d987 --stat | head -15; echo '==='; git show 9a9d987:.coding-hermes/board/tasks.jsonl | wc -l; echo '==='; git show 6941880:.coding-hermes/board/tasks.jsonl | wc -l; git show 6e481cd:.coding-hermes/board/tasks.jsonl | wc -l; git show f10ca29:.coding-hermes/board/tasks.jsonl | wc -l",
+          "exit_code": 0,
+          "output_sha": "70646d776ed970ce2f1f5d7032656354c771ac5b10b5dae3b37a830ea3e05f72"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 9a9d987 | head -60 | tail -40",
+          "exit_code": 0,
+          "output_sha": "4b1b69a8959584a205e795fe73969dbb423dffc469c2951d850b8be8f20160b9"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 9a9d987:.coding-hermes/board/tasks.jsonl > /tmp/board_9a9d987.jsonl && python3 -c \"\nimport json\ncur = [json.loads(l)['id'] for l in open('.coding-hermes/board/tasks.jsonl') if l.strip()]\nrest = [json.loads(l)['id'] for l in open('/tmp/board_9a9d987.jsonl') if l.strip()]\nprint('current:', len(cur), 'restored:', len(rest))\nprint('missing from current:', sorted(set(rest)-set(cur)))\nprint('added after restore:', sorted(set(cur)-set(rest)))\n\"",
+          "exit_code": 0,
+          "output_sha": "dc19bc24248ba0c52d5bebf65d25bb0ce2fae264c86274ad39e806a499984961"
+        },
+        {
+          "tool": "run_command",
+          "command": "SCRATCH=$(mktemp -d) && cd \"$SCRATCH\" && git init -q && mkdir -p scripts .coding-hermes/board && cp /home/kara/auger/scripts/board_shrink_check.py scripts/ && cp /home/kara/auger/scripts/install_board_guard.py scripts/ && export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_AUTHOR_NAME=T GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=T GIT_COMMITTER_EMAIL=t@t && python3 - <<'EOF'\nimport json\nids = [\"A\",\"B\",\"C\"]\nwith open(\".coding-hermes/board/tasks.jsonl\",\"w\") as f:\n    for i in ids: f.write(json.dumps({\"id\":i})+\"\\n\")\nEOF\ngit add . && git commit -qm init && git config core.hooksPath \"$SCRATCH/hooks\" && python3 scripts/install_board_guard.py && echo '--- AC1: shrink refused ---' && python3 - <<'EOF'\nimport json\nwith open(\".coding-hermes/board/tasks.jsonl\",\"w\") as f:\n    f.write(json.dumps({\"id\":\"A\"})+\"\\n\")\nEOF\ngit add .coding-hermes/board/tasks.jsonl && git commit -m shrink; echo \"AC1 exit=$?\"; echo \"HEAD still: $(git rev-parse --short HEAD)\"; git log --oneline | head -2",
+          "exit_code": 0,
+          "output_sha": "f5a1c6ee7a8239c122df99bbc03562d1192d8a6cd0469b638307b3a37f5f7037"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /mnt/ssd/tmp/tmp.iEqNdpqoG7 && export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_AUTHOR_NAME=T GIT_AUTHOR_EMAIL=t@t GIT_COMMITTER_NAME=T GIT_COMMITTER_EMAIL=t@t && echo '--- AC3: override ---' && BOARD_ALLOW_SHRINK=1 git commit -m 'deliberate prune'; echo \"AC3 exit=$?\"; git log --oneline | head -2; echo '--- AC2: append ---' && python3 - <<'EOF'\nimport json\nwith open(\".coding-hermes/board/tasks.jsonl\",\"a\") as f:\n    f.write(json.dumps({\"id\":\"D\"})+\"\\n\")\nEOF\ngit add .coding-hermes/board/tasks.jsonl && git commit -m append; echo \"AC2-append exit=$?\"; echo '--- AC2: in-place edit ---' && python3 - <<'EOF'\nimport json\nlines=[json.loads(l) for l in open(\".coding-hermes/board/tasks.jsonl\") if l.strip()]\nlines[0][\"note\"]=\"edited\"\nwith open(\".coding-hermes/board/tasks.jsonl\",\"w\") as f:\n    for r in lines: f.write(json.dumps(r)+\"\\n\")\nEOF\ngit add .coding-hermes/board/tasks.jsonl && git commit -m 'in-place edit'; echo \"AC2-edit exit=$?\"; git log --oneline | head -4",
+          "exit_code": 0,
+          "output_sha": "bc7963cd5b06f9492dff91e256475c499b0d165b48ec7d24433f9edb741751ff"
+        },
+        {
+          "tool": "run_command",
+          "command": "rm -rf /mnt/ssd/tmp/tmp.iEqNdpqoG7 /tmp/board_9a9d987.jsonl; grep -rn 'BOARD_ALLOW_SHRINK' --include='*.py' --include='*.yml' --include='*.sh' . 2>/dev/null | grep -v '.git/' | head",
+          "exit_code": 0,
+          "output_sha": "06b0b7436556cae7dfa87fce4bfbb4224642e63afb0392ce8227f63e28ce3b8e"
+        },
+        {
+          "tool": "run_command",
+          "command": "python3 -m py_compile scripts/board_shrink_check.py scripts/install_board_guard.py && echo COMPILE-OK; ruff check scripts/board_shrink_check.py scripts/install_board_guard.py tests/test_board_shrink_check.py 2>&1 | tail -3",
+          "exit_code": 0,
+          "output_sha": "85d0596913cc3cf451cf6b68bf4605acd290aba6bf87561cc7a2b0d6fe6049a2"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: scripts/board_shrink_check.py:170-186 refuses shrink exit 1 with 'REFUSED baseline=3 candidate=1 lost ids=B, C'; live scratch-repo replay: commit exit=1, HEAD unchanged (2cd742d). tests/test_board_shrink_check.py::test_shrink_is_refused_and_the_commit_does_not_land + test_deleting_the_board_is_refused; pytest run: 19 passed in 8.03s.\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "b0c6671027c03cf3543c3aff188c1830a240edd0b03ccecb0f2e2600ec85676b"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: live scratch replay: append commit exit=0 ('OK baseline=1 candidate=2 ... 1 row(s) appended'), in-place same-count edit exit=0. tests test_append_and_same_count_edit_pass, test_adding_the_board_for_the_first_time_passes.\", \"key\": \"verified_1\"}",
+          "exit_code": 0,
+          "output_sha": "08fe395dcae1a997a25dfa92063953fbffe3aecd8f7e5a69711fdba0e7fcdc20"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: board_shrink_check.py:171-176 override prints 'NOTICE BOARD_ALLOW_SHRINK override: baseline=3 candidate=1 lost ids=B, C' + 'SHRINK ACCEPTED', exit 0; live replay confirmed commit landed with counts+ids printed. test_override_lands_and_still_names_counts_and_ids + test_override_does_not_excuse_a_parse_failure.\", \"key\": \"verified_2\"}",
+          "exit_code": 0,
+          "output_sha": "a2648dfd408bab4d60c527a190f8dc9280613288abae38f43f56b4c56e6f4ecb"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS (quarantine arm): writer behind 45a29b9 was an ad-hoc lane snippet outside the repo (restore commit 9a9d987 message: hand-built key order, not a boardctl write). Verified all tracked writers never reduce rows: board_row_closeout.py:104-132 line-wise byte-preserving; append_board_task_completed.py:163-182 and update_board_task_notes.py:100-115 and close_tick_jsonl_board.py:62-65 rewrite the full loaded row list; create_board_tasks.py:180 append-only. Quarantine = checker refuses any shrink landing (proven by 45a29b9 replay test + live replay). GAP: checker not installed in this repo's own .git/hooks/pre-commit (grep board-shrink exit=1) and installer never run in-repo; protection on this checkout's commit path is CI-only (ci.yml:71 --recent step).\", \"key\": \"verified_3\"}",
+          "exit_code": 0,
+          "output_sha": "b7f7fc6b8e1ecdd77d74a18acd891fcec74d1692c0c923329516573867608587"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: boardctl validate -C . => 'RESULT: OK (439 warning(s))' exit=0 on repaired board (298 rows, superset of 9a9d987's restored 297 \\u2014 only AUG-194 added, none missing). Scratch copy (mktemp dir with tasks.jsonl+events.jsonl) => 'RESULT: OK (440 warning(s))' exit=0.\", \"key\": \"verified_4\"}",
+          "exit_code": 0,
+          "output_sha": "f59abf6b6e1e5ab003694820acda5ee202e319c9b1a085d646b548c8247b5798"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"The guard is wired into the repo's own commit path: pre-commit hook carries the managed block OR the checker is otherwise guaranteed to run on local commits.\", \"key\": \"derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "e3b4668f457a450a5c921c7ef7be7599bde8a4623df89bdd97fc9ac4ba21cd7b"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"The new test suite is wired into the repo's gate (tests/gate.sh pytest arm) and CI so the proof actually runs.\", \"key\": \"derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "096cb15a572629eb36d3728c82071bc0c4c0c1d4d15cc4fb489e60f3ee5e2cfa"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Fail-closed: an unreadable/missing baseline (shallow clone, unmerged board, parse failure) exits 1 rather than passing blind.\", \"key\": \"derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "c92ee7c1de7eab908629515fa93c2f608f0f53f7f02724cd660d426c2f3db35d"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"FAIL: `grep -n 'board-shrink' .git/hooks/pre-commit` exit=1 \\u2014 the managed block is NOT installed in this repo's own pre-commit hook, and no core.hooksPath redirect (git config core.hooksPath empty). scripts/install_board_guard.py exists but nothing runs it in-repo (no Makefile/CI step installs it locally; CI installs nothing \\u2014 it runs --recent directly). Consequence: on this checkout, a repeat of the 45a29b9 lane-close truncation commits locally without any refusal; only the CI --recent step (ci.yml:71) catches it after push. The task title says 'on the commit path' and AC4's quarantine ('never reduces rows' landing) is only half-wired: the hook half is opt-in and was never enabled where the incident occurred.\", \"key\": \"verified_derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "3d0f8334cfca7ab2939475b82ca3795f74b9894877265aa0d236c30e0d7ca63c"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: tests/gate.sh:244 pytest arm names tests/test_board_shrink_check.py; ci.yml runs the --recent step before the gate step plus a pytest step; test_the_gate_pytest_arm_names_this_file + test_the_real_workflow_runs_the_check + 4 mutation legs all pass (19 passed in 8.03s).\", \"key\": \"verified_derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "9ac92d913626c148ae836c4fb53a55f36923157b2e464dc9d8ec9ef43f32981f"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: board_shrink_check.py:96-103 raises ValueError naming 'git fetch --deepen=1' when baseline unresolvable; unmerged index raises (line 108-111); parse failures exit 1 (lines 162-168). test_missing_parent_fails_closed_naming_the_deepen_hint and test_override_does_not_excuse_a_parse_failure pass in the 19-test run.\", \"key\": \"verified_derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "d7bf89298c67a8769de89440961dc17a381ef894136fe3ef2b276e8ad909621b"
+        }
+      ]
+    }
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "Diff only appends a well-formed task entry (AUG-194) to .gitreins/tasks.yaml matching the surrounding entry shape; no code, wiring, or test changes to review.",
+    "review_state": {
+      "emitted": [],
+      "carried": []
+    }
+  },
+  "summary": "Stage tier1: FAIL\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2717 tests: FAIL (tests/test_auger.py::test_reseeding_the_grid_adds_no_second_copy [first failing id])\n\nStage tier2: FAIL\n  INCOMPLETE\n  \u2717 AC1: commit refuses a board shrink (exit 1, both counts + lost ids, commit not landed). AC2: legitimate append/in-place edit passes. AC3: BOARD_ALLOW_SHRINK=1 override passes and still names counts+lost ids. AC4: the truncating lane close writer is fixed or quarantined so it never reduces rows. AC5: boardctl validate RESULT OK on repaired board and scratch copy.: AC1 PASS: scripts/board_shrink_check.py:170-186 prints 'REFUSED baseline=3 candidate=1 lost ids=B, C' and returns 1; proven live in a scratch repo (install hook, stage 3->1 row shrink, `git commit` exit=1, HEAD unchanged at 2cd742d) and by tests/test_board_shrink_check.py::test_shrink_is_refused_and_the_commit_does_not_land + test_deleting_the_board_is_refused. AC2 PASS: live replay \u2014 append commit exit=0 ('OK baseline=1 candidate=2 ... 1 row(s) appended'), same-count in-place edit exit=0; test_append_and_same_count_edit_pass. AC3 PASS: live replay \u2014 BOARD_ALLOW_SHRINK=1 commit exit=0 printing 'NOTICE BOARD_ALLOW_SHRINK override: baseline=3 candidate=1 lost ids=B, C' + 'SHRINK ACCEPTED \u2014 2 task row(s) dropped (3 -> 1)'; test_override_lands_and_still_names_counts_and_ids. AC5 PASS: `boardctl validate -C .` => 'RESULT: OK (439 warning(s))' exit=0 on the repaired board (298 rows, verified superset of the 297 rows restored by 9a9d987 \u2014 only AUG-194 added, none missing); scratch copy in mktemp dir => 'RESULT: OK (440 warning(s))' exit=0. Full new suite: `python3 -m pytest tests/test_board_shrink_check.py -q` => 19 passed in 8.03s. AC4 FAIL (the quarantine is not installed where the incident happened): the truncating writer was an ad-hoc lane-session snippet outside the repo (restore commit 9a9d987 message: hand-built key order, 'a lane-scoped close writer ... not a boardctl write'), so the fix arm is impossible here and the deliverable is the quarantine. I verified every tracked writer never reduces rows (board_row_closeout.py:104-132 line-wise byte-preserving; append_board_task_completed.py:163-182, update_board_task_notes.py:100-115, close_tick_jsonl_board.py:62-65 rewrite the full loaded row list; create_board_tasks.py:180 append-only). BUT the quarantine itself is only half-wired: `grep -n 'board-shrink' .git/hooks/pre-commit` exits 1 \u2014 the managed block was NEVER installed into this repository's own pre-commit hook, no core.hooksPath redirect exists, and nothing in the repo runs scripts/install_board_guard.py locally. On this checkout a repeat of the 45a29b9 truncation commits locally with zero refusal; only the CI step (ci.yml:71 `python3 scripts/board_shrink_check.py --recent`) catches it after push. A quarantine that exists as an opt-in installer nobody ran does not make the commit path refuse row loss on the machine where 295 rows were lost.\n  \u2717 The guard is wired into the repo's own commit path: the pre-commit hook carries the managed block (or the checker is otherwise guaranteed to run on local commits), not merely shipped as an opt-in installer.: grep 'board-shrink' .git/hooks/pre-commit => exit=1 (absent); `git config core.hooksPath` empty; scripts/install_board_guard.py is never invoked by any in-repo automation (no Makefile target, no CI local-install step \u2014 CI runs the checker directly via --recent). The incident commit 45a29b9 was created on this host; today the same local commit path has no shrink check.\n  \u2713 The new test suite is wired into the repo's gate (tests/gate.sh pytest arm) and CI so the proof actually runs.: tests/gate.sh:244 pytest arm names tests/test_board_shrink_check.py; ci.yml adds the --recent step before the gate step plus a pytest step; wiring tests test_the_gate_pytest_arm_names_this_file, test_the_real_workflow_runs_the_check and 4 ci.yml mutation legs all pass (19 passed in 8.03s).\n  \u2713 Fail-closed: an unreadable/missing baseline (shallow clone, unmerged board, torn row) exits 1 rather than passing blind.: board_shrink_check.py:96-103 raises ValueError naming 'git fetch --deepen=1' when the baseline cannot be resolved; lines 108-111 refuse an unmerged board; lines 162-168 exit 1 on parse failures even with the override. Covered by test_missing_parent_fails_closed_naming_the_deepen_hint and test_override_does_not_excuse_a_parse_failure in the passing 19-test run.\n  \u2717 Coverage FAILED \u2014 not passing: AC1: commit refuses a board shrink (exit 1, both counts + lost ids, commit not landed). AC2: legitimate append/in-place edit passes. AC3: BOARD_ALLOW_SHRINK=1 override passes and still names counts+lost ids. AC4: the truncating lane close writer is fixed or quarantined so it never reduces rows. AC5: boardctl validate RESULT OK on repaired board and scratch copy.\nThe checker, override, fail-closed paths, tests, CI step and board repair all verify green (19/19 tests, live scratch-repo replays of AC1/AC2/AC3, boardctl RESULT OK on real and scratch boards), but the quarantine was never installed into this repo's own pre-commit hook \u2014 the commit path where the 45a29b9 truncation happened still has no shrink refusal locally, so AC4's 'quarantined so it never reduces rows' is not delivered on the machine that needed it. [uncovered failure paths: failure mode 0 (A lane close-out re-truncates tasks.jsonl (297->2 style) and the commit lands locally with no refusal; the loss is only caught by CI after push, requiring another emergency restore commit like 9a9d987): detected_by is empty \u2014 uncovered failure path; failure mode 1 (Same-count wholesale row replacement passes the check (all 298 rows swapped for 298 different rows)): detected_by cites tests/test_board_shrink_check.py::test_same_count_replacement_is_the_documented_blind_spot but no tool result in this run shows it ran \u2014 uncovered failure path]\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-11-21T17:08:41.851820",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-21T17:08:41.869007+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 40555,
+        "truncated": false,
+        "source": "git show f10ca2957240"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 882,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-194"
+  }
+}
