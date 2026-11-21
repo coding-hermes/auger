@@ -58,6 +58,18 @@ jobs:
           # faster — it turns a real proof into a CI-only red.
           fetch-depth: 0
 
+      # AUG-194: the board is a JSONL row store, and a commit that DROPS rows from it is
+      # invisible to `boardctl validate` (a short board is a VALID board). Commit 45a29b9 kept
+      # 2 of 297 rows that way. This step compares the checked-out commit against its parent
+      # with the same checker the repo's pre-commit hook runs, so a wholesale rewrite cannot
+      # land: `--recent` grades HEAD:<board> against HEAD^:<board>, which is why the checkout
+      # above must carry the parent commit. fetch-depth: 0 (full history) satisfies that need
+      # and is kept for the trace battery below — depth 2 would also do, but 0 is what the
+      # battery needs, so 0 is what stays. A deliberate prune is still legal and loud:
+      # BOARD_ALLOW_SHRINK=1 turns the refusal into a printed notice.
+      - name: reject board shrink in the checked-out commit (AUG-194)
+        run: python3 scripts/board_shrink_check.py --recent
+
       - name: set up python 3.11
         uses: actions/setup-python@v5
         with:
@@ -132,6 +144,9 @@ jobs:
           # `set -e` would turn a bare `boardctl version` into a red step on a runner whose
           # default PATH lacks the install dir.
           "${DEST}/boardctl" version
+
+      - name: test board shrink guard
+        run: python3 -m pytest -q tests/test_board_shrink_check.py
 
       - name: run the gate (tests/gate.sh)
         run: bash tests/gate.sh
