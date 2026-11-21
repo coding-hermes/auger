@@ -486,3 +486,57 @@ selection_out="$(run_inner_gate AUGER_ALLOW_SKIPPED_ARMS=1)"
 assert_contains "$selection_out" "gate pytest interpreter: $skiparms_dir/repo/.venv/bin/python"
 [[ -s "$AUG189_MARKER" ]] || { printf 'local interpreter never ran pytest\n' >&2; exit 1; }
 printf 'AUG-189 interpreter selection: PASS\n'
+
+# AUG-191 red at e51c23e, docs commit over an auger.py commit with
+# GATE_BASE at the preceding revision:
+# == gate mode: DOC-ONLY fast path (skipping pytest + e2e smoke) ==
+# Use an isolated clone, real gate, and the pytest stand-in above. Its marker
+# proves that FULL actually reaches pytest rather than merely printing a mode.
+range_repo="$skiparms_dir/repo"
+git -C "$range_repo" config user.name 'Gate Fixture'
+git -C "$range_repo" config user.email fixture@example.invalid
+range_base="$(git -C "$range_repo" rev-parse HEAD)"
+git -C "$range_repo" update-ref refs/remotes/origin/main "$range_base"
+printf '\n# AUG-191 fixture\n' >> "$range_repo/auger.py"
+git -C "$range_repo" add auger.py
+git -C "$range_repo" -c core.hooksPath=/dev/null commit -qm 'fixture code'
+code_base="$(git -C "$range_repo" rev-parse HEAD)"
+printf '\nAUG-191 fixture\n' >> "$range_repo/docs/VERBS.md"
+git -C "$range_repo" add docs/VERBS.md
+git -C "$range_repo" -c core.hooksPath=/dev/null commit -qm 'fixture docs'
+
+run_range_gate(){
+  env -u GATE_FULL -u GATE_BASE -u AUGER_ALLOW_SKIPPED_ARMS \
+    AUGER_CI=1 GITHUB_ACTIONS=true AUGER_GATE_INNER=1 \
+    AUG130_REAL_PYTHON="$real_python" "$@" bash "$INNER_GATE" 2>&1
+}
+rm -f "$AUG189_MARKER"
+range_out="$(run_range_gate GATE_BASE="$range_base")"
+assert_contains "$range_out" '== gate mode: FULL gate =='
+[[ -s "$AUG189_MARKER" ]] || { printf 'AUG-191: full range did not invoke pytest\n' >&2; exit 1; }
+[[ "$range_out" != *'SKIPPED [pytest]'* && "$range_out" != *'arms SKIPPED: pytest'* ]] || {
+  printf 'AUG-191: full range skipped pytest:\n%s\n' "$range_out" >&2; exit 1;
+}
+printf 'AUG-191 explicit docs-over-code range: PASS\n'
+
+rm -f "$AUG189_MARKER"
+range_out="$(run_range_gate)"
+assert_contains "$range_out" '== gate mode: FULL gate =='
+[[ -s "$AUG189_MARKER" ]] || { printf 'AUG-191: merge-base range did not invoke pytest\n' >&2; exit 1; }
+printf 'AUG-191 merge-base docs-over-code range: PASS\n'
+
+rm -f "$AUG189_MARKER"
+range_out="$(run_range_gate GATE_BASE="$code_base")"
+assert_contains "$range_out" '== gate mode: DOC-ONLY fast path'
+assert_contains "$range_out" 'SKIPPED [pytest]: doc-only fast path'
+[[ ! -e "$AUG189_MARKER" ]] || { printf 'AUG-191: docs-only range ran pytest\n' >&2; exit 1; }
+printf 'AUG-191 explicit docs-only range: PASS\n'
+
+# An explicitly empty range and a HEAD identical to origin/main are conservative.
+range_head="$(git -C "$range_repo" rev-parse HEAD)"
+range_out="$(run_range_gate GATE_BASE="$range_head")"
+assert_contains "$range_out" '== gate mode: FULL gate =='
+git -C "$range_repo" update-ref refs/remotes/origin/main "$range_head"
+range_out="$(run_range_gate)"
+assert_contains "$range_out" '== gate mode: FULL gate =='
+printf 'AUG-191 empty and equal-origin ranges: PASS\n'

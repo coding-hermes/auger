@@ -87,19 +87,30 @@ if ! require_live_prerequisites; then
 fi
 
 # INT-GITREINS-20260927-01: doc-only fast path.
-# When the latest commit touches ONLY documentation files (no .py, no tests/),
-# skip the expensive pytest + e2e-smoke arms. The docs-check arm still runs.
-# Override: GATE_FULL=1 forces the full gate regardless of diff.
+# Skip pytest + e2e smoke only when all changed files are documentation.
+# Prefer staged files, then GATE_BASE..HEAD, then merge-base(origin/main)..HEAD
+# for a divergent HEAD, falling back to HEAD~1..HEAD. Empty diffs run full.
+# The docs-check arm still runs; GATE_FULL=1 forces the full gate.
 DOC_ONLY=0
 if [ "${GATE_FULL:-0}" != "1" ]; then
-  # Detect changed files: prefer staged (pre-commit hook), fall back to HEAD~1..HEAD (post-commit / gitreins)
+  # Staged files describe the pending pre-commit change, not a committed wave.
   CHANGED=""
   if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     STAGED="$(git diff --cached --name-only 2>/dev/null)"
     if [ -n "$STAGED" ]; then
       CHANGED="$STAGED"
+    elif [ -n "${GATE_BASE:-}" ]; then
+      CHANGED="$(git diff --name-only "$GATE_BASE" HEAD 2>/dev/null)" || CHANGED=""
+    elif git rev-parse --verify origin/main >/dev/null 2>&1; then
+      if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+        BASE="$(git merge-base HEAD origin/main 2>/dev/null)" || BASE=""
+        if [ -n "$BASE" ]; then
+          CHANGED="$(git diff --name-only "$BASE" HEAD 2>/dev/null)" || CHANGED=""
+        fi
+      fi
+      # HEAD at origin/main has no known unreviewed range: run the full gate.
     elif git rev-parse HEAD~1 >/dev/null 2>&1; then
-      CHANGED="$(git diff --name-only HEAD~1 HEAD 2>/dev/null)"
+      CHANGED="$(git diff --name-only HEAD~1 HEAD 2>/dev/null)" || CHANGED=""
     fi
   fi
   if [ -n "$CHANGED" ]; then
