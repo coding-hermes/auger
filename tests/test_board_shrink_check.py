@@ -29,6 +29,11 @@ Every arm here runs against a SCRATCH repository (its own ``git init``, its own
                                           board and on a scratch copy — see the AUG-194 report)
   post-commit mode (CI) ................ test_recent_mode_compares_a_commit_to_its_parent
   fail closed on a shallow clone ....... test_missing_parent_fails_closed_naming_the_deepen_hint
+  pre-push mode (AUG-196, AC1-AC3) ..... test_a_no_verify_shrink_commit_is_refused_at_the_push_path
+                                        and the override / skip / empty-stdin / parse-failure /
+                                        installer-mode / default-mode-no-change arms below —
+                                        every push arm drives the REAL generated hook block via
+                                        `git push` against a scratch LOCAL bare remote.
   wiring, not decoration ............... test_the_gate_pytest_arm_names_this_file
                                         test_the_real_workflow_runs_the_check
                                         (plus four mutation legs on a copy of ci.yml)
@@ -78,13 +83,14 @@ def env(**extra):
     return clean
 
 
-def run(repo, *args, env_extra=None):
+def run(repo, *args, env_extra=None, input_text=None):
     return subprocess.run(
         args,
         cwd=repo,
         text=True,
         capture_output=True,
         env=env(**(env_extra or {})),
+        input=input_text,
         timeout=120,
     )
 
@@ -537,3 +543,313 @@ def test_removing_the_shrink_step_is_a_finding(tmp_path):
         steps.pop(shrink_step_index(steps))
 
     assert "missing-shrink-step" in workflow_findings(mutated(tmp_path, drop_step))
+
+
+# ------------------------------------------------------------- AUG-196: the push path
+
+
+BEGIN = "# >>> board-shrink managed block >>>"
+END = "# <<< board-shrink managed block <<<"
+PUSH_BEGIN = "# >>> board-shrink-push managed block >>>"
+PUSH_END = "# <<< board-shrink-push managed block <<<"
+NULL_SHA = "0" * 40
+
+
+def pre_push_line(local_ref, local_sha, remote_ref, remote_sha):
+    """One pre-push stdin line in git's wire order (refs first, oids second)."""
+    return f"{local_ref} {local_sha} {remote_ref} {remote_sha}"
+
+
+def make_push_pair(tmp_path):
+    """A scratch repo, a LOCAL bare remote, and a clone of it carrying BOTH hooks.
+
+    The clone installs the pre-commit guard too, so a shrink commit there NEEDS
+    --no-verify — the push arm then grades the real bypass, not a hook-less commit.
+    """
+    repo = make_repo(tmp_path, install=False)
+    origin = tmp_path / "origin.git"
+    assert (
+        git(repo, "clone", "--bare", "--quiet", str(repo), str(origin)).returncode == 0
+    )
+    clone = tmp_path / "clone"
+    assert git(tmp_path, "clone", "--quiet", str(origin), str(clone)).returncode == 0
+    installed = run(clone, sys.executable, str(INSTALLER))
+    assert installed.returncode == 0, installed.stderr
+    push_install = run(clone, sys.executable, str(INSTALLER), "--hook", "pre-push")
+    assert push_install.returncode == 0, push_install.stderr
+    return clone
+
+
+def clone_branch(clone):
+    return git(clone, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+
+
+def clone_oids(clone):
+    branch = clone_branch(clone)
+    local = git(clone, "rev-parse", "HEAD").stdout.strip()
+    remote = git(clone, "rev-parse", f"origin/{branch}").stdout.strip()
+    return branch, local, remote
+
+
+def remote_board_sha(clone):
+    """The sha the remote currently holds for the tracked branch."""
+    branch = clone_branch(clone)
+    listing = git(clone, "ls-remote", "origin", f"refs/heads/{branch}").stdout
+    return listing.split()[0]
+
+
+def test_a_no_verify_shrink_commit_is_refused_at_the_push_path(tmp_path):
+    """AC2: the incident shape — --no-verify lands the shrink locally, the PUSH refuses it."""
+    clone = make_push_pair(tmp_path)
+    remote_before = remote_board_sha(clone)
+    stage_board(clone, ("A",))
+    committed = git(clone, "commit", "-qm", "shrink", "--no-verify")
+    assert committed.returncode == 0, committed.stdout + committed.stderr
+    result = git(clone, "push", "--quiet", "origin", "HEAD")
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "REFUSED baseline=3 candidate=1 lost ids=B, C" in result.stderr
+    # The refusal is real: the remote branch still carries the baseline sha.
+    assert remote_board_sha(clone) == remote_before
+
+
+def test_an_append_push_passes_and_lands_the_new_row(tmp_path):
+    clone = make_push_pair(tmp_path)
+    stage_board(clone, ("A", "B", "C", "D"))
+    # The pre-commit guard is installed in the clone too: a plain append commits normally.
+    committed = git(clone, "commit", "-qm", "append D")
+    assert committed.returncode == 0, committed.stdout + committed.stderr
+    result = git(clone, "push", "--quiet", "origin", "HEAD")
+    assert result.returncode == 0, result.stdout + result.stderr
+    branch = clone_branch(clone)
+    assert git(clone, "rev-parse", f"origin/{branch}").stdout.strip() == head(clone)
+
+
+def test_a_push_that_does_not_touch_the_board_passes(tmp_path):
+    clone = make_push_pair(tmp_path)
+    (clone / "notes.txt").write_text("unrelated\n")
+    assert git(clone, "add", "notes.txt").returncode == 0
+    assert git(clone, "commit", "-qm", "unrelated change").returncode == 0
+    result = git(clone, "push", "--quiet", "origin", "HEAD")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "REFUSED" not in result.stdout + result.stderr
+
+
+def test_pre_push_refs_that_leave_the_board_identical_are_skipped_silently(tmp_path):
+    """Skip-when-unrelated lives in the checker per line, not in a cwd heuristic."""
+    clone = make_push_pair(tmp_path)
+    branch, local, _ = clone_oids(clone)
+    stdin = pre_push_line(f"refs/heads/{branch}", local, f"refs/heads/{branch}", local)
+    result = run(
+        clone, sys.executable, str(CHECKER), "--pre-push", input_text=stdin + "\n"
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == "", "an unchanged board must not be graded at all"
+
+
+def test_pre_push_skips_a_deletion_line_and_grades_the_rest_of_the_push(tmp_path):
+    """A remote deletion pushes nothing of ours: that line is skipped, the rest is graded."""
+    clone = make_push_pair(tmp_path)
+    stage_board(clone, ("A", "B", "C", "D"))
+    assert git(clone, "commit", "-qm", "append D", "--no-verify").returncode == 0
+    branch, local, remote = clone_oids(clone)
+    stdin = "\n".join(
+        [
+            # a deletion of some other remote ref, in git's wire order
+            pre_push_line(f"refs/heads/{branch}", NULL_SHA, "refs/tags/old", remote),
+            # and the real pair the push grades
+            pre_push_line(
+                f"refs/heads/{branch}", local, f"refs/heads/{branch}", remote
+            ),
+        ]
+    )
+    result = run(
+        clone, sys.executable, str(CHECKER), "--pre-push", input_text=stdin + "\n"
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "OK baseline=3 candidate=4" in result.stdout
+
+
+def test_pre_push_exits_zero_when_every_line_is_a_delete(tmp_path):
+    clone = make_push_pair(tmp_path)
+    branch, _local, remote = clone_oids(clone)
+    stdin = "\n".join(
+        (
+            pre_push_line(
+                f"refs/heads/{branch}", NULL_SHA, f"refs/heads/{branch}", remote
+            ),
+            pre_push_line("refs/tags/old", NULL_SHA, "refs/tags/old", remote),
+        )
+    )
+    result = run(
+        clone, sys.executable, str(CHECKER), "--pre-push", input_text=stdin + "\n"
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout == ""
+
+
+def test_a_shrink_push_with_the_override_is_loud(tmp_path):
+    """AC3: the push override is explicit AND still names the counts and lost ids."""
+    clone = make_push_pair(tmp_path)
+    stage_board(clone, ("A",))
+    assert git(clone, "commit", "-qm", "shrink", "--no-verify").returncode == 0
+    result = git(
+        clone,
+        "push",
+        "--quiet",
+        "origin",
+        "HEAD",
+        env_extra={"BOARD_ALLOW_SHRINK": "1"},
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    output = result.stdout + result.stderr
+    assert (
+        "NOTICE BOARD_ALLOW_SHRINK override: baseline=3 candidate=1 lost ids=B, C"
+        in output
+    )
+    # the push LANDED with the prune
+    branch = clone_branch(clone)
+    assert git(clone, "rev-parse", f"origin/{branch}").stdout.strip() == head(clone)
+
+
+def test_the_override_does_not_excuse_a_parse_failure_at_the_push_path(tmp_path):
+    clone = make_push_pair(tmp_path)
+    (clone / BOARD).write_text("{not json\n")
+    assert git(clone, "add", str(BOARD)).returncode == 0
+    assert git(clone, "commit", "-qm", "torn row", "--no-verify").returncode == 0
+    result = git(
+        clone,
+        "push",
+        "--quiet",
+        "origin",
+        "HEAD",
+        env_extra={"BOARD_ALLOW_SHRINK": "1"},
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "parse failures baseline=0 candidate=1" in result.stderr
+
+
+def test_pre_push_fails_closed_on_empty_stdin(tmp_path):
+    """Empty stdin never happens on a real push — refuse blind, never pass blind."""
+    clone = make_push_pair(tmp_path)
+    result = run(clone, sys.executable, str(CHECKER), "--pre-push", input_text="")
+    assert result.returncode == 1
+    assert "no ref lines on stdin" in result.stderr
+
+
+def test_pre_push_fails_closed_on_an_unresolvable_ref(tmp_path):
+    clone = make_push_pair(tmp_path)
+    missing = "a" * 40
+    stdin = pre_push_line("refs/heads/master", missing, "refs/heads/master", NULL_SHA)
+    result = run(
+        clone, sys.executable, str(CHECKER), "--pre-push", input_text=stdin + "\n"
+    )
+    assert result.returncode == 1
+    assert f"cannot resolve {missing}" in result.stderr
+    assert "git fetch --deepen=1" in result.stderr
+
+
+def test_pre_push_fails_closed_on_an_unparseable_stdin_line(tmp_path):
+    clone = make_push_pair(tmp_path)
+    result = run(
+        clone, sys.executable, str(CHECKER), "--pre-push", input_text="garbage line\n"
+    )
+    assert result.returncode == 1
+    assert "cannot parse" in result.stderr
+
+
+def test_pre_push_tolerates_the_swapped_oid_first_field_order(tmp_path):
+    """The board row names `<local_sha> <remote_sha> <local_ref> <remote_ref>`; grade it too."""
+    clone = make_push_pair(tmp_path)
+    stage_board(clone, ("A",))
+    assert git(clone, "commit", "-qm", "shrink", "--no-verify").returncode == 0
+    branch, local, remote = clone_oids(clone)
+    stdin = f"{local} {remote} refs/heads/{branch} refs/heads/{branch}"
+    result = run(
+        clone, sys.executable, str(CHECKER), "--pre-push", input_text=stdin + "\n"
+    )
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "REFUSED baseline=3 candidate=1 lost ids=B, C" in result.stderr
+
+
+def test_installer_pre_push_mode_creates_the_hook_and_is_idempotent(tmp_path):
+    """Mirror of the pre-commit installer legs: create, preserve, repeat."""
+    repo = make_repo(tmp_path, install=True)
+    push_hook = repo / "hooks" / "pre-push"
+    assert not push_hook.exists(), (
+        "the test starts without it — the installer must CREATE it"
+    )
+    result = run(repo, sys.executable, str(INSTALLER), "--hook", "pre-push")
+    assert result.returncode == 0, result.stderr
+    content = push_hook.read_text()
+    assert content.startswith("#!/bin/sh"), "a created hook carries the shebang"
+    assert os.access(push_hook, os.X_OK), (
+        "git refuses to run a non-executable pre-push hook"
+    )
+    assert content.count(PUSH_BEGIN) == 1 and content.count(PUSH_END) == 1
+    assert "--pre-push" in content
+    assert BEGIN not in content, "the pre-commit markers never leak into the push block"
+
+    push_hook.write_text(content + "echo preserved\n")
+    for _ in range(2):
+        assert (
+            run(repo, sys.executable, str(INSTALLER), "--hook", "pre-push").returncode
+            == 0
+        )
+    content = push_hook.read_text()
+    assert content.count(PUSH_BEGIN) == 1 and content.count(PUSH_END) == 1
+    assert content.count("echo preserved") == 1
+    assert content.startswith("#!")
+
+
+def test_installer_pre_push_refuses_a_malformed_block_and_leaves_it_intact(tmp_path):
+    repo = make_repo(tmp_path, install=False)
+    assert git(repo, "config", "core.hooksPath", "hooks").returncode == 0
+    hook = repo / "hooks" / "pre-push"
+    hook.parent.mkdir(exist_ok=True)
+    broken = "#!/bin/sh\n" + PUSH_BEGIN + "\nno closing marker\n"
+    hook.write_text(broken)
+    hook.chmod(0o755)
+    result = run(repo, sys.executable, str(INSTALLER), "--hook", "pre-push")
+    assert result.returncode == 1
+    assert "malformed managed block" in result.stderr
+    assert "pre-push" in result.stderr
+    assert hook.read_text() == broken
+
+
+def test_the_default_mode_still_installs_the_pre_commit_hook(tmp_path):
+    """No behavior change for existing callers: default mode never touches the push path."""
+    repo = make_repo(tmp_path, install=False)
+    assert git(repo, "config", "core.hooksPath", "hooks").returncode == 0
+    assert not (repo / "hooks" / "pre-push").exists()
+    assert run(repo, sys.executable, str(INSTALLER)).returncode == 0
+    pre_commit = (repo / "hooks" / "pre-commit").read_text()
+    assert pre_commit.count(BEGIN) == 1 and pre_commit.count(END) == 1
+    assert "--pre-push" not in pre_commit
+    assert not (repo / "hooks" / "pre-push").exists(), (
+        "default mode must not create the pre-push hook"
+    )
+    # and the two modes stay in their own hook files
+    assert (
+        run(repo, sys.executable, str(INSTALLER), "--hook", "pre-push").returncode == 0
+    )
+    push_content = (repo / "hooks" / "pre-push").read_text()
+    assert push_content.count(PUSH_BEGIN) == 1
+    assert pre_commit == (repo / "hooks" / "pre-commit").read_text(), (
+        "push-mode install must not rewrite the pre-commit hook"
+    )
+
+
+def test_the_print_mode_prints_each_hook_block_without_changing_anything():
+    pre_commit = run(ROOT, sys.executable, str(INSTALLER), "--print")
+    assert pre_commit.returncode == 0
+    assert BEGIN in pre_commit.stdout and END in pre_commit.stdout
+    assert PUSH_BEGIN not in pre_commit.stdout
+    assert pre_commit.stdout.endswith(END + "\n")
+
+    pre_push = run(
+        ROOT, sys.executable, str(INSTALLER), "--print", "--hook", "pre-push"
+    )
+    assert pre_push.returncode == 0
+    assert PUSH_BEGIN in pre_push.stdout and PUSH_END in pre_push.stdout
+    assert "--pre-push" in pre_push.stdout
+    assert BEGIN not in pre_push.stdout

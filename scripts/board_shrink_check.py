@@ -13,6 +13,18 @@ Modes
                     the stage-0 INDEX blob — byte for byte what the commit will contain.
   --recent          `git show HEAD:<board>`        vs `git show HEAD^:<board>`
                     post-commit mode for CI, where nothing is staged.
+  --pre-push        `git show <remote_sha>:<board>` vs `git show <local_sha>:<board>` for every
+                    ref pair the pre-push hook passes on stdin (one per line, git's wire format
+                    `<local_ref> <local_oid> <remote_ref> <remote_oid>`; the swapped
+                    `<local_oid> <remote_oid> <local_ref> <remote_ref>` order is tolerated).
+                    This is the SECOND enforcement point (AUG-196): a commit made with
+                    --no-verify can LAND a board shrink, so the push that would publish one is
+                    refused as well. A line whose local oid is the null oid (a remote deletion)
+                    is skipped — nothing of ours is published; a ref pair whose board blob is
+                    byte-identical on both sides is skipped (the push does not change the
+                    board path); when every stdin line is skipped the check exits 0. Empty
+                    stdin never happens on a real push: it is a fail-closed error, never a
+                    silent pass.
 
 Row counting
   One JSON object per line; blank lines are ignored. A line that does not parse — invalid JSON, a
@@ -54,6 +66,7 @@ AC4 — the truncating writer
 Usage
   python3 scripts/board_shrink_check.py          # staged index vs HEAD (pre-commit hook)
   python3 scripts/board_shrink_check.py --recent # HEAD vs HEAD^ (CI)
+  python3 scripts/board_shrink_check.py --pre-push # ref pairs on stdin (pre-push hook)
   BOARD_ALLOW_SHRINK=1 git commit ...            # deliberate prune
 
 Exit codes: 0 append / surviving ids with unchanged count / explicit override; 1 shrink, missing
@@ -63,6 +76,7 @@ baseline id, parse failure, or an impossible comparison (fail closed).
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -149,24 +163,8 @@ def summary(old, new, lost):
     )
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument(
-        "--recent",
-        action="store_true",
-        help="compare HEAD^ to HEAD (CI, nothing staged)",
-    )
-    parser.add_argument("--path", default=BOARD, help=f"board path (default: {BOARD})")
-    args = parser.parse_args()
-    path = args.path
-
-    try:
-        old = rows(read_blob("HEAD^" if args.recent else "HEAD", path), "baseline")
-        new = rows(read_blob("HEAD" if args.recent else "", path), "candidate")
-    except (ValueError, OSError) as exc:
-        print(f"board-shrink: {exc}", file=sys.stderr)
-        return 1
-
+def verdict(old, new, path, subject):
+    """Shared refusal/override/OK contract for every mode (AUG-194/195/196)."""
     lost = sorted(old[1] - new[1])
     report = summary(old[0], new[0], lost)
 
@@ -188,14 +186,14 @@ def main():
         if override in TRUTHY:
             print(f"board-shrink: NOTICE {ALLOW_ENV} override: {report}")
             print(
-                f"board-shrink: SHRINK ACCEPTED — the commit will {effect} "
+                f"board-shrink: SHRINK ACCEPTED — the {subject} will {effect} "
                 f"({old[0]} -> {new[0]}); the ids above are gone from the board."
             )
             return 0
         print(f"board-shrink: REFUSED {report}", file=sys.stderr)
         print(
-            f"board-shrink: the commit would {effect} "
-            f"({old[0]} -> {new[0]}); {BOARD} must be updated in place (append, or rewrite only "
+            f"board-shrink: the {subject} would {effect} "
+            f"({old[0]} -> {new[0]}); {path} must be updated in place (append, or rewrite only "
             f"the changed lines) — never replaced with a filtered row set.",
             file=sys.stderr,
         )
@@ -215,6 +213,119 @@ def main():
     else:
         print(f"board-shrink: OK {report} — row count and ids unchanged")
     return 0
+
+
+OID_RE = re.compile(r"^[0-9a-fA-F]{40}$|^[0-9a-fA-F]{64}$")
+
+
+def is_oid(token):
+    return bool(OID_RE.match(token))
+
+
+def is_null_oid(oid):
+    return is_oid(oid) and set(oid) == {"0"}
+
+
+def parse_pre_push_line(fields):
+    """(local_ref, local_sha, remote_ref, remote_sha) from one pre-push stdin line, else None.
+
+    git sends `<local_ref> <local_oid> <remote_ref> <remote_oid>`. The swapped
+    `<local_oid> <remote_oid> <local_ref> <remote_ref>` order — the one named on the
+    board row — is tolerated so the check does not depend on which spelling the hook
+    block received. Any other shape is unparseable and refuses closed.
+    """
+    if len(fields) != 4:
+        return None
+    oid_positions = [i for i, field in enumerate(fields) if is_oid(field)]
+    if oid_positions == [1, 3]:
+        return fields[0], fields[1], fields[2], fields[3]
+    if oid_positions == [0, 1]:
+        return fields[2], fields[0], fields[3], fields[1]
+    return None
+
+
+def run_pre_push(path):
+    """Pre-push mode (AUG-196): grade every stdin ref pair that changes `path`.
+
+    baseline = the board at the REMOTE oid (what is on the remote now); candidate = the board
+    at the LOCAL oid (what the push would land). The same verdict contract as the commit
+    path applies: every distinct baseline id must survive, the row count must not fall, and
+    BOARD_ALLOW_SHRINK stays loud. Parse failures and unreadable refs fail closed with or
+    without the override; refs whose board blob is identical are skipped, per line, and
+    remote deletions carry no candidate at all.
+    """
+    lines = sys.stdin.read().splitlines()
+    if not any(line.strip() for line in lines):
+        print(
+            "board-shrink: --pre-push got no ref lines on stdin; refusing to pass blind",
+            file=sys.stderr,
+        )
+        return 1
+    for number, line in enumerate(lines, 1):
+        fields = line.split()
+        if not fields:
+            continue
+        parsed = parse_pre_push_line(fields)
+        if parsed is None:
+            print(
+                f"board-shrink: pre-push line {number}: cannot parse {line!r}; "
+                "refusing to pass blind",
+                file=sys.stderr,
+            )
+            return 1
+        local_ref, local_sha, remote_ref, remote_sha = parsed
+        if is_null_oid(local_sha):
+            # Deleting the remote ref publishes nothing of ours — no candidate to grade.
+            continue
+        try:
+            baseline = "" if is_null_oid(remote_sha) else read_blob(remote_sha, path)
+            candidate = read_blob(local_sha, path)
+        except (ValueError, OSError) as exc:
+            print(
+                f"board-shrink: pre-push line {number} "
+                f"({local_ref} -> {remote_ref}): {exc}",
+                file=sys.stderr,
+            )
+            return 1
+        if baseline == candidate:
+            # The push does not change the board path — per-line skip, not a cwd heuristic.
+            continue
+        code = verdict(
+            rows(baseline, "baseline"), rows(candidate, "candidate"), path, "push"
+        )
+        if code != 0:
+            return code
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--recent",
+        action="store_true",
+        help="compare HEAD^ to HEAD (CI, nothing staged)",
+    )
+    parser.add_argument(
+        "--pre-push",
+        action="store_true",
+        help=(
+            "ref pairs on stdin from the pre-push hook: remote:<board> is the baseline, "
+            "local:<board> the candidate"
+        ),
+    )
+    parser.add_argument("--path", default=BOARD, help=f"board path (default: {BOARD})")
+    args = parser.parse_args()
+    path = args.path
+
+    try:
+        if args.pre_push:
+            return run_pre_push(path)
+        old = rows(read_blob("HEAD^" if args.recent else "HEAD", path), "baseline")
+        new = rows(read_blob("HEAD" if args.recent else "", path), "candidate")
+    except (ValueError, OSError) as exc:
+        print(f"board-shrink: {exc}", file=sys.stderr)
+        return 1
+    return verdict(old, new, path, "commit")
 
 
 if __name__ == "__main__":
