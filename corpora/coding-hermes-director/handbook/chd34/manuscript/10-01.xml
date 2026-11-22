@@ -1,0 +1,255 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd34/manuscript/10-01.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD34-MA-386713-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd34/manuscript/10-01.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD34-MA-386713-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+&lt;!-- CHD3.4A-03-BLOCK I; SPEC V3.4; section 10; source src/80-admission-dispatch.md --&gt;
+
+&gt; **REVISION NOTICE — CHD-3.4 supersedes CHD-3.3.** This revised section integrates the audit disposition and selected contracts. All body blocks below carry change bars.
+
+&lt;div class="chg" markdown="1"&gt;
+
+# §J — Admission, dispatch and worker run control
+
+&lt;div class="chg"&gt;
+**Edition:** CHD-3.4 · **Revision notice:** This section replaces CHD-3.3 lifecycle prose where it conflated logical send, attempt, run, report, wait, timeout, or capacity state. `tables/lifecycle-34.json` is the typed authority; generated `lifecycle-34-*` schemas/tables and the figure model are projections. The concrete native/provider stop-attestation producer and transport remain OPEN; this document specifies the required proof, not an implementation claim.
+&lt;/div&gt;
+
+**Status:** normative handbook section. This section explains operation ordering, guards, record ownership, queue admission, immediate dispatch, SEND execution, and managed worker runs. It does not create a second state machine.
+
+**Authority:** the controller/service writer owns admission, reservations, logical-send and attempt transitions, run records, report correlation, wait records, and every gateway HTTP dispatch. The verifier classifies reports; the provider/native adapter is the producer of runtime status and any trusted stop attestation; the scheduler only registers timed triggers and delivers callbacks. No store, board, shell, CLI, profile prompt, scheduler, or bridge calls a gateway.
+
+**Normative safety rule:** request cancellation, report receipt, logical-send closure, attempt closure, run terminality, wait opening, objective acceptance, and confirmed executor stop are distinct events. A slot is charged to the controller-owned reservation linked to the canonical `AttemptRecord` and `RunRecord`, and releases only after trusted correlated terminal runtime proof or trusted correlated stop attestation is durably read back, committed, and audited. A report, process exit, timeout, lease expiry, scheduler response, cancellation intent, or uncorrelated process absence is not stop proof.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/manuscript/10-01.md#j-1-contract-and-authority-boundary -->
+  <section id="CHD-HANDBOOK-CHD34-MA-386713-J-1-CONTRACT-AND-AUTHORITY-BOU-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## J.1 Contract and authority boundary
+
+A request has four identities that are never substituted:
+
+TABLE 10.1-1 — J.1 Contract and authority boundary
+
+| Identity | Meaning | Rotation |
+|---|---|---|
+| `send_id` | One logical owed work item, linked to the assignment and request message | Stable across queueing, retries, new sessions, wait/resume and reconciliation |
+| `attempt_id` | One execution attempt against one immutable session target | New target or wait-resume mints a new attempt; a closed attempt never reopens |
+| `run_id` | One Hermes/worker runtime execution record | Minted by the gateway/controller for the attempt; status is queried, never inferred |
+| `gateway_request_key` | Idempotency key for one POST to one target | Reused only for the same send, attempt and target snapshot; a changed target requires a new key |
+
+The controller is the admission owner for both scheduled and immediate paths. It stores the effective capacity evidence and performs the shared atomic reservation. The scheduler is a trigger and callback retry owner, not a second capacity ledger and not a dispatcher. A supervisor/director is an authorized requester, not an admission authority. A foreman can request a worker run but cannot bypass the controller or select a default/shared profile. The controller's reservation depends on the controller writer lease, durable `chd` control storage, and the canonical assignment/send/attempt/run records; scheduler availability is not a prerequisite for an authorized `run_now` request.
+
+Every guarantee below names its mechanism: single writer + fsync records for durability; request-ledger idempotency for replay; one atomic reservation primitive for caps; immutable attempt target snapshots for external effects; run-status reconciliation and stop confirmation for capacity release; scheduler callback dedupe for timed fires; profile/runtime validation for worker isolation.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/manuscript/10-01.md#j-2-clock-registration-and-timed-work -->
+  <section id="CHD-HANDBOOK-CHD34-MA-386713-J-2-CLOCK-REGISTRATION-AND-TIM-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## J.2 Clock registration and timed work
+
+The service owns no scheduler and no hidden cycle clock. At startup and config reload it registers stable NORMAL lanes through the validated scheduler API:
+
+- `chd-&lt;cycle&gt;` — director sync;
+- `chd-mgr-&lt;agent-id&gt;` — manager clock;
+- `chd-followup-&lt;send-id&gt;` — bounded follow-up.
+
+The registration readback records `lane_id`, schedule, `clock_source: scheduler`, `registered_at`, `config_digest` and `last_fire_ts`. The service host is NTP-synchronised to the scheduler source; skew above `ingress.max_clock_skew_s` (default 5 seconds) fails readiness and prevents silent deadline arithmetic. Deadlines are absolute service-stamped UTC values. A restart, endpoint wake or counter snapshot is never a cycle boundary.
+
+`POST /v1/cycle` accepts `{cycle,lane,namespace,ts,dedupe_key}`. The controller reads the callback ledger and pending records, validates the scheduler credential and dedupe key, writes all composed manifests and deadlines with `X-Durability: fsync`, reads them back, and only then returns 2xx. A replay of the same lane/fire dedupe key returns the retained result and composes nothing. A persistence failure returns 5xx so the scheduler retries the same key; the service does not add a second callback retry loop.
+
+Startup and outage rules are explicit:
+
+- If scheduler registration is unavailable, configured scheduled lanes remain unarmed and the registration failure is persisted/audited; no scheduled callback is treated as fired. Existing queued work remains durable and is not discarded.
+- If the scheduler transport is down after a valid immediate `run_now` request reaches the controller, scheduler state is irrelevant: the controller performs the same shared reservation. If capacity is available it dispatches through the controller to the configured gateway; if full it persists `queued{reason: at_capacity}`; if the controller store or writer lease is unavailable it returns `503 admission_unavailable` and makes no dispatch claim. It never invents a local slot.
+- If a scheduled callback cannot reach the controller, no scheduled admission occurs. On recovery the scheduler retries the same callback key; controller restart first scans canonical manifests and reservations, so a callback response loss cannot create a second reservation or POST.
+- The zero-scheduled-trigger assertion means **no gateway call caused by a scheduler fire** when no scheduled lane is registered and no trigger fires. It does not prohibit an independently authorized immediate `POST /v1/assignments` or `POST /v1/worker-runs`; those are tested separately and still require controller admission, canonical records, and shared capacity.
+
+Thus scheduler outage degrades scheduled initiation, not the controller's immediate request surface; controller/store outage blocks both paths fail-closed.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/manuscript/10-01.md#j-3-two-initiators-one-admission-contract -->
+  <section id="CHD-HANDBOOK-CHD34-MA-386713-J-3-TWO-INITIATORS-ONE-ADMISSI-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## J.3 Two initiators, one admission contract
+
+A scheduled request and a supervisor/orchestrator request use the same assignment, manifest, authorization, capacity and idempotency contract. This is the R31-019 rule: two producers, one ledger, one reservation primitive.
+
+TABLE 10.1-2 — J.3 Two initiators, one admission contract
+
+| Path | Request | Admission owner | Gateway now? | Durable result |
+|---|---|---|---|---|
+| Scheduled | scheduler callback → controller; controller may request a scheduler bump, never a gateway call | controller reservation ledger; scheduler supplies trigger only | Only after the same reservation succeeds and controller dispatches | assignment/message/send manifest; `queued` or `admitted` |
+| Enqueue-only | supervisor/director → `POST /v1/assignments` with `admission: enqueue_only` | controller | **No**; later scheduler cycle | assignment/message/send manifest in `queued`; no gateway request |
+| Run-now | supervisor/director → controller with `admission: run_now` | controller | Controller orchestrator calls gateway after reservation | same records, then attempt and gateway run reference |
+| Worker dispatch | foreman → `POST /v1/worker-runs` | controller | controller → gateway; never foreman shell/CLI | worker run + send/attempt records |
+
+`enqueue_only` is not a low-priority run-now: it deliberately creates no immediate gateway effect. `run_now` means execute as soon as capacity permits, not ignore capacity. At capacity it returns a durable `202 state=queued` (or synchronous `429 at_capacity` for a caller explicitly requiring immediate completion); the request is not dropped.
+
+The controller's reservation operation is conceptually:
+
+```text
+journal_reserve(logical_work_identity, send_id, dimensions)
+  if an existing committed reservation/manifest names the same logical work:
+      duplicate(existing ids)
+  if any dimension would exceed its cap: at_capacity
+  otherwise journal claim + intent + prepared reservation/manifest,
+      read back every step, append commit marker last, return ok
+```
+
+The reservation and manifest are one controller-owned journal transaction, not a DuckBrain multi-key
+transaction: claim → intent → prepared reservation/manifest constituents → exact readbacks →
+last-written commit marker → response. The durable reservation record names `reservation_id`,
+`send_id`, `attempt_id`, every charged dimension and cap revision, `owner: controller`,
+`state: held|released`, `held_at`, `released_at`, and `release_proof_ref`. There is no scheduler
+counter plus controller counter. A reservation without a valid marker is not an accepted
+reservation; a manifest without a reservation is re-admitted once by `send_id` after restart.
+The reservation is held until the canonical attempt/run reaches a terminal state **and** the
+controller has committed positive stop proof. `released` is a projection of that proof, never a
+source of capacity truth.
+
+Capacity ownership is therefore derived from the effective `AttemptRecord.run_state`,
+`reservation_id`, target snapshot, and controller reservation record—not from `SendManifest.state`,
+`WorkerRun.state`, report receipt, queue counters, scheduler counters, or a separate cache.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/manuscript/10-01.md#j-3-1-timed-versus-immediate-race -->
+  <section id="CHD-HANDBOOK-CHD34-MA-386713-J-3-1-TIMED-VERSUS-IMMEDIATE-R-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### J.3.1 Timed versus immediate race
+
+Suppose assignment `T-101` is under `max_inflight=1`. A scheduled callback and `run_now` arrive concurrently. Both authenticate, resolve the same assignment and present the same logical-work identity. The controller serializes `journal_reserve(T-101, …)`:
+
+1. Winner writes one `send_id`, one `attempt_id` and one reservation, then calls the gateway once.
+2. Loser reads the committed reservation and returns `409 duplicate` with the winner's `send_id`/`attempt_id`; it does not mint an attempt or call the gateway.
+3. If the cap was already full, both requests retain `queued`; the first later reservation wins and the other remains a duplicate of that logical work.
+
+This is safe because the single-writer journal marker is the mechanism, not timing luck. The losing branch's error is `409 duplicate` for the same logical assignment/open send; a changed idempotency payload is `409 admission_conflict`. Neither branch may return a second success.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/manuscript/10-01.md#j-4-capacity-dimensions-and-fairness -->
+  <section id="CHD-HANDBOOK-CHD34-MA-386713-J-4-CAPACITY-DIMENSIONS-AND-FA-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## J.4 Capacity dimensions and fairness
+
+Capacity is a vector, not one integer. Usage is derived from effective manifests and active bonds; no parallel counter is authoritative.
+
+TABLE 10.1-3 — J.4 Capacity dimensions and fairness
+
+| Dimension | Example cap | Usage charged by | Release mechanism |
+|---|---:|---|---|
+| gateway inflight | `gateway:&lt;id&gt;.max_inflight` | controller reservations linked to open attempts/runs | trusted correlated terminal runtime proof or stop attestation, then committed release |
+| worker agent sessions | `agent:&lt;id&gt;.max_sessions` | active SessionBond generations linked to open runs | bond retirement only after trusted stop/readback |
+| role/kind parallelism | `type:&lt;role&gt;.max_parallel.&lt;kind&gt;` | controller reservations for the kind | release only after the charged attempt/run proof and reservation commit |
+| gateway request rate | `max_requests_per_cycle` | dispatches in the scheduler cycle | next cycle boundary; never used as inflight release |
+| fan-out | `orchestration.max_fanout` | sends composed by one cycle | cycle close; excess remains queued |
+| workspace/runtime pool | configured profile/runtime pool | controller reservations linked to admitted runs | trusted correlated terminal runtime proof or stop attestation, then committed release |
+
+Reservation checks every applicable dimension under one controller lock/transaction. If any dimension is full, no dimension is partially reserved. Queuing is allowed; capacity is never a refusal of the underlying request. Fairness is FIFO by `composed_ts` within a gateway, with aging so new traffic cannot starve old work. When a gateway returns, queued sends resume oldest-first in composition order. Across independent gateways, queues are independent. `max_fanout` bounds each cycle without changing logical-work identity.
+
+&lt;div class="chg"&gt;
+A lease expiry is a detection event, not a release event. It produces `capacity_lease_expired`, records the attempt/run as `unknown` or `unreachable` in the typed machine, and retains its charge while reconciliation proceeds. This mechanism deliberately sacrifices availability before admitting above a cap; `paused:uncertain` is a historical label and not a CHD-3.4 state.
+&lt;/div&gt;
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/manuscript/10-01.md#j-5-send-state-machine -->
+  <section id="CHD-HANDBOOK-CHD34-MA-386713-J-5-SEND-STATE-MACHINE-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## J.5 SEND state machine
+
+&lt;div class="chg"&gt;
+The send orchestrator owns every transition defined in `tables/lifecycle-34.json`. It reads the effective record revision, validates the machine-specific guard, writes the next record revision and audit event with fsync, reads back those writes, and only then performs an external effect. The normal logical-send path is `composed → queued → admitted → dispatched → await_report → verified → closed`; the attempt and run are separate records and may be `open`, `running`, `unknown`, or `unreachable` while the send remains open. The generated transition projection is `tables/lifecycle-34-transitions.csv`; `tables/send-state-transitions.csv` is historical compatibility material and cannot define a state outside the CHD-3.4 source.
+
+A report is receipt and correlation evidence, not run terminality. If a report arrives while the run is `running`, `unknown`, or `unreachable`, the controller stores it and retains the reservation. It can classify content, but it cannot close the attempt, open a successor, release capacity, or accept an assignment until trusted correlated terminal/stop proof is read, validated, committed, and read back. If report receipt and runtime status race, the controller serializes both against the attempt revision; release requires both the report link and proof record.
+
+The wait path is `await_report → waiting` only when the waiting content is valid, the current run has trusted correlated stop attestation, and no success claim is made. The attempt closes, `WaitRecord` opens, and the logical send remains open. Resolution writes a new `ResolutionRecord`, `SuccessorLink`, and successor attempt only after the old reservation release is read back. An unresolved or uncertain run cannot mint a successor. A follow-up deadline, timeout, or ladder rung is visibility only: it never closes, approves, resumes, or releases.
+
+Cancellation has distinct records: cancel intent, stop request receipt, runtime terminality/stop proof, and logical-send/attempt closure. Before an external POST, the controller may commit a cancelled non-run path under the source guard. After POST, cancellation intent and HTTP receipt do not establish stop; the run remains charged until the trusted proof ordering in the source is complete. The concrete native/provider producer of that proof is OPEN, so this specification does not claim runtime capability.
+&lt;/div&gt;
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/manuscript/10-01.md#j-6-managed-http-worker-dispatch-r31-021 -->
+  <section id="CHD-HANDBOOK-CHD34-MA-386713-J-6-MANAGED-HTTP-WORKER-DISPAT-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## J.6 Managed HTTP worker dispatch (R31-021)
+
+The target authority is structured HTTP, not a shell or CLI launch. The foreman calls the controller; the controller validates and reserves, then its orchestrator calls the configured gateway using the selected profile and credential reference.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/manuscript/10-01.md#j-6-1-workerrun-request-schema -->
+  <section id="CHD-HANDBOOK-CHD34-MA-386713-J-6-1-WORKERRUN-REQUEST-SCHEMA-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### J.6.1 WorkerRun request schema
+
+```json
+{
+  "schema_version": "chd.worker-run.v1",
+  "request_id": "wr-20261109-1015-a1b2",
+  "dedupe_key": "CRIER-412:attempt:1",
+  "caller": {"principal_ref": "foreman-crier", "credential_ref": "cred:foreman-crier"},
+  "worker": {"agent_id": "wrk-crier-03", "profile_ref": "profile:chd-worker-crier-03", "role": "worker"},
+  "target": {"gateway_id": "gw-crier", "gateway_url_ref": "gateway:gw-crier", "credential_scope": "profile:chd-worker-crier-03/credential:cred-worker-03"},
+  "work": {"ticket_id": "CRIER-412", "assignment_id": "a-...", "room": "task-crier-42", "thread_root": 41, "send_id": "s-...", "parent_bond_id": "b-..."},
+  "instructions": {"body_ref": "/chd/room/task-crier-42/m000000000041", "criteria_ref": "/chd/acceptance/CRIER-412/C1", "request_digest": "sha256:..."},
+  "workspace": {"workdir": "/srv/work/crier-412", "scope": ["repo", "tmp"]},
+  "runtime": {"provider": "deepseek", "model": "deepseek-flash", "context_window": 160000, "max_turns": 40},
+  "provisioning": {"mode": "fresh", "session_allocation_id": "alloc-..."},
+  "admission": {"mode": "run_now", "reservation_id": null}
+}
+```
+
+Required fields are `schema_version`, request/dedupe identity, caller credential reference, worker `agent_id/profile_ref/role`, target `gateway_id/gateway_url_ref/credential_scope`, work lineage, instruction/criteria references, explicit workspace and runtime, provisioning mode, and admission mode. `gateway_url_ref` and credential fields are references only; secrets never appear in the body or durable records. The request is rejected if the profile is missing/shared/default, target or credential scope is inconsistent with config, workspace is outside an allowed root, runtime is not delegated, or the caller is not authorized.
+
+Validation order is authentication → caller role → work record/ownership → explicit non-default worker profile → gateway/profile/credential resolution → allowed workspace → explicit runtime/delegation pool → shared admission → durable attempt/run write → controller gateway dispatch. A missing or shared profile is `422 profile_missing`/`422 profile_shared`; an unsafe workspace is `422 workspace_not_allowed`; an unauthorized runtime is `403 runtime_not_granted`. There is no inherited foreman profile/provider and no default fallback.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/manuscript/10-01.md#j-6-2-workerrun-durable-result-schema -->
+  <section id="CHD-HANDBOOK-CHD34-MA-386713-J-6-2-WORKERRUN-DURABLE-RESULT-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### J.6.2 WorkerRun durable result schema
+
+`WorkerRun` is stored by the controller at `/chd/worker/&lt;run_id&gt;` and is authoritative for run state; a SendManifest summary is only a projection:
+
+```json
+{
+  "schema_version": "chd.worker-run.v1",
+  "run_id": "wrun-...", "request_id": "wr-...", "send_id": "s-...", "attempt_id": "at-...",
+  "reservation_id": "res-...", "owner": "controller",
+  "worker": {"agent_id": "wrk-crier-03", "profile_ref": "profile:chd-worker-crier-03", "role": "worker"},
+  "target": {"gateway_id": "gw-crier", "gateway_url_ref": "gateway:gw-crier", "credential_scope": "profile:chd-worker-crier-03/credential:cred-worker-03"},
+  "state": "queued|admitted|running|stopped|terminal|unknown|unreachable",
+  "run_state": "queued|admitted|running|stopped|terminal|unknown|unreachable",
+  "lifecycle_note": "Report outcome, cancellation intent, assignment verdict, and logical-send closure are separate records; they are not additional RunRecord states.",
+  "result": {"report_ref": "/chd/report/s-.../r-...", "artifact_refs": [], "criteria_results_ref": "/chd/acceptance/CRIER-412/C1"},
+  "stop_proof_ref": null, "cancel_request_ref": null, "gateway_request_key": "chd-key-v1:sha256:...",
+  "started_at": null, "ended_at": null, "last_observed_at": "2026-11-09T10:15:00Z", "revision": 1
+}
+```
+
+A correlated, schema-valid report and terminal/proven-stopped `run_state` are separate prerequisites for assignment or logical-send verification; neither report nor run state alone is acceptance. `unknown` and `unreachable` retain the reservation. `GET /v1/worker-runs/{run_id}` returns this record, the latest gateway readback class, reservation state, and reconciliation evidence. `POST /v1/worker-runs/{run_id}/cancel` records `cancel_request_ref`, sends the stop request through the controller, and returns `202 state=running|unknown|unreachable` with the cancel intent reference until trusted stop proof changes the run to `stopped` or `terminal`. A repeated request id replays the original run; a different request id for the same `(ticket, worker, attempt)` returns `409 duplicate`. The concrete stop-attestation producer remains OPEN.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/manuscript/10-01.md#j-6-3-workerrun-cancel-and-outage-result-shapes -->
+  <section id="CHD-HANDBOOK-CHD34-MA-386713-J-6-3-WORKERRUN-CANCEL-AND-OUT-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### J.6.3 WorkerRun cancel and outage result shapes
+
+Cancel response:
+
+```json
+{"schema_version":"chd.worker-run.v1","run_id":"wrun-...","state":"running","cancel_request_ref":"/chd/cancel/wrun-.../cr-1","stop_request":{"accepted":true,"gateway_id":"gw-crier","request_id":"stop-..."},"reservation":{"state":"held","reservation_id":"res-..."},"poll_ref":"/v1/worker-runs/wrun-...","note":"cancel intent is not stop proof; state changes only after trusted correlated attestation"}
+```
+
+Outage/unknown response:
+
+```json
+{"schema_version":"chd.worker-run.v1","run_id":"wrun-...","state":"unreachable","outage":{"gateway_id":"gw-crier","kind":"transport|health|auth|controller_store","observed_at":"2026-11-09T10:20:00Z","retry_after_s":60,"scheduler_effect":"scheduled_callbacks_queued"},"reservation":{"state":"held","reason":"stop_unproven"},"reconcile_ref":"/v1/worker-runs/wrun-..."}
+```
+
+An outage response never claims that no worker ran. The controller retains the reservation and retries status → resolve-unknown → session history. The visibility ladder may emit notices, but no timer-driven closure/resume is legal. No new POST, successor attempt, or capacity release is legal until the existing run is proven stopped or terminal by trusted correlated runtime proof. An operator decision can record an incident or block, but cannot fabricate stop proof; the concrete provider/native attestation producer remains OPEN.
+
+Dispatch returns `202 {run_id,state}` immediately. The worker's result is a correlated `kind=report` validated against criteria; process exit is observation, not completion. The foreman may poll and verify asynchronously but cannot launch a replacement through a shell or by bypassing the controller.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/manuscript/10-01.md#j-7-idempotency-and-unknown-execution -->
+  <section id="CHD-HANDBOOK-CHD34-MA-386713-J-7-IDEMPOTENCY-AND-UNKNOWN-EX-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## J.7 Idempotency and unknown execution
+
+The logical work identity is `(ticket_id, assignment_id, assignee, open obligation)` and survives attempts. The gateway key is derived from the canonical identity `(send_id, attempt_id, allocation_id, immutable_target_scope, profile, credential_scope, request_bytes)` using the Section E `chd-key-v1` serialization, and is persisted with the canonical request bytes before POST. Exact duplicate POST bytes to the same target/profile/credential scope are replayed by Hermes; a changed body, target, profile or credential scope under the key returns `409 admission_conflict` and starts no second execution. A transport timeout or lost response is `unknown_execution`, not a failed POST. The controller first reads the stored `allocation_id`/`target_session_id`, then run status/session metadata, calls `resolve-unknown` with `admission_id + execution_generation`, and reads session history for a correlated report. While unresolved it holds capacity and refuses a fresh external effect. A new target is allowed only after a recorded stop/terminal decision and a new attempt/key; credential rotation retains the old scope for the current attempt or requires an authorized successor.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/manuscript/10-01.md#j-8-operator-evidence-and-tests -->
+  <section id="CHD-HANDBOOK-CHD34-MA-386713-J-8-OPERATOR-EVIDENCE-AND-TEST-S012" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## J.8 Operator evidence and tests
+
+Every acceptance or refusal has a request id, logical work identity, manifest revision, reservation outcome, attempt/run reference, audit record and readback. The probes named by this section are `T-ADM-RACE` (timed/run-now race), `T-ADM-CAP` (vector cap), `T-ADM-FAIR` (aging/FIFO), `T-WORKER-HTTP` (profile/runtime payload), `T-WORKER-CANCEL` (stop proof), `T-DUP-POST` (replay/conflict), and `WF-07` (gateway disconnect, controller restart during send, expired lease with live run). The expected records and exact commands are in the examples and runbooks accompanying this section.
+
+
+**CHD-3.3 contract:** `contracts/request-attempt-lifecycle.md`, `schemas/attempt.schema.json`, and `tables/commit-protocol.csv` own identity, stop proof, commit markers and recovery.
+
+
+**Full-size figure detail:** FIGURE 10.3-1 in §27; the detail sheets carry the drawing, explanation, steps and failure branches.
+
+
+&lt;/div&gt;
+  </section>
+</spec>

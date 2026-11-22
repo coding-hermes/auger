@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/handbook/chd32/contracts/request-attempt-lifecycle.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-BUILD-SPEC-INTEGR-FDAF5C-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/handbook/chd32/contracts/request-attempt-lifecycle.md#preamble -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FDAF5C-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# CHD-3.3 Core Contract: request, send, attempt, run and wait
+
+**Contract ID:** `chd.request-attempt.v1`
+**Authority:** this file owns identity allocation and the cross-record lifecycle. The
+Section 11 source-of-truth at `tables/section11-lifecycle-source.json` owns the
+logical-send, attempt, wait/gate, run, resolution, successor-link and current-attempt
+transition vocabulary; its generated/checked companions are the schemas and tables
+listed below. Per-operation cards implement the contract.
+**Status:** specified and internally checked; runtime execution is unverified.
+
+**Section 11 companions:** `schemas/logical-send.schema.json`, `schemas/attempt.schema.json`,
+`schemas/wait-gate.schema.json`, `schemas/run-record.schema.json`,
+`schemas/resolution-record.schema.json`, `schemas/successor-link.schema.json`,
+`schemas/current-attempt-selection.schema.json`, `tables/section11-transition-table.csv`,
+`tables/section11-ladder.csv`, and `examples/reports/section11-lifecycle.json`.
+
+The source explicitly selects one policy: the visibility ladder never verifies or closes
+content; a late valid report may close an open logical send, while a late report after
+terminal closure is immutable late evidence and never reopens work.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/handbook/chd32/contracts/request-attempt-lifecycle.md#1-identity-is-allocated-before-any-external-effect -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FDAF5C-1-IDENTITY-IS-ALLOCATED-BEFORE-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 1. Identity is allocated before any external effect
+
+These identifiers are different and must never be substituted:
+
+| Identifier | Scope | Immutable meaning |
+|---|---|---|
+| `request_id` | caller/profile/credential scope | one client request and its canonical request bytes |
+| `send_id` | logical work | one obligation to obtain a result; it can remain open across waits |
+| `attempt_id` | one send and one immutable target snapshot | one dispatch episode; a closed attempt is never reopened |
+| `run_id` | one Hermes/worker execution | the runtime execution whose status must be read back |
+| `gateway_request_key` | one attempt and one target/profile/credential scope | idempotency key sent to the gateway |
+| `session_id` | native Hermes session | native target identity returned by create/fork/replace |
+| `bond_generation` | CHD routing branch | `(agent, room, thread_root, work_uid, generation)` routing identity |
+
+The controller serializes canonical request bytes as UTF-8 JSON with sorted object keys,
+no insignificant whitespace, explicit `null` values where the schema permits them, and
+normalized RFC3339 UTC timestamps supplied by the controller. `request_digest` is
+`sha256(canonical_request_bytes)`. The request ledger stores the digest, authenticated
+profile, credential reference, immutable target snapshot, `send_id`, `attempt_id`,
+`gateway_request_key`, and response/result references before dispatch.
+
+The gateway key is derived only after the target snapshot is allocated:
+`gw:&lt;profile_ref&gt;:&lt;send_id&gt;:&lt;attempt_id&gt;:&lt;target_digest&gt;:&lt;credential_scope&gt;`, where
+`target_digest` covers gateway, agent, profile, native session id (or an explicit
+`session_allocation_id` before create), room, thread root and work UID. The serialized
+key is hashed before transport if the gateway requires a bounded header. A transport
+retry reuses the same `attempt_id` and key. A new target, new profile, wait-resume,
+replacement, or authorized successor gets a new attempt and key only after the old
+attempt is reconciled or a documented stop authority records proven stop.
+
+Credential rotation does not mutate a retained request. The old credential scope remains
+part of the ledger and is used for exact replay when still valid; if it is revoked, the
+controller records `credential_scope_unavailable`, retains the original unknown outcome,
+and requires an authorized successor with a new attempt/key. It never reuses the old key
+under a new credential.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/handbook/chd32/contracts/request-attempt-lifecycle.md#2-native-session-provisioning-is-separate-from-delivery -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FDAF5C-2-NATIVE-SESSION-PROVISIONING-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 2. Native session provisioning is separate from delivery
+
+`create`, `fork`, and `replace` are provisioning operations. `NEW` and `REUSE` are
+CHD delivery labels. A native create or fork response is committed to `SessionBond`
+**before** the first assignment turn. The first turn targets the returned native
+`session_id`; omitting a session header is not evidence of a fresh session.
+
+A native allocation has an `allocation_id` and request digest. If the create/fork
+response is lost, recovery queries the provider using that allocation identity. It either
+replays the returned native id, records `allocation_unknown`, or stops; it does not create
+a second child speculatively. Two equal scheduled prompts have two distinct allocation
+ids and two distinct native sessions.
+
+A same-profile native fork may copy the parent context under D-038. A cross-profile or
+cross-host assignment is **not** a native fork: the controller creates/targets the
+receiver's configured profile and transfers only an authorized context reference (room,
+thread, work, selected report/artifact refs). It never transfers sender credentials,
+policy grants, or native session identity. The receiver gets its own policy snapshot,
+profile credential and bond.
+
+CHD policy snapshots are authorization records. They do not freeze Hermes learning,
+recall, compaction or native transcript behavior; those remain Hermes-owned.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/handbook/chd32/contracts/request-attempt-lifecycle.md#3-logical-send-and-attempt-lifecycle -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FDAF5C-3-LOGICAL-SEND-AND-ATTEMPT-LIF-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 3. Logical send and attempt lifecycle
+
+A `SendManifest` is the logical-send head. Each attempt is a separate immutable record.
+The canonical states are:
+
+```
+composed -&gt; queued -&gt; admitted -&gt; dispatched -&gt; await_report
+                                      |             |
+                                      |             +-&gt; waiting (attempt terminal; send open)
+                                      |             +-&gt; verified -&gt; closed{verified}
+                                      +-&gt; failed/cancelled (only with required proof)
+waiting --resolution record--&gt; queued (new successor attempt)
+```
+
+`waiting` is not a terminal logical-send state. The waiting attempt is closed with
+`close_reason=waiting_human`, a `WaitRecord` is open, and the send stores
+`current_attempt_id=null` until resolution. Resolution is idempotent by `resolution_id`.
+A no-change wait replay returns the same wait and creates no successor. A successful
+resolution creates exactly one new `attempt_id`, links
+`prior_attempt_id -&gt; successor_attempt_id`, and selects it as current only after its
+manifest is durable. All earlier attempts, reports and audit records remain readable.
+
+A report must match the current open attempt's `send_id`, `attempt_id`, `request_ref`,
+`session_ref`, target digest and criteria version. A report for a prior attempt is a
+late/duplicate audit outcome; it cannot close a successor or reopen terminal work.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/handbook/chd32/contracts/request-attempt-lifecycle.md#4-verification-ladder-and-late-reports -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FDAF5C-4-VERIFICATION-LADDER-AND-LATE-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 4. Verification ladder and late reports
+
+The single ladder is visibility-only and is separate from content verification:
+
+| Rung | Guard | Action | State effect |
+|---|---|---|---|
+| 0 | missing correlated report at deadline | one bounded reminder/readback | attempt remains open |
+| 1 | still missing after configured follow-up | escalation to accountable owner | attempt remains open or becomes explicitly paused |
+| 2 | escalation bound reached | incident/owner notice | never grants approval and never silently closes |
+
+Content verification independently classifies a matching report as `verified`,
+`waiting_human`, `blocked`, `failed`, or `rework`. A late valid report before logical
+closure may close the open attempt if its correlation and freshness rules pass. A late
+valid report after terminal closure is stored as `late_report`/`duplicate_ignored` and
+linked for audit; it never reopens the send. Wrong-request, stale, or invalid reports
+are rejected with their named error and do not advance the ladder as valid completion.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/handbook/chd32/contracts/request-attempt-lifecycle.md#5-proven-stop-capacity-rule -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FDAF5C-5-PROVEN-STOP-CAPACITY-RULE-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 5. Proven-stop capacity rule
+
+Capacity is charged to the canonical attempt/run reservation, not to a message, report,
+wait record, lease expiry, process exit, cancellation intent, or elapsed timeout. A slot
+is released only after a terminal runtime status or an equivalent correlated stop proof
+is read, committed, and audited. A human-wait report is receipt/correlation evidence, not stop proof. It may release the runtime slot only when provider readback proves that the turn stopped; otherwise the attempt remains uncertain and the slot remains held. An unknown or unreachable run remains held and is reconciled oldest-first after restart. A report received before terminal run status is stored without closing the attempt; report receipt, logical-send closure, run terminality, and stop proof are separate events.
+
+The authoritative source is `AttemptRecord.run_state` plus its reservation record. A
+manifest summary is a projection and cannot release capacity by itself.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/handbook/chd32/contracts/request-attempt-lifecycle.md#6-required-fault-traces -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FDAF5C-6-REQUIRED-FAULT-TRACES-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 6. Required fault traces
+
+The acceptance package must retain records for exact replay, fresh-session retry, wait
+successor, deleted session, rotated credential, unknown create/fork response, and
+post-POST cancellation. Each trace proves request digest, immutable target, attempt/key,
+run status, capacity decision and resulting audit row. A successful HTTP response alone
+is never the proof.
+  </section>
+</spec>

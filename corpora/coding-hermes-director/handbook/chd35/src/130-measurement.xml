@@ -1,0 +1,174 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd35/src/130-measurement.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD35-SRC-130-M-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd35/src/130-measurement.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-130-M-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# §O — Measurements, diagnostics and operational readout
+
+**Authority and status.** This section is the operational measurement contract for
+CHD-3.5. It specifies VOL-D `VOLD-043..048` and `VOLD-080..084`, R31-012,
+and the measurement part of INDEX §5. A specification label records contract presence only; `implemented` is reserved for inspectable runtime code. Values labelled `measured` require a captured run. `proposed` is an operator budget, not a product guarantee; `unverified` means that no live adapter evidence is shipped.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/130-measurement.md#o-1-evidence-classes-and-status-labels -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-130-M-O-1-EVIDENCE-CLASSES-AND-STATU-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## O.1 Evidence classes and status labels
+
+| Class | Answers | Required evidence | Cannot prove |
+|---|---|---|---|
+| Sample evidence | What did this fixture/run observe? | Raw samples, request/response bodies, expected/observed records, config/fixture digest, run id | Specification conformance, production readiness or owner acceptance |
+| Specification checks | Does the authored contract/schema/matrix agree internally? | Validator output, schema/fixture checks, named source revision | Live runtime behavior or measured performance |
+| Measured runs | What did a finite repeatable workload consume? | Captured run, raw samples, window definition, restart snapshots, compact/reconstruct comparison | Authorization, semantic correctness, recovery or owner acceptance |
+| Owner acceptance | Has the configured owner accepted the objective? | Criterion-by-criterion evidence and configured approval record | A green build, counter, status label or fixture pass alone |
+
+Every report carries independent status fields: `specified`, `internally_checked`,
+`source_cross_checked`, `implemented`, `measured`, and `owner_accepted`. The words
+`proposed` and `unverified` qualify the evidence class; they never upgrade another
+status. A performance result never closes a correctness, authorization, recovery or
+owner-acceptance cell. A fixture pass demonstrates the test adapter only.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/130-measurement.md#o-2-retention-safe-metric-contract -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-130-M-O-2-RETENTION-SAFE-METRIC-CONT-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## O.2 Retention-safe metric contract
+
+The collector MUST NOT derive lifetime totals from rows that are about to be
+tombstoned. Before compaction, it writes an immutable `MetricCheckpoint` record
+(`schemas/metric-checkpoint.schema.json`) and advances a source watermark. A
+checkpoint contains the metric, bounded labels, label schema version, source kind,
+scope, dedupe epoch, bucket values and the last committed namespace/sequence/event
+watermark. The checkpoint is the retention-independent lifetime source; the original
+rows may then be compacted or tombstoned without making `since_start` totals fall.
+
+A metric event uses a deterministic idempotency key:
+`metric_name + canonical_label_bytes + source_record_id + source_revision + event_kind`.
+The collector stores the key or its covered hash in the checkpoint's dedupe epoch.
+Replayed pages, a retry after collector restart, and a checkpoint rebuild therefore
+contribute zero additional count. A checkpoint is committed before any source row
+that it covers is tombstoned; if the checkpoint write or read-back fails, compaction
+stops and the source rows remain. Checkpoints are append-only and addressed by
+`checkpoint_id`; an operator reset creates a new `run_id`/epoch and audit record,
+never mutating historical checkpoints.
+
+The event/aggregate choice is explicit. Event-backed metrics use the durable
+`MetricEvent` source and checkpoint-plus-events reconstruction. State-backed gauges
+and capacity use canonical state reconstruction and never infer state from a
+counter. The collector startup sequence is: acquire the writer lease; load the
+newest checkpoint; scan committed events after its watermark with a stable cursor;
+reconcile the canonical attempt/run state; write a restart readback; then publish
+status. A missing or conflicting checkpoint yields `unverified`/`null` with a reason,
+not zero.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/130-measurement.md#o-2-1-metric-register -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-130-M-O-2-1-METRIC-REGISTER-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### O.2.1 Metric register
+
+Every row names the source labels, canonical state, dedupe key, retention,
+schema migration, restart/reconstruction rule and query output. Labels are closed
+enums or bounded identifiers; request text, URLs, arbitrary exceptions and user
+text are never labels. `send_id`, `attempt_id`, and `run_id` remain correlation
+fields, not interchangeable label sources.
+
+| Metric | Source labels | Canonical attempt/run state | Dedupe | Retention and migration | Restart/reconstruction | Query output |
+|---|---|---|---|---|---|---|
+| `chd_requests_total` | `operation`, `result` | committed request claim/audit decision | request id + revision + result | checkpoint before 90d request tombstone; v1→v2 maps result enum, explicit gap on unknown | checkpoint + MetricEvent after watermark | `/v1/status?view=metrics` with `scope=since_start`, `checkpoint_id`, `as_of` |
+| `chd_send_state_total` | `from_state`, `to_state` | SendManifest transition revision | send id + manifest revision + transition | checkpoint before terminal-manifest tombstone; preserve transition enum; unknown migration is a gap | checkpoint + transition events | `/chd/send?view=metrics&amp;state=` and status |
+| `chd_worker_runs_total` | `state`, bounded `role` | WorkerRun state/revision; terminal state is not inferred from report | run id + state revision | checkpoint before run retention; v1 state aliases map to canonical state, never drop `unknown` | checkpoint + run events; reconcile open runs first | `/v1/runs?view=metrics&amp;state=` |
+| `chd_worker_run_seconds` | bounded `role`, terminal `state` | WorkerRun with `started_at` and `ended_at` | run id + terminal revision | raw sample/checkpoint retained 90d; non-finite/unknown remains a gap | reconstruct only from canonical timestamps; no duration from logs | run record plus status histogram with `sample_status` |
+| `chd_waits_total` | `gate`, `state` (`opened`,`resolved`,`cancelled`,`open`) | WaitRecord state; `open` is a current state, not a completed event | wait id + state revision | checkpoint before wait tombstone; preserve open/held rows and migration aliases | checkpoint + wait events; current open set from WaitRecord | `/chd/wait?view=metrics&amp;state=` |
+| `chd_report_results_total` | fixed `result`, bounded `agent` | ReportEnvelope tied to send/attempt/run | report id + verdict revision; exact replay returns same result | checkpoint before envelope retention; changed second report remains separate refusal event | checkpoint + report events | `/chd/report?view=metrics&amp;result=` |
+| `chd_capacity_inflight` | `gateway`, `dimension` (`attempt`,`run`,`session`) | canonical Attempt/Run state: `admitted`, `dispatched`, `running`, `paused:uncertain`, `paused:unreachable` charge; only `proven-stopped` releases | reservation id + attempt id + run revision | open/uncertain reservations retained until proven stop; closed snapshots 30d; state aliases migrate to canonical set | reconstruct from active manifests, attempts and runs; uncertain stays visible | `/v1/capacity` returns `charged`, `uncertain`, `held`, `as_of`, source refs |
+| `chd_archive_results_total` | `operation`, fixed `result`, bounded `agent` | ExportManifest/checkpoint publication state | export id + checkpoint revision | checkpoint/gap manifest retained 90d; unsupported schema is explicit gap | checkpoint + archive events | `/chd/archive/status?view=metrics` |
+| `chd_bridge_deliveries_total` | `direction`, fixed `result` | durable delivery/ACK record | delivery id + outcome revision | checkpoint before dead-letter retention; old result aliases map or gap | checkpoint + delivery events; ACK-before-commit is error | `/chd/bridge/status?view=metrics` |
+| `chd_fixture_steps_total` | `scenario` (`WF-01`..`WF-10`), `result` | evidence report step and observed record | run id + step id + observation digest | evidence report is authoritative and retained; schema migration preserves expected/observed | checkpoint index + report readback; no fabricated zero | `evidence/runs/&lt;run&gt;/report.json` |
+| `chd_cycle_cost_tokens` | `cycle_phase` (`startup`,`unchanged`,`recovery`), bounded `role` | measurement run/cycle boundary, not a send state | measurement run id + cycle ordinal + sample digest | raw samples/checkpoint retained 90d; incompatible unit is `unverified` | reconstruct from retained samples/checkpoint only | soak report with `evidence_class=measured` |
+
+The same label source is used in status, audit and evidence queries: `send_id`
+identifies a logical send, `attempt_id` identifies one dispatch episode, and `run_id`
+identifies one external execution. A report or wait cannot silently substitute one
+for another. `chd_capacity_inflight` is charged from the canonical Attempt/Run
+state table, not from `SendManifest` closure, lease expiry, report arrival, or a
+collector-local counter. Unknown/uncertain runs retain their reservation and appear
+as `uncertain`/`held`; they are never hidden as zero.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/130-measurement.md#o-3-events-open-state-labels-and-logs -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-130-M-O-3-EVENTS-OPEN-STATE-LABELS-A-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## O.3 Events, open-state labels and logs
+
+Every durable `MetricEvent` contains `event_id`, `event_type` from a closed enum,
+`occurred_at`, `schema_version`, `run_id` when applicable, correlation refs
+(`send_id`, `attempt_id`, `run_id`), bounded labels, `source_record_id`, source
+revision, dedupe key/digest, value, and `record_refs`. Logs are diagnostic
+projections, not authority. The authoritative sequence is the durable event or
+canonical record plus its read-back response.
+
+Open states are printed rather than collapsed: `queued`, `admitted`, `dispatched`,
+`running`, `await_report`, `waiting_human`, `paused:unreachable`,
+`paused:uncertain`, and `open` are active labels; `terminal` is not. Every open
+label must resolve to the canonical state machine for its record family. The
+readout includes `state_source` (`attempt` or `run` for capacity, `wait` for wait,
+`send` for send) and `as_of` watermark. A NULL value includes a reason such as
+`store_unavailable`, `checkpoint_missing`, `schema_gap`, or `no_sample`; it is not
+printed as zero.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/130-measurement.md#o-4-migration-compaction-and-reconstruction-acceptance -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-130-M-O-4-MIGRATION-COMPACTION-AND-R-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## O.4 Migration, compaction and reconstruction acceptance
+
+Schema migration is additive and versioned. A collector supports the current
+checkpoint schema and one previous version; it rewrites a migrated checkpoint under
+an append-only new `checkpoint_id`, records `from_schema_version`, transform and
+loss (`none` or `explicit_gap`), and never silently discards an unknown label/state.
+Compaction ordering is: stop metric publication; acquire writer lease; flush and
+read back MetricEvent batches; write and read back checkpoint; verify watermark and
+label digest; only then tombstone covered counted rows; restart collector; reconstruct
+from checkpoint plus post-watermark events and canonical open state; compare with the
+pre-compaction report. Any mismatch is `unverified` and blocks deletion.
+
+The required evidence sequence is **measure → compact/tombstone → restart collector
+→ reconstruct → compare**. `since_start` totals must be monotone (equal or greater),
+rolling windows must expire by event timestamp rather than compaction, duplicate
+replay must be stable, and uncertain capacity must remain visible and charged.
+The acceptance fixture must include one duplicate event, one old rolling-window
+event, one tombstoned terminal record, one open wait, and one uncertain run.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/130-measurement.md#o-5-bounded-comparison-and-provisional-workload -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-130-M-O-5-BOUNDED-COMPARISON-AND-PRO-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## O.5 Bounded comparison and provisional workload
+
+For a repeatable unchanged-workload comparison, use two finite windows of five
+identical cycles (`window_cycles=5`) and a stated tolerance of 10%. Compare the later
+median with the earlier median; pass if the later median is no more than
+`earlier × 1.10`. Report startup separately. A steady-state band is a band, not a
+strictly decreasing sequence. The eight-cycle figure is only a **provisional** burn
+budget for four fires per day over two days, not a token law and not a universal
+ceiling. No acceptance criterion requires tokens to decrease from cycle to cycle.
+
+A cycle starts at the named director fire and ends when all its sends are terminal or
+waiting. Record config digest, fixture revision, seed, cadence, raw samples, counter
+snapshots before/after, compact/tombstone result and restart readback. A single
+sample never carries a performance verdict.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/130-measurement.md#o-6-operational-readout-and-traceability -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-130-M-O-6-OPERATIONAL-READOUT-AND-TR-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## O.6 Operational readout and traceability
+
+The operator readout shows readiness, config/fixture digest, writer lease, capacity
+by gateway and canonical attempt/run state, open sends and waits, held uncertain
+capacity, archive gaps, bridge dead letters, last successful durable readback,
+checkpoint/watermark and links to retained evidence. It labels each claim
+`sample`, `specified`, `internally_checked`, `measured`, `proposed`, `unverified`, or
+`owner_accepted`.
+
+A green build or passing count is not acceptance. Page on an accepted request without
+fsync/readback, denial without audit, capacity above cap, unknown run released
+without stop proof, report closed on wrong correlation, archive restore without
+lineage, or ACK before local durable write. Preserve evidence and stop the affected
+scope; never repair a counter by editing it.
+
+`matrices/test-matrix.csv` maps critical failure gates to named probes;
+`harness/run_scenario.py` emits expected versus observed effects and retains reports
+and records. R32-024 requires the WF-07 evidence to retain the sequence
+`measure → compact/tombstone → restart → reconstruct → compare`, with separate
+sample, specification-check, measured-run and owner-acceptance fields.
+  </section>
+</spec>

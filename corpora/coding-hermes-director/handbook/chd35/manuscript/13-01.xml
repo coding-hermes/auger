@@ -1,0 +1,275 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd35/manuscript/13-01.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD35-MA-23C50F-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/13-01.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD35-MA-23C50F-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+&lt;!-- CHD3.5A-03-BLOCK I; SPEC V3.5; section 13; source src/120-deployment-federation.md --&gt;
+
+&gt; **REVISION NOTICE — CHD-3.5 supersedes CHD-3.4.** This revised section integrates the audit disposition and selected contracts. All body blocks below carry change bars.
+
+&lt;div class="chg" markdown="1"&gt;
+
+# §M — Deployment, project-memory federation, and Crier directors
+
+**CHD-3.5 revision notice (readiness/fencing):** This chapter supersedes any CHD-3.3
+claim that scheduler registration is a universal startup or dispatch prerequisite.
+Read-only, immediate, and scheduled readiness are separate capabilities. Immediate
+admission still requires the authoritative attempt/run reservation and storage-boundary
+fence/snapshot; federation and local project memory cannot provide a second ledger.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/13-01.md#m-0-deployment-readiness-contract -->
+  <section id="CHD-HANDBOOK-CHD35-MA-23C50F-M-0-DEPLOYMENT-READINESS-CONTR-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## M.0 Deployment readiness contract
+
+A deployment publishes `read_only_ready`, `immediate_ready`, and `scheduled_ready`
+separately. Read-only requires authenticated authoritative reads and durable control
+readback. Immediate additionally requires the configured admission owner, correlated
+attempt/run reservation, storage-boundary fencing and authoritative snapshot support,
+profile/credential/runtime checks, and gateway capability readback. Scheduled additionally
+requires scheduler registration/readback for every lane. A scheduler outage therefore
+sets scheduled readiness false and leaves triggers unarmed, but does not globally block
+read-only or an otherwise-ready controller-local immediate request. Scheduler-owner
+admission mode remains blocked until scheduler approval is healthy.
+
+The reservation owner is the controller's authoritative attempt/run ledger. Manifest,
+report, board, role, local project-memory, and scheduler counters are projections or
+trigger state and cannot release capacity. A report, waiting state, timeout, cancellation
+intent, process absence, or network response is not stop proof. Release requires a
+correlated authoritative attempt/run terminal status or trusted runtime stop attestation,
+then a durable release readback. If the fencing/snapshot adapter is unavailable or
+unresolved, immediate and scheduled readiness remain false; the controller does not
+invent native DuckBrain transaction or CAS semantics.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/13-01.md#m-0-1-native-and-storage-release-gates -->
+  <section id="CHD-HANDBOOK-CHD35-MA-23C50F-M-0-1-NATIVE-AND-STORAGE-RELEA-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## M.0.1 Native and storage release gates
+
+The required native `hermes.session.export` export/import adapter, supported API/version,
+request/response/error contract, response-loss reconciliation and export → import →
+first-turn trace remain OPEN-ARCHIVE-1 until probed and verified. The storage
+LeaseAuthority/FencedStore/SnapshotToken binding likewise remains open until atomic
+reservation/fence binding, stale-writer rejection at the write boundary, durable
+high-water reads and multi-page snapshot consistency are evidenced. These unresolved
+release gates are visible in readiness readback; no fallback raw SQLite ledger, guessed
+payload format, or guessed native API is permitted.
+
+
+**Status:** deployment and federation contract for CHD-3.5.
+
+**Authority.** This chapter maps VOL-D §§1.10 and 5.1–5.6 (`VOLD-037..042`,
+`VOLD-056..059`, `VOLD-085..089`), VOL-B §§1 and 6.6, VOL-C §8, R31-028 and
+R31-029. It defines deployment routing, not a new ticket or permission state
+machine. `schemas/federation-map.schema.json` governs peer mapping and
+`schemas/bridge-envelope.schema.json` governs bridge delivery.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/13-01.md#m-1-four-data-classes-and-one-default-route -->
+  <section id="CHD-HANDBOOK-CHD35-MA-23C50F-M-1-FOUR-DATA-CLASSES-AND-ONE-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## M.1 Four data classes and one default route
+
+The controller DuckBrain route is the default for tool calls. Data classes are
+separate even when they use the same controller service:
+
+TABLE 13.1-1 — M.1 Four data classes and one default route
+
+| Class | Default backend | Consistency | Can acknowledge completion? |
+|---|---|---|---|
+| `coordination_report` | controller `/chd` | immediate, `fsync` | yes, after controller readback |
+| `control_key` | controller `/chd` | immediate, `fsync` | yes, after controller readback |
+| `session_archive` | controller `/chd-archive` ingestor | checkpointed | only after archive commit/readback |
+| `project_code_memory` | disabled by default; controller, local, or federated | eventual/background | **never** by itself |
+
+A completion report and control transition always use the controller path. A
+local observation may be queued or stale while sync runs; it cannot be used as
+the acknowledgement of a report, grant, ticket, lease, or verdict. If the
+controller is unavailable, the operation returns `503 control_store_unavailable`
+and remains queued/blocked; no completion is manufactured.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/13-01.md#m-2-two-supported-storage-topologies -->
+  <section id="CHD-HANDBOOK-CHD35-MA-23C50F-M-2-TWO-SUPPORTED-STORAGE-TOPO-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## M.2 Two supported storage topologies
+
+**T-A central-only (default).** Agents proxy all control, report, archive, and
+project-memory reads/writes to the controller. This gives one immediate
+readback authority and no project-memory replication lag.
+
+**T-B central control plus local/federated project memory.** Agents still proxy
+coordination/report and control-key tools to the controller. A configured project
+namespace may be local or federated. In the local topology, the controller accepts
+the observation request, but the named **local project-memory writer** is the
+component that writes the local project-memory store under its local-store
+credential; the controller does not write that store directly. The named single
+**project-memory sync owner** owns checkpointing, conflict policy, and retry, and
+reports the sync checkpoint/result back through the controller. The same
+writer/sync-owner separation applies at a configured federated project backend.
+Conflicts use `controller_wins` for central keys and
+`local_wins_on_project_keys` for project-only keys; every conflict is durable
+and retried from `last_synced_rev/ts`, never silently discarded.
+
+The two drawings are deliberately separate: `fig-storage-topology.svg` and its
+Mermaid source show the immediate controller path, checkpointed archive path,
+and optional eventual project-memory path. Their arrows label backend, proxy,
+acknowledgement, and lag. A deployment cannot silently change T-A into T-B.
+`GET /v1/effective-routing` reads back, per class, backend, namespace, sync,
+proxy, credential reference name, digest, sync owner, and project lag.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/13-01.md#m-3-route-configuration-and-failure-behavior -->
+  <section id="CHD-HANDBOOK-CHD35-MA-23C50F-M-3-ROUTE-CONFIGURATION-AND-FA-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## M.3 Route configuration and failure behavior
+
+Configuration names classes explicitly:
+
+```json
+{
+  "storage": {
+    "classes": {
+      "coordination_report": {"namespace":"chd","backend":"controller","sync":"immediate","proxy":"controller"},
+      "control_key": {"namespace":"chd","backend":"controller","sync":"immediate","proxy":"controller"},
+      "session_archive": {"namespace":"chd-archive","backend":"controller","sync":"checkpointed","proxy":"archive-ingestor"},
+      "project_code_memory": {"namespace":"project-alpha","backend":"local","sync":"background","proxy":"controller"}
+    },
+    "controller": {"backend_url":"https://controller.example/v1","credential_ref_name":"ctrl-api"},
+    "sync": {"owner":"controller-sync-1","conflict":"controller_wins"}
+  }
+}
+```
+
+Unknown classes, credentials embedded in configuration, or a control class
+pointing at a delayed backend fail validation. Startup checks config, controller
+reachability, achieved durability, registry/bond mirrors, and zero traffic
+before arming triggers. Each write confirms `X-Durability` is the configured
+`fsync` mode; a degraded barrier is a loud failure, not an acknowledgement.
+
+TABLE 13.1-2 — M.3 Route configuration and failure behavior
+
+| Failure | Immediate effect | Recovery/evidence |
+|---|---|---|
+| controller unavailable | no control/report dispatch; `503 control_store_unavailable` | retry same request id after health/readback; report remains blocked |
+| local project store unavailable | observation read/write is stale or queued | show lag; do not affect controller completion |
+| sync conflict | conflict record, no silent winner | apply configured class rule, retry from checkpoint, read back digest |
+| archive ingestor unavailable | live control continues; checkpoint/gap remains visible | resume capture; do not claim coverage beyond last commit |
+| peer bridge unavailable | federation traffic isolated | local objectives, tickets, reports and workers continue |
+
+&lt;img class="section13-flow" alt="FIGURE 13.3-1" src="../figures/fig-13.3-1.svg"&gt;
+
+FIGURE 13.3-1 — ROUTE FAILURE / RECOVERY — PRODUCER TO CONSUMER.
+
+The route keeps the producer obligation visible until the controller consumer reads back a correlated durable result. Branch A holds the same request when the queue or controller is unavailable; branch B sends a rejected report to rework rather than manufacturing completion; branch C permits advancement only after verified recovery and acknowledgement.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/13-01.md#m-4-crier-independent-directors-not-a-hierarchy-shortcut -->
+  <section id="CHD-HANDBOOK-CHD35-MA-23C50F-M-4-CRIER-INDEPENDENT-DIRECTOR-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## M.4 Crier: independent directors, not a hierarchy shortcut
+
+Crier connects independent director systems under different owners. Each system
+retains its own VP, director, managers, supervisors, foremen, workers, local
+policy, control store, and acceptance. A peer is an authenticated external
+principal such as `crier:client-alpha`, mapped to a local actor
+`peer:client-alpha` by a durable `FederationMap`.
+
+Connectivity never confers VP status. A message claiming `as: vp` is rejected
+with `403 peer_vp_claim` and audited. Trust is only the configured transport
+identity and scope. A peer request cannot create a local grant, bypass a local
+approval, write local DuckBrain, or alter local VP configuration.
+
+Onboarding records the peer key/token reference, owner label, expiry, allowed
+objective/message/room/ticket scopes, automatic-vs-proposal mode, approval
+route, local actor, and dedupe namespace. Local owner policy is evaluated after
+authentication and before any objective, ticket, dispatch, grant, or report
+side effect:
+
+- allowed scope may create a correlated local objective/ticket;
+- proposal-only or approval-gated scope becomes `202 pending_local_approval`;
+- untrusted, expired, malformed, or out-of-scope work is `403` with only an audit record, or `202` if local policy explicitly chooses wait;
+- no peer request is allowed to widen local VP bounds.
+
+&lt;img class="section13-flow" alt="FIGURE 13.5-1" src="../figures/fig-13.5-1.svg"&gt;
+
+FIGURE 13.5-1 — PEER SCOPE / LOCAL APPROVAL BOUNDARY.
+
+The peer producer supplies identity and requested scope; the local consumer decides allow or deny. Out-of-scope work produces an auditable denial and no dispatch, while connectivity never supplies local VP approval.
+
+The figure is read left to right by the local policy consumer. Identity is authenticated before scope is evaluated; an allow edge maps the peer to a local actor, while the deny edge produces an audit-only result and blocks dispatch. This boundary preserves local approval ownership even when the bridge transport is healthy.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/13-01.md#m-5-bridge-directions-and-durable-delivery -->
+  <section id="CHD-HANDBOOK-CHD35-MA-23C50F-M-5-BRIDGE-DIRECTIONS-AND-DURA-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## M.5 Bridge directions and durable delivery
+
+Crier bridge traffic has distinct planes and arrows. They must not be collapsed.
+
+**Inbound data/read/lease:** Crier inbox → bridge authentication and scope
+check → lease claim → inbound dedupe → controller local objective/message/report
+write. The lease is held until the local durable write and dedupe result are
+known. A malformed or unauthorized inbound payload is dead-lettered and never
+partially posted.
+
+**Outbound ACK:** after the local room/objective/report write has received the
+configured durability acknowledgement, the bridge sends an ACK containing the
+same `delivery_id`, local record key, durability mode, and outcome. ACK is not
+an outbound topic publication and does not authorize work.
+
+**Outbound topic/inbox delivery:** local event → bridge envelope → configured
+Crier topic or durable peer inbox. The destination is explicit; important work
+uses a durable inbox, while topic delivery is only for configured relay events.
+A topic publication is not evidence that the peer performed work.
+
+The bridge consumes only authenticated, scoped input and produces a durable
+local record before its ACK producer acts. A lease expiry re-enters the dedupe
+consumer; a repeated delivery replays the prior ACK and does not create a
+second effect. A bounded retry exhaustion produces one dead-letter record and
+one outage record for the outage window; it does not manufacture completion.
+
+Every envelope carries `delivery_id`, `peer_request_id` where applicable,
+`origin`, source system, target scope, schema version, and payload digest.
+Retries reuse the same delivery id and request id. The receiver stores a dedupe
+result before forwarding work; repeated delivery replays the prior ACK and
+creates no second objective, ticket, room message, lease, or external effect.
+Lease expiry causes redelivery, not duplicate work. Bounded retry exhaustion
+writes a dead-letter record and one outage/incident record per outage window.
+Origin tags prevent a bridge from re-egressing its own inbound message.
+
+The bridge is not in the controller's transaction. A successful network response
+is not cross-system commit; read back local records and correlate the peer
+request/report. See `fig-crier-bridge.svg` and its Mermaid source for the
+separate inbound and outbound sequences.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/13-01.md#m-6-correlation-and-approval-example -->
+  <section id="CHD-HANDBOOK-CHD35-MA-23C50F-M-6-CORRELATION-AND-APPROVAL-E-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## M.6 Correlation and approval example
+
+`peer_request_id=pr-42` from `client-alpha` authenticates, maps to
+`peer:client-alpha`, passes local scope, and creates `obj-local-42` and
+`ticket-42`. Every local report carries `peer_request_id`, `ticket_id`, a report
+digest, and `peer_report_id=rr-42`. A retry of `pr-42` resolves the existing
+mapping. A request for `room:private` produces `403 peer_scope_denied` (or a
+policy-selected pending record) without local dispatch. If approval is required,
+local VP approval is recorded before work; peer connectivity does not supply it.
+
+The internal “same owner asks its own director to re-enter a cycle” path is not
+peer federation and keeps local provenance. Crier moves scoped work and reports;
+it does not imply project-memory replication. Project-memory federation remains
+independently configured and independently granted.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/13-01.md#m-7-required-evidence-and-runbooks -->
+  <section id="CHD-HANDBOOK-CHD35-MA-23C50F-M-7-REQUIRED-EVIDENCE-AND-RUNB-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## M.7 Required evidence and runbooks
+
+An operator must be able to read back: effective routing digest; backend and
+namespace per class; `fsync` durability; sync owner and lag; conflict records;
+peer mapping revision and scope; local approval/deny; inbound lease and dedupe;
+ACK durability mode; outbound destination; retry count; dead-letter key; outage
+window; and correlated local/peer report ids.
+
+`runbooks/peer-onboarding.md` covers trust and scope. `runbooks/bridge-deadletter.md`
+covers retry and dead-letter recovery. `examples/bridge/inbound-data-outbound-ack/`
+proves the inbound data/read/lease sequence and later outbound ACK. The
+`untrusted-peer/` fixture proves `peer_vp_claim`, scope denial, and approval
+hold. `outage-isolation/` proves repeated delivery is idempotent and local work
+continues while bridge delivery is down.
+
+
+**Full-size figure detail:** FIGURE 13.1-1, FIGURE 13.4-1 in §27; the detail sheets carry the drawing, explanation, steps and failure branches.
+
+
+&lt;/div&gt;
+  </section>
+</spec>

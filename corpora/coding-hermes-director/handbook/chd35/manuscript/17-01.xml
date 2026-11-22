@@ -1,0 +1,1496 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd35/manuscript/17-01.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD35-MA-9029EB-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/17-01.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9029EB-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+&lt;!-- CHD3.5A-03-BLOCK I; SPEC V3.5; section 17; source src/150-config-reference.md --&gt;
+
+&gt; **REVISION NOTICE — CHD-3.5 supersedes CHD-3.4.** This revised section integrates the audit disposition and selected contracts. All body blocks below carry change bars.
+
+&lt;div class="chg" markdown="1"&gt;
+
+# §17 — CONFIGURATION FORMAT AND FIELD CONTRACT
+
+**CHD-3.5 · SPEC V3.5 · source-integrated reference chapter.**
+
+&gt; **REVISION NOTICE — supersedes CHD-3.4.** Adds the complete configuration format and field contract, including concrete definitions and catalogs. Revised blocks carry change bars.
+
+The selected integration source is reproduced as actual contract content below. Research evidence and historical source fingerprints are provenance, not proof of an implemented CHD runtime. This edition’s §A authority table and D-039 govern all projections. **The release-level normative manifest is `build-spec/INTEGRATION.md` plus its explicit inventory/supersession map; this section is a projection, not a competing authority.**
+
+Source: `build-spec/integrated/config-format.md`; SHA-256 `f862d11f97c1d2fceda177ab76d6fdfee7479bf6b13d16d9a05916beb59f5e0d`. Source-relative citations below resolve within the upstream specification package, not an alternative edition.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/17-01.md#1-authority-compatibility-and-scope -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9029EB-1-AUTHORITY-COMPATIBILITY-AND-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1. Authority, compatibility and scope
+
+&lt;figure&gt;
+&lt;img class="section17-flow" alt="FIGURE 17.1-1" src="../figures/fig-17.1-1.svg"&gt;
+&lt;figcaption&gt;&lt;i&gt;Figure 17.1-1. Configuration Intake, Validation, and Activation.&lt;/i&gt;&lt;/figcaption&gt;
+&lt;p&gt;The controller consumes one explicit v4 document, rejects malformed or unauthorized input with a structured location, and retains the prior effective revision whenever external convergence or readback fails. The producer corrects the source and resubmits; no invalid input creates a partial agent, lane, trigger, or credential effect.&lt;/p&gt;
+&lt;/figure&gt;
+
+
+Source order for this deliverable is confirmed owner decisions (especially D-038/D-039), the newer R32 explicit-worker/profile/dispatch corrections, VOL-D configuration requirements, then the historical v2 schema. It makes conflicting prescriptions explicit rather than pretending they agree. The pre-created integration task must promote this candidate and amend the old requirements before the package can claim one normative configuration contract.
+
+TABLE 17.1-1 — 1. Authority, compatibility and scope
+
+| Source | Incorporated requirements / exact reconciliation |
+|---|---|
+| `../../DESIGN.md`, RL-1–RL-20; §3.2, §3.6, §6.3 | Operator-owned registry; gateway/agent/role caps; all runtime knobs; rooms/responsibility; scheduler-owned clocks; VP ingress; Crier/UI; no prompt-based authority. RL-9 is library selection, not a configurable field. RL-3/6/11/12/20 are delivery, thread and fresh-report invariants, not switches that can disable correctness. |
+| `../../build-spec/VOL-D-config-acceptance-ops.md`, VOLD-001–021 | Versioning, strict keys, required-explicit security fields, precedence, activation, creation, runtime and composition. The prose's `capability`, `approval`, and flat runtime examples are historical spellings, not parallel v4 inputs. |
+| VOL-D VOLD-056–066, §1.10–1.11, §2 | Four storage classes, unique profiles, fork/resync. D-039 overrides VOLD-063's archived-snapshot authority recipe: restore always resolves current policy. |
+| `../../build-spec/VOL-C-tools-messaging-admission-authz.md`, §6.6–7, §12 | Ingress limits; follow-up controls; managed workers; admission selection; reservation shared by scheduled and immediate work. |
+| `../../build-spec/VOL-B-records-storage-recovery.md`, VOLB-060/061 | Probe/hold timers never release uncertain capacity. |
+| `../../contracts/config.schema.json`, `config.template.yaml` | Existing identifiers, room shapes, permissions, federation and storage fields, with explicit v4 changes below. Historical root v2 files are preserved under contracts/historical-v2; canonical schema is now v4. |
+| `../../handbook/chd32/src/20-configuration.md`, C.3/C.8; `schemas/profile-identity.schema.json` | Explicit principal/profile/host/policy-owner, protected state, explicit temporary workers. Runtime work/thread/session IDs are operation/record fields, not required static deployment fields. |
+| `../../handbook/chd32/src/80-admission-dispatch.md`, §J | Controller reservation authority; scheduler trigger-only for timing. No scheduler-outage bypass of authorization or reservations. |
+| `../../audit/astra-audit.md`, G-08/G-09/G-13 | Explicit-worker path, non-ordered fork modes and complete current config contract addressed here. G-01 package promotion and other runtime integration gaps are not declared solved. |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/17-01.md#1-1-version-rule -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9029EB-1-1-VERSION-RULE-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.1 Version rule
+
+* Current documents MUST say integer `schema_version: 4`. No silent migration. `2`, `3`, future versions and absent versions fail `schema_version_unsupported` before any write/provisioning/trigger registration.
+* Historical v2 validation may remain a separately invoked compatibility command using `../../contracts/historical-v2/config.schema.json`; it MUST NOT arm a v4 deployment. The assertion in VOLD-001 that a const-2 document is an unchanged valid const-4 document is superseded for this candidate: **data can be migrated, bytes cannot be identical while changing the version**.
+* Migration is explicit operator work: emit an old/new field diff; move agent `model/context_limit/max_turns/token_budget` into `runtime.model/context_window/max_turns/token_budget`; require an explicit provider; map singular `approval` to `approvals`; replace `capability` or legacy `grants/grantable_pool` with all three `permissions` scopes and separate `create_subordinate`; map `sessions` or per-agent `session.fork_policy` into root `session`; add all missing required blocks. Both spellings together are a migration conflict, never last-writer-wins. New identity/profile references require actual provisioning/readback, not a rename-only migration.
+* `registry[].mirror_key` gains the required leading slash. All existing sessions retain their snapshots; migration cannot rewrite their authority or protected state. A submitted v4 file containing any legacy key fails `unknown_field`.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/17-01.md#1-2-deliberate-format-decisions-not-historical-owner-confirmed-defaults -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9029EB-1-2-DELIBERATE-FORMAT-DECISION-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.2 Deliberate format decisions (not historical owner-confirmed defaults)
+
+This deliverable chooses concrete mechanics where the source only names a requirement. These are design outputs for integration, not claims of prior owner approval:
+
+1. Every top-level block is present, including disabled subsystems. Explicit empty lists are legal where shown. Every field without a source-backed default is **required**, except `workers[].temporary_config` (conditional). No guessed model, provider, security policy, retention, numeric cap or lifetime default is introduced.
+2. Gateway `max_inflight` is required. The source's **4 main / 2 remote** are deployment examples, not a universal rule deducible from a gateway ID. `orchestration.stale_after_s` is required because “2× cycle” is ambiguous for multiple cron clocks. The full example selects 7200 explicitly, not as a loader default. Admission owner/fallback are also required-explicit: VOL-C §6.7 proposes controller-local/true, but §11.7 marks that proposal not user-confirmed; the example deliberately chooses controller-local/false.
+3. `ingress.bind/public_url/credential_ref`, `scheduler.*`, `capacity.per_role`, `projects[]`, `identity`, `allowed_workdirs`, and `temporary_config` are the exact homes for previously untyped requirements. No extra `config`, `settings`, or untyped extension bag is permitted.
+4. Static managed foremen/workers reside in `workers[]`; director/manager/supervisor rows reside in `agents[]`. IDs and identities are unique across both arrays. Runtime worker creation uses the same explicit shape, with its work-specific values carried in the operation rather than silently writing the VP file.
+5. `create_subordinate` includes `foreman|worker` as well as `none|supervisor|manager`, reconciling the newer explicit-worker path with VOLD-010's obsolete restriction. Values name the maximum tier permitted, as defined in §5; the field alone is not provisioned credentials.
+6. Permission classes keep the canonical names `use`, `grant`, `confer_delegation`; `create_subordinate` remains independent. Root static grants have no runtime lineage fields. Issued GrantRecords, expiry, revocation and `authority_ref` live in the durable control store, not in this file.
+7. Root `session` is the only fork-policy location. VP-authored project overrides precede agent overrides, then global. The two modes are **not** ordered by strictness. See §5.3; this replaces G-09's undefined “narrower mode” test.
+8. The candidate makes `runtime.max_turns` and `runtime.token_budget` required along with provider/model/context, satisfying RL-19 without an unconfirmed fallback limit. `approvals.gates` contains exact action identifiers, not the historical four-item enum that contradicted VOL-D's `payment`/`delete` examples.
+9. Integer fields are bounded at 9007199254740991 unless a smaller maximum is listed, to keep JSON canonicalization exact across Go and JSON consumers. This is an encoding bound, not a tuned operational default. An overflowing derived value is an error; do not wrap or clamp it. All five roles are representable in explicit recipient selectors. The three project conflict policies are a closed enumeration, not executable text.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/17-01.md#2-file-syntax-and-load-boundary -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9029EB-2-FILE-SYNTAX-AND-LOAD-BOUNDAR-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2. File syntax and load boundary
+
+The logical document is a JSON-compatible object. Recommended file is `harness.yaml`; `.json` is equivalent. The original `harness.toml` name remains supported with TOML 1.0 decoding into the identical object.
+
+* UTF-8, one document, string keys, case-sensitive exact names. Preserve `hermesBinding` camel case; all other spellings are shown in the registry. Do not accept guessed aliases.
+* Reject duplicate keys/tables, YAML aliases/anchors/merge keys, custom tags, malformed UTF-8, non-finite numbers, YAML timestamp objects and trailing documents. No shell expansion, environment interpolation, `~` expansion, includes or implicit overlay search. `${TOKEN}` is literal text, never a credential value. YAML booleans are only `true` and `false`.
+* JSON integers use integer syntax, not floats or booleans; ranges are as registered. YAML numbers use JSON decimal syntax (no octal, hex, sexagesimal or underscored integers); TOML uses its native numeric syntax with the same decoded type/range checks. Explicit YAML tags, including standard tags, are forbidden. `_s` is integer seconds; `_days` integer days; budgets/context are token counts; `_bytes` is bytes. A configured zero is accepted only where `minimum: 0` is registered; it never means unlimited. In Go, validate with `json.Number`/token-kind retention before decoding to `int64`; converting everything to `float64` loses the integer-token distinction. Check seconds-to-duration overflow before conversion, or use integer deadlines instead of a nanosecond duration for long horizons.
+* `null` is legal only for `storage.classes.*.{namespace,sync_owner,conflict_rule}`. JSON/YAML spell it explicitly. TOML has no null: omission of exactly those fields normalizes to null before structural validation; no other omission is translated to null. Active route rules can still reject null.
+* Closed objects reject unknown keys. The **only typed maps** are `storage.tool_class` (tool identifier → one of four class names) and `session.per_agent_override/per_project_override` (known ID → fork mode). Map values are validated, never free JSON; override map keys match `^[a-z][a-z0-9-]*$`.
+* Strings with `minLength: 1` cannot be blank/whitespace-only. References are opaque exact names unless their schema says path, URL, ID or pattern. Identifiers are never normalized. No inline secrets. File-token references are absolute paths; logical profile references begin `/chd/credentials/` and are resolved by the deployment's authenticated credential store. A missing credential is a readiness failure, not an invitation to use another profile's token.
+* URL origins contain scheme, hostname and optional port, no user-info/query/fragment/path/trailing slash. Hostname syntax and `http|https` match the schema; ports are 1–65535. This revision deliberately does not accept IPv6 literals (schema excludes brackets/colons in hosts). `transport: loopback` requires `localhost` or `127.0.0.1`; tunnels must terminate at an operator-provisioned endpoint; CHD does not create SSH tunnels from config text. Non-loopback plaintext is accepted only with a deployment-level verified private transport; readiness must reject an unprotected direct HTTP route.
+* Paths are absolute, cannot contain NUL or a `..` segment, and must resolve inside allowed roots after symlink resolution **on the target host**. `/srv/chd/work-evil` is not inside `/srv/chd/work`. Never check a remote workdir only on the controller and call it valid.
+* Cron strings are five fields, UTC: minute 0–59, hour 0–23, day 1–31, month 1–12, weekday 0–6. Allow `*`, lists, ascending ranges and positive step expressions within each field range; no seconds, names, `@every`, `?`, timezone prefix or weekday 7. Scheduler supplies calendar behavior (restricted day-of-month/day-of-week use OR). CHD registers ordinary scheduler triggers; it never runs a cron engine. `[]` means event-driven; a supervisor must have `[]`.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/17-01.md#2-1-ordered-algorithm-and-errors -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9029EB-2-1-ORDERED-ALGORITHM-AND-ERRO-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.1 Ordered algorithm and errors
+
+1. Parse with duplicate/type preservation; require version 4.
+2. Validate raw structure with Draft 2020-12. `default` is an annotation, **not** automatic mutation. Required absence fails even if an implementation has a zero value. In Go, pointer/optional fields or raw-message presence tracking MUST distinguish absent, `false`, `0`, `[]`, `{}`, and null.
+3. Copy input; insert only registered defaults and the derived wait timeout. Revalidate the effective object. Record default provenance and the source requirement. Do not mutate the submitted file.
+4. Check unique identities/references, then policy/storage/limit consistency (§4–§5), then warnings. Use structured `{code,json_path,detail}` errors. Return nonzero / refuse activation on any error; never partially create agents or scheduler lanes for an invalid file. A warning cannot downgrade an error.
+5. Validate external prerequisites: tool/capability/action catalog, skill assets and explicit specialization deltas, project paths, host/profile identity, credential access, current VP revision and authority, transport security, tool restriction enforcement, storage durability/fencing capability, scheduler trigger readback (scheduled readiness only), and archive-adapter compatibility. These are separate from structural validation and MUST be recorded as `not_checked|ready|failed`, not assumed green.
+6. Stage a desired revision, converge profiles and read back each effective revision/digest. Publish ready only for verified targets. Preserve prior effective revision on failure. Register changed triggers through the scheduler's validated API, never by direct database edits. No runtime/secret/learned-state replacement is smuggled through this file.
+
+Primary static errors: `schema_version_unsupported`, `parse_error`, `unknown_field`, `required_missing`, `schema_invalid`, `duplicate_id`, `unknown_gateway`, `profile_shared`, `principal_shared`, `policy_owner_mismatch`, `registry_mismatch`, `unknown_participant`, `room_membership_mismatch`, `bond_room_mismatch`, `bond_kind_mismatch`, `unknown_dispatch_target`, `unknown_agent`, `unknown_project`, `workspace_not_allowed`, `path_invalid`, `cron_invalid`, `tool_without_grant`, `tool_rule_conflict`, `use_not_delegable`, `supervisor_delegation_forbidden`, `control_route_invalid`, `archive_route_invalid`, `project_route_invalid`, `measurement_band_reversed`. Error messages must never include resolved token bytes.
+
+External/policy errors include `credential_unavailable`, `unknown_capability`, `unknown_action`, `unknown_skill`, `specialization_conflict`, `override_exceeds_pool`, `grant_conflict`, `authority_revoked`, `meta_grant_exceeds_authority`, `grant_limit_exceeded`, `fork_policy_conflict`, `fork_policy_widen_refused`, `profile_readback_mismatch`, `config_revision_conflict`, and `transport_unverified`. The reference validator deliberately does not claim it can prove these external effects.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/17-01.md#2-2-defaults-exhaustive -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9029EB-2-2-DEFAULTS-EXHAUSTIVE-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.2 Defaults (exhaustive)
+
+TABLE 17.1-2 — 2.2 Defaults (exhaustive)
+
+| Path | Omission value | Source |
+|---|---|---|
+| `verify.deadline_s` | 1800 | VOL-D VOLD-003 |
+| `verify.remind_gap_s` | 300 | VOL-D VOLD-003 |
+| `verify.max_reminds` | 2 | VOL-D VOLD-003 |
+| `verify.followup_after_s` | 86400 | VOL-C VOLC-050 |
+| `verify.max_followups` | 2 | VOL-C VOLC-050 |
+| `verify.wait_timeout_s` | 4 × effective `verify.deadline_s` | VOL-D VOLD-023; derive after deadline defaulting |
+| `orchestration.max_fanout` | 12 | VOL-D VOLD-003 |
+| `agents[].session.reuse_policy` | `reuse-until-wedged` | VOL-D VOLD-003 |
+| `session.fork_policy` | `preserve_parent_snapshot` | D-038 / VOLD-060 |
+| `session.resync.enabled` | false | D-038 / VOLD-060 |
+| `session.resync.authorized_by` | `[session_policy_authority, session.policy_resync]` | Existing config schema / D-038 |
+| `session.resync.requires_approval` | false | Existing config schema |
+| `ingress.max_body_bytes` | 65536 | VOL-C §3 validation |
+| `ingress.max_clock_skew_s` | 5 | VOL-C §6.1 |
+| `worker.progress_interval_s` | 60 | VOL-C VOLC-076 |
+| `capacity.unresolved_hold_s` | 7200 | VOL-B VOLB-060 |
+| `capacity.probe_backoff_s` | 60 | VOL-B VOLB-061; maximum 900 |
+| `measurement.window_cycles` | 5 | VOL-D VOLD-044–045 |
+| `measurement.nonregression_tolerance_pct` | 10 | VOL-D VOLD-045 |
+| `measurement.steady_state_band_tokens` | `[90,120]` | VOL-D metric register; comparison band, not a promised cost |
+
+All other fields: no default, omission is an error, except the explicitly conditional temporary block and TOML's null encoding. Optional map entries do not default: missing key means no override. Required arrays may be empty only if the registry's minimum permits it. No default value grants use, delegation, VP standing, manager creation, archive read or resync approval.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/17-01.md#3-complete-root-tree-and-schema-notation -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9029EB-3-COMPLETE-ROOT-TREE-AND-SCHEM-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3. Complete root tree and schema notation
+
+```text
+schema_version, namespace
+vp { owner, rev, grants { objective_create, message_inject, room_read } }
+gateways[] { id, host_id, url, transport, auth_token_ref, max_inflight }
+agents[] { id, role, gateway, hermesBinding, identity, workdir, allowed_workdirs,
+           skills, tools, runtime, composition, permissions, approvals,
+           create_subordinate, max_sessions, max_parallel, responsibility,
+           session, triggers, rooms }
+workers[] { id, role, gateway, hermesBinding, identity, workdir, allowed_workdirs,
+            skills, tools, runtime, composition, permissions, approvals,
+            create_subordinate, max_sessions, max_parallel, responsibility,
+            temporary, temporary_config }
+projects[] { id, workdirs }
+hierarchy { manager_creation { enabled, max_director_created, provisioning } }
+rooms[] { id, kind, participants }
+registry[] { agent, responsibility, mirror_key }
+ingress { bind, public_url, credential_ref, max_body_bytes, max_clock_skew_s }
+scheduler { enabled, base_url, auth_token_ref, callback_url,
+            callback_auth_token_ref, namespace, timezone }
+dispatch { transport, admission_authority, max_inflight_per_gateway,
+           targets, duplicate_policy }
+admission { run_now_owner, scheduler_bump_fallback }
+worker { direct_gateway, progress_interval_s, timeout_s }
+capacity { per_role, unresolved_hold_s, probe_backoff_s }
+crier_bridge { enabled, endpoint, auth_token_ref, board, announce_room, inject_kinds }
+ui { enabled, bind, read_scoped, base_path }
+duckbrain { base_url, token_dir, health_interval_s }
+storage { controller, classes { coordination_report, control_key,
+          session_archive, project_code_memory }, tool_class, effective_readback }
+archive { namespace, export_trigger, checkpoint_cadence_s, retention_days, read_scopes }
+federation { enabled, local_vp_precedence, no_sender_vp, peers[] }
+orchestration { max_fanout, stale_after_s }
+verify { deadline_s, remind_gap_s, max_reminds, followup_after_s,
+         max_followups, wait_timeout_s }
+session { fork_policy, resync, restore_policy, per_agent_override,
+          per_project_override }
+measurement { window_cycles, nonregression_tolerance_pct, steady_state_band_tokens }
+```
+
+The fully expanded registry in §8 enumerates every nested key and array/map item. `[]` means each member, `{*}` each typed map value. Empty validation `{}` means only the registered type and universal rules apply; it does **not** allow unknown object fields. Each object is closed except the three maps listed in §2. Schema conditionals are part of the contract, not informational comments.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/17-01.md#4-cross-record-semantics-and-operational-meaning -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9029EB-4-CROSS-RECORD-SEMANTICS-AND-O-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4. Cross-record semantics and operational meaning
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/17-01.md#4-1-identity-membership-and-resources -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9029EB-4-1-IDENTITY-MEMBERSHIP-AND-RE-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.1 Identity, membership and resources
+
+* IDs are globally unique across agents and workers; gateway, room, project, peer and registry IDs are unique within their registries. `hermesBinding.instance == gateway`, and that gateway exists. Profile names are distinct `(instance,profile)` pairs matching `pf-…`; `default` is forbidden. `identity.principal_id` is globally unique. Protected session/learned-state references cannot be shared. Gateway `host_id` names the enrolled host and must match profile readback; two gateways may address one host only if their instance/profile bindings remain distinct.
+* `identity.policy_owner == vp.owner`. It is never inferred from the sender, room, parent bond or transport. Profile credentials are looked up from `identity.credential_ref`; the gateway token authenticates controller transport and cannot substitute for another profile's credential.
+* Each agent/worker has exactly one matching registry row; responsibility equals the actor's responsibility string; mirror key equals `/chd/registry/&lt;id&gt;`. Unknown extra rows fail. Registry mirroring is controller-owned; it conveys responsibility, not capability.
+* All room participants exist. Room kind matches its ID prefix. For actors with a `rooms` array, membership is bidirectional between that array and `participants`. Worker assignment room membership is established by the authorized assignment operation, not guessed from a worker ID. `agents[].session.objective` is a bootstrap room reference despite its historical name; the actor is a participant. An objective/task bond matches room kind; `self` is a self session associated with the explicit room. `session_key` is a configured logical seed, never a promise that a particular native session already exists; branch/native session identities belong in runtime bond records.
+* `composition.project_scope` is an explicit list of instruction roots; `projects[].workdirs` maps named project IDs for policy overrides. Multiple selected projects are explicit request context. Do not choose one by lexicographic path or first match. Actual dispatch paths are checked against `allowed_workdirs` after target-side realpath resolution.
+* Tool include/exclude entries are exact registered tool identifiers in this candidate, not wildcard toolsets. Lists cannot overlap; every included tool has an explicit use capability. An excluded tool cannot run even when a use grant exists. The production loader resolves tool/capability IDs against the adapter's authoritative catalog, not a hardcoded fixture list. Skills do not grant tools. Unknown strings must fail, not silently disappear.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/17-01.md#4-2-caps-clocks-waits-and-no-op -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9029EB-4-2-CAPS-CLOCKS-WAITS-AND-NO-O-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.2 Caps, clocks, waits and no-op
+
+All admission dimensions are independent and conjunctive: gateway `max_inflight`; the additional global gateway ceiling `dispatch.max_inflight_per_gateway`; actor `max_sessions`; `capacity.per_role.&lt;role&gt;` across the namespace; actor/worker `max_parallel`; and `orchestration.max_fanout` per send composition. The effective gateway run ceiling is the minimum of its row and dispatch ceiling. Actor room-kind concurrency and native live-session counts are different units; worker `max_parallel` is its concurrent managed-run count. Values are not multiplied or inferred from one another. Zero room-kind/per-role cap disables new running work in that class, **not** enqueueing or scheduling. Capacity reduction does not kill in-flight work; new reservations wait until usage falls below all limits.
+
+`dispatch.admission_authority: controller` fixes the owner of the shared reservation ledger for **all** paths. `admission.run_now_owner: controller_local` permits immediate admission without a scheduler round trip. `scheduler` means an additional required scheduler approval gate, never a second reservation ledger. In controller-local mode `scheduler_bump_fallback: true` permits a queued immediate request to request a normal scheduler wake using the same identity; it does not bypass backpressure or create a second run. Set false in scheduler-owner mode because the scheduler is already primary. Scheduler-down cold start may be read/immediate-ready with verified storage and gateways in controller-local mode, but must report scheduled-not-ready; scheduler-owner mode cannot dispatch new work until its approval path is ready. These select explicit deployment behavior rather than globally assuming outage means ready or unready.
+
+`scheduler.callback_url` is exactly `&lt;ingress.public_url&gt;/v1/triggers/fire`. The ingress credential reference authenticates the owner surface; callback credentials authenticate the scheduler as a restricted trigger principal, not unrestricted VP. Agent principals resolve from their profile credential binding. All API/MCP/CLI/webhook doors use that same authentication/authorization policy. Enabling a UI or bridge never grants posting authority. UI stays room-scoped/read-only unless the caller independently holds a named VP posting grant.
+
+`worker.direct_gateway` must be false. `worker.timeout_s` requests cancellation and verified stop, never synthetic success. `progress_interval_s` bounds progress-write frequency. `capacity.unresolved_hold_s` is an escalation threshold, not auto-release TTL. Probe backoff is bounded at 900s; failures retain the reservation until positive runtime stop proof is committed. A report alone, elapsed lease, waiting status or process absence does not prove stop.
+
+Verify deadlines/follow-ups detect silence and notify/escalate; they do not approve or resume human waits. `max_followups: 0` disables follow-ups. Follow-ups are scheduler triggers, with the source's per-gate dedupe/cap; no CHD scheduling engine. `stale_after_s` marks stale pending composition for reconciliation, never erases the logical obligation. Fresh-report validation uses trusted ingest timestamps and request/attempt correlation, not configurable permissiveness.
+
+No hierarchy is a legal no-op: use empty `agents`, `workers`, `rooms`, `registry`, `dispatch.targets`; disable scheduler/bridge/federation and manager creation, with all required infrastructure/security fields explicit. It creates no hierarchy rooms/triggers/runs. Missing/empty file is invalid, not an implicit deployment. This is the exact reconciliation of DESIGN R-012 with strict required fields.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/17-01.md#4-3-storage-archive-federation-and-measurement -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9029EB-4-3-STORAGE-ARCHIVE-FEDERATION-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.3 Storage, archive, federation and measurement
+
+* `duckbrain.base_url` and `storage.controller.backend_url` identify the same control-store origin. Namespace is separate from a key path; e.g. namespace `chd`, key `/chd/registry/director`. No local SQLite durability substitute is authorized.
+* `coordination_report` and `control_key`: namespace equals root namespace; backend controller; immediate sync; no proxy; `controller_fsync` acknowledgement. Control/report writes never route to project memory. Controller storage outages leave work queued/blocked.
+* `session_archive`: distinct namespace equal to `archive.namespace`; controller backend; checkpointed sync; `committed_checkpoint`. Advertisement follows committed checkpoint readback. `archive.read_scopes` is the maximum grantable scope, not a read grant. Retention and checkpoint cadence are required explicit; retained restore manifests/checkpoints must remain verifiable under the archive contract. No raw native payload format is invented here.
+* Project memory disabled: backend none, namespace/sync_owner/conflict_rule null, sync disabled, proxy none, acknowledgement none. Enabled: isolated nonempty namespace, background sync, explicit sync_owner/conflict_rule, acknowledgement `local_enqueue_not_complete`; local/federated routes require controller proxy. `conflict_rule` is a named registered rule (`controller_wins`, `local_wins_on_project_keys`, or `checkpoint_order` where applicable), not executable text. Enabled sync must have exactly one writer per namespace. Disabled fields do not imply authority.
+* Every class's `readback_field` equals `&lt;class&gt;.backend`. `storage.tool_class` maps exact registered operation names. All enabled persisted operations must be mapped; unknown/unmapped operations fail closed. The full example maps only its enabled tool surface; extending that surface requires explicit mappings.
+* Federation requires authenticated peer identity and a live unexpired onboarding record; allowed_scopes are maximum local bounds. `local_vp_precedence` and `no_sender_vp` must both be true. No peer ID or successful mTLS handshake confers local VP. Expiry is UTC RFC3339 `Z`, no inferred expiry. Disabled federation performs no peer dispatch.
+* `measurement.window_cycles` compares adjacent windows, `nonregression_tolerance_pct` is a percentage (divide by 100 when applying), and the two-element token band is ordered low ≤ high. They configure reporting only and cannot certify an unexecuted soak. Example values are not measured performance results.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/17-01.md#5-precedence-vp-director-manager -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9029EB-5-PRECEDENCE-VP-DIRECTOR-MANAG-S012" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5. Precedence: VP &gt; director &gt; manager
+
+There are **not three config files** to merge. The VP owns this entire desired document. Director/manager changes are authorized, provenance-bearing control-store records, not arbitrary YAML patches. For each exact `(recipient, capability, resource, authority-class)` decision:
+
+1. Authenticate issuer and verify current grant lineage, expiry/revocation, resource/recipient subset, delegation depth, count, conferable bounds and approval. Reject invalid records before resolution. A role name by itself grants nothing.
+2. Apply VP explicit policy first, then valid director delegation, then valid manager delegation. **Explicit deny wins over lower-layer allow; absence is not a deny**, but grants still cannot exceed the VP's maximum authorized pool. A missing use grant is deny-by-absence unless a valid authorized delegation supplies it. A VP `room_read` scope `[]` is an explicit empty standing scope, never a wildcard.
+3. Same-rank conflicting live proposals for the same tuple fail `grant_conflict`; do not choose arrival order. Revisions supersede their own prior record by explicit lineage, not by timestamp arbitration.
+4. Specialization may refine base role only inside `authorized_overrides` and exact authorized grant deltas, below VP/director/manager constraints. Project instructions → base-role → specialization is instruction composition order, **not** permission authority order. Neither instruction text nor a skill can grant a right.
+5. Record winning value/source and every rejected conflicting source in readback/audit. An out-of-bound proposal fails even if another higher-ranked value would mask it. Never briefly apply a losing value.
+
+TABLE 17.1-3 — 5. Precedence: VP &gt; director &gt; manager
+
+| VP bound / decision | Director decision | Manager decision | Result |
+|---|---|---|---|
+| bound allows; explicit deny | allow | allow | denied, VP origin; conflict audited |
+| bound allows; no explicit decision | explicit deny | allow | denied, director origin |
+| bound excludes tuple | none | allow | deny / reject outside-authority manager record |
+| bound allows; no explicit decision | none | valid delegated allow | allowed, manager origin |
+| bound allows; explicit allow | deny | deny | VP allow remains; attempted conflicting lower update audited |
+| no valid use grant from any source | none | none | deny-by-absence |
+
+A manager may grant a capability it cannot itself use **only** if `permissions.grant` independently authorizes it. `confer_delegation` is separately required to issue another grantor. The example intentionally gives `mgr-infra` grant-use for `telegram.send` without Telegram use or tool inclusion. `use.recipients` is self only: roles/agents/pools empty and tiers `[self]`. Recipient selectors on delegation scopes are explicit permitted sets; empty lists permit no recipients except the explicit self use convention. A recipient must match a configured tier and, if roles/agents/pools constrain it, satisfy those bounds; multiple named agent/pool selectors union within that dimension, then intersect with tier/role/resource/VP bounds. Unknown pools or archive agents are errors. `max_depth:0` forbids conferring delegation; `max_grants:0` permits no outstanding downstream grants. Limits apply to new issuance, not as permission inheritance.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/17-01.md#5-1-create-and-approval-rules -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9029EB-5-1-CREATE-AND-APPROVAL-RULES-S013" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.1 Create and approval rules
+
+Tier order is director &gt; manager &gt; supervisor &gt; foreman &gt; worker. `create_subordinate:none` denies creation. Any other value is the highest tier a holder may create; only strictly lower tiers than the holder are eligible, within the named ceiling. A supervisor has no grant/confer authority; a configured creation permission does not turn it into a policy chooser. Worker cannot create anything. Creation requests require explicit authorized templates, capacity, gateway pool, unique profile, token provisioning and readback. Director-created managers additionally require `hierarchy.manager_creation.enabled:true` and positive remaining `max_director_created`. Disabled returns `manager_creation_disabled`. Provisioning is pending until operator token setup/readiness, never automatically armed.
+
+`approvals.human_approval_required:true` gates every mutating operation for that actor; otherwise `gates` names the exact mutating action classes requiring recorded human approval. An empty gates list with false means no extra profile-wide gate, **not** a permission grant. Assignment-specific human gates and delegation `limits.require_approval` are conjunctive extra gates: no lower layer can remove them. Gate names resolve against the authoritative action catalog during readiness. A timer is not approval.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/17-01.md#5-2-activation-and-evidence -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9029EB-5-2-ACTIVATION-AND-EVIDENCE-S014" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.2 Activation and evidence
+
+TABLE 17.1-4 — 5.2 Activation and evidence
+
+| Field group | Writer | Activation |
+|---|---|---|
+| File, identities/bindings, skills, caps, membership, triggers, runtime, approvals, storage and specialization asset selection | VP/operator only | Atomic desired revision after full validation; external convergence/readback before target readiness |
+| Caps and room membership | VP/operator | Next orchestrator/router check; never retroactively kill current runs |
+| Trigger changes | VP/operator | Next verified scheduler-registration pass |
+| Skills/runtime/tool availability/composition | VP/operator | Next NEW session or REUSE turn; in-flight turn retains captured config digest |
+| Permission/approval policy | VP roots plus authorized bounded grant records | New session/fork/restore or explicit authorized resync; existing live snapshot not silently refreshed |
+| New grant issuance and archive page access | Authorized issuer/reader | Current lineage checked each issuance/page, including revocation; live-use snapshot is not issuance authority |
+| Fork-mode maps / resync enablement | VP/operator | Future fork/resync authorization boundaries only |
+
+This explicitly resolves the VOLD-008 “next REUSE tools/approvals” wording against frozen policy: profile runtime/tool availability may change at a turn boundary, but policy rights/approval requirements in the live snapshot do not mutate automatically. A newly available tool still needs frozen use authority; a removed tool is unavailable even if a frozen grant remains. Effective-config and session-policy readbacks must expose that distinction.
+
+`GET /v1/effective-config/{agent-id}` must return desired and profile-reported effective revisions/digests, drift/readiness, explicit identity and protected-state refs, and **each resolved leaf's value, winning authority (`vp|director|manager|specialization|base|default`), source reference and activation boundary**. Config-scope current policy is not session-scope frozen authority. `GET /v1/policy/effective?session=&lt;bond-id&gt;` must reproduce the stored snapshot and digest. `GET /v1/effective-routing` includes class, backend, namespace, sync, proxy, credential reference name (no secret), digest and project sync checkpoint/lag. Readback schemas/transport ownership remain the sibling operation-contract deliverable; this defines required content, not a fabricated endpoint response.
+
+Digest contract for this candidate: SHA-256 over RFC 8785 canonical JSON of the resolved document; prefix `sha256:`. Source file formatting and comments do not enter it; secret bytes never enter it. Revision increases monotonically; equal revision with different effective bytes is `config_revision_conflict`. Arrays retain their supplied order in digest computation even when uniqueness is required; an implementation must not secretly sort skills or treat a reordered file as byte-identical. Source provenance is recorded separately, not mixed into the desired document's hash.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/17-01.md#5-3-fork-restore-and-project-overrides-g-09-closure -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9029EB-5-3-FORK-RESTORE-AND-PROJECT-O-S015" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.3 Fork, restore and project overrides (G-09 closure)
+
+The maps are **VP-authored choices of mode**, not lower-authority requests to widen a pool. Resolution: all selected project overrides must agree, else `fork_policy_conflict`; a matching project choice wins over the agent choice; otherwise agent wins over global. A caller-supplied alternate mode requires VP authority or an explicitly recorded session-policy authority bounded to that choice; ordinary director/manager identity alone cannot change it. Unauthorized differing mode fails `fork_policy_widen_refused` (historical error name; no numeric ordering is implied).
+
+TABLE 17.1-5 — 5.3 Fork, restore and project overrides (G-09 closure)
+
+| Parent rights | Current authorized rights | preserve-parent fork | explicit current-policy fork |
+|---|---|---|---|
+| `{A}` | `{A}` | `{A}` | `{A}` |
+| `{A}` | `{}` (revocation) | `{A}` frozen use, as D-038 requires | `{}` |
+| `{A}` | `{A,B}` | `{A}` | `{A,B}`, if current resolution authorizes B |
+| `{A}` | `{B}` (incomparable) | `{A}` | `{B}`, not intersection or union |
+
+Current-policy is not intrinsically “stricter”; it may acquire current valid grants. VP ceilings/current lineage constrain that fresh resolution. Preserve-parent may retain since-revoked **use** in the child's frozen snapshot; this never permits minting grants from revoked current authority or bypassing per-page archive checks. Restore is separate: `restore_policy` is const `current_policy`, regardless of fork default/maps and regardless of whether an archived snapshot exists. Archived snapshots are audit history only. No automatic live resync; explicit resync requires enablement, authorized source, target-bound scope, expected revision and any additional approval.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/17-01.md#5-4-temporary-workers -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9029EB-5-4-TEMPORARY-WORKERS-S016" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.4 Temporary workers
+
+Permanent worker is `temporary:false`. `temporary:true` requires `temporary_config` with work UID, positive explicit lifetime, bundle reference, `checkpoint_before_retire` archive policy and `worker` capacity class, plus the same explicit identity, gateway, workdir, skills/tools, runtime, limits, composition, permissions and approvals as permanent workers. This maps C.8's flat operation names to exact config homes without omitting any semantic input: worker_id→id; profile→hermesBinding.profile; credential_ref→identity.credential_ref; model/context/max_turns/token_budget→runtime; workspace→workdir/allowed_workdirs; lifetime→temporary_config.lifetime_s. Provider remains explicit. No unspecified defaults block a fully explicit request.
+
+At lifetime expiry, stop/cancel and confirm termination; commit/read back archive checkpoint before retiring/revoking profile. If any step fails, retain retirement-pending evidence; do not reuse the profile/credentials/state for another worker. No implicit temporary supervisor/manager creation is included in this revision.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/17-01.md#6-acceptance-and-verification-boundary -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9029EB-6-ACCEPTANCE-AND-VERIFICATION-S017" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 6. Acceptance and verification boundary
+
+Run from `audit/deliverables/config-format/`:
+
+```sh
+python3 validate.py example.yaml
+python3 validate.py example.json
+python3 validate.py --selftest
+python3 verify_pack.py
+```
+
+Dependencies: Python 3.11+ for the fixture tools, `jsonschema` with Draft 2020-12 support, PyYAML; exact exercised package versions are recorded in `verification.json`. Go production code MUST implement the same contract without depending on these fixture tools. Format validation explicitly checks UTC timestamps even when optional jsonschema format extras are absent. Never fall back to a partial schema implementation that ignores `allOf`, `not`, `propertyNames`, typed `additionalProperties`, `maximum`, tuple length or format. Structural JSON Schema treats 1.0 as an integer mathematically; the stricter parser/token check is an additional mandatory rule, exercised by the reference validator.
+
+Acceptance obligations:
+
+* **CFG-01:** given the complete YAML/JSON/TOML examples, parse to equal logical objects, expand only specified defaults and pass schema + static semantics. Proof: `verify_pack.py` and `validate.py`.
+* **CFG-02:** given every schema property occurrence, find a registry row with type, omission/default and validation. Conversely every row maps to the schema. Proof: `verify_pack.py` exhaustive registry comparison; §8 embeds that registry.
+* **CFG-03:** given missing mandatory security/runtime settings, unknown keys, type errors, broken references, duplicate identities, invalid routes or an obsolete version, refuse before any effect. Proof: negative selftests. A permissive schema is a failing implementation even if examples pass.
+* **CFG-04:** given false/zero/empty, preserve them; given absent defaulted fields, insert source-backed defaults and derive wait timeout from the effective deadline. Null never substitutes for an absent required value. Proof: selftests and parser tests.
+* **CFG-05:** given VP deny/director allow/manager allow, deny with VP provenance. Given bounded valid manager grant, allow with manager provenance. Given grant-use without use, reject actual tool use. Proof: precedence fixtures and grant-is-not-use negative control. Production adds authenticated record/lineage tests; a fixture resolver is not proof of that enforcement.
+* **CFG-06:** given explicit temporary worker, accept structural/static checks; remove any required lifecycle input and reject. Proof: selftests. Deployment lifecycle/stop/archive tests remain Go runtime acceptance, not a Python simulation claim.
+* **CFG-07:** given project/agent mode choices, resolve by the exact rule; reject ambiguous project modes and unauthorized lower-authority change. Restore cannot preserve archived authority. Proof: fork/restore tests. Real snapshot persistence and native adapter tests remain runtime obligations.
+* **CFG-08:** given no hierarchy actors, no rooms/targets, and disabled integrations, validate a no-op configuration; never create hidden agents. Proof: static no-op fixture check plus required future live zero-effects test.
+* **CFG-09:** given a profile/credential/catalog/storage failure, mark readiness failed and leave prior revision active. Proof required from the Go implementation: inject each failure, inspect durable desired/effective revisions, verify no dispatch; **not exercised by this deliverable**.
+
+`verification.json` records real local checker output; it does not certify a running gateway, actual credentials, provisioned paths, native restore availability or runtime enforcement. The source example is synthetic but fully specified; no token values or placeholder strings are embedded. A production operator must provision the concrete referenced resources or replace those values through a validated revision.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/17-01.md#7-full-example-file -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9029EB-7-FULL-EXAMPLE-FILE-S018" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7. Full example file
+
+The following is exactly the standalone `config-format/example.yaml`. It includes every required block, all default-bearing fields explicitly, and one director, manager, supervisor and managed worker. Disabled creation/federation/bridge are intentional example choices. Optional peers and temporary lifecycle have separate validated variants in the checker. Example limits and retention are explicit sample policy, not new product defaults.
+
+```yaml
+# Complete structural example; credentials/assets must be provisioned before activation.
+schema_version: 4
+namespace: chd
+session:
+  fork_policy: preserve_parent_snapshot
+  resync:
+    enabled: false
+    authorized_by:
+    - session_policy_authority
+    - session.policy_resync
+    requires_approval: false
+  restore_policy: current_policy
+  per_agent_override:
+    mgr-infra: current_policy
+  per_project_override:
+    crier: preserve_parent_snapshot
+gateways:
+- id: gw-main
+  url: http://127.0.0.1:8642
+  transport: loopback
+  auth_token_ref: /etc/chd/credentials/gw-main.token
+  max_inflight: 4
+  host_id: host-main
+agents:
+- id: director
+  role: director
+  gateway: gw-main
+  hermesBinding:
+    instance: gw-main
+    profile: pf-director
+  workdir: /srv/chd/work
+  skills:
+  - coding-hermes-director
+  - coding-hermes-manager
+  - coding-hermes-north-star
+  tools:
+    include:
+    - room.read
+    - room.post
+    exclude: []
+  max_sessions: 1
+  max_parallel:
+    objective: 1
+    task: 0
+    space: 1
+  responsibility: fleet hierarchy direction; owner delegation and verification
+  session:
+    bond: objective
+    objective: obj-fleet
+    session_key: chd-sess-director
+    reuse_policy: reuse-until-wedged
+  triggers:
+  - 0 */6 * * *
+  rooms:
+  - obj-fleet
+  identity:
+    principal_id: pr-director
+    policy_owner: pr-vp-owner
+    credential_ref: /chd/credentials/director
+    session_state_ref: /chd/session-state/pf-director
+    learned_state_ref: /chd/learned-state/pf-director
+    learned_state_policy: hermes_owned_protected
+  allowed_workdirs:
+  - /srv/chd/work
+  runtime:
+    provider: deepseek
+    model: deepseek-flash
+    context_window: 160000
+    max_turns: 40
+    token_budget: 2000000
+  permissions:
+    use:
+      capabilities:
+      - room.read
+      - room.post
+      resource_scope:
+      - room:*
+      recipients:
+        roles: []
+        agents: []
+        tiers:
+        - self
+        allowed_pools: []
+        archive_agents: []
+      limits:
+        max_depth: 0
+        max_grants: 0
+        max_conferable: []
+        expires_within_s: 3600
+        require_approval: false
+        archive_pages_per_read: 1
+    grant:
+      capabilities: []
+      resource_scope: []
+      recipients:
+        roles:
+        - supervisor
+        agents: []
+        tiers:
+        - supervisor
+        allowed_pools: []
+        archive_agents: []
+      limits:
+        max_depth: 1
+        max_grants: 8
+        max_conferable: []
+        expires_within_s: 3600
+        require_approval: false
+        archive_pages_per_read: 1
+    confer_delegation:
+      capabilities: []
+      resource_scope: []
+      recipients:
+        roles:
+        - supervisor
+        agents: []
+        tiers:
+        - supervisor
+        allowed_pools: []
+        archive_agents: []
+      limits:
+        max_depth: 1
+        max_grants: 8
+        max_conferable: []
+        expires_within_s: 3600
+        require_approval: false
+        archive_pages_per_read: 1
+  approvals:
+    human_approval_required: false
+    gates: []
+  create_subordinate: none
+  composition:
+    base_role: coding-hermes-director
+    specialization:
+      name: evidence-collection
+      authorized_overrides: []
+    project_scope:
+    - /srv/chd/work
+- id: mgr-infra
+  role: manager
+  gateway: gw-main
+  hermesBinding:
+    instance: gw-main
+    profile: pf-mgr-infra
+  workdir: /srv/chd/work
+  skills:
+  - coding-hermes-manager
+  - coding-hermes-foreman
+  - coding-hermes-fleet-topology
+  tools:
+    include:
+    - room.read
+    - room.post
+    exclude: []
+  max_sessions: 2
+  max_parallel:
+    objective: 2
+    task: 3
+    space: 1
+  responsibility: 'infra: crier, lore, bunker foreman lanes'
+  session:
+    bond: objective
+    objective: obj-fleet
+    session_key: chd-sess-mgr-infra
+    reuse_policy: reuse-until-wedged
+  triggers:
+  - 30 */6 * * *
+  rooms:
+  - obj-fleet
+  - task-crier
+  identity:
+    principal_id: pr-mgr-infra
+    policy_owner: pr-vp-owner
+    credential_ref: /chd/credentials/mgr-infra
+    session_state_ref: /chd/session-state/pf-mgr-infra
+    learned_state_ref: /chd/learned-state/pf-mgr-infra
+    learned_state_policy: hermes_owned_protected
+  allowed_workdirs:
+  - /srv/chd/work
+  runtime:
+    provider: deepseek
+    model: deepseek-flash
+    context_window: 160000
+    max_turns: 40
+    token_budget: 2000000
+  permissions:
+    use:
+      capabilities:
+      - room.read
+      - room.post
+      resource_scope:
+      - room:*
+      recipients:
+        roles: []
+        agents: []
+        tiers:
+        - self
+        allowed_pools: []
+        archive_agents: []
+      limits:
+        max_depth: 0
+        max_grants: 0
+        max_conferable: []
+        expires_within_s: 3600
+        require_approval: false
+        archive_pages_per_read: 1
+    grant:
+      capabilities:
+      - telegram.send
+      resource_scope:
+      - telegram:*
+      recipients:
+        roles:
+        - supervisor
+        agents: []
+        tiers:
+        - supervisor
+        allowed_pools: []
+        archive_agents: []
+      limits:
+        max_depth: 1
+        max_grants: 8
+        max_conferable:
+        - telegram.send
+        expires_within_s: 3600
+        require_approval: false
+        archive_pages_per_read: 1
+    confer_delegation:
+      capabilities: []
+      resource_scope: []
+      recipients:
+        roles:
+        - supervisor
+        agents: []
+        tiers:
+        - supervisor
+        allowed_pools: []
+        archive_agents: []
+      limits:
+        max_depth: 1
+        max_grants: 8
+        max_conferable: []
+        expires_within_s: 3600
+        require_approval: false
+        archive_pages_per_read: 1
+  approvals:
+    human_approval_required: false
+    gates: []
+  create_subordinate: supervisor
+  composition:
+    base_role: coding-hermes-manager
+    specialization:
+      name: evidence-collection
+      authorized_overrides: []
+    project_scope:
+    - /srv/chd/work
+- id: sup-crier
+  role: supervisor
+  gateway: gw-main
+  hermesBinding:
+    instance: gw-main
+    profile: pf-sup-crier
+  workdir: /srv/chd/work
+  skills:
+  - coding-hermes-supervisor-subagent-base
+  - crier-platform-ops
+  tools:
+    include:
+    - room.read
+    - room.post
+    exclude: []
+  max_sessions: 3
+  max_parallel:
+    objective: 0
+    task: 4
+    space: 0
+  responsibility: crier lane data-gathering and bounded actions
+  session:
+    bond: task
+    objective: task-crier
+    session_key: chd-sess-sup-crier
+    reuse_policy: reuse-until-wedged
+  triggers: []
+  rooms:
+  - task-crier
+  identity:
+    principal_id: pr-sup-crier
+    policy_owner: pr-vp-owner
+    credential_ref: /chd/credentials/sup-crier
+    session_state_ref: /chd/session-state/pf-sup-crier
+    learned_state_ref: /chd/learned-state/pf-sup-crier
+    learned_state_policy: hermes_owned_protected
+  allowed_workdirs:
+  - /srv/chd/work
+  runtime:
+    provider: deepseek
+    model: deepseek-flash
+    context_window: 160000
+    max_turns: 40
+    token_budget: 2000000
+  permissions:
+    use:
+      capabilities:
+      - room.read
+      - room.post
+      resource_scope:
+      - room:*
+      recipients:
+        roles: []
+        agents: []
+        tiers:
+        - self
+        allowed_pools: []
+        archive_agents: []
+      limits:
+        max_depth: 0
+        max_grants: 0
+        max_conferable: []
+        expires_within_s: 3600
+        require_approval: false
+        archive_pages_per_read: 1
+    grant:
+      capabilities: []
+      resource_scope: []
+      recipients:
+        roles:
+        - supervisor
+        agents: []
+        tiers:
+        - supervisor
+        allowed_pools: []
+        archive_agents: []
+      limits:
+        max_depth: 1
+        max_grants: 8
+        max_conferable: []
+        expires_within_s: 3600
+        require_approval: false
+        archive_pages_per_read: 1
+    confer_delegation:
+      capabilities: []
+      resource_scope: []
+      recipients:
+        roles:
+        - supervisor
+        agents: []
+        tiers:
+        - supervisor
+        allowed_pools: []
+        archive_agents: []
+      limits:
+        max_depth: 1
+        max_grants: 8
+        max_conferable: []
+        expires_within_s: 3600
+        require_approval: false
+        archive_pages_per_read: 1
+  approvals:
+    human_approval_required: false
+    gates: []
+  create_subordinate: none
+  composition:
+    base_role: coding-hermes-supervisor-subagent-base
+    specialization:
+      name: evidence-collection
+      authorized_overrides: []
+    project_scope:
+    - /srv/chd/work
+workers:
+- id: wrk-crier-01
+  role: worker
+  gateway: gw-main
+  hermesBinding:
+    instance: gw-main
+    profile: pf-wrk-crier-01
+  workdir: /srv/chd/work
+  skills:
+  - coding-hermes-worker
+  tools:
+    include:
+    - room.read
+    - room.post
+    exclude: []
+  runtime:
+    provider: deepseek
+    model: deepseek-flash
+    context_window: 160000
+    max_turns: 40
+    token_budget: 2000000
+  max_sessions: 1
+  max_parallel: 1
+  responsibility: bounded crier evidence unit
+  identity:
+    principal_id: pr-wrk-crier-01
+    policy_owner: pr-vp-owner
+    credential_ref: /chd/credentials/wrk-crier-01
+    session_state_ref: /chd/session-state/pf-wrk-crier-01
+    learned_state_ref: /chd/learned-state/pf-wrk-crier-01
+    learned_state_policy: hermes_owned_protected
+  allowed_workdirs:
+  - /srv/chd/work
+  permissions:
+    use:
+      capabilities:
+      - room.read
+      - room.post
+      resource_scope:
+      - room:*
+      recipients:
+        roles: []
+        agents: []
+        tiers:
+        - self
+        allowed_pools: []
+        archive_agents: []
+      limits:
+        max_depth: 0
+        max_grants: 0
+        max_conferable: []
+        expires_within_s: 3600
+        require_approval: false
+        archive_pages_per_read: 1
+    grant:
+      capabilities: []
+      resource_scope: []
+      recipients:
+        roles:
+        - supervisor
+        agents: []
+        tiers:
+        - supervisor
+        allowed_pools: []
+        archive_agents: []
+      limits:
+        max_depth: 1
+        max_grants: 8
+        max_conferable: []
+        expires_within_s: 3600
+        require_approval: false
+        archive_pages_per_read: 1
+    confer_delegation:
+      capabilities: []
+      resource_scope: []
+      recipients:
+        roles:
+        - supervisor
+        agents: []
+        tiers:
+        - supervisor
+        allowed_pools: []
+        archive_agents: []
+      limits:
+        max_depth: 1
+        max_grants: 8
+        max_conferable: []
+        expires_within_s: 3600
+        require_approval: false
+        archive_pages_per_read: 1
+  approvals:
+    human_approval_required: false
+    gates: []
+  create_subordinate: none
+  composition:
+    base_role: coding-hermes-worker
+    specialization:
+      name: evidence-collection
+      authorized_overrides: []
+    project_scope:
+    - /srv/chd/work
+  temporary: false
+dispatch:
+  transport: controller_brokered
+  admission_authority: controller
+  max_inflight_per_gateway: 4
+  targets:
+  - wrk-crier-01
+  duplicate_policy: request_id_or_logical_work
+rooms:
+- id: obj-fleet
+  kind: objective
+  participants:
+  - director
+  - mgr-infra
+- id: task-crier
+  kind: task
+  participants:
+  - mgr-infra
+  - sup-crier
+registry:
+- agent: director
+  responsibility: fleet hierarchy direction; owner delegation and verification
+  mirror_key: /chd/registry/director
+- agent: mgr-infra
+  responsibility: 'infra: crier, lore, bunker foreman lanes'
+  mirror_key: /chd/registry/mgr-infra
+- agent: sup-crier
+  responsibility: crier lane data-gathering and bounded actions
+  mirror_key: /chd/registry/sup-crier
+- agent: wrk-crier-01
+  responsibility: bounded crier evidence unit
+  mirror_key: /chd/registry/wrk-crier-01
+crier_bridge:
+  enabled: false
+  endpoint: http://127.0.0.1:9090
+  auth_token_ref: /etc/chd/credentials/crier.token
+  board: /srv/chd/board/tasks.jsonl
+  announce_room: obj-fleet
+  inject_kinds:
+  - dispatch
+  - verify
+  - escalate
+federation:
+  enabled: false
+  local_vp_precedence: true
+  no_sender_vp: true
+  peers: []
+ui:
+  enabled: true
+  bind: 127.0.0.1:8899
+  read_scoped: true
+  base_path: /ui
+duckbrain:
+  base_url: http://127.0.0.1:3000
+  token_dir: /etc/chd/credentials
+  health_interval_s: 10
+storage:
+  controller:
+    backend_url: http://127.0.0.1:3000
+    auth_token_ref: /etc/chd/credentials/duckbrain.token
+  classes:
+    coordination_report:
+      namespace: chd
+      backend: controller
+      sync: immediate
+      proxy: none
+      acknowledgement: controller_fsync
+      readback_field: coordination_report.backend
+      access_grant: coordination_report
+      sync_owner: null
+      conflict_rule: null
+    control_key:
+      namespace: chd
+      backend: controller
+      sync: immediate
+      proxy: none
+      acknowledgement: controller_fsync
+      readback_field: control_key.backend
+      access_grant: control_key
+      sync_owner: null
+      conflict_rule: null
+    session_archive:
+      namespace: chd-archive
+      backend: controller
+      sync: checkpointed
+      proxy: none
+      acknowledgement: committed_checkpoint
+      readback_field: session_archive.backend
+      access_grant: archive_read
+      sync_owner: archive-ingestor
+      conflict_rule: checkpoint_order
+    project_code_memory:
+      namespace: null
+      backend: none
+      sync: disabled
+      proxy: none
+      acknowledgement: none
+      readback_field: project_code_memory.backend
+      access_grant: project_memory
+      sync_owner: null
+      conflict_rule: null
+  tool_class:
+    room.post: coordination_report
+    room.read: coordination_report
+  effective_readback: /v1/effective-routing
+orchestration:
+  max_fanout: 12
+  stale_after_s: 7200
+verify:
+  deadline_s: 1800
+  remind_gap_s: 300
+  max_reminds: 2
+  followup_after_s: 86400
+  max_followups: 2
+  wait_timeout_s: 7200
+archive:
+  namespace: chd-archive
+  export_trigger:
+  - turn_end
+  - checkpoint_interval
+  - bond_retire
+  - session_end
+  checkpoint_cadence_s: 300
+  retention_days: 90
+  read_scopes:
+  - own_history
+  - room_log
+vp:
+  owner: pr-vp-owner
+  rev: 1
+  grants:
+    objective_create:
+      agents: []
+      rooms: []
+      max_depth: 0
+    message_inject:
+      agents: []
+      rooms: []
+      max_depth: 0
+    room_read:
+      agents: []
+      rooms: []
+      max_depth: 0
+projects:
+- id: crier
+  workdirs:
+  - /srv/chd/work
+hierarchy:
+  manager_creation:
+    enabled: false
+    max_director_created: 0
+    provisioning:
+      role_template: coding-hermes-manager
+      gateway_pool:
+      - gw-main
+      token_provisioning: operator
+ingress:
+  bind: 127.0.0.1:8898
+  public_url: http://127.0.0.1:8898
+  credential_ref: /etc/chd/credentials/ingress.token
+  max_body_bytes: 65536
+  max_clock_skew_s: 5
+scheduler:
+  enabled: true
+  base_url: http://127.0.0.1:9090
+  auth_token_ref: /etc/chd/credentials/scheduler.token
+  callback_url: http://127.0.0.1:8898/v1/triggers/fire
+  callback_auth_token_ref: /etc/chd/credentials/scheduler-callback.token
+  namespace: chd
+  timezone: UTC
+admission:
+  run_now_owner: controller_local
+  scheduler_bump_fallback: false
+worker:
+  direct_gateway: false
+  progress_interval_s: 60
+  timeout_s: 3600
+capacity:
+  per_role:
+    director: 1
+    manager: 2
+    supervisor: 4
+    foreman: 2
+    worker: 4
+  unresolved_hold_s: 7200
+  probe_backoff_s: 60
+measurement:
+  window_cycles: 5
+  nonregression_tolerance_pct: 10
+  steady_state_band_tokens:
+  - 90
+  - 120
+```
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/17-01.md#8-exhaustive-key-type-default-validation-registry -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9029EB-8-EXHAUSTIVE-KEY-TYPE-DEFAULT-S019" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 8. Exhaustive key/type/default/validation registry
+
+All file paths below are VP/operator-owned. **For every row, file-key precedence is VP only**; director/manager records may affect the resolved permission/assignment scope only through §5, never overwrite these keys. Each property's omission is explicit; objects and arrays are listed in addition to leaves. General parsing and cross-field rules in §2/§4/§5 always apply.
+
+TABLE 17.1-6 — 8. Exhaustive key/type/default/validation registry
+
+| Key path | Type | Default / omission | Validation (in addition to semantic rules) |
+|---|---|---|---|
+| `$` | object | required document | {"additionalProperties": false} |
+| `$.schema_version` | integer | ERROR required_missing | {"const": 4, "maximum": 9007199254740991} |
+| `$.namespace` | string | ERROR required_missing | {"pattern": "^[a-z][a-z0-9-]*$", "minLength": 1} |
+| `$.gateways` | array | ERROR required_missing | {"minItems": 1, "uniqueItems": true} |
+| `$.gateways[]` | object | each array member | {"additionalProperties": false} |
+| `$.gateways[].id` | string | ERROR required_missing | {"pattern": "^gw-[a-z0-9-]+$", "minLength": 1} |
+| `$.gateways[].url` | string | ERROR required_missing | {"pattern": "^https?://[A-Za-z0-9.-]+(:[0-9]+)?$", "minLength": 1} |
+| `$.gateways[].transport` | string | ERROR required_missing | {"enum": ["loopback", "tailscale", "ssh-tunnel", "direct"], "minLength": 1} |
+| `$.gateways[].auth_token_ref` | string | ERROR required_missing | {"minLength": 1, "pattern": "^/"} |
+| `$.gateways[].max_inflight` | integer | ERROR required_missing | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.gateways[].host_id` | string | ERROR required_missing | {"minLength": 1, "pattern": "^host-[a-z0-9-]+$"} |
+| `$.agents` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[]` | object | each array member | {"additionalProperties": false} |
+| `$.agents[].id` | string | ERROR required_missing | {"pattern": "^[a-z][a-z0-9-]*$", "minLength": 1} |
+| `$.agents[].role` | string | ERROR required_missing | {"enum": ["director", "manager", "supervisor"], "minLength": 1} |
+| `$.agents[].gateway` | string | ERROR required_missing | {"pattern": "^gw-[a-z0-9-]+$", "minLength": 1} |
+| `$.agents[].hermesBinding` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.agents[].hermesBinding.instance` | string | ERROR required_missing | {"pattern": "^gw-[a-z0-9-]+$", "minLength": 1} |
+| `$.agents[].hermesBinding.profile` | string | ERROR required_missing | {"minLength": 1, "pattern": "^pf-[a-z0-9-]+$"} |
+| `$.agents[].workdir` | string | ERROR required_missing | {"pattern": "^/", "minLength": 1} |
+| `$.agents[].skills` | array | ERROR required_missing | {"minItems": 1, "uniqueItems": true} |
+| `$.agents[].skills[]` | string | each array member | {"minLength": 1} |
+| `$.agents[].tools` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.agents[].tools.include` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].tools.include[]` | string | each array member | {"minLength": 1} |
+| `$.agents[].tools.exclude` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].tools.exclude[]` | string | each array member | {"minLength": 1} |
+| `$.agents[].max_sessions` | integer | ERROR required_missing | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.agents[].max_parallel` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.agents[].max_parallel.objective` | integer | ERROR required_missing | {"minimum": 0, "maximum": 9007199254740991} |
+| `$.agents[].max_parallel.task` | integer | ERROR required_missing | {"minimum": 0, "maximum": 9007199254740991} |
+| `$.agents[].max_parallel.space` | integer | ERROR required_missing | {"minimum": 0, "maximum": 9007199254740991} |
+| `$.agents[].responsibility` | string | ERROR required_missing | {"minLength": 1} |
+| `$.agents[].session` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.agents[].session.bond` | string | ERROR required_missing | {"enum": ["objective", "task", "self"], "minLength": 1} |
+| `$.agents[].session.objective` | string | ERROR required_missing | {"pattern": "^(obj\|task\|space)-[a-z0-9-]+$", "minLength": 1} |
+| `$.agents[].session.session_key` | string | ERROR required_missing | {"minLength": 1} |
+| `$.agents[].session.reuse_policy` | string | default "reuse-until-wedged" | {"enum": ["reuse-until-wedged", "always-new"], "minLength": 1} |
+| `$.agents[].triggers` | array | ERROR required_missing | {"uniqueItems": true} |
+| `$.agents[].triggers[]` | string | each array member | {"pattern": "^[0-9*,-/ ]+$", "minLength": 1} |
+| `$.agents[].rooms` | array | ERROR required_missing | {"minItems": 1, "uniqueItems": true} |
+| `$.agents[].rooms[]` | string | each array member | {"pattern": "^(obj\|task\|space)-[a-z0-9-]+$", "minLength": 1} |
+| `$.agents[].permissions` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.agents[].permissions.use` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.agents[].permissions.use.capabilities` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].permissions.use.capabilities[]` | string | each array member | {"minLength": 1} |
+| `$.agents[].permissions.use.resource_scope` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].permissions.use.resource_scope[]` | string | each array member | {"minLength": 1} |
+| `$.agents[].permissions.use.recipients` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.agents[].permissions.use.recipients.roles` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].permissions.use.recipients.roles[]` | string | each array member | {"enum": ["director", "manager", "supervisor", "foreman", "worker"], "minLength": 1} |
+| `$.agents[].permissions.use.recipients.agents` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].permissions.use.recipients.agents[]` | string | each array member | {"pattern": "^[a-z][a-z0-9-]*$", "minLength": 1} |
+| `$.agents[].permissions.use.recipients.tiers` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].permissions.use.recipients.tiers[]` | string | each array member | {"enum": ["self", "director", "manager", "supervisor", "foreman", "worker"], "minLength": 1} |
+| `$.agents[].permissions.use.recipients.allowed_pools` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].permissions.use.recipients.allowed_pools[]` | string | each array member | {"minLength": 1} |
+| `$.agents[].permissions.use.recipients.archive_agents` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].permissions.use.recipients.archive_agents[]` | string | each array member | {"pattern": "^[a-z][a-z0-9-]*$", "minLength": 1} |
+| `$.agents[].permissions.use.limits` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.agents[].permissions.use.limits.max_depth` | integer | ERROR required_missing | {"minimum": 0, "maximum": 3} |
+| `$.agents[].permissions.use.limits.max_grants` | integer | ERROR required_missing | {"minimum": 0, "maximum": 9007199254740991} |
+| `$.agents[].permissions.use.limits.max_conferable` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].permissions.use.limits.max_conferable[]` | string | each array member | {"minLength": 1} |
+| `$.agents[].permissions.use.limits.expires_within_s` | integer | ERROR required_missing | {"minimum": 60, "maximum": 9007199254740991} |
+| `$.agents[].permissions.use.limits.require_approval` | boolean | ERROR required_missing | {} |
+| `$.agents[].permissions.use.limits.archive_pages_per_read` | integer | ERROR required_missing | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.agents[].permissions.grant` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.agents[].permissions.grant.capabilities` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].permissions.grant.capabilities[]` | string | each array member | {"minLength": 1} |
+| `$.agents[].permissions.grant.resource_scope` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].permissions.grant.resource_scope[]` | string | each array member | {"minLength": 1} |
+| `$.agents[].permissions.grant.recipients` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.agents[].permissions.grant.recipients.roles` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].permissions.grant.recipients.roles[]` | string | each array member | {"enum": ["director", "manager", "supervisor", "foreman", "worker"], "minLength": 1} |
+| `$.agents[].permissions.grant.recipients.agents` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].permissions.grant.recipients.agents[]` | string | each array member | {"pattern": "^[a-z][a-z0-9-]*$", "minLength": 1} |
+| `$.agents[].permissions.grant.recipients.tiers` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].permissions.grant.recipients.tiers[]` | string | each array member | {"enum": ["self", "director", "manager", "supervisor", "foreman", "worker"], "minLength": 1} |
+| `$.agents[].permissions.grant.recipients.allowed_pools` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].permissions.grant.recipients.allowed_pools[]` | string | each array member | {"minLength": 1} |
+| `$.agents[].permissions.grant.recipients.archive_agents` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].permissions.grant.recipients.archive_agents[]` | string | each array member | {"pattern": "^[a-z][a-z0-9-]*$", "minLength": 1} |
+| `$.agents[].permissions.grant.limits` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.agents[].permissions.grant.limits.max_depth` | integer | ERROR required_missing | {"minimum": 0, "maximum": 3} |
+| `$.agents[].permissions.grant.limits.max_grants` | integer | ERROR required_missing | {"minimum": 0, "maximum": 9007199254740991} |
+| `$.agents[].permissions.grant.limits.max_conferable` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].permissions.grant.limits.max_conferable[]` | string | each array member | {"minLength": 1} |
+| `$.agents[].permissions.grant.limits.expires_within_s` | integer | ERROR required_missing | {"minimum": 60, "maximum": 9007199254740991} |
+| `$.agents[].permissions.grant.limits.require_approval` | boolean | ERROR required_missing | {} |
+| `$.agents[].permissions.grant.limits.archive_pages_per_read` | integer | ERROR required_missing | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.agents[].permissions.confer_delegation` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.agents[].permissions.confer_delegation.capabilities` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].permissions.confer_delegation.capabilities[]` | string | each array member | {"minLength": 1} |
+| `$.agents[].permissions.confer_delegation.resource_scope` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].permissions.confer_delegation.resource_scope[]` | string | each array member | {"minLength": 1} |
+| `$.agents[].permissions.confer_delegation.recipients` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.agents[].permissions.confer_delegation.recipients.roles` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].permissions.confer_delegation.recipients.roles[]` | string | each array member | {"enum": ["director", "manager", "supervisor", "foreman", "worker"], "minLength": 1} |
+| `$.agents[].permissions.confer_delegation.recipients.agents` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].permissions.confer_delegation.recipients.agents[]` | string | each array member | {"pattern": "^[a-z][a-z0-9-]*$", "minLength": 1} |
+| `$.agents[].permissions.confer_delegation.recipients.tiers` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].permissions.confer_delegation.recipients.tiers[]` | string | each array member | {"enum": ["self", "director", "manager", "supervisor", "foreman", "worker"], "minLength": 1} |
+| `$.agents[].permissions.confer_delegation.recipients.allowed_pools` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].permissions.confer_delegation.recipients.allowed_pools[]` | string | each array member | {"minLength": 1} |
+| `$.agents[].permissions.confer_delegation.recipients.archive_agents` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].permissions.confer_delegation.recipients.archive_agents[]` | string | each array member | {"pattern": "^[a-z][a-z0-9-]*$", "minLength": 1} |
+| `$.agents[].permissions.confer_delegation.limits` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.agents[].permissions.confer_delegation.limits.max_depth` | integer | ERROR required_missing | {"minimum": 0, "maximum": 3} |
+| `$.agents[].permissions.confer_delegation.limits.max_grants` | integer | ERROR required_missing | {"minimum": 0, "maximum": 9007199254740991} |
+| `$.agents[].permissions.confer_delegation.limits.max_conferable` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].permissions.confer_delegation.limits.max_conferable[]` | string | each array member | {"minLength": 1} |
+| `$.agents[].permissions.confer_delegation.limits.expires_within_s` | integer | ERROR required_missing | {"minimum": 60, "maximum": 9007199254740991} |
+| `$.agents[].permissions.confer_delegation.limits.require_approval` | boolean | ERROR required_missing | {} |
+| `$.agents[].permissions.confer_delegation.limits.archive_pages_per_read` | integer | ERROR required_missing | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.agents[].approvals` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.agents[].approvals.human_approval_required` | boolean | ERROR required_missing | {} |
+| `$.agents[].approvals.gates` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].approvals.gates[]` | string | each array member | {"minLength": 1} |
+| `$.agents[].create_subordinate` | string | ERROR required_missing | {"enum": ["none", "supervisor", "manager", "foreman", "worker"], "minLength": 1} |
+| `$.agents[].runtime` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.agents[].runtime.provider` | string | ERROR required_missing | {"minLength": 1} |
+| `$.agents[].runtime.model` | string | ERROR required_missing | {"minLength": 1} |
+| `$.agents[].runtime.context_window` | integer | ERROR required_missing | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.agents[].runtime.max_turns` | integer | ERROR required_missing | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.agents[].runtime.token_budget` | integer | ERROR required_missing | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.agents[].identity` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.agents[].identity.principal_id` | string | ERROR required_missing | {"minLength": 1, "pattern": "^pr-[a-z0-9-]+$"} |
+| `$.agents[].identity.policy_owner` | string | ERROR required_missing | {"minLength": 1, "pattern": "^pr-[a-z0-9-]+$"} |
+| `$.agents[].identity.credential_ref` | string | ERROR required_missing | {"minLength": 1, "pattern": "^/chd/credentials/[A-Za-z0-9._/-]+$"} |
+| `$.agents[].identity.session_state_ref` | string | ERROR required_missing | {"minLength": 1, "pattern": "^/chd/session-state/[A-Za-z0-9._/-]+$"} |
+| `$.agents[].identity.learned_state_ref` | string | ERROR required_missing | {"minLength": 1, "pattern": "^/chd/learned-state/[A-Za-z0-9._/-]+$"} |
+| `$.agents[].identity.learned_state_policy` | string | ERROR required_missing | {"enum": ["hermes_owned_protected", "hermes_owned_read_only"], "minLength": 1} |
+| `$.agents[].composition` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.agents[].composition.base_role` | string | ERROR required_missing | {"minLength": 1} |
+| `$.agents[].composition.specialization` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.agents[].composition.specialization.name` | string | ERROR required_missing | {"minLength": 1} |
+| `$.agents[].composition.specialization.authorized_overrides` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].composition.specialization.authorized_overrides[]` | string | each array member | {"enum": ["behavior", "permissions"], "minLength": 1} |
+| `$.agents[].composition.project_scope` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.agents[].composition.project_scope[]` | string | each array member | {"minLength": 1, "pattern": "^/"} |
+| `$.agents[].allowed_workdirs` | array | ERROR required_missing | {"minItems": 1, "uniqueItems": true} |
+| `$.agents[].allowed_workdirs[]` | string | each array member | {"minLength": 1, "pattern": "^/"} |
+| `$.workers` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[]` | object | each array member | {"additionalProperties": false, "conditional": "temporary=true requires temporary_config; otherwise forbidden"} |
+| `$.workers[].id` | string | ERROR required_missing | {"pattern": "^[a-z][a-z0-9-]*$", "minLength": 1} |
+| `$.workers[].role` | string | ERROR required_missing | {"enum": ["foreman", "worker"], "minLength": 1} |
+| `$.workers[].gateway` | string | ERROR required_missing | {"pattern": "^gw-[a-z0-9-]+$", "minLength": 1} |
+| `$.workers[].hermesBinding` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.workers[].hermesBinding.instance` | string | ERROR required_missing | {"pattern": "^gw-[a-z0-9-]+$", "minLength": 1} |
+| `$.workers[].hermesBinding.profile` | string | ERROR required_missing | {"minLength": 1, "pattern": "^pf-[a-z0-9-]+$"} |
+| `$.workers[].workdir` | string | ERROR required_missing | {"pattern": "^/", "minLength": 1} |
+| `$.workers[].skills` | array | ERROR required_missing | {"minItems": 1, "uniqueItems": true} |
+| `$.workers[].skills[]` | string | each array member | {"minLength": 1} |
+| `$.workers[].tools` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.workers[].tools.include` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].tools.include[]` | string | each array member | {"minLength": 1} |
+| `$.workers[].tools.exclude` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].tools.exclude[]` | string | each array member | {"minLength": 1} |
+| `$.workers[].runtime` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.workers[].runtime.provider` | string | ERROR required_missing | {"minLength": 1} |
+| `$.workers[].runtime.model` | string | ERROR required_missing | {"minLength": 1} |
+| `$.workers[].runtime.context_window` | integer | ERROR required_missing | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.workers[].runtime.max_turns` | integer | ERROR required_missing | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.workers[].runtime.token_budget` | integer | ERROR required_missing | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.workers[].max_sessions` | integer | ERROR required_missing | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.workers[].max_parallel` | integer | ERROR required_missing | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.workers[].responsibility` | string | ERROR required_missing | {"minLength": 1} |
+| `$.workers[].temporary` | boolean | ERROR required_missing | {} |
+| `$.workers[].identity` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.workers[].identity.principal_id` | string | ERROR required_missing | {"minLength": 1, "pattern": "^pr-[a-z0-9-]+$"} |
+| `$.workers[].identity.policy_owner` | string | ERROR required_missing | {"minLength": 1, "pattern": "^pr-[a-z0-9-]+$"} |
+| `$.workers[].identity.credential_ref` | string | ERROR required_missing | {"minLength": 1, "pattern": "^/chd/credentials/[A-Za-z0-9._/-]+$"} |
+| `$.workers[].identity.session_state_ref` | string | ERROR required_missing | {"minLength": 1, "pattern": "^/chd/session-state/[A-Za-z0-9._/-]+$"} |
+| `$.workers[].identity.learned_state_ref` | string | ERROR required_missing | {"minLength": 1, "pattern": "^/chd/learned-state/[A-Za-z0-9._/-]+$"} |
+| `$.workers[].identity.learned_state_policy` | string | ERROR required_missing | {"enum": ["hermes_owned_protected", "hermes_owned_read_only"], "minLength": 1} |
+| `$.workers[].composition` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.workers[].composition.base_role` | string | ERROR required_missing | {"minLength": 1} |
+| `$.workers[].composition.specialization` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.workers[].composition.specialization.name` | string | ERROR required_missing | {"minLength": 1} |
+| `$.workers[].composition.specialization.authorized_overrides` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].composition.specialization.authorized_overrides[]` | string | each array member | {"enum": ["behavior", "permissions"], "minLength": 1} |
+| `$.workers[].composition.project_scope` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].composition.project_scope[]` | string | each array member | {"minLength": 1, "pattern": "^/"} |
+| `$.workers[].permissions` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.workers[].permissions.use` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.workers[].permissions.use.capabilities` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].permissions.use.capabilities[]` | string | each array member | {"minLength": 1} |
+| `$.workers[].permissions.use.resource_scope` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].permissions.use.resource_scope[]` | string | each array member | {"minLength": 1} |
+| `$.workers[].permissions.use.recipients` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.workers[].permissions.use.recipients.roles` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].permissions.use.recipients.roles[]` | string | each array member | {"enum": ["director", "manager", "supervisor", "foreman", "worker"], "minLength": 1} |
+| `$.workers[].permissions.use.recipients.agents` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].permissions.use.recipients.agents[]` | string | each array member | {"pattern": "^[a-z][a-z0-9-]*$", "minLength": 1} |
+| `$.workers[].permissions.use.recipients.tiers` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].permissions.use.recipients.tiers[]` | string | each array member | {"enum": ["self", "director", "manager", "supervisor", "foreman", "worker"], "minLength": 1} |
+| `$.workers[].permissions.use.recipients.allowed_pools` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].permissions.use.recipients.allowed_pools[]` | string | each array member | {"minLength": 1} |
+| `$.workers[].permissions.use.recipients.archive_agents` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].permissions.use.recipients.archive_agents[]` | string | each array member | {"pattern": "^[a-z][a-z0-9-]*$", "minLength": 1} |
+| `$.workers[].permissions.use.limits` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.workers[].permissions.use.limits.max_depth` | integer | ERROR required_missing | {"minimum": 0, "maximum": 3} |
+| `$.workers[].permissions.use.limits.max_grants` | integer | ERROR required_missing | {"minimum": 0, "maximum": 9007199254740991} |
+| `$.workers[].permissions.use.limits.max_conferable` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].permissions.use.limits.max_conferable[]` | string | each array member | {"minLength": 1} |
+| `$.workers[].permissions.use.limits.expires_within_s` | integer | ERROR required_missing | {"minimum": 60, "maximum": 9007199254740991} |
+| `$.workers[].permissions.use.limits.require_approval` | boolean | ERROR required_missing | {} |
+| `$.workers[].permissions.use.limits.archive_pages_per_read` | integer | ERROR required_missing | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.workers[].permissions.grant` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.workers[].permissions.grant.capabilities` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].permissions.grant.capabilities[]` | string | each array member | {"minLength": 1} |
+| `$.workers[].permissions.grant.resource_scope` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].permissions.grant.resource_scope[]` | string | each array member | {"minLength": 1} |
+| `$.workers[].permissions.grant.recipients` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.workers[].permissions.grant.recipients.roles` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].permissions.grant.recipients.roles[]` | string | each array member | {"enum": ["director", "manager", "supervisor", "foreman", "worker"], "minLength": 1} |
+| `$.workers[].permissions.grant.recipients.agents` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].permissions.grant.recipients.agents[]` | string | each array member | {"pattern": "^[a-z][a-z0-9-]*$", "minLength": 1} |
+| `$.workers[].permissions.grant.recipients.tiers` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].permissions.grant.recipients.tiers[]` | string | each array member | {"enum": ["self", "director", "manager", "supervisor", "foreman", "worker"], "minLength": 1} |
+| `$.workers[].permissions.grant.recipients.allowed_pools` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].permissions.grant.recipients.allowed_pools[]` | string | each array member | {"minLength": 1} |
+| `$.workers[].permissions.grant.recipients.archive_agents` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].permissions.grant.recipients.archive_agents[]` | string | each array member | {"pattern": "^[a-z][a-z0-9-]*$", "minLength": 1} |
+| `$.workers[].permissions.grant.limits` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.workers[].permissions.grant.limits.max_depth` | integer | ERROR required_missing | {"minimum": 0, "maximum": 3} |
+| `$.workers[].permissions.grant.limits.max_grants` | integer | ERROR required_missing | {"minimum": 0, "maximum": 9007199254740991} |
+| `$.workers[].permissions.grant.limits.max_conferable` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].permissions.grant.limits.max_conferable[]` | string | each array member | {"minLength": 1} |
+| `$.workers[].permissions.grant.limits.expires_within_s` | integer | ERROR required_missing | {"minimum": 60, "maximum": 9007199254740991} |
+| `$.workers[].permissions.grant.limits.require_approval` | boolean | ERROR required_missing | {} |
+| `$.workers[].permissions.grant.limits.archive_pages_per_read` | integer | ERROR required_missing | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.workers[].permissions.confer_delegation` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.workers[].permissions.confer_delegation.capabilities` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].permissions.confer_delegation.capabilities[]` | string | each array member | {"minLength": 1} |
+| `$.workers[].permissions.confer_delegation.resource_scope` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].permissions.confer_delegation.resource_scope[]` | string | each array member | {"minLength": 1} |
+| `$.workers[].permissions.confer_delegation.recipients` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.workers[].permissions.confer_delegation.recipients.roles` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].permissions.confer_delegation.recipients.roles[]` | string | each array member | {"enum": ["director", "manager", "supervisor", "foreman", "worker"], "minLength": 1} |
+| `$.workers[].permissions.confer_delegation.recipients.agents` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].permissions.confer_delegation.recipients.agents[]` | string | each array member | {"pattern": "^[a-z][a-z0-9-]*$", "minLength": 1} |
+| `$.workers[].permissions.confer_delegation.recipients.tiers` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].permissions.confer_delegation.recipients.tiers[]` | string | each array member | {"enum": ["self", "director", "manager", "supervisor", "foreman", "worker"], "minLength": 1} |
+| `$.workers[].permissions.confer_delegation.recipients.allowed_pools` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].permissions.confer_delegation.recipients.allowed_pools[]` | string | each array member | {"minLength": 1} |
+| `$.workers[].permissions.confer_delegation.recipients.archive_agents` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].permissions.confer_delegation.recipients.archive_agents[]` | string | each array member | {"pattern": "^[a-z][a-z0-9-]*$", "minLength": 1} |
+| `$.workers[].permissions.confer_delegation.limits` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.workers[].permissions.confer_delegation.limits.max_depth` | integer | ERROR required_missing | {"minimum": 0, "maximum": 3} |
+| `$.workers[].permissions.confer_delegation.limits.max_grants` | integer | ERROR required_missing | {"minimum": 0, "maximum": 9007199254740991} |
+| `$.workers[].permissions.confer_delegation.limits.max_conferable` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].permissions.confer_delegation.limits.max_conferable[]` | string | each array member | {"minLength": 1} |
+| `$.workers[].permissions.confer_delegation.limits.expires_within_s` | integer | ERROR required_missing | {"minimum": 60, "maximum": 9007199254740991} |
+| `$.workers[].permissions.confer_delegation.limits.require_approval` | boolean | ERROR required_missing | {} |
+| `$.workers[].permissions.confer_delegation.limits.archive_pages_per_read` | integer | ERROR required_missing | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.workers[].approvals` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.workers[].approvals.human_approval_required` | boolean | ERROR required_missing | {} |
+| `$.workers[].approvals.gates` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.workers[].approvals.gates[]` | string | each array member | {"minLength": 1} |
+| `$.workers[].create_subordinate` | string | ERROR required_missing | {"enum": ["none", "supervisor", "manager", "foreman", "worker"], "minLength": 1} |
+| `$.workers[].allowed_workdirs` | array | ERROR required_missing | {"minItems": 1, "uniqueItems": true} |
+| `$.workers[].allowed_workdirs[]` | string | each array member | {"minLength": 1, "pattern": "^/"} |
+| `$.workers[].temporary_config` | object | absent for permanent worker; required when temporary=true | {"additionalProperties": false} |
+| `$.workers[].temporary_config.work_uid` | string | ERROR required_missing | {"minLength": 1, "pattern": "^work-[A-Za-z0-9][A-Za-z0-9._-]*$"} |
+| `$.workers[].temporary_config.lifetime_s` | integer | ERROR required_missing | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.workers[].temporary_config.asset_bundle_ref` | string | ERROR required_missing | {"minLength": 1, "pattern": "^/"} |
+| `$.workers[].temporary_config.archive_policy` | string | ERROR required_missing | {"const": "checkpoint_before_retire", "minLength": 1} |
+| `$.workers[].temporary_config.capacity_class` | string | ERROR required_missing | {"enum": ["worker"], "minLength": 1} |
+| `$.dispatch` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.dispatch.transport` | string | ERROR required_missing | {"const": "controller_brokered", "minLength": 1} |
+| `$.dispatch.admission_authority` | string | ERROR required_missing | {"const": "controller", "minLength": 1} |
+| `$.dispatch.max_inflight_per_gateway` | integer | ERROR required_missing | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.dispatch.targets` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.dispatch.targets[]` | string | each array member | {"pattern": "^[a-z][a-z0-9-]*$", "minLength": 1} |
+| `$.dispatch.duplicate_policy` | string | ERROR required_missing | {"const": "request_id_or_logical_work", "minLength": 1} |
+| `$.rooms` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.rooms[]` | object | each array member | {"additionalProperties": false} |
+| `$.rooms[].id` | string | ERROR required_missing | {"pattern": "^(obj\|task\|space)-[a-z0-9-]+$", "minLength": 1} |
+| `$.rooms[].kind` | string | ERROR required_missing | {"enum": ["objective", "task", "space"], "minLength": 1} |
+| `$.rooms[].participants` | array | ERROR required_missing | {"minItems": 2, "uniqueItems": true} |
+| `$.rooms[].participants[]` | string | each array member | {"pattern": "^[a-z][a-z0-9-]*$", "minLength": 1} |
+| `$.registry` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.registry[]` | object | each array member | {"additionalProperties": false} |
+| `$.registry[].agent` | string | ERROR required_missing | {"pattern": "^[a-z][a-z0-9-]*$", "minLength": 1} |
+| `$.registry[].responsibility` | string | ERROR required_missing | {"minLength": 1} |
+| `$.registry[].mirror_key` | string | ERROR required_missing | {"pattern": "^/chd/registry/[a-z][a-z0-9-]*$", "minLength": 1} |
+| `$.crier_bridge` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.crier_bridge.enabled` | boolean | ERROR required_missing | {} |
+| `$.crier_bridge.endpoint` | string | ERROR required_missing | {"pattern": "^https?://[A-Za-z0-9.-]+(:[0-9]+)?$", "minLength": 1} |
+| `$.crier_bridge.auth_token_ref` | string | ERROR required_missing | {"minLength": 1, "pattern": "^/"} |
+| `$.crier_bridge.board` | string | ERROR required_missing | {"pattern": "^/", "minLength": 1} |
+| `$.crier_bridge.announce_room` | string | ERROR required_missing | {"pattern": "^(obj\|task\|space)-[a-z0-9-]+$", "minLength": 1} |
+| `$.crier_bridge.inject_kinds` | array | ERROR required_missing | {"minItems": 1, "uniqueItems": true} |
+| `$.crier_bridge.inject_kinds[]` | string | each array member | {"enum": ["dispatch", "verify", "escalate"], "minLength": 1} |
+| `$.ui` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.ui.enabled` | boolean | ERROR required_missing | {} |
+| `$.ui.bind` | string | ERROR required_missing | {"pattern": "^[A-Za-z0-9.-]+:[0-9]+$", "minLength": 1} |
+| `$.ui.read_scoped` | boolean | ERROR required_missing | {"const": true} |
+| `$.ui.base_path` | string | ERROR required_missing | {"pattern": "^/", "minLength": 1} |
+| `$.duckbrain` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.duckbrain.base_url` | string | ERROR required_missing | {"pattern": "^https?://[A-Za-z0-9.-]+(:[0-9]+)?$", "minLength": 1} |
+| `$.duckbrain.token_dir` | string | ERROR required_missing | {"pattern": "^/", "minLength": 1} |
+| `$.duckbrain.health_interval_s` | integer | ERROR required_missing | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.storage` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.storage.controller` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.storage.controller.backend_url` | string | ERROR required_missing | {"pattern": "^https?://[A-Za-z0-9.-]+(:[0-9]+)?$", "minLength": 1} |
+| `$.storage.controller.auth_token_ref` | string | ERROR required_missing | {"minLength": 1, "pattern": "^/"} |
+| `$.storage.classes` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.storage.classes.coordination_report` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.storage.classes.coordination_report.namespace` | ['string', 'null'] | ERROR required_missing | {"minLength": 1} |
+| `$.storage.classes.coordination_report.backend` | string | ERROR required_missing | {"enum": ["controller", "local", "federated", "none"], "minLength": 1} |
+| `$.storage.classes.coordination_report.sync` | string | ERROR required_missing | {"enum": ["immediate", "checkpointed", "background", "disabled"], "minLength": 1} |
+| `$.storage.classes.coordination_report.proxy` | string | ERROR required_missing | {"enum": ["none", "controller"], "minLength": 1} |
+| `$.storage.classes.coordination_report.acknowledgement` | string | ERROR required_missing | {"enum": ["controller_fsync", "committed_checkpoint", "local_enqueue_not_complete", "none"], "minLength": 1} |
+| `$.storage.classes.coordination_report.readback_field` | string | ERROR required_missing | {"minLength": 1} |
+| `$.storage.classes.coordination_report.access_grant` | string | ERROR required_missing | {"minLength": 1} |
+| `$.storage.classes.coordination_report.sync_owner` | ['string', 'null'] | ERROR required_missing | {"minLength": 1} |
+| `$.storage.classes.coordination_report.conflict_rule` | ['string', 'null'] | ERROR required_missing | {"enum": [null, "controller_wins", "local_wins_on_project_keys", "checkpoint_order"], "minLength": 1} |
+| `$.storage.classes.control_key` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.storage.classes.control_key.namespace` | ['string', 'null'] | ERROR required_missing | {"minLength": 1} |
+| `$.storage.classes.control_key.backend` | string | ERROR required_missing | {"enum": ["controller", "local", "federated", "none"], "minLength": 1} |
+| `$.storage.classes.control_key.sync` | string | ERROR required_missing | {"enum": ["immediate", "checkpointed", "background", "disabled"], "minLength": 1} |
+| `$.storage.classes.control_key.proxy` | string | ERROR required_missing | {"enum": ["none", "controller"], "minLength": 1} |
+| `$.storage.classes.control_key.acknowledgement` | string | ERROR required_missing | {"enum": ["controller_fsync", "committed_checkpoint", "local_enqueue_not_complete", "none"], "minLength": 1} |
+| `$.storage.classes.control_key.readback_field` | string | ERROR required_missing | {"minLength": 1} |
+| `$.storage.classes.control_key.access_grant` | string | ERROR required_missing | {"minLength": 1} |
+| `$.storage.classes.control_key.sync_owner` | ['string', 'null'] | ERROR required_missing | {"minLength": 1} |
+| `$.storage.classes.control_key.conflict_rule` | ['string', 'null'] | ERROR required_missing | {"enum": [null, "controller_wins", "local_wins_on_project_keys", "checkpoint_order"], "minLength": 1} |
+| `$.storage.classes.session_archive` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.storage.classes.session_archive.namespace` | ['string', 'null'] | ERROR required_missing | {"minLength": 1} |
+| `$.storage.classes.session_archive.backend` | string | ERROR required_missing | {"enum": ["controller", "local", "federated", "none"], "minLength": 1} |
+| `$.storage.classes.session_archive.sync` | string | ERROR required_missing | {"enum": ["immediate", "checkpointed", "background", "disabled"], "minLength": 1} |
+| `$.storage.classes.session_archive.proxy` | string | ERROR required_missing | {"enum": ["none", "controller"], "minLength": 1} |
+| `$.storage.classes.session_archive.acknowledgement` | string | ERROR required_missing | {"enum": ["controller_fsync", "committed_checkpoint", "local_enqueue_not_complete", "none"], "minLength": 1} |
+| `$.storage.classes.session_archive.readback_field` | string | ERROR required_missing | {"minLength": 1} |
+| `$.storage.classes.session_archive.access_grant` | string | ERROR required_missing | {"minLength": 1} |
+| `$.storage.classes.session_archive.sync_owner` | ['string', 'null'] | ERROR required_missing | {"minLength": 1} |
+| `$.storage.classes.session_archive.conflict_rule` | ['string', 'null'] | ERROR required_missing | {"enum": [null, "controller_wins", "local_wins_on_project_keys", "checkpoint_order"], "minLength": 1} |
+| `$.storage.classes.project_code_memory` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.storage.classes.project_code_memory.namespace` | ['string', 'null'] | ERROR required_missing | {"minLength": 1} |
+| `$.storage.classes.project_code_memory.backend` | string | ERROR required_missing | {"enum": ["controller", "local", "federated", "none"], "minLength": 1} |
+| `$.storage.classes.project_code_memory.sync` | string | ERROR required_missing | {"enum": ["immediate", "checkpointed", "background", "disabled"], "minLength": 1} |
+| `$.storage.classes.project_code_memory.proxy` | string | ERROR required_missing | {"enum": ["none", "controller"], "minLength": 1} |
+| `$.storage.classes.project_code_memory.acknowledgement` | string | ERROR required_missing | {"enum": ["controller_fsync", "committed_checkpoint", "local_enqueue_not_complete", "none"], "minLength": 1} |
+| `$.storage.classes.project_code_memory.readback_field` | string | ERROR required_missing | {"minLength": 1} |
+| `$.storage.classes.project_code_memory.access_grant` | string | ERROR required_missing | {"minLength": 1} |
+| `$.storage.classes.project_code_memory.sync_owner` | ['string', 'null'] | ERROR required_missing | {"minLength": 1} |
+| `$.storage.classes.project_code_memory.conflict_rule` | ['string', 'null'] | ERROR required_missing | {"enum": [null, "controller_wins", "local_wins_on_project_keys", "checkpoint_order"], "minLength": 1} |
+| `$.storage.tool_class` | object | ERROR required_missing | {"propertyNames": {"pattern": "^[A-Za-z][A-Za-z0-9_.-]*$"}, "additionalProperties": "typed map; see {*} entry"} |
+| `$.storage.tool_class{*}` | string | each map entry; omitted key has no override | {"enum": ["coordination_report", "control_key", "session_archive", "project_code_memory"], "minLength": 1} |
+| `$.storage.effective_readback` | string | ERROR required_missing | {"const": "/v1/effective-routing", "minLength": 1} |
+| `$.federation` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.federation.enabled` | boolean | ERROR required_missing | {} |
+| `$.federation.local_vp_precedence` | boolean | ERROR required_missing | {"const": true} |
+| `$.federation.no_sender_vp` | boolean | ERROR required_missing | {"const": true} |
+| `$.federation.peers` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.federation.peers[]` | object | each array member | {"additionalProperties": false} |
+| `$.federation.peers[].peer_id` | string | ERROR required_missing | {"pattern": "^[a-z][a-z0-9-]*$", "minLength": 1} |
+| `$.federation.peers[].identity` | string | ERROR required_missing | {"const": "crier:peer-id", "minLength": 1} |
+| `$.federation.peers[].authentication` | string | ERROR required_missing | {"enum": ["mTLS_public_key", "signed_token"], "minLength": 1} |
+| `$.federation.peers[].onboarding_record` | string | ERROR required_missing | {"minLength": 1, "pattern": "^/chd/federation/"} |
+| `$.federation.peers[].allowed_scopes` | array | ERROR required_missing | {"minItems": 1, "uniqueItems": true} |
+| `$.federation.peers[].allowed_scopes[]` | string | each array member | {"minLength": 1} |
+| `$.federation.peers[].approval_routing` | string | ERROR required_missing | {"enum": ["local_vp", "local_director", "operator"], "minLength": 1} |
+| `$.federation.peers[].denial_outcome` | string | ERROR required_missing | {"enum": ["403_peer_scope_denied", "202_pending_local_approval"], "minLength": 1} |
+| `$.federation.peers[].expires_at` | string | ERROR required_missing | {"minLength": 1, "format": "date-time"} |
+| `$.orchestration` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.orchestration.max_fanout` | integer | default 12 | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.orchestration.stale_after_s` | integer | ERROR required_missing | {"minimum": 60, "maximum": 9007199254740991} |
+| `$.verify` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.verify.deadline_s` | integer | default 1800 | {"minimum": 60, "maximum": 9007199254740991} |
+| `$.verify.remind_gap_s` | integer | default 300 | {"minimum": 30, "maximum": 9007199254740991} |
+| `$.verify.max_reminds` | integer | default 2 | {"minimum": 0, "maximum": 9007199254740991} |
+| `$.verify.followup_after_s` | integer | default 86400 | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.verify.max_followups` | integer | default 2 | {"minimum": 0, "maximum": 9007199254740991} |
+| `$.verify.wait_timeout_s` | integer | derived 4 * verify.deadline_s | {"minimum": 60, "maximum": 9007199254740991} |
+| `$.archive` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.archive.namespace` | string | ERROR required_missing | {"pattern": "^[a-z][a-z0-9-]*$", "minLength": 1} |
+| `$.archive.export_trigger` | array | ERROR required_missing | {"minItems": 1, "uniqueItems": true} |
+| `$.archive.export_trigger[]` | string | each array member | {"enum": ["turn_end", "checkpoint_interval", "bond_retire", "session_end"], "minLength": 1} |
+| `$.archive.checkpoint_cadence_s` | integer | ERROR required_missing | {"minimum": 60, "maximum": 9007199254740991} |
+| `$.archive.retention_days` | integer | ERROR required_missing | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.archive.read_scopes` | array | ERROR required_missing | {"uniqueItems": true} |
+| `$.archive.read_scopes[]` | string | each array member | {"enum": ["own_history", "room_log", "cross_agent_archive"], "minLength": 1} |
+| `$.vp` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.vp.owner` | string | ERROR required_missing | {"minLength": 1, "pattern": "^pr-[a-z0-9-]+$"} |
+| `$.vp.rev` | integer | ERROR required_missing | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.vp.grants` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.vp.grants.objective_create` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.vp.grants.objective_create.agents` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.vp.grants.objective_create.agents[]` | string | each array member | {"pattern": "^[a-z][a-z0-9-]*$", "minLength": 1} |
+| `$.vp.grants.objective_create.rooms` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.vp.grants.objective_create.rooms[]` | string | each array member | {"minLength": 1} |
+| `$.vp.grants.objective_create.max_depth` | integer | ERROR required_missing | {"minimum": 0, "maximum": 3} |
+| `$.vp.grants.message_inject` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.vp.grants.message_inject.agents` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.vp.grants.message_inject.agents[]` | string | each array member | {"pattern": "^[a-z][a-z0-9-]*$", "minLength": 1} |
+| `$.vp.grants.message_inject.rooms` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.vp.grants.message_inject.rooms[]` | string | each array member | {"minLength": 1} |
+| `$.vp.grants.message_inject.max_depth` | integer | ERROR required_missing | {"minimum": 0, "maximum": 3} |
+| `$.vp.grants.room_read` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.vp.grants.room_read.agents` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.vp.grants.room_read.agents[]` | string | each array member | {"pattern": "^[a-z][a-z0-9-]*$", "minLength": 1} |
+| `$.vp.grants.room_read.rooms` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.vp.grants.room_read.rooms[]` | string | each array member | {"minLength": 1} |
+| `$.vp.grants.room_read.max_depth` | integer | ERROR required_missing | {"minimum": 0, "maximum": 3} |
+| `$.session` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.session.fork_policy` | string | default "preserve_parent_snapshot" | {"enum": ["preserve_parent_snapshot", "current_policy"], "minLength": 1} |
+| `$.session.resync` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.session.resync.enabled` | boolean | default false | {} |
+| `$.session.resync.authorized_by` | array | default ["session_policy_authority", "session.policy_resync"] | {"uniqueItems": true, "minItems": 1} |
+| `$.session.resync.authorized_by[]` | string | each array member | {"enum": ["session_policy_authority", "session.policy_resync"], "minLength": 1} |
+| `$.session.resync.requires_approval` | boolean | default false | {} |
+| `$.session.per_agent_override` | object | ERROR required_missing | {"propertyNames": {"pattern": "^[a-z][a-z0-9-]*$"}, "additionalProperties": "typed map; see {*} entry"} |
+| `$.session.per_agent_override{*}` | string | each map entry; omitted key has no override | {"enum": ["preserve_parent_snapshot", "current_policy"], "minLength": 1} |
+| `$.session.per_project_override` | object | ERROR required_missing | {"propertyNames": {"pattern": "^[a-z][a-z0-9-]*$"}, "additionalProperties": "typed map; see {*} entry"} |
+| `$.session.per_project_override{*}` | string | each map entry; omitted key has no override | {"enum": ["preserve_parent_snapshot", "current_policy"], "minLength": 1} |
+| `$.session.restore_policy` | string | ERROR required_missing | {"const": "current_policy", "minLength": 1} |
+| `$.projects` | array | ERROR required_missing | {"minItems": 0, "uniqueItems": true} |
+| `$.projects[]` | object | each array member | {"additionalProperties": false} |
+| `$.projects[].id` | string | ERROR required_missing | {"minLength": 1, "pattern": "^[a-z][a-z0-9-]*$"} |
+| `$.projects[].workdirs` | array | ERROR required_missing | {"minItems": 1, "uniqueItems": true} |
+| `$.projects[].workdirs[]` | string | each array member | {"minLength": 1, "pattern": "^/"} |
+| `$.hierarchy` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.hierarchy.manager_creation` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.hierarchy.manager_creation.enabled` | boolean | ERROR required_missing | {} |
+| `$.hierarchy.manager_creation.max_director_created` | integer | ERROR required_missing | {"minimum": 0, "maximum": 9007199254740991} |
+| `$.hierarchy.manager_creation.provisioning` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.hierarchy.manager_creation.provisioning.role_template` | string | ERROR required_missing | {"minLength": 1} |
+| `$.hierarchy.manager_creation.provisioning.gateway_pool` | array | ERROR required_missing | {"minItems": 1, "uniqueItems": true} |
+| `$.hierarchy.manager_creation.provisioning.gateway_pool[]` | string | each array member | {"minLength": 1, "pattern": "^gw-[a-z0-9-]+$"} |
+| `$.hierarchy.manager_creation.provisioning.token_provisioning` | string | ERROR required_missing | {"const": "operator", "minLength": 1} |
+| `$.ingress` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.ingress.bind` | string | ERROR required_missing | {"minLength": 1, "pattern": "^[A-Za-z0-9.-]+:[0-9]+$"} |
+| `$.ingress.public_url` | string | ERROR required_missing | {"minLength": 1, "pattern": "^https?://[A-Za-z0-9.-]+(:[0-9]+)?$"} |
+| `$.ingress.credential_ref` | string | ERROR required_missing | {"minLength": 1, "pattern": "^/"} |
+| `$.ingress.max_body_bytes` | integer | default 65536 | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.ingress.max_clock_skew_s` | integer | default 5 | {"minimum": 0, "maximum": 9007199254740991} |
+| `$.scheduler` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.scheduler.enabled` | boolean | ERROR required_missing | {} |
+| `$.scheduler.base_url` | string | ERROR required_missing | {"minLength": 1, "pattern": "^https?://[A-Za-z0-9.-]+(:[0-9]+)?$"} |
+| `$.scheduler.auth_token_ref` | string | ERROR required_missing | {"minLength": 1, "pattern": "^/"} |
+| `$.scheduler.callback_url` | string | ERROR required_missing | {"minLength": 1, "pattern": "^https?://[A-Za-z0-9.-]+(:[0-9]+)?/v1/triggers/fire$"} |
+| `$.scheduler.callback_auth_token_ref` | string | ERROR required_missing | {"minLength": 1, "pattern": "^/"} |
+| `$.scheduler.namespace` | string | ERROR required_missing | {"minLength": 1, "pattern": "^[a-z][a-z0-9-]*$"} |
+| `$.scheduler.timezone` | string | ERROR required_missing | {"const": "UTC", "minLength": 1} |
+| `$.admission` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.admission.run_now_owner` | string | ERROR required_missing | {"enum": ["controller_local", "scheduler"], "minLength": 1} |
+| `$.admission.scheduler_bump_fallback` | boolean | ERROR required_missing | {} |
+| `$.worker` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.worker.direct_gateway` | boolean | ERROR required_missing | {"const": false} |
+| `$.worker.progress_interval_s` | integer | default 60 | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.worker.timeout_s` | integer | ERROR required_missing | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.capacity` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.capacity.per_role` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.capacity.per_role.director` | integer | ERROR required_missing | {"minimum": 0, "maximum": 9007199254740991} |
+| `$.capacity.per_role.manager` | integer | ERROR required_missing | {"minimum": 0, "maximum": 9007199254740991} |
+| `$.capacity.per_role.supervisor` | integer | ERROR required_missing | {"minimum": 0, "maximum": 9007199254740991} |
+| `$.capacity.per_role.foreman` | integer | ERROR required_missing | {"minimum": 0, "maximum": 9007199254740991} |
+| `$.capacity.per_role.worker` | integer | ERROR required_missing | {"minimum": 0, "maximum": 9007199254740991} |
+| `$.capacity.unresolved_hold_s` | integer | default 7200 | {"minimum": 60, "maximum": 9007199254740991} |
+| `$.capacity.probe_backoff_s` | integer | default 60 | {"minimum": 1, "maximum": 900} |
+| `$.measurement` | object | ERROR required_missing | {"additionalProperties": false} |
+| `$.measurement.window_cycles` | integer | default 5 | {"minimum": 1, "maximum": 9007199254740991} |
+| `$.measurement.nonregression_tolerance_pct` | number | default 10 | {"minimum": 0, "maximum": 100} |
+| `$.measurement.steady_state_band_tokens` | array | default [90, 120] | {"minItems": 2, "maxItems": 2, "additionalItems": false} |
+| `$.measurement.steady_state_band_tokens[0]` | integer | required tuple element | {"minimum": 0, "maximum": 9007199254740991} |
+| `$.measurement.steady_state_band_tokens[1]` | integer | required tuple element | {"minimum": 0, "maximum": 9007199254740991} |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/17-01.md#9-integration-handoff -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9029EB-9-INTEGRATION-HANDOFF-S020" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 9. Integration handoff
+
+Promote `config-format/config.schema.json` as the single current schema and this document's reconciliation rules into VOL-D. Keep historical v2 schema under a versioned legacy name if compatibility validation is retained. Do not simply replace it while leaving const-2 templates/checkers claiming current conformance. Port the reference cases to the Go loader and add external readiness/lineage/lifecycle tests. Regenerate the root normative manifest and reference index **in the already-created integration card**, together with the other deliverables, not concurrently from this card.
+
+Items intentionally not represented as optional config switches: bypass authorization; bypass fsync/fencing; accept stale reports; disable distinct profiles; silently use default profile; reconstruct prompt history; grant VP by sender ID; restore archived permissions; automatic live policy resync; release capacity on lease expiry; worker CLI launch. These are forbidden behaviors, not missing knobs.
+
+
+&lt;/div&gt;
+  </section>
+</spec>

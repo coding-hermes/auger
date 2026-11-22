@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd32/runbooks/bridge-deadletter.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD32-RU-52051B-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/bridge-deadletter.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD32-RU-52051B-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# Runbook: bridge retry and dead-letter
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/bridge-deadletter.md#preconditions -->
+  <section id="CHD-HANDBOOK-CHD32-RU-52051B-PRECONDITIONS-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Preconditions
+
+Identify the `delivery_id`, `peer_request_id` (if any), bridge id, source/destination,
+lease, current retry count, and outage window. Do not manually replay with a new id.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/bridge-deadletter.md#procedure -->
+  <section id="CHD-HANDBOOK-CHD32-RU-52051B-PROCEDURE-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Procedure
+
+1. Read the bridge envelope, local dedupe record, lease state, and last ACK.
+2. For inbound data, verify authentication/scope, then lease and write the local record.
+   ACK only after durable local write/readback; include record ref and durability mode.
+3. For repeated inbound delivery, return the prior ACK and do not create another
+   objective, ticket, room event, lease or external effect.
+4. For outbound delivery, retry with the same `delivery_id` and `peer_request_id` using
+   bounded exponential backoff. Keep local work independent of bridge availability.
+5. After the retry bound, write a dead-letter record and one incident for the outage
+   window. Do not mark the peer work complete.
+6. When connectivity returns, inspect the dead-letter, read back local correlation,
+   and re-drive only with the same idempotency key. Close the dead-letter only after
+   peer ACK/report correlation is read back.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/bridge-deadletter.md#safety-checks -->
+  <section id="CHD-HANDBOOK-CHD32-RU-52051B-SAFETY-CHECKS-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Safety checks
+
+A topic publication is not proof of peer work. An ACK is not a VP grant. Origin tags
+prevent re-egress loops. A bridge outage isolates federation only; local control,
+reports, tickets and workers continue.
+  </section>
+</spec>

@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/build-spec/acceptance/README.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-BUILD-SPEC-ACCEPTANCE-RE-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/build-spec/acceptance/README.md#preamble -->
+  <section id="CHD-BUILD-SPEC-ACCEPTANCE-RE-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# CHD acceptance package
+
+This package is the repeatable acceptance trace for R31-012 and R31-013. It is a
+fixture-backed contract check, not a claim that a live gateway has been tested.
+The cards are **planned** at package revision `working-tree` until a real
+service run produces an artifact. A live run must record the commit (or image
+digest), UTC date, fixture digest, and output path in its report.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/acceptance/README.md#prerequisites-and-credential-placeholders -->
+  <section id="CHD-BUILD-SPEC-ACCEPTANCE-RE-PREREQUISITES-AND-CREDENTIAL-P-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Prerequisites and credential placeholders
+
+- Python 3.11 or newer; no third-party package is required.
+- A built CHD service and a test DuckBrain namespace when running against a live
+  deployment. The static fixture check can run without either.
+- Set these placeholders only in an untracked environment file or secret
+  manager; never put values in the fixture:
+
+```text
+CHD_VP_TOKEN_REF=&lt;authorized VP credential reference&gt;
+CHD_SCHEDULER_TOKEN_REF=&lt;authorized scheduler callback credential reference&gt;
+CHD_DIRECTOR_TOKEN_REF=&lt;authorized director credential reference&gt;
+CHD_DUCKBRAIN_NAMESPACE=chd-acceptance-&lt;run-id&gt;
+CHD_GATEWAY_URL=&lt;isolated test gateway URL&gt;
+```
+
+The expected records intentionally contain references, not token values.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/acceptance/README.md#static-repeatable-procedure -->
+  <section id="CHD-BUILD-SPEC-ACCEPTANCE-RE-STATIC-REPEATABLE-PROCEDURE-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Static, repeatable procedure
+
+Run from the repository root:
+
+```sh
+python3 build-spec/acceptance/run_acceptance.py \
+  --fixture build-spec/acceptance/fixtures/records.json \
+  --cards build-spec/acceptance/cards.json \
+  --out build-spec/acceptance/artifacts/acceptance-report.json
+```
+
+Exit status 0 means every card's expected field predicates matched a fixture
+record and every card had a non-id-only assertion, command, evidence query and
+planned/run label. The command prints each evidence query and the matched
+record key. It does **not** claim live execution. `--live` is deliberately not
+implemented by this package: an adapter must be added only when the deployed
+API and credential-loading path are approved.
+
+For a live execution, follow the same card order and replace each fixture
+record with a read-back query against the isolated namespace. Record the exact
+request command, response body, UTC timestamp, commit/image digest and failure
+injection result. A live artifact is valid only when its `execution` object has
+`mode: live`, `status: pass`, and all 17 cards have `status: run`.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/acceptance/README.md#card-contract -->
+  <section id="CHD-BUILD-SPEC-ACCEPTANCE-RE-CARD-CONTRACT-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Card contract
+
+`cards.json` is normative for this package. Every card has:
+
+- a concrete record key and record type;
+- at least two expected field/value predicates (the checker rejects an id-only
+  assertion);
+- an executable/procedural command and a concrete evidence query;
+- a `status` of `planned` or `run`, plus a UTC date and commit/image marker;
+- an explicit distinction between semantic, authorization, recovery, owner,
+  and performance evidence.
+
+The event cards `T-W1` through `T-W11` cover every NEW event in VOL-C §4.
+`T-ACC-03` is the manager fan-out card: it cites `evt-w3-director-manager`,
+whose body names `assigner: director`, `assignee: mgr-infra`, and `kind: task`.
+It does not cite W1; W1 is only the VP objective opening event.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/acceptance/README.md#failure-injections-and-evidence-boundaries -->
+  <section id="CHD-BUILD-SPEC-ACCEPTANCE-RE-FAILURE-INJECTIONS-AND-EVIDENC-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Failure injections and evidence boundaries
+
+The live procedure must inject: a full gateway queue, a wrong-request report,
+a duplicate gateway POST, a duplicate report, a crash at the ack/link window,
+a lost bonded session, an unreachable transport, and a denied authorization
+call. The expected records in `records.json` show the resulting durable bodies.
+Counter/soak evidence is performance evidence only. It cannot substitute for
+cards marked `semantic`, `authorization`, `recovery`, or `owner-acceptance`;
+each of those categories has non-counter cards.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/acceptance/README.md#measurement-procedure -->
+  <section id="CHD-BUILD-SPEC-ACCEPTANCE-RE-MEASUREMENT-PROCEDURE-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Measurement procedure
+
+`T-MEAS-01..06` records startup separately from cycle cost, captures snapshots
+before and after restart, and compares two finite windows of five identical
+unchanged cycles using the configured 10% tolerance. The steady-state goal is
+an explicit band, not an endlessly decreasing sequence. The six-hour cadence
+supports at most eight fire intervals in a 48-hour observation window
+(4 fires/day × 2 days); it is not an unconditional eight-cycle ceiling.
+  </section>
+</spec>

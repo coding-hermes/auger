@@ -1,0 +1,610 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/build-spec/integrated/duckbrain-schema/source-snapshot/contracts/DATA-MODEL.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-BUILD-SPEC-INTEGR-C803D6-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/source-snapshot/contracts/DATA-MODEL.md#preamble -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C803D6-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# CODING-HERMES-DIRECTOR — DATA MODEL &amp; DUCKBRAIN KEY LAYOUT
+
+```
+DOC     : contracts/DATA-MODEL.md
+REV    : 1.4 (R31 revision pass 2026-11-09). Delta vs 1.3: explicit four-class
+          routing namespaces and controller-authoritative coordination/control
+          semantics (R31-028); peer provenance is defined by VOL-C/VOL-D (R31-029).
+          Delta vs 1.2: §1.5 report v3
+          envelope/content variants and §1.5.1 ReportDataset/ReportRow logical
+          records (R31-030); v3 freshness/retry precedence; report/dataset
+          keys and ER diagram updated. Prior §1.6/§1.9/§1.10 changes remain
+          cumulative.
+DATE    : 2026-11-09
+IMPLEMENTS: DESIGN.md v2 §3.2 (config registry), §4.4 (chat semantics),
+            §4.5 (report contract), CT-01/CT-05/CT-09
+AMENDED-BY: VOL-B rev 2.1 (record schemas, key normalization,
+            ordering, restore procedure). On conflict, VOL-B controls.
+STATUS  : CONTRACT. No server exists yet; this is what the build must
+          conform to. Config surface = contracts/config.schema.json.
+```
+
+Data-class namespaces are explicit and never interchangeable. The controller
+coordination/report and protected control-key classes use the controller's
+**`chd`** namespace; native session archives use **`chd-archive`**; optional
+project/code memory uses a deployment-selected namespace. All room/registry/
+send/report keys are controller-authoritative DuckBrain keys under `chd`,
+written through the harness service with role tokens (DESIGN FACT-19/FACT-20).
+A project-memory write is never a report/control acknowledgement. Effective
+backend, namespace, sync and grant are read back through `/v1/effective-routing`.
+
+Namespace for control keys below: **`chd`** (the director namespace).
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/source-snapshot/contracts/DATA-MODEL.md#1-entities -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C803D6-1-ENTITIES-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 1. Entities
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/source-snapshot/contracts/DATA-MODEL.md#1-1-agent -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C803D6-1-1-AGENT-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.1 Agent
+
+A hierarchy participant. Config data, operator-owned (CT-01, R-001).
+Never agent-editable (§6.3).
+
+| Field | Type | Constraint | Meaning |
+|-------|------|-----------|---------|
+| `id` | string | `^[a-z][a-z0-9-]*$` | Stable identity; used in `from`/`to`, registry key, bond key |
+| `role` | enum | `director \| manager \| supervisor` | Determines grants (DESIGN §6.1) and which room kinds it may create |
+| `gateway` | string | must match a `gateway.id` | **Binding** (RL-2/RL-7): the one gateway the agent runs on |
+| `workdir` | string (abs path) | — | Where the agent's sessions run |
+| `skills` | string[] | non-empty for all roles | Skill list the harness injects into the gateway (RL-2) |
+| `tools.include` / `tools.exclude` | string[] | deny by default (§6.1) | Tool rulesets; exclude wins |
+| `model` | string | non-empty | Explicit model id; no provider defaults |
+| `context_limit` | int | ≥ 1 | Context window cap in tokens |
+| `max_turns` | int | ≥ 1 | Per-session turn cap |
+| `token_budget` | int | ≥ 1 | Per-session token budget |
+| `max_sessions` | int | ≥ 1 | Concurrent bonded sessions allowed for this agent |
+| `max_parallel` | object | per room kind | Per-type parallel caps: `{objective, task, space}`, each int ≥ 0 |
+| `responsibility` | string | non-empty for manager/director | Registry entry (RL-8), mirrored to `chd/registry/&lt;id&gt;` |
+| `session` | object | see §1.6 | Bonding + reuse policy |
+| `triggers` | string[] | cron expressions | Registered as normal scheduler lanes (CT-02); `[]` = woken by messages only |
+| `rooms` | string[] | room ids or `task-&lt;id&gt;-*` globs | Membership; config data, never discovered (§4.6) |
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/source-snapshot/contracts/DATA-MODEL.md#1-2-gateway -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C803D6-1-2-GATEWAY-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.2 Gateway
+
+One addressable Hermes gateway (DESIGN §9). Host routing and
+concurrency are decided in ONE place — the gateway row.
+
+| Field | Type | Constraint | Meaning |
+|-------|------|-----------|---------|
+| `id` | string | `^gw-[a-z0-9-]+$` | Referenced by `agent.gateway` |
+| `url` | string | `^https?://[A-Za-z0-9.-]+(:\d+)?$` | Gateway POST target |
+| `transport` | enum | `loopback \| tailscale \| ssh-tunnel \| direct` | How the harness reaches the host; never fails over silently |
+| `auth_token_ref` | string | non-empty | Reference to the credential file for this gateway |
+| `max_inflight` | int | ≥ 1 | **The backpressure** (RL-7): max concurrent agent requests on this gateway; sends beyond it queue, never dispatch |
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/source-snapshot/contracts/DATA-MODEL.md#1-3-room -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C803D6-1-3-ROOM-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.3 Room
+
+An objective, a task, or a manager-to-manager space. **A room IS a
+DuckBrain key family** — one ordered, searchable log (RL-4/RL-5/RL-6).
+
+| Field | Type | Constraint | Meaning |
+|-------|------|-----------|---------|
+| `id` | string | `^(obj\|task\|space)-[a-z0-9-]+$` | Room id; key family is `chd/room/&lt;id&gt;/&lt;seq&gt;` |
+| `kind` | enum | `objective \| task \| space` | objective = director+managers (RL-4); task = manager+supervisors (RL-5); space = managers↔managers, registry-justified (RL-8) |
+| `participants` | string[] | agent ids; ≥ 2; kind-consistent | Membership is config data + registry justification (CT-09) |
+
+Kind rules: `objective` must contain exactly one director;
+`task` must not contain a director; `space` must contain only managers,
+each with a `registry` entry (router refuses otherwise, CT-09).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/source-snapshot/contracts/DATA-MODEL.md#1-4-message -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C803D6-1-4-MESSAGE-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.4 Message
+
+One entry in a room's log. JSON at key `chd/room/&lt;room-id&gt;/&lt;seq&gt;`
+(DESIGN §4.4).
+
+| Field | Type | Constraint | Meaning |
+|-------|------|-----------|---------|
+| `room` | string | existing room id | Key family this seq belongs to |
+| `seq` | int | ≥ 1, monotonic per room | Server-allocated; race-safety per UQ-7/OQ-14 (harness single-writer if needed) |
+| `from` | string | `owner` or member agent id | Attribution; owner posts with no self-echo (RL-6) |
+| `to` | string | agent id \| `group` \| `@&lt;agent-id&gt;` | Decides **who is WOKEN**, not who can read — the log is visible to all members |
+| `thread` | int (optional) | seq of root message | Sub-thread; threads are reads over the same log, nothing stored outside it |
+| `kind` | enum | `msg \| question \| status \| directive \| task \| report \| incident` | The complete seven-value enum (R31-003; identical in VOL-B §3.1, VOL-C §3.2/§3.6). `question` = answer owed in-thread (missing-reply detection); `status` = progress/state post; `directive` opens an objective; `task` opens a task room/subthread; `report` carries a report attachment; `incident` is a service-written escalation record (R-017). Per-role/per-room legality is the single table in VOL-C §3.6 (VOLC-066) |
+| `body` | string | non-empty | Human-readable text |
+| `attach` | object[] (optional) | report refs | `kind=report` messages carry the report JSON here (RL-6) |
+| `ts` | string | RFC 3339 UTC | Write timestamp |
+
+Storage amendment (VOL-B §3.1, R31 revision): the ambiguous optional `thread`
+field is replaced by the explicit pair `thread_root` (stable grouping key) and
+`reply_to` (tree edge), and `dedupe_key`/`send_id` are promoted into indexed
+attributes. VOL-B §3.1 is the storage-normative shape; this table stays the
+entity-level view and carries the same kind enum verbatim.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/source-snapshot/contracts/DATA-MODEL.md#1-5-report-schema-v3 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C803D6-1-5-REPORT-SCHEMA-V3-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.5 Report (schema v3)
+
+A finished task's report **arrives as a chat message** with one common envelope
+and exactly one requester-selected content variant. The authoritative contract
+is `contracts/schemas/report-v3.schema.json`; the same envelope persists
+`class=free_form`, `class=structured`, or `class=dataset` content in DuckBrain.
+The v2 shape below is superseded and accepted only through migration.
+
+| Envelope field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `id` | string | `^r-[0-9]{8}-[0-9]{4}-[a-z0-9]+$` | Immutable report id |
+| `produced_by` / `room` | string | member agent / room id | Producer and posting room |
+| `send_id` / `attempt_id` | string | existing grammars | Logical send and dispatch attempt |
+| `request_ref` | string | `/chd/room/&lt;room&gt;/m&lt;seq&gt;` | Exact request message |
+| `session_ref` | object | `{mode: NEW\|REUSE, session_key}` | Session correlation |
+| `status` / `summary` | enum / string | status vocabulary; summary non-empty | Outcome and human roll-up |
+| `assignment` | object | required_content, schema_ref, validation_policy, completion_policy | Immutable requester contract |
+| `content_ref` / `content_digest` | string | DuckBrain key / sha256 | Content identity |
+| `ingest_ts` | string | harness-recorded RFC 3339 UTC | Trusted freshness clock |
+
+Content variants are: `free_form` (non-empty `text`), `structured` (JSON object
+validated by immutable `schema_ref={name,version,digest}`), and `dataset`
+(ReportDataset + typed ReportRow records). Unknown schema is
+`422 schema_unsupported`; invalid data is `422 schema_validation`.
+
+**Freshness rule v3 (supersedes CHD-3 and v2 wording).** Freshness is
+`ingest_ts &gt;= dispatch_ts` for the same `(send_id, attempt_id, session_ref)`;
+agent `ts` and timestamps within an attachment are evidence only. A stale
+attachment in a newly accepted envelope is reviewed as evidence, not rejected
+as an old report. Mismatched attempt/session is `bad_report{reason:
+attempt_mismatch}` or `wrong_request`. Only a carrier accepted and durably
+persisted by the harness exists for verification. A send with no report inside
+its deadline is `no_report` and enters the ladder.
+
+**Single precedence.** Exact replay of the same attempt and content digest is
+a dedupe response; a different second report while open is
+`409 report_already_posted`; a non-replay report after terminal closure is
+recorded `duplicate_ignored`; a late valid result may close only still-open
+work. The complete first-match table is VOL-D VOLD-026; this entity contract
+does not define another duplicate rule.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/source-snapshot/contracts/DATA-MODEL.md#1-5-1-reportdataset-and-reportrow -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C803D6-1-5-1-REPORTDATASET-AND-REPORT-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.5.1 ReportDataset and ReportRow
+
+`ReportDataset` and `ReportRow` are logical records stored as JSON memories in
+DuckBrain, not a dependency on an unreleased declared-table API. Dataset keys
+are `/chd/dataset/&lt;send-id&gt;/&lt;dataset-id&gt;` and
+`/chd/dataset/&lt;send-id&gt;/&lt;dataset-id&gt;/r&lt;row:08d&gt;`.
+
+| Entity | Required fields and rules |
+|---|---|
+| `ReportDataset` | `dataset_id`, `report_id` (exactly one), `send_id`, `schema_ref`, ordered `columns` (`string\|integer\|number\|boolean\|timestamp\|json` + nullable), `row_count`, `state=staging\|published\|failed`, `retention_days`, `published_ts`; immutable after publish |
+| `ReportRow` | `dataset_id`, dense harness-assigned `row_id=r00000001` onward, `values` typed against columns, optional `row_ts`; unique and immutable within dataset |
+
+Only `state=published` datasets are readable. The service enforces report-read
+permission; unauthorized callers get indistinguishable `404 not_found`. Query
+uses a closed typed `filter`, deterministic `order_by` + row_id, `page_size`
+1..500, and opaque keyset `cursor`; returns `rows`, `next_cursor`, and
+`has_more`. Partial uploads remain staging and expose neither rows nor report;
+validation failure is audited as `422 schema_validation` or
+`422 dataset_row_invalid`. A correction is a new dataset and report. A retry
+with the same attempt and content digest is an exact replay; a different digest
+uses the V3 second-report rule.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/source-snapshot/contracts/DATA-MODEL.md#1-6-sessionbond -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C803D6-1-6-SESSIONBOND-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.6 SessionBond
+
+The bond between one agent and one Hermes session in the context of one room
+and one work branch (RL-4). **Identity (rev 1.2, R31-022/D-025):** the bond is
+NO longer one-per-agent or one-per-(agent × room). The bond identity and key
+grammar are:
+
+```
+bond identity : (agent, room, subthread_root, work_uid) + generation
+bond key      : chd/bond/&lt;agent-id&gt;/&lt;bond-id&gt;
+bond_id       : b-YYYYMMDD-HHMM-&lt;rand&gt;
+subthread_root: seq of the task/subthread root message; null for room-level work
+work_uid      : ticket id, assignment id, or send id — the one work item the
+                session owns (prevents two tasks sharing a session)
+generation    : &gt;= 1, incremented on session replacement (VOL-B §7.5)
+```
+
+The identity tuple **admits two concurrent tasks for the same agent in the
+same room**: the tuples differ in `(subthread_root, work_uid)`, so each task
+holds its own bond, its own thread, and its own Hermes session. The record is
+harness-owned runtime state (written by the harness, never by agents); the
+full record schema — `bond_id`, `generation`, `parent_bond_id`, `fork_mode`,
+`policy_snapshot_id`, `policy_rev`, `hermes_base_url`, `hermes_session_id`,
+`session_key`, `hermes_profile`, `state ∈ provisioned|active|retired|lost`,
+`runtime_caps`, `reuse_policy` — is VOL-B §3.3. `fork_mode` is the explicit
+D-038 mode; it is not inferred from the bond's generation or delivery mode.
+
+**Worked example (normative; fixture VOLB-067).** Supervisor `sup-nova` holds
+two concurrent tasks in room `task-auth-14`. Both bonds are `active`
+simultaneously (requires `max_sessions &gt;= 2`), with **two distinct bond ids
+and two distinct threads**:
+
+| bond_id | agent | room | subthread_root | work_uid | gen | hermes_session_id | state |
+|---|---|---|---|---|---|---|---|
+| `b-20261109-0914-q4x7` | sup-nova | task-auth-14 | 42 | T-101 | 1 | `sess-aa11…` (its own session) | active |
+| `b-20261109-0917-m8k3` | sup-nova | task-auth-14 | 57 | T-205 | 1 | `sess-bb22…` (a different session) | active |
+
+A reply or report posted under thread root `42` is owned by bond
+`b-…-q4x7` only; under `57`, by `b-…-m8k3` only (routing rule VOLB-063,
+VOL-B §7.5). Conversations cannot mix because Hermes scopes history by
+session id and CHD scopes wakes by bond.
+
+| Field | Type | Constraint | Meaning |
+|-------|------|-----------|---------|
+| `agent` | string | agent id | Owner of the bonded session |
+| `room` | string | room id | The bonded room; every wake lands as a message in it |
+| `subthread_root` | int \| null | existing seq, or null | Which branch of the room this session serves |
+| `work_uid` | string | non-empty | The one work item this session owns |
+| `generation` | int | ≥ 1 | Replacement counter for the same identity tuple |
+| `session_key` | string | Hermes session key | Durable key the scheduler transmits (FACT-11); REUSE mode sends here |
+| `reuse_policy` | enum | `reuse-until-wedged \| always-new` | The ONLY config knob selecting between the two delivery modes NEW/REUSE (CT-04); there is no third mode |
+| `fork_mode` | enum \| null | `preserve_parent_snapshot \| current_policy`; null for a fresh non-forked session | D-038 mode selected at fork; readback returns it |
+| `policy_snapshot_id` | string \| null | existing snapshot id | SessionPolicySnapshot bound to the bond; CHD31-06 owns grant lineage records |
+| `policy_rev` | int \| null | &gt;= 1 once snapshot exists | Effective revision returned by session-policy readback; resync increments atomically |
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/source-snapshot/contracts/DATA-MODEL.md#1-7-registryentry -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C803D6-1-7-REGISTRYENTRY-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.7 RegistryEntry
+
+The responsibilities registry (RL-8, CT-09). Authoritative source is the
+config's per-agent `responsibility`; the **harness mirrors it** to
+`chd/registry/&lt;agent-id&gt;` (harness-written, agents read-only). A
+manager-to-manager `space` whose members lack registry entries is
+refused by the router.
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `agent` | string | agent id |
+| `responsibility` | string | "who owns X" — human- and agent-readable |
+| `mirror_key` | string | `chd/registry/&lt;agent-id&gt;` |
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/source-snapshot/contracts/DATA-MODEL.md#1-8-limit-entries -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C803D6-1-8-LIMIT-ENTRIES-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.8 Limit entries
+
+Limits are config data with explicit minimums; they are the entire
+backpressure story (RL-7, DESIGN §3.4/§5.5).
+
+| Limit | Scope | Field | Default floor |
+|-------|-------|-------|---------------|
+| Gateway concurrency | per gateway | `gateways[].max_inflight` ≥ 1 | sends beyond it queue, never dispatch |
+| Agent sessions | per agent | `agents[].max_sessions` ≥ 1 | concurrent bonded sessions |
+| Parallel work by room kind | per agent | `agents[].max_parallel.{objective,task,space}` ≥ 0 | 0 = the agent never holds that kind |
+| Fan-out | harness | `orchestration.max_fanout` ≥ 1 (default 12) | max wakes composed per cycle |
+| Send staleness | harness | `orchestration.stale_after_s` ≥ 60 | queued send older than this → `deferred{reason: backpressure}` |
+| Verify deadline | harness | `verify.deadline_s` ≥ 60 (default 1800) | inside gateway timeout 3600 (FACT-21) |
+| Remind cadence | harness | `verify.remind_gap_s` ≥ 30, `verify.max_reminds` ≥ 0 (default 2) | ladder rung 0 pacing |
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/source-snapshot/contracts/DATA-MODEL.md#1-10-exportmanifest-new-in-rev-1-2-r31-016 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C803D6-1-10-EXPORTMANIFEST-NEW-IN-REV-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.10 ExportManifest (new in rev 1.2 — R31-016)
+
+One record per committed native Hermes session-export checkpoint, in the
+**archive namespace `chd-archive`** (D-018: session exports and CHD control
+state use SEPARATE namespaces). CHD owns the manifest; the export payload's
+internal shape is Hermes' own and is **probed, never assumed** (OPEN-6). The
+committed JSON Schema is `contracts/schemas/session-archive.schema.json`
+(`$defs.exportManifest`); the storage-normative record is VOL-B §3.12.
+
+| Field | Type | Constraint | Meaning |
+|-------|------|-----------|---------|
+| `manifest_id` | string | `em-YYYYMMDD-HHMM-&lt;rand&gt;` | Identity; immutable |
+| `session_archive_id` | string | existing §1.11 archive id | The per-session index this checkpoint belongs to |
+| `agent` / `profile` | string | existing config identity | Subject of the export |
+| `session_id` / `session_key` | string | Hermes identity | Exported session |
+| `bond_id` / `work_uid` | string \| null | existing | Work linkage |
+| `room` / `subthread_root` | string / int \| null | existing | Thread lineage |
+| `export_schema` | object | `{name: "hermes.session.export", version: "&lt;probed&gt;"}` | **Native format/version** — probed from the deployed Hermes, never guessed |
+| `checkpoint_id` | string | `ck-YYYYMMDD-HHMM-&lt;rand&gt;` | Identity of this coverage boundary |
+| `checkpoint_seq` | int | ≥ 1, monotone per session | Messages ≤ this seq are included |
+| `coverage` | object | `{from_ts, through_ts}` RFC 3339 UTC | The **coverage window** the payload claims |
+| `completeness` | enum | `complete \| partial \| declared_gap` | What the exporter claims; not `complete` ⇒ `gap_ref` MUST be set |
+| `gap_ref` | string \| null | archive key of a §1.10 gap record | **Gap marker** naming the declared gap; a silent partial export is a defect |
+| `payload_ref` / `payload_digest` / `bytes` | string / string / int | archive key / sha256 / ≥ 0 | The bytes and their integrity check |
+| `incremental` | object \| null | `{base_checkpoint_id, dedupe: "content_digest"}` | **Incremental dedupe**: an incremental export names the base checkpoint and dedupes rows by content digest against it |
+| `state` | enum | `staging \| committed \| superseded \| failed` | **Export status**: `committed` only after digest verification |
+| `failure_ref` | string \| null | archive key of the gap record | Set when `state=failed` — **failed-export visibility is a named record+field**, never a silent absence |
+| `retention_until` | string \| null | RFC 3339 UTC | Derived from archive retention policy |
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/source-snapshot/contracts/DATA-MODEL.md#1-9-ticket-r31-017-r31-018-controller-authoritative -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C803D6-1-9-TICKET-R31-017-R31-018-CON-S012" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.9 Ticket (R31-017/R31-018; controller-authoritative)
+
+A Ticket is the general-purpose shared work item. The controller ticket service
+owns its identity, graph, authorization, workflow binding, revision and state;
+DuckBrain stores the durable `TicketRecord` representation and immutable
+transition events under `/chd/ticket`. No board file, room message, report, or
+DuckBrain-linked evidence record owns those fields.
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `ticket_id` | string | registered `&lt;family&gt;-&lt;nnn&gt;`; never reused | Stable identity |
+| `title` / `kind` | string / enum | title non-empty; `task|bug|review|decision|incident|epic` | Generic work category, including non-coding work |
+| `workflow` | object | `{workflow_id, version, machine_ref, state_projection}` | Binding to `build-spec/state-machines.json`; not a second machine |
+| `state` | string | controller projection of objective or assignment machine | Current workflow state |
+| `parent_id` / `depends_on` | string[] | existing ids; acyclic | Parent/child and prerequisite links |
+| `accountable_owner` | string | exactly one agent id | Sole accountable owner |
+| `assignees` / `watchers` | string[] | agent ids | Actors and observers |
+| `criteria` | object[] | criterion id, text, provenance, version, evidence refs | Acceptance conditions |
+| `authorization` | object | required grants, actor scope, approval ref | Mutation/dispatch authorization facts |
+| `links` | object | objective, room, thread, sends, reports, artifacts | Correlation and evidence links |
+| `priority` / `revision` | integer | priority 0–9; revision ≥ 1 and monotone | Ordering and CAS |
+| `created_ts` / `updated_ts` / `closed_ts` | RFC 3339 string | timestamps | Lifecycle times |
+| `meta` | object | optional | Source and correlation metadata |
+
+Each transition atomically increments `revision` and appends
+`/chd/ticket/&lt;ticket-id&gt;/event/m&lt;seq:012d&gt;` with `from`, `to`, actor, reason,
+revision before/after, evidence refs and timestamp. A stale revision returns
+`409 ticket_revision_conflict` with no write. On restart, the controller reloads
+the highest committed TicketRecord revision and ordered events. The linked
+ObjectiveRecord, AssignmentRecord, RoomMessage, SendManifest, Report and
+artifacts are evidence or projections only; they do not compete for authority.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/source-snapshot/contracts/DATA-MODEL.md#1-11-sessionarchive-new-in-rev-1-2-r31-016 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C803D6-1-11-SESSIONARCHIVE-NEW-IN-REV-S013" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.11 SessionArchive (new in rev 1.2 — R31-016)
+
+The durable per-session index of exported checkpoints — the record a
+**replacement host** queries to discover and read a lost host's sessions
+(D-017). Stored in namespace `chd-archive`; written only by the archive
+ingestor (a harness-side principal holding its own credential — no agent
+ever holds an archive credential). Committed JSON Schema:
+`contracts/schemas/session-archive.schema.json` (`$defs.sessionArchive`).
+
+| Field | Type | Constraint | Meaning |
+|-------|------|-----------|---------|
+| `archive_id` | string | `sa-YYYYMMDD-HHMM-&lt;rand&gt;` | Identity |
+| `agent` / `profile` | string | existing config identity | Subject |
+| `session_id` / `session_key` | string | Hermes identity | Archived session |
+| `bond_ids` / `work_uids` | string[] | existing bond ids / work items | Bonds that served this session over its life |
+| `rooms` / `subthread_roots` | string[] / int[] | existing | Thread lineage summary |
+| `latest_checkpoint_id` / `latest_checkpoint_seq` | string / int | from the newest committed manifest | Newest committed coverage boundary |
+| `covered_through_ts` | string | RFC 3339 UTC | Newest committed `coverage.through_ts` |
+| `manifest_count` | int | ≥ 0 | Committed ExportManifests for this session |
+| `open_gaps` | string[] | gap record keys | Unresolved declared gaps / failed exports |
+| `state` | enum | `active \| frozen \| expired` | Lifecycle; `expired` = past retention |
+| `retention_until` | string \| null | RFC 3339 UTC | Retention bound |
+| `ts` | string | RFC 3339 UTC | Last index update |
+
+**Discovery and access (normative).** Replacement discovery is by
+`(agent, profile)` prefix scan over `/sessions/&lt;agent&gt;/&lt;profile&gt;/` (query
+contract VOL-B §5.10). Every archive read — including a replacement's —
+requires an explicit archive read grant (VOL-C §8.8); **there is no implicit
+read**. The grant-record schema and selector grammar for archive scopes are
+owned by **CHD31-06**; archive read MUST NOT ship ahead of that record.
+
+**Hard limitation (normative).** An archived record is NEVER evidence that a
+live session exists or can be resumed. Restore is a validated IMPORT into a
+new local session store (VOL-B §5.10/VOLB-070, VOL-D §5.2), never a
+resumption of the archived session or a copy of a live database.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/source-snapshot/contracts/DATA-MODEL.md#2-duckbrain-key-layout-namespace-chd -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C803D6-2-DUCKBRAIN-KEY-LAYOUT-NAMESPA-S014" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 2. DuckBrain key layout (namespace `chd`)
+
+| Key | Writer | Content |
+|-----|--------|---------|
+| `chd/room/&lt;room-id&gt;/&lt;seq&gt;` | harness service (controller-authoritative) | Message JSON (§1.4); `kind=report` carries the report object as attachment |
+| `chd/registry/&lt;agent-id&gt;` | **harness only** | RegistryEntry mirror (CT-09) |
+| `chd/delegation/&lt;delegation-id&gt;` | **harness only** | DelegationRecord (§3.6 VOL-B): bounded authority and lineage |
+| `chd/send/&lt;send-id&gt;/manifest` | **harness only** | Send composition record: send_id, room, target, mode NEW/REUSE, gateway, dispatch_ts, deadline, verify outcome, close reason |
+| `chd/ticket/&lt;ticket-id&gt;` | **controller ticket service** | TicketRecord (§1.9); controller-authoritative shared work state |
+| `chd/ticket/&lt;ticket-id&gt;/event/m&lt;seq:012d&gt;` | **controller ticket service** | Immutable Ticket transition event (§1.9) |
+| `chd/bond/&lt;agent-id&gt;/&lt;bond-id&gt;` | **harness only** | SessionBond record (§1.6): identity `(agent, room, subthread_root, work_uid)` + generation, session refs, state |
+| `chd/report/&lt;send-id&gt;/&lt;report-id&gt;` | **harness only** | Schema-v3 report envelope plus one content variant (§1.5) |
+| `chd/dataset/&lt;send-id&gt;/&lt;dataset-id&gt;` | **harness only** | ReportDataset descriptor (§1.5.1) |
+| `chd/dataset/&lt;send-id&gt;/&lt;dataset-id&gt;/r&lt;row:08d&gt;` | **harness only** | ReportRow with typed values (§1.5.1) |
+
+**Archive namespace `chd-archive` (rev 1.2 — R31-016; D-018 separates it
+from the `chd` control namespace).** Canonical leading-slash form per
+VOLB-003; writer for every row is the **archive ingestor only** — the harness
+never writes it and no agent holds an archive credential:
+
+| Key | Content |
+|-----|---------|
+| `/sessions/&lt;agent&gt;/&lt;profile&gt;/&lt;session-id&gt;` | SessionArchive index (§1.10) |
+| `/sessions/&lt;agent&gt;/&lt;profile&gt;/&lt;session-id&gt;/&lt;checkpoint-id&gt;/export.json` | Native Hermes export payload |
+| `/sessions/&lt;agent&gt;/&lt;profile&gt;/&lt;session-id&gt;/&lt;checkpoint-id&gt;/manifest` | ExportManifest (§1.9) |
+| `/sessions/&lt;agent&gt;/&lt;profile&gt;/&lt;session-id&gt;/&lt;checkpoint-id&gt;/policy` | SessionPolicySnapshot copy for restore (VOL-B §3.11) |
+| `/gaps/&lt;agent&gt;/&lt;profile&gt;/&lt;session-id&gt;/&lt;checkpoint-id&gt;` | ArchiveGapRecord — declared coverage gap or failed export (§1.9 `gap_ref`/`failure_ref`) |
+
+Patterns (enforced by `config.schema.json` and the harness write gate):
+
+- room id: `^(obj|task|space)-[a-z0-9-]+$`
+- room key: `^chd/room/(obj|task|space)-[a-z0-9-]+/[0-9]+$`
+- registry key: `^chd/registry/[a-z][a-z0-9-]*$`
+- send key: `^chd/send/s-[0-9]{8}-[0-9]{4}-[a-z0-9]+/manifest$`
+- bond key: `^chd/bond/[a-z][a-z0-9-]*/b-[0-9]{8}-[0-9]{4}-[a-z0-9]+$`
+- archive session key: `^/sessions/[a-z][a-z0-9-]*/[a-z][a-z0-9-]*/[^/]+$`
+- general duckbrain key: `^chd/[a-z0-9-]+(/[A-Za-z0-9._-]+)*$`
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/source-snapshot/contracts/DATA-MODEL.md#3-er-diagram -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C803D6-3-ER-DIAGRAM-S015" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 3. ER diagram
+
+```mermaid
+erDiagram
+    GATEWAY ||--o{ AGENT : "binds (agent.gateway)"
+    AGENT ||--o{ ROOM : "member of (config data)"
+    AGENT ||--|| REGISTRY_ENTRY : "responsibility"
+    AGENT ||--o{ SESSION_BOND : "owns N bonded sessions (per subthread/work item, rev 1.2)"
+    ROOM ||--o{ MESSAGE : "chd/room/&lt;id&gt;/&lt;seq&gt;"
+    AGENT ||--o{ MESSAGE : "from"
+    MESSAGE ||--o| REPORT : "attach (kind=report)"
+    SEND ||--o| REPORT : "answered by (send_id)"
+    REPORT ||--o| REPORT_DATASET : "content (class=dataset)"
+    REPORT_DATASET ||--o{ REPORT_ROW : "typed rows"
+    SEND }o--|| AGENT : "target"
+    SEND }o--|| GATEWAY : "routed via"
+    SESSION_BOND }o--|| ROOM : "bonded to"
+    AGENT ||--o{ SESSION_ARCHIVE : "archived per (agent, profile, session)"
+    SESSION_ARCHIVE ||--o{ EXPORT_MANIFEST : "checkpoints"
+
+    GATEWAY {
+        string id "gw-*"
+        string url "http(s) host:port"
+        string transport "loopback|tailscale|ssh-tunnel|direct"
+        string auth_token_ref
+        int max_inflight "backpressure, &gt;=1"
+    }
+    AGENT {
+        string id
+        string role "director|manager|supervisor"
+        string gateway "FK gateway.id"
+        string workdir
+        string skills "injected by harness"
+        string tools_include
+        string tools_exclude "exclude wins"
+        string model "explicit"
+        int context_limit
+        int max_turns
+        int token_budget
+        int max_sessions
+        int max_parallel_objective
+        int max_parallel_task
+        int max_parallel_space
+        string responsibility "registry source"
+        string triggers "cron list, [] = message-woken"
+        string rooms "memberships"
+    }
+    ROOM {
+        string id "obj|task|space-*"
+        string kind "objective|task|space"
+        string participants "agent ids"
+    }
+    MESSAGE {
+        int seq "monotonic per room"
+        string from "agent id | owner"
+        string to "agent id | group | @agent"
+        int thread "root seq, optional"
+        string kind "msg|directive|task|report|incident"
+        string body
+        string attach "report refs"
+        string ts "RFC3339"
+    }
+    REPORT {
+        string id "r-*"
+        string produced_by "agent id"
+        string send_id "FK send"
+        string attempt_id "FK attempt"
+        string status "done|deferred|blocked|failed|waiting_human"
+        string summary
+        string content_class "free_form|structured|dataset"
+        string content_ref "duckbrain key"
+        string content_digest "sha256"
+        string ingest_ts "harness clock"
+    }
+    REPORT_DATASET {
+        string dataset_id "ds-*"
+        string report_id "exactly one report"
+        string schema_ref "name/version/digest"
+        string columns "ordered typed columns"
+        int row_count
+        string state "staging|published|failed"
+    }
+    REPORT_ROW {
+        string dataset_id "FK dataset"
+        string row_id "dense r00000001"
+        string values "typed by columns"
+    }
+    SESSION_BOND {
+        string agent
+        string room "bonded room id"
+        int subthread_root "root seq, null = room-level"
+        string work_uid "one work item per session"
+        int generation "replacement counter"
+        string session_key
+        string hermes_session_id "Hermes-owned session id"
+        string reuse_policy "reuse-until-wedged|always-new"
+        string state "provisioned|active|retired|lost"
+    }
+    SESSION_ARCHIVE {
+        string archive_id "sa-*"
+        string agent
+        string profile
+        string session_id
+        string latest_checkpoint_id
+        int latest_checkpoint_seq
+        string state "active|frozen|expired"
+        string open_gaps "gap record keys"
+    }
+    EXPORT_MANIFEST {
+        string manifest_id "em-*"
+        string checkpoint_id "ck-*"
+        int checkpoint_seq "monotone per session"
+        string export_schema "hermes.session.export, version probed"
+        string completeness "complete|partial|declared_gap"
+        string gap_ref "gap marker, required unless complete"
+        string payload_digest "sha256"
+        string state "staging|committed|superseded|failed"
+        string failure_ref "gap record when failed"
+    }
+    REGISTRY_ENTRY {
+        string agent
+        string responsibility
+        string mirror_key "chd/registry/&lt;agent-id&gt;"
+    }
+    SEND {
+        string send_id "s-*"
+        string room
+        string target
+        string mode "NEW|REUSE"
+        string gateway
+        string dispatch_ts
+        string verify_outcome "verified|no_report|bad_report|failed"
+        string close_reason
+    }
+```
+
+Cross-references: endpoint → key-write map lives in
+`contracts/ENDPOINTS.md` §7; the machine-checkable version of every
+constraint above lives in `contracts/config.schema.json`.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/source-snapshot/contracts/DATA-MODEL.md#4-complete-operation-facing-inventory -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C803D6-4-COMPLETE-OPERATION-FACING-IN-S016" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 4. Complete operation-facing inventory
+
+`build-spec/VOL-E-operation-reference.md` §5 is the bidirectional operation-facing inventory of every namespace, key family and query path in this document. It does not replace the field tables above. The control namespace is `chd`; the archive namespace is `chd-archive`; the writer is the harness/controller except archive rows, which are archive-ingestor-only. Every record family has a canonical key, required field table, indexed attributes and at least one prefix/query example.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/source-snapshot/contracts/DATA-MODEL.md#4-1-field-and-namespace-invariants -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C803D6-4-1-FIELD-AND-NAMESPACE-INVARI-S017" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.1 Field and namespace invariants
+
+All control records are JSON content with `rev` where the family is state-carrying, RFC 3339 `ts`, and a service writer identity. Indexed attributes are projections used for filtering and never a second source of truth. `/chd/room/*`, `/chd/send/*`, `/chd/report/*`, `/chd/ticket/*`, `/chd/grant/*`, `/chd/audit/*`, `/chd/wait/*`, `/chd/objective/*`, `/chd/assignment/*`, `/chd/bond/*`, `/chd/registry/*`, `/chd/limits/*`, `/chd/policy/*`, `/chd/rule/*`, `/chd/acceptance/*`, `/chd/aggregation/*`, `/chd/dataset/*` and `/chd/pattern/*` are control families. `/sessions/*`, `/gaps/*` and checkpoint children are archive families. Agents have no direct write credential for either namespace.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/source-snapshot/contracts/DATA-MODEL.md#4-2-query-examples -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C803D6-4-2-QUERY-EXAMPLES-S018" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.2 Query examples
+
+The implementation uses DuckBrain HTTP prefix/keyset access, not an assumed declared-table API: `GET /api/memories?namespace=chd&amp;prefix=/chd/room/&lt;room&gt;/&amp;limit=500`; `GET /api/memories?namespace=chd&amp;prefix=/chd/send/&amp;attr.state=open`; `GET /api/memories?namespace=chd&amp;prefix=/chd/ticket/&lt;id&gt;/event/&amp;attr.seq_gt=&lt;n&gt;`; `GET /api/memories?namespace=chd-archive&amp;prefix=/sessions/&lt;agent&gt;/&lt;profile&gt;/`; and `GET /api/memories?namespace=chd-archive&amp;prefix=/gaps/&lt;agent&gt;/`. Query authorization is checked before the prefix is exposed; inaccessible targets return `404 not_found` and an authorized audit record. Dataset rows use typed keyset pagination and never offset pagination.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/source-snapshot/contracts/DATA-MODEL.md#4-complete-operation-facing-inventory -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C803D6-4-COMPLETE-OPERATION-FACING-IN-S019" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 4. Complete operation-facing inventory
+
+`build-spec/VOL-E-operation-reference.md` §5 is the bidirectional operation-facing inventory of every namespace, key family and query path in this document. It does not replace the field tables above. The control namespace is `chd`; the archive namespace is `chd-archive`; the writer is the harness/controller except archive rows, which are archive-ingestor-only. Every record family has a canonical key, required field table, indexed attributes and at least one prefix/query example.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/source-snapshot/contracts/DATA-MODEL.md#4-1-field-and-namespace-invariants -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C803D6-4-1-FIELD-AND-NAMESPACE-INVARI-S020" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.1 Field and namespace invariants
+
+All control records are JSON content with `rev` where the family is state-carrying, RFC 3339 `ts`, and a service writer identity. Indexed attributes are projections used for filtering and never a second source of truth. `/chd/room/*`, `/chd/send/*`, `/chd/report/*`, `/chd/ticket/*`, `/chd/grant/*`, `/chd/audit/*`, `/chd/wait/*`, `/chd/objective/*`, `/chd/assignment/*`, `/chd/bond/*`, `/chd/registry/*`, `/chd/limits/*`, `/chd/policy/*`, `/chd/rule/*`, `/chd/acceptance/*`, `/chd/aggregation/*`, `/chd/dataset/*` and `/chd/pattern/*` are control families. `/sessions/*`, `/gaps/*` and checkpoint children are archive families. Agents have no direct write credential for either namespace.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/source-snapshot/contracts/DATA-MODEL.md#4-2-query-examples -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C803D6-4-2-QUERY-EXAMPLES-S021" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.2 Query examples
+
+The implementation uses DuckBrain HTTP prefix/keyset access, not an assumed declared-table API: `GET /api/memories?namespace=chd&amp;prefix=/chd/room/&lt;room&gt;/&amp;limit=500`; `GET /api/memories?namespace=chd&amp;prefix=/chd/send/&amp;attr.state=open`; `GET /api/memories?namespace=chd&amp;prefix=/chd/ticket/&lt;id&gt;/event/&amp;attr.seq_gt=&lt;n&gt;`; `GET /api/memories?namespace=chd-archive&amp;prefix=/sessions/&lt;agent&gt;/&lt;profile&gt;/`; and `GET /api/memories?namespace=chd-archive&amp;prefix=/gaps/&lt;agent&gt;/`. Query authorization is checked before the prefix is exposed; inaccessible targets return `404 not_found` and an authorized audit record. Dataset rows use typed keyset pagination and never offset pagination.
+  </section>
+</spec>

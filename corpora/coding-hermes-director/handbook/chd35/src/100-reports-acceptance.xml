@@ -1,0 +1,246 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd35/src/100-reports-acceptance.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD35-SRC-100-R-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd35/src/100-reports-acceptance.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-100-R-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# §K — Reports, criteria, waiting, acceptance and delivery
+
+&lt;div class="chg"&gt;
+**Edition:** CHD-3.5 · **Revision notice:** This chapter supersedes CHD-3.3 report/acceptance lifecycle claims that treated report receipt, timeout, waiting, approval, assignment completion, or delivery acknowledgement as interchangeable. `tables/lifecycle-35.json` is the typed lifecycle authority; `schemas/lifecycle-35-*.schema.json`, `tables/lifecycle-35-acceptance.csv`, and `figures/lifecycle-35-figure-model.json` are projections. The concrete trusted provider/native stop-attestation producer remains OPEN.
+&lt;/div&gt;
+
+**Authority.** This chapter is the handbook mapping of report content, criteria, waiting, acceptance, and delivery. The report envelope remains separate from requester-selected content. The schemas in `schemas/`, the tables in `tables/`, and the examples in `examples/reports/` are executable contracts only where they conform to the CHD-3.5 typed source; historical projections cannot define alternate states.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/100-reports-acceptance.md#k-1-one-report-two-planes -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-100-R-K-1-ONE-REPORT-TWO-PLANES-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## K.1 One report, two planes
+
+A report is an immutable **correlation envelope** plus exactly one content variant. The
+controller resolves `request_ref` to a specific persisted request before any completion decision.
+It never guesses a request from a filename, message text, timestamp, room name, or a matching
+summary.
+
+The envelope (`report-envelope.schema.json`) carries `report_id`, `send_id`, `attempt_id`,
+attempt ordinal, request and parent-thread references, room, Hermes session reference, status,
+content class/ref/digest, harness-recorded `dispatch_ts` and `ingest_ts`, assignment snapshot,
+criteria results, and evidence references. `ingest_ts &gt;= dispatch_ts` is checked only for the
+same `(send_id, attempt_id, session_ref)`; an agent-authored timestamp is narrative evidence,
+not freshness proof. The envelope is not the requested answer and cannot silently change its
+content class.
+
+The content (`report.schema.json`) is requester-selected:
+
+| class | content | required validation | persistence/query |
+|---|---|---|---|
+| `free_form` | non-empty prose | text and envelope shape | immutable report content by `content_ref` |
+| `structured` | one JSON object | `schema_ref` resolves name/version/digest, then JSON Schema validation | immutable digest; parser-safe object |
+| `dataset` | descriptor plus typed multirow records | column and every row validation before publish | immutable published rows; keyset cursor query |
+
+The assignment copies `required_content`, schema identity/version/digest, validation policy,
+completion policy, and criteria refs into the envelope. A correction is a new report and new
+content identity; it is not an in-place mutation. `free_form` is the canonical spelling (not
+`freeform`). A queryable dataset is still a report: report, dataset descriptor, rows, send,
+assignment, room and thread are joined by immutable references.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/100-reports-acceptance.md#k-2-validation-and-atomic-dataset-publication -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-100-R-K-2-VALIDATION-AND-ATOMIC-DATA-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## K.2 Validation and atomic dataset publication
+
+Validation order is: (1) envelope JSON Schema and known schema version; (2) request/send/
+attempt/session correlation; (3) selected content validation; (4) freshness and duplicate/late
+precedence; (5) criteria evidence and acceptance policy. A report failing shape or content
+validation is `bad_report{reason: schema}` or `422 schema_unsupported|schema_validation`; it
+cannot close an attempt or publish complete data.
+
+Dataset writes use the §G journal and are not a substrate transaction or a stream that becomes
+complete by counting rows:
+
+1. Write a `DatasetDescriptor` in `state=staging` with a transaction id and expected row count.
+2. Validate every proposed row against the declared columns, typed row id, authorization and
+   dataset schema. Any failure leaves no published descriptor and no queryable complete rows.
+3. Append descriptor, every typed row, a digest/count receipt, and a `PublicationMarker` as
+   prepared constituents; fsync and read back each. Append the outer commit marker last.
+4. Read back the outer marker, descriptor, row count, digest, publication state and query contract.
+   Only then expose `state=published` and allow queries.
+
+If an interruption or row error occurs, `state=partial` (or `failed`) is observable with
+`rows_expected`, `rows_committed`, `atomic=false` and `partial_reason`. It is never presented
+as a complete report and never satisfies a `done` criterion. A published dataset has
+`publication.committed=true`, a content digest and the complete committed row set. The word
+`atomic` is reserved for the reader-visible all-or-none effect of the journal marker, not a
+claim about a DuckBrain multi-key transaction. Dataset correction uses a new dataset/report
+identity.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/100-reports-acceptance.md#k-3-correlation-wrong-requests-stale-late-and-duplicates -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-100-R-K-3-CORRELATION-WRONG-REQUESTS-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## K.3 Correlation, wrong requests, stale, late and duplicates
+
+The verifier uses the following non-overlapping first-match precedence:
+
+| condition | outcome | state effect |
+|---|---|---|
+| exact same send, attempt, session and content digest | exact replay; return original response | no write, no counter |
+| same open send/attempt but different content digest | `409 report_already_posted` | audit only; no second report |
+| terminal send, not exact replay | `duplicate_ignored` | audit and counter; never reopen |
+| open, matching correlation, harness freshness valid but after deadline | late valid report | accept/link as `late_report=true`; may close only open work |
+| open but stale or correlation mismatch | `bad_report{reason: stale|attempt_mismatch|wrong_request}` | audit and enter verify ladder |
+
+A **wrong request** is not a freshness problem. If a fresh, schema-valid carrier's
+`request_ref` resolves to a different request than the open send manifest, reject it as exactly
+`bad_report{reason: wrong_request}`. The send remains open, and rung history receives an appended
+rejection event. The report cannot be reattached to the request it resembles. A stale attachment
+inside an otherwise accepted envelope is reviewed as attachment evidence; a mismatched
+attachment attempt/session is rejected and cannot close work.
+
+Freshness uses harness-recorded dispatch and ingress timestamps; no freshness-based closure or
+human approval is invented. A late report cannot reopen a terminal send. An explicit authorized
+change record is required to revisit an acceptance decision.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/100-reports-acceptance.md#k-4-criteria-provenance-version-and-evidence -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-100-R-K-4-CRITERIA-PROVENANCE-VERSIO-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## K.4 Criteria: provenance, version and evidence
+
+Every criterion is a durable `criteria.schema.json` record:
+`{criterion_id, provenance, version, text, applies_to}`. Provenance is one of:
+
+- `vp_supplied`: copied from the VP objective and immutable to the director;
+- `director_derived`: added by the director to cover an omitted or newly decomposed requirement;
+- `standing_rule`: resolved from the Hermes-effective standing rules at review time, with an
+  `effective_rule_ref` and source/version readback.
+
+The director may extend criteria additively; it may not silently replace a carried condition.
+Managers and supervisors carry the assignment conditions verbatim. A changed condition requires
+an authorized change record `{changed_by, authority_ref, at, delta}`. Hermes owns standing-rule
+learning and propagation; CHD records the rule set actually consulted and makes **no propagation
+guarantee** to in-flight or future sessions. If a frozen session did not see a newly changed
+rule, that absence is evidence, not a reason to pretend the rule applied.
+
+Acceptance requires a result for every criterion in scope, and every result must have at least
+one `evidence_refs` entry. `done` or approval without per-criterion evidence cannot reach
+acceptance. Evidence refs point to persisted report/artifact/row/query/audit records and are
+resolved under authorization; prose claims and counters alone are insufficient.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/100-reports-acceptance.md#k-5-distinct-closure-waiting-resume-and-acceptance-states -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-100-R-K-5-DISTINCT-CLOSURE-WAITING-R-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## K.5 Distinct closure, waiting, resume and acceptance states
+
+&lt;div class="chg"&gt;
+These are distinct controller-owned records and guards, as generated in `tables/lifecycle-35.json`:
+
+1. **Invocation closure:** one attempt has `AttemptRecord.state=closed` only after report classification and trusted correlated runtime terminal/stop proof. A `waiting` attempt is closed only after the stop attestation guard; its logical send remains open with `SendManifest.state=waiting` and an open `WaitRecord`. A report, timeout, or approval does not close an attempt.
+2. **Unresolved human gate:** a valid `waiting_human` report is receipt/correlation evidence, not stop proof. The controller writes the report and retains capacity until the concrete provider/native adapter supplies trusted correlated stop attestation. If the run is running, unknown, or unreachable, no wait successor is admitted. Once proof is read back, the controller writes the closed attempt and open `WaitRecord` in order, and the logical send remains open. A wait propagates as a status notice carrying the same gate reference.
+3. **Resumed attempt:** only an authorized, durable resolution writes one `ResolutionRecord`, one `SuccessorLink`, and one new `attempt_id`; the old attempt is never reopened. The successor is selectable only after its manifest is committed and read back.
+4. **Assignment acceptance:** `AssignmentRecord.active → accepted` is legal only under `AS-03`: every assignment criterion passes with non-empty evidence refs; no required send is open, uncertain, or waiting without resolution; no human gate is unresolved; and trusted runtime terminal/stop proof is committed. A manager/supervisor verdict is scoped evidence, not a bypass of the controller guard.
+5. **Objective acceptance:** the director records the objective verdict only after assignment projections and blocking sends are read back. For `composition_required=false`, `ObjectiveRecord.in_acceptance → accepted` uses guarded `OB-03`: all required assignments are accepted, no blocking send remains, and any configured delivery and approval guards pass. This is the explicit non-composition path. When composition is required, `OB-04` enters `composing` and an accepted composition artifact is required before downstream delivery/approval or direct composed acceptance. Approval is only a gate condition; it is not a report, runtime stop proof, assignment acceptance, or delivery.
+
+The visibility ladder is generated from `tables/lifecycle-35.json` and is visibility-only. A deadline, follow-up timer, timeout, escalation, missing reply, missing report, or owner page never closes, approves, resumes, or releases. A late valid report may close still-open work after full correlation/content/runtime checks; a report after terminal closure remains immutable late evidence and never reopens work.
+
+The accompanying `figures/lifecycle-35-figure-model.json` describes this boundary without claiming a rendered artifact. A resumed report must pass the full validation, correlation, freshness, criteria, runtime-proof, and acceptance guards again.
+&lt;/div&gt;
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/100-reports-acceptance.md#k-6-child-reports-reviews-and-roll-up -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-100-R-K-6-CHILD-REPORTS-REVIEWS-AND-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## K.6 Child reports, reviews and roll-up
+
+A child report has a stable `parent_thread_ref`, child assignment id, send/attempt and evidence
+refs. The parent may query child reports only through authorized thread links and keyset
+pagination. A child result is not eligible for parent aggregation when its assigned review is
+missing, failed, or unresolved. The sequence is:
+
+`child report → assigned supervisor/manager review → reviewed child verdict → parent roll-up →
+director acceptance`.
+
+The reviewer records the criterion evidence and the child verdict; then the parent aggregation
+record records exactly one child send/thread mapping and its state. One child can map to one
+thread only; zero or multiple mappings are `409 thread_not_owned`. A waiting or failed child is
+visible to the parent as such and does not become a successful aggregate. Unrelated branches
+continue. The parent never polls arbitrary rooms or trusts a child filename.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/100-reports-acceptance.md#k-7-delivery-evidence-and-idempotent-retry -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-100-R-K-7-DELIVERY-EVIDENCE-AND-IDEM-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## K.7 Delivery evidence and idempotent retry
+
+Delivery is a separate stage from content acceptance. Only when the assignment's completion
+policy requires delivery does a delivering agent perform it. The durable evidence shape is:
+
+```json
+{
+  "channel": "telegram",
+  "channel_message_id": "msg-123",
+  "delivered_at": "2026-11-09T12:00:00Z",
+  "delivery_attempt": 2,
+  "idempotency_key": "sha256:delivery-objective-123"
+}
+```
+
+Transport failure retries with the **same** `idempotency_key`; the channel adapter deduplicates
+and returns the original external message identity. It must not create a second external send.
+`delivery_attempt` increments for each attempt, while the idempotency key does not. Delivery
+success is evidence of transport only. It never substitutes for required director acceptance,
+per-criterion evidence, or a configured human approval.
+
+There is no universal human-ack rule. The per-assignment completion/approval condition is carried
+unchanged from director to manager to supervisor. If delivery is not part of that condition,
+objective acceptance need not wait for a delivery record; if it is part of it, delivery evidence
+is required before the objective reaches accepted.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/100-reports-acceptance.md#k-8-workflow-probes-and-failure-resolution -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-100-R-K-8-WORKFLOW-PROBES-AND-FAILUR-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## K.8 Workflow probes and failure resolution
+
+**WF-02 duplicate invoice.** Ingest duplicate attachments with the same source identity and
+content digest. The first row/report is retained; the exact replay is deduplicated, while a
+different report for the same open attempt receives `409 report_already_posted`. Totals query only
+published rows, so the duplicate cannot inflate the total. The director's criterion cites the
+invoice rows, source links, dedupe audit and total query as evidence.
+
+**WF-04 missing source.** A source snapshot that cannot be fetched is recorded explicitly as a
+missing-source finding with its source identity, attempted-at evidence and reason. The narrative
+and structured finding remain incomplete/uncertain; no report claims the missing source was
+checked. The director can accept only if the assignment's criteria permit the explicit gap, with
+the gap evidence cited; otherwise it is rework or blocked, not complete.
+
+**WF-06 concurrent field update.** A stale update carrying an old `expected_revision` is refused
+as `409 ticket_revision_conflict`. The report links the conflict audit and current record
+readback, and remains incomplete until a new assignment/report reflects the reconciled field.
+No last-writer-wins overwrite or acceptance-by-approval is permitted.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/100-reports-acceptance.md#k-9-query-and-error-contract -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-100-R-K-9-QUERY-AND-ERROR-CONTRACT-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## K.9 Query and error contract
+
+Queries join by `objective_id`, `assignment_id`, `send_id`, `attempt_id`, `report_id`, `dataset_id`,
+room and thread refs. Use keyset cursors and declared dataset ordering; timestamps are not
+ordering keys. Authorized reads return reports, criteria, wait records, child roll-ups, dataset
+descriptors/rows and delivery evidence. Unknown or unauthorized references are not guessed.
+
+Canonical errors include `bad_report{reason: schema|stale|attempt_mismatch|wrong_request}`,
+`422 schema_unsupported`, `422 schema_validation`, `422 dataset_row_invalid`,
+`409 report_already_posted`, `409 thread_not_owned`, `409 ticket_revision_conflict`,
+`duplicate_ignored`, and `at_capacity`. Every rejection appends an audit/rung event and leaves
+open work open unless the authoritative transition says otherwise.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/100-reports-acceptance.md#k-10-required-evidence-checklist -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-100-R-K-10-REQUIRED-EVIDENCE-CHECKLI-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## K.10 Required evidence checklist
+
+A reviewer may mark a report/objective accepted only after reading back:
+
+- resolved `request_ref`, matching send/attempt/session and harness timestamps;
+- selected content class, schema version/digest, validation result and immutable content ref;
+- every criterion's provenance/version, verdict and non-empty evidence refs;
+- dataset atomic publication state and complete row/query readback, or explicit partial state;
+- child review verdicts before parent roll-up;
+- wait state and resolution evidence, if applicable;
+- delivery evidence and reused idempotency key, if delivery is required;
+- explicit distinctions among attempt closure, human gate, resumed execution, objective acceptance
+  and delivery.
+
+No fresh timestamp, successful transport, approval, green counter, or status label can replace
+this evidence ladder.
+
+
+**CHD-3.3 contract:** `tables/section11-lifecycle-source.json` is the single Section 11 state source. `tables/section11-transition-table.csv`, `tables/section11-ladder.csv`, all Section 11 schemas and `examples/reports/section11-lifecycle.json` are checked companions generated or validated from that source; `contracts/request-attempt-lifecycle.md` is the explanatory contract. `tables/verify-ladder.csv` remains the legacy compatibility projection and must not define a second ladder.
+  </section>
+</spec>

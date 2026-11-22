@@ -1,0 +1,358 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd32/build-spec/VOL-E-tickets-workstate.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD32-BU-65F39F-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-E-tickets-workstate.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD32-BU-65F39F-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# VOL-E — TICKETS, WORKFLOWS, AND AUTHORITATIVE WORK STATE
+
+```
+DOC     : build-spec/VOL-E-tickets-workstate.md
+RESOLVES: §1–§5 anchors of this volume; ids VOL-E-001..016
+          (volume -&gt; § anchors -&gt; ids: `manifest/package-manifest.json`,
+          `build-spec/REFERENCE-INDEX.md` §1)
+REV     : 1.0 (new in the R31 revision; R31-017, R31-018)
+DATE    : 2026-11-09
+COVERS  : R31-017 (general-purpose tickets/workflows), R31-018 (control-plane
+          shared work state; boardctl-compatible capability)
+DECISIONS: D-020 (general tickets, master flow), D-021 (controller-mediated
+          centralized work state; no commit/pull), D-032 (authorities apply to
+          ticket operations too)
+STATUS  : BUILDABLE SPEC. Requirement ids VOLE-001..VOLE-016. Open points are
+          marked OPEN and are never resolved by an invented default.
+```
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-E-tickets-workstate.md#1-why-this-volume-exists -->
+  <section id="CHD-HANDBOOK-CHD32-BU-65F39F-1-WHY-THIS-VOLUME-EXISTS-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 1. Why this volume exists
+
+Rev 1.1 could describe a hierarchy but not its **work**. Objectives decomposed
+into assignments, assignments were reported on, and yet nothing carried the durable
+identity of "the thing being worked on": a bug, a bill batch, an incident, a
+review, a decision. The fleet's answer — a JSONL board in a repository — does not
+survive multi-agent use: it requires every agent to commit and pull the same file,
+it has no authorization, and two writers silently overwrite each other.
+
+This volume makes the ticket the authoritative work item and places it in the
+control plane (D-021). It is **general-purpose**: coding is one application
+(VOLE-001). A ticket is not a message, a task room, a send, or an assignment; it
+links to them.
+
+**VOLE-001.** Tickets and workflows SHALL be modeled generically: kinds, states and
+workflows are configuration, not code, and nothing in the model assumes software
+delivery. The same mechanism SHALL carry the ten workflow-suite scenarios
+(WF-01..WF-10), including non-coding ones.
+
+**VOLE-002.** A ticket SHALL have a stable identity that survives state changes,
+re-parenting, reassignment and moves between rooms. Identity is assigned by the
+controller and never reused; an imported board row is matched, not re-identified.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-E-tickets-workstate.md#2-entities -->
+  <section id="CHD-HANDBOOK-CHD32-BU-65F39F-2-ENTITIES-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 2. Entities
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-E-tickets-workstate.md#2-1-ticket -->
+  <section id="CHD-HANDBOOK-CHD32-BU-65F39F-2-1-TICKET-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.1 Ticket
+
+The canonical schema is VOL-B §3.14 (`TicketRecord`), stored at
+`/chd/ticket/&lt;ticket-id&gt;`. Fields of record here: `ticket_id`, `title`, `kind`,
+`workflow` (+version), `state`, `parent_id`, `depends_on`, `accountable_owner`
+(exactly one), `assignees`, `watchers`, `criteria`, `links`
+(`objective_id, room, thread_root, send_ids, report_ids, artifact_refs`),
+`priority`, `revision`, timestamps.
+
+**VOLE-003.** Exactly one `accountable_owner` per ticket. `assignees` may be many;
+ownership never splits. A ticket whose owner is unset is invalid
+(`ticket_owner_required`).
+
+**VOLE-004.** Every ticket SHALL link to the place its work happens: at minimum a
+room (or a planned room id) and, once dispatched, the `send_id`s and
+`thread_root`. Artifacts are referenced, never copied. A ticket with no room and no
+pending assignment is `unlinked` and is visible as such in queries — not silently
+treated as healthy.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-E-tickets-workstate.md#2-2-workflow-binding-single-transition-canon -->
+  <section id="CHD-HANDBOOK-CHD32-BU-65F39F-2-2-WORKFLOW-BINDING-SINGLE-TR-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.2 Workflow binding (single transition canon)
+
+A ticket does not introduce a second workflow engine. Its `workflow` field is a
+registered binding to the machine that owns the work: the CHD default binding
+is `assignment` for child tickets and `objective` for objective/epic tickets,
+both defined in `build-spec/state-machines.json` (the single transition
+canon; see `VOL-A §4.1`, `VOL-A §4.3`, and `VOL-C §6.4`). A domain-specific
+workflow may add labels and criteria, but it MUST reference a registered CHD
+machine and may not redefine a transition, writer, terminal state, or release
+rule. The controller projects the machine state into the ticket's `state` field.
+
+Example binding (not a second state machine):
+
+```json
+{
+  "workflow_id": "chd.assignment",
+  "version": 1,
+  "machine_ref": "build-spec/state-machines.json#/machines/1",
+  "state_projection": {"active": "in-progress", "reported": "review", "accepted": "done"},
+  "transition_owners": "machine_ref",
+  "initial": "pending"
+}
+```
+
+**VOLE-005.** A transition is legal only if `(from, to, writer)` matches the
+pinned machine referenced by the ticket's workflow binding and all required
+facts are present. The controller validates the binding against
+`build-spec/state-machines.json`; it refuses an unregistered binding or a
+projection that changes an edge with `403 ticket_transition_not_allowed` or
+`workflow_version_unknown`. The machine's assignment/objective writer and
+recovery rules remain authoritative; ticket tools are the access path, not a
+new state machine.
+
+**VOLE-006.** Workflow versions are immutable. Changing a workflow means registering
+a new version and explicitly migrating tickets (a recorded bulk transition), never
+editing the old definition. Tickets keep the version they were created with until
+migrated.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-E-tickets-workstate.md#2-3-ticket-events -->
+  <section id="CHD-HANDBOOK-CHD32-BU-65F39F-2-3-TICKET-EVENTS-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.3 Ticket events
+
+**VOLE-007.** Each transition appends one event at
+`/chd/ticket/&lt;ticket-id&gt;/event/m&lt;seq&gt;`:
+`{ticket_id, seq, from, to, actor, actor_class, reason, revision_before,
+revision_after, evidence_refs, ts}`. The event is the audit trail and the replay
+input; current state is `revision`-checked, not reconstructed from prose.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-E-tickets-workstate.md#3-where-the-authority-lives-and-how-boardctl-fits -->
+  <section id="CHD-HANDBOOK-CHD32-BU-65F39F-3-WHERE-THE-AUTHORITY-LIVES-AN-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 3. Where the authority lives, and how boardctl fits
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-E-tickets-workstate.md#3-1-controller-routed-access -->
+  <section id="CHD-HANDBOOK-CHD32-BU-65F39F-3-1-CONTROLLER-ROUTED-ACCESS-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.1 Controller-routed access
+
+**VOLE-008.** Agents read and write tickets only through controller-routed tools
+(MCP `chd_ticket_*`, the same semantics over API/CLI). There is **no** ticket file
+in a repository that an agent edits to change shared state, and no commit/pull
+synchronization between agents. This is the D-021 boundary and it applies to every
+role, including foremen.
+
+#### Authority conflict table (one owner per field)
+
+The controller ticket record is authoritative for shared work identity and
+workflow state. DuckBrain `chd` records are authoritative for coordination
+content and event evidence. A field appears in exactly one authority column;
+the other store carries only a read-only reference or projection.
+
+| Ticket field | Authoritative store | DuckBrain CHD relationship | Writer/reconciliation rule |
+|---|---|---|---|
+| `ticket_id`, `title`, `kind`, `priority` | Controller ticket service | `/chd/ticket/&lt;id&gt;` TicketRecord | Ticket create/update only; board imports cannot overwrite without CAS |
+| `workflow`, `state` | Controller machine binding and projection | Ticket transition event ref; objective/assignment state is evidence, not a second state | Registered machine + expected revision; reconcile flags drift, never silently repairs |
+| `parent_id`, `depends_on` | Controller ticket graph | Objective/Assignment records carry link refs | Director owns edge changes; cancelled/failed/expired prerequisites block until replacement |
+| `accountable_owner`, `assignees`, `watchers` | Controller ticket service | Assignment/bond/message recipient refs | Governed owner change re-points open sends; room membership does not change ownership |
+| `criteria` | Controller ticket criteria set | `/chd/acceptance/...` carries evidence refs and provenance | Criteria version changes are controller-authorized; reports prove, but do not edit, criteria |
+| `links.objective_id`, `room`, `thread_root` | Controller ticket link set | Objective/RoomMessage/SessionBond are the linked source records | Link writes use ticket CAS; missing links become `inconsistent`, not guessed |
+| `links.send_ids`, `report_ids`, `artifact_refs` | Controller ticket link set | SendManifest, Report and external artifact records are sources | Service appends verified refs; artifact bytes remain in work plane |
+| `revision`, timestamps, close reason | Controller ticket event log | `/chd/ticket/&lt;id&gt;/event/m&lt;seq&gt;` is immutable audit evidence | Transition increments exactly once; replay uses request identity and revision |
+
+DuckBrain does not claim ticket authority merely because the TicketRecord is
+stored under `/chd/ticket`. The controller ticket service owns the schema,
+CAS, authorization, graph and state projection; the CHD namespace stores its
+record/event representation and linked coordination records. There is one
+workflow engine: `state-machines.json`, not boardctl and not DuckBrain.
+
+**Restart guarantee.** Any committed ticket mutation is durable when the
+controller has acknowledged the ticket revision and event write. On restart,
+the controller reloads `/chd/ticket/&lt;ticket-id&gt;` plus its ordered event keys,
+retains the highest committed `revision`, and replays only idempotent requests
+whose outcome is recorded. An acknowledged transition is therefore not lost;
+an accepted-but-uncommitted request is retried or refused without creating a
+second event. If one branch is `blocked` or `awaiting_human`, independent sibling
+tickets remain in their own machine states and remain dispatchable when their
+own dependencies and capacity permit. A blocked branch never blocks unrelated
+siblings by aggregate inference.
+
+Local boards, worktrees and artifacts are non-authoritative work-plane
+objects. A board export is a mirror; an import is a reconciled proposal matched
+by `ticket_id`, with conflicts reported and no delete-by-absence. A worktree or
+artifact may be linked to a ticket but cannot write its state.
+
+A controller mutation is atomic across ticket revision, transition event, audit
+row and link update. If any required write fails, none of those writes is
+acknowledged; retrying the same request id returns the original committed result
+or a typed unavailable/conflict error. This is the transaction boundary; room
+reports and worker artifacts are deliberately separate evidence writes and are
+joined by correlation refs.
+
+Authorization is evaluated before mutation: credential principal, family/room
+scope, accountable-owner or delegated writer, machine edge and required facts.
+A denied operation writes an audit denial but no TicketRecord revision/event.
+Duplicate `request_id` replays the original response; a stale
+`expected_revision` returns `409 ticket_revision_conflict` and changes nothing.
+
+Reconciliation is bidirectional only as an integrity comparison, never dual
+authority: the controller compares ticket links against room, send, report and
+artifact refs and emits `inconsistent{reason}` flags. It may propose a repair,
+but only an authorized transition writer commits it. Boardctl reads the
+controller API and may export/import rows; it is not a second store.
+
+The controller provides both a single-ticket API and bulk query reconciliation;
+no claim of "exactly two touch points" remains. The lifecycle has at least
+assignment-in, execution/report-out, ticket create/update/query,
+transition/audit, reconciliation, and export/import interactions, all joined by
+ticket/request/correlation ids.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-E-tickets-workstate.md#3-2-operations -->
+  <section id="CHD-HANDBOOK-CHD32-BU-65F39F-3-2-OPERATIONS-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.2 Operations
+
+| Operation | Tool / endpoint | Fields | Notes |
+|---|---|---|---|
+| create | `chd_ticket_create` / `POST /v1/tickets` | title, kind, workflow, parent_id?, depends_on?, owner, criteria?, links? | `request_id` idempotency; returns `ticket_id`, `revision` |
+| read | `chd_ticket_get` / `GET /v1/tickets/{id}` | — | returns record + last event + allowed transitions |
+| transition | `chd_ticket_transition` / `POST /v1/tickets/{id}/transitions` | to, expected_revision, reason?, evidence_refs? | compare-and-set; emits event |
+| update fields | `chd_ticket_update` / `PATCH /v1/tickets/{id}` | title?, priority?, owner?, assignees?, criteria?, links? | `expected_revision` required; owner change is a governed act |
+| query | `chd_ticket_query` / `GET /v1/tickets?…` | workflow, state, owner, assignee, parent, depends_on, room, kind, updated_since | keyset pagination |
+| import | `chd_ticket_import` / `POST /v1/tickets/import` | board rows + source digest | reconciliation report; never blind overwrite |
+| export | `chd_ticket_export` / `GET /v1/tickets/export` | filters, format `jsonl` | read-only view for boards/tools |
+
+**VOLE-009.** Every mutating operation requires `expected_revision` (except create).
+A mismatch is `409 ticket_revision_conflict` and changes nothing; the caller must
+re-read. This is the only concurrency control: no locks, no long transactions.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-E-tickets-workstate.md#3-3-local-boards-are-views -->
+  <section id="CHD-HANDBOOK-CHD32-BU-65F39F-3-3-LOCAL-BOARDS-ARE-VIEWS-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.3 Local boards are views
+
+**VOLE-010.** A local JSONL board MAY be generated by `export` and used by existing
+tooling as a **view**. It MUST NOT be treated as authority: an edit to the file is
+not a transition, and an `import` must reconcile by `ticket_id` and report
+(added, updated, conflicts, ignored). Import never deletes a ticket that is absent
+from the file; absence is reported, and deletion is an explicit cancelled
+transition by an authorized actor.
+
+**VOLE-011.** The mapping to the existing boardctl surface is an interface
+mapping, not a second store: board columns map to `state`, row ids to `ticket_id`
+(or a documented family alias), owners to `accountable_owner`, and board events to
+ticket events. A deployment that keeps boardctl as an operator UI does so by
+reading the controller API.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-E-tickets-workstate.md#3-4-duplicates-and-conflicts -->
+  <section id="CHD-HANDBOOK-CHD32-BU-65F39F-3-4-DUPLICATES-AND-CONFLICTS-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.4 Duplicates and conflicts
+
+**VOLE-012.** Duplicate creation is resolved in this order: (a) same `request_id`
+→ replay of the original ticket; (b) same `(source, source_ref)` (e.g. an inbound
+email id, an issue key) → the existing ticket is returned and the caller is told
+it was a duplicate; (c) no identity match → new ticket. Two tickets for one
+real-world item are reconciled by an explicit `merge` operation that re-parents
+children, unions links, and cancels the loser with `merged_into` — never by
+deleting history.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-E-tickets-workstate.md#4-states-ownership-and-reconciliation -->
+  <section id="CHD-HANDBOOK-CHD32-BU-65F39F-4-STATES-OWNERSHIP-AND-RECONCI-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 4. States, ownership, and reconciliation
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-E-tickets-workstate.md#4-1-the-default-workflow-drawn -->
+  <section id="CHD-HANDBOOK-CHD32-BU-65F39F-4-1-THE-DEFAULT-WORKFLOW-DRAWN-S012" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.1 The default workflow, drawn
+
+```mermaid
+stateDiagram-v2
+    [*] --&gt; open
+    open --&gt; in_progress
+    in_progress --&gt; blocked
+    blocked --&gt; in_progress
+    in_progress --&gt; review
+    review --&gt; done
+    review --&gt; rework
+    rework --&gt; in_progress
+    open --&gt; cancelled
+    in_progress --&gt; cancelled
+    blocked --&gt; cancelled
+    review --&gt; cancelled
+    done --&gt; [*]
+    cancelled --&gt; [*]
+```
+
+**VOLE-013.** The diagram and the registered version MUST agree; a diagram showing
+an unregistered transition is a defect. `cancelled` is reachable from every
+non-terminal state; terminal states have no outgoing transition.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-E-tickets-workstate.md#4-2-ownership-changes -->
+  <section id="CHD-HANDBOOK-CHD32-BU-65F39F-4-2-OWNERSHIP-CHANGES-S013" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.2 Ownership changes
+
+**VOLE-014.** Changing `accountable_owner` is a governed act: it requires the
+director (or the current owner's manager with delegated authority), records the
+reason and the previous owner, and re-points open sends to the new owner's queue
+(old sends are closed `cancelled{ownership_moved}` if they had not dispatched;
+dispatched attempts finish and are annotated). Work-in-progress evidence is
+preserved and re-parented, not duplicated.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-E-tickets-workstate.md#4-3-reconciliation -->
+  <section id="CHD-HANDBOOK-CHD32-BU-65F39F-4-3-RECONCILIATION-S014" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.3 Reconciliation
+
+**VOLE-015.** The controller reconciles tickets against their linked records on a
+schedule and on demand: a ticket in `review` with no verified report is flagged
+`inconsistent{reason: missing_report}`; a ticket `in_progress` whose only send is
+terminal and failed is flagged `inconsistent{reason: dead_send}`; a ticket whose
+room no longer exists is `inconsistent{reason: room_missing}`. Flags are visible
+in queries and do not silently change state — a human or the owner resolves them.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-E-tickets-workstate.md#4-4-authorization -->
+  <section id="CHD-HANDBOOK-CHD32-BU-65F39F-4-4-AUTHORIZATION-S015" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.4 Authorization
+
+**VOLE-016.** Ticket operations obey VOL-C §8: `ticket.write` is scoped by family
+and role; `ticket.read` is scoped by the linked room/objective plus explicit
+grants; archive-linked tickets do not grant archive reads (VOL-C §8.8). Every
+ticket call is audited (`/chd/audit/*`) with `{actor, ticket, operation, from, to,
+revision, decision}`.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-E-tickets-workstate.md#5-requirement-index -->
+  <section id="CHD-HANDBOOK-CHD32-BU-65F39F-5-REQUIREMENT-INDEX-S016" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 5. Requirement index
+
+| id | Requirement | Serves |
+|---|---|---|
+| VOLE-001 | Generic tickets/workflows; no coding assumption | R31-017 |
+| VOLE-002 | Stable non-reused identity across moves | R31-017 |
+| VOLE-003 | Exactly one accountable owner | R31-017 |
+| VOLE-004 | Every ticket links its room/sends/artifacts | R31-017 |
+| VOLE-005 | Registered transitions only; writer + requires facts | R31-017 |
+| VOLE-006 | Immutable workflow versions + explicit migration | R31-017 |
+| VOLE-007 | One event per transition, replayable | R31-017 |
+| VOLE-008 | Controller-routed access only; no repo authority | R31-018 |
+| VOLE-009 | Revision compare-and-set on every mutation | R31-018 |
+| VOLE-010 | Boards are exports/imports; import reconciles, never deletes | R31-018 |
+| VOLE-011 | boardctl is an interface mapping, not a second store | R31-018 |
+| VOLE-012 | Duplicate identity + explicit merge | R31-018 |
+| VOLE-013 | Diagram == registered workflow | R31-017 |
+| VOLE-014 | Governed ownership change with re-pointing | R31-017 |
+| VOLE-015 | Reconciliation flags, never silent repairs | R31-018 |
+| VOLE-016 | Ticket authz + audit per VOL-C §8 | R31-018 |
+
+Count: **16** (`VOLE-001..VOLE-016`, contiguous).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-E-tickets-workstate.md#6-open -->
+  <section id="CHD-HANDBOOK-CHD32-BU-65F39F-6-OPEN-S017" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 6. OPEN
+
+| id | Open point | Blocked on |
+|---|---|---|
+| OPEN-VOLE-1 | Whether a dedicated "workflow manager" role is created by default (D-020 calls it possible, not required) | owner ruling |
+| OPEN-VOLE-2 | Boardctl column/label mapping table for the existing fleet boards | fleet tooling owner |
+| OPEN-VOLE-3 | Ticket retention after `done`/`cancelled` | owner ruling; default follows VOL-B §8 |
+  </section>
+</spec>

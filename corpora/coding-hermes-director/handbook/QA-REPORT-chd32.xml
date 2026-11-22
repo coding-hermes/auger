@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/QA-REPORT-chd32.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-QA-REPORT-CHD32-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/QA-REPORT-chd32.md#preamble -->
+  <section id="CHD-HANDBOOK-QA-REPORT-CHD32-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# CHD-3.2 Book QA Report
+
+**Artifact reviewed:** `CHD-3.2-complete.pdf` (canonical merged book)
+**Review basis:** extracted PDF evidence, manifest/index checks, the generated 300 dpi tile set, a targeted visual sample across index/register, table-heavy, figure-heavy, continuation, revision, and acceptance pages.
+**Measured book:** 90 PDF pages; 17 rendered sections (SECTION 0 front matter plus Sections 1–16); 68 section sheets excluding the 22-sheet front-matter index. The PDF is A4, 594.96 × 841.92 pt.
+  </section>
+  <!-- source: coding-hermes-director/handbook/QA-REPORT-chd32.md#verdict-matrix -->
+  <section id="CHD-HANDBOOK-QA-REPORT-CHD32-VERDICT-MATRIX-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Verdict matrix
+
+| # | Check | Result | Page/tile evidence | Exact command or tile proving it |
+|---:|---|:---:|---|---|
+| 1 | Stamp and identity: document id, section token, sheet `i OF n`, leaf, and date on every page; revision notices on revised-section first sheets; revised content carries change bars | **PASS** | 90/90 merged pages have `CHD-3.2`, `SECTION`, `SHEET i OF n`, numeric `LEAF`, and `9 NOV 2026`; revision notices are present on first sheets of revised Sections 1–4, 5–16 (sampled at PDF pages 23, 27, 37, 41, 44, 50, 55, 60, 65, 68, 71, 74, 76, 80, 83, 86). | `/tmp/pdfvenv/bin/python audit_chd32.py` → `stamp_bad []`, `pages 90`; source evidence: `CHD-3.2-merge-evidence.md` lines 68–197. Visual tiles: `tiles-chd32/qa-final/p23-overview.png`, `p27-overview.png`, `p37-overview.png`, `p65-overview.png`, `p80-overview.png`, `p90-overview.png`. |
+| 2 | Page geometry: body ≤275 mm, footer separation, page boundary, and continuation placards | **PASS** | Maximum extracted body extent is 272.027 mm on page 57; no page exceeds 275 mm. All pages are A4. Continuation headings and table placards are present where tables split (e.g. PDF page 35 / Section 6 sheet 4, page 37 / Section 7 sheet 3). | `/tmp/pdfvenv/bin/python audit_chd32.py` → `max_body_over_275 []`; `CHD-3.2-merge-evidence.md` lines 199–203; `/tmp/pdfvenv/bin/python p2_qa.py CHD-3.2-complete.pdf` → `TOTAL findings: 6` (the six findings are the targeted false-positive/visual follow-up items below, not overflow). Exact tiles: `p35-overview.png`, `p37-overview.png`, `p54-overview.png`. |
+| 3 | Figure integrity, including no mid-stroke cuts at figure bottoms and continuation bands | **PASS** | Targeted figure-heavy pages and their bottom/top bands show complete diagram borders, wires, arrows, captions, and footer separation: pages 27, 65, 67, 80, 85, 90. The 300 dpi tile set contains 90 overviews plus 720 band tiles (8 per page), so every page's bottom/top bands are available for inspection. | `find tiles-chd32/qa-final -name '*overview.png' | wc -l` → `90`; `find ... -name '*band*.png' | wc -l` → `720`. Visual tiles: `p27-overview.png`, `p65-overview.png`, `p67-overview.png`, `p80-overview.png`, `p85-overview.png`, `p90-overview.png`; corresponding `pNN-band3-*`/`pNN-band4-*` tiles cover the bottom 30 mm and footer band. |
+| 4 | Label integrity: figure ids/captions/callouts/station tags visible, no label-on-wire/edge, no touching labels, 2.05 mm floor | **PASS** | The sampled figure pages show complete labels and captions with no body label clipped. `p2_qa.py` reported only six findings across 90 pages; none was a clipped word/figure id or figure-bottom stroke. The visual sample found no label defects on pages 27, 65, 67, 80, 85, or 90. | `python3 p2_qa.py CHD-3.2-complete.pdf` → `TOTAL findings: 6`; exact visual tiles: `p27-overview.png`, `p65-overview.png`, `p67-overview.png`, `p80-overview.png`, `p85-overview.png`, `p90-overview.png` and their 300 dpi bands. |
+| 5 | Cross-references: section/figure/table and finding/decision ids resolve; no dead CHD-3.1 references | **FAIL — rework filed** | Rendered text contains intentional historical CHD-3.1 references in revision notices and the old-to-new map, but the acceptance wording requested zero references to dead CHD-3.1 numbering. Mechanical scan found 51 `CHD-3.1` mentions across pages 1–90. Figure/table mention counts also include expected caption/register repeats, so a raw duplicate count is not proof of duplicate ownership; the manifest is the authority. | `python3 audit_chd32.py` → `PAT CHD-3\\.1 count 51 pages [...]`; manifest: `BOOK-chd32.yaml` declares `supersedes: CHD-3.1` and the old-to-new map. Owning follow-up: `t_9b8eb491` (TOC, folio, index and cross-reference/readability QA) is the filed rework row. Residual risk: removing historical references would contradict the mandated revision lineage and old-to-new map unless the owner changes that contract. |
+| 6 | Index truth: contents folios equal actual page footers; figure/table registers match rendered book | **FAIL — rework filed** | The generated index’s contents rows describe section-relative folios and leaves, but the comparison script found only 68 unique index folio rows against 90 actual merged-page footer rows because SECTION 0/front matter is not represented in its own contents table. `gen-index.py --check` exits 0 and regenerates the index, but that is not sufficient to prove equality with the merged PDF. | `python3 compare_index.py` → `actual_footer_rows 90`, `index_rows 227 unique 68`, `index_and_actual_equal False`, with missing SECTION 0 rows listed. Owning follow-up: `t_9b8eb491`. Residual risk: the report cannot claim complete folio/register parity until index-generation and merged-PDF comparison are repaired and rerun. |
+| 7 | Census: pure black ink, allowed fonts, no raster where drawing should be, page and section counts stated | **FAIL — rework filed** | `check.py` confirms black/white and A4 on all 90 pages, but its extracted font lists include `LiberationSans`, `LiberationSans-Bold`, `NotoSansMath-Regular`, and multiple `Type3` fonts in addition to the allowed families. The book itself states “68 rendered sheets · 16 function sections” on the index, while the measured merged artifact is 90 pages and 17 sections including SECTION 0. | `/tmp/pdfvenv/bin/python check.py CHD-3.2-complete.pdf --out tiles-chd32/qa-final` → 90 pages, black and white only; `python3 audit_chd32.py` → `fonts Counter(...)` including disallowed families and `NotoSansMath-Regular`; `compare_index.py` → `pdf_pages 90`, section totals for 0–16. Owning follow-up: `t_9b8eb491` for index/count truth and the render owner for font census. Residual risk: font substitution/Type3 glyphs may violate the print contract even though page geometry is clean. |
+| 8 | Honesty: proposed/unverified content is not presented as verified/measured; no page count/green check is semantic or owner acceptance | **PASS** | Targeted acceptance page 90 explicitly distinguishes implemented, measured, proposed, and unverified and says the package is not deployment or owner acceptance. Page 23 and page 83 retain explicit `PROPOSED`/`UNVERIFIED` language. Visual tile `p90-overview.png` shows the handover disclaimer and status vocabulary without a false acceptance stamp. | `python3 audit_chd32.py` → `PAT PROPOSED count 4 pages [23, 40, 83, 90]`, `PAT UNVERIFIED count 3 pages [23, 83, 90]`, `PAT OWNER ACCEPTANCE count 3 pages [83, 84]`; visual tile: `tiles-chd32/qa-final/p90-overview.png`. |
+  </section>
+  <!-- source: coding-hermes-director/handbook/QA-REPORT-chd32.md#rework-and-residual-risk -->
+  <section id="CHD-HANDBOOK-QA-REPORT-CHD32-REWORK-AND-RESIDUAL-RISK-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Rework and residual risk
+
+Two failures are filed rather than hidden:
+
+1. **Cross-reference/edition-lineage wording:** `t_9b8eb491` owns the cross-reference/readability rework. The current 51 `CHD-3.1` mentions are chiefly required revision lineage and the old-to-new map, but they fail the literal zero-reference acceptance wording. The owner must decide whether those historical references are exempted or the text/index is revised.
+2. **Index/register and census parity:** `t_9b8eb491` owns the index/folio/register correction. The current generated index check exits 0, but the independent comparison does not establish equality for all 90 merged pages. The font census also requires a render-owner correction or an explicit contract exception for the observed substituted/Type3 fonts.
+
+The six `p2_qa.py` findings are recorded as diagnostic evidence, not silently promoted to PASS: three text-overlap findings on page 80 and page 85's overlap/word-strike findings require owning render review if the underlying vector/text geometry is confirmed on the source tile. The visual samples did not show a clipped figure bottom or footer collision, but this report does not convert those six machine findings into an unverified green claim.
+  </section>
+  <!-- source: coding-hermes-director/handbook/QA-REPORT-chd32.md#commands-and-artifacts -->
+  <section id="CHD-HANDBOOK-QA-REPORT-CHD32-COMMANDS-AND-ARTIFACTS-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Commands and artifacts
+
+- Canonical PDF: `handbook/CHD-3.2-complete.pdf`
+- Print-safe PDF: `handbook/CHD-3.2-complete-print.pdf`
+- Merge evidence: `handbook/CHD-3.2-merge-evidence.md`, `handbook/CHD-3.2-merge-evidence.json`
+- Tile set: `handbook/tiles-chd32/qa-final/` (90 overviews, 720 band tiles)
+- Mechanical probes: `handbook/audit_chd32.py`, `handbook/p2_qa.py`, `compare_index.py` (workspace probe)
+- Index check: `cd handbook/chd32 &amp;&amp; python3 gen-index.py --check`
+
+**Overall QA status: NOT CLEAR FOR ZERO-FAIL CLOSE.** Geometry, stamps, placeholders, and the sampled visual figure pass are evidenced; cross-reference wording, index parity, and font census remain residual failures with filed rework ownership.
+  </section>
+</spec>

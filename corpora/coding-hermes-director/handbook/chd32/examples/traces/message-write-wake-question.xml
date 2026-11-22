@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd32/examples/traces/message-write-wake-question.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD32-EX-357CE5-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd32/examples/traces/message-write-wake-question.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD32-EX-357CE5-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# Trace WF-03 — question → durable write → wake
+
+**Payload (API/MCP/CLI equivalent):**
+```json
+{"schema_version":"chd.operation.v1","request_id":"req-q-001","dedupe_key":"question:obj-fleet:43","room":"task-crier-42","from":"mgr-infra","to":"sup-crier","kind":"question","body":"Which commit pinned the retry regression?"}
+```
+
+1. The controller authenticates `agent:mgr-infra`, confirms membership and VOL-C §3.6 legality, then allocates room sequence `43` from `/chd/room/task-crier-42/_head`.
+2. It commits the RoomMessage at `/chd/room/task-crier-42/m000000000043` with `kind=question`, plus its audit record at `/chd/audit/&lt;audit-seq:012d&gt;`. The response is `201` only after the controller writer's fsync acknowledgement.
+3. **Durable effect:** the two records above and their request/correlation fields. **Routing effect:** independently, the recipient snapshot contains `sup-crier`; the router returns `wakes=["sup-crier"]` and selects the documented `REUSE`/bond target. That wake target is not a DuckBrain key and does not claim that a session ran.
+4. The recipient reply is a later `chd_reply` and, if a report is owed, a later `chd_report`; neither is folded into this write.
+
+**Duplicate:** exact replay returns the original `seq=43`; changed bytes under the same dedupe key return `409 duplicate`. **Error:** unreadable room returns `404 not_found` before kind checks; illegal kind/role/room returns `403 kind_not_allowed`, with no business write.
+
+**Readback:** `GET /api/memories?namespace=chd&amp;prefix=/chd/room/task-crier-42/m000000000043` and the audit prefix prove the write; `GET /v1/wakes?...`/run status proves routing separately.
+  </section>
+</spec>

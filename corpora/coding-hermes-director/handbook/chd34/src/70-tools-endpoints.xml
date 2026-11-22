@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd34/src/70-tools-endpoints.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD34-SRC-70-TO-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd34/src/70-tools-endpoints.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-70-TO-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# §H — CHD-3.4 operation-specific tools and endpoints
+
+**Authority.** `contracts/openapi.yaml` is the canonical controller wire contract. This chapter is its readable inventory; generated operation schemas in `schemas/operations/` and cards in `opcards/` are projections, not generic envelopes or alternate authority. `scripts/project_wire.py` regenerates them. The bundled OpenAPI is a specification deliverable, not a deployed CHD runtime.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/70-tools-endpoints.md#h-1-doors-and-processing-contract -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-70-TO-H-1-DOORS-AND-PROCESSING-CONTR-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## H.1 Doors and processing contract
+
+Muster is the CLI and MCP projection. API uses the exact HTTP method/path below; MCP uses the operation name; CLI uses the generated operation command or native full-JSON request. These doors share validation, authorization, idempotency and error mapping. No bespoke CLI vocabulary, direct store write, shell worker launch, implicit wake, credential substitution, or unlisted webhook route is supported. `signal_ingress` is the only operation with the approved webhook door; Crier bridge routes are separate typed dependency projections.
+
+The operation contract is not a generic body bag. Each operation has a typed request body, exact path/query/header parameters, operation-specific response schemas, allowed principal classes, status/error mapping, and algorithm semantics. Closed raw schemas remain unchanged for Muster: `additionalProperties: false` is not weakened to make a catalog convenient. Opaque bytes are limited to the explicitly binary attachment route.
+
+Validation order is fixed: authenticate the principal; enforce identity consistency; perform non-leaking target lookup; validate exact path/query/header/body schema, version, enum and limits; check use/grant-use/meta-grant/create, approval, policy snapshot and CAS; check idempotency; commit the primary record and required companions; then route wake/admission/gateway/report/archive effects. A failed validation writes no business state, although an authorized denial may be audited. `202` means queued, pending approval or asynchronous; it never means completed.
+
+Every success has `{ok:true, operation, request_id, result, events, records}`. Every failure has `{ok:false, operation, request_id, error:{code,message,detail}}` and uses the catalog status. Exact duplicate validated bytes replay the original response without another business write. Changed bytes under the same request identity return the declared conflict. A report, acknowledgement, timer, lease expiry, process absence or waiting status does not prove runtime stop or release capacity; only correlated positive stop/runtime terminal readback does.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/70-tools-endpoints.md#h-2-complete-projection-inventory -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-70-TO-H-2-COMPLETE-PROJECTION-INVENT-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## H.2 Complete projection inventory
+
+The generator emits **59 HTTP operations covering all 59 operation identities across OP-001..OP-048 plus WIRE additions and canonical aliases**. The 48 base OP ids map to the following named operations. The machine-readable count and exact method/path/card/schema mapping are in `tables/wire-operations.json`.
+
+| OP ids | Operation | Exact API | Typed projection |
+|---|---|---|---|
+| OP-001 | bootstrap | `POST /v1/admin/bootstrap` | `opcards/op-bootstrap.md` |
+| OP-002..005 | provision_agent | `POST /v1/admin/agents` | `opcards/op-provision-agent.md` |
+| OP-006 | provision_worker | `POST /v1/workers/provision` | `opcards/op-provision-worker.md` |
+| OP-007 | onboard_gateway | `POST /v1/admin/gateways` | `opcards/op-onboard-gateway.md` |
+| OP-008 | sync_profile | `POST /v1/admin/profiles/{agent}/sync` | `opcards/op-sync-profile.md` |
+| OP-009 | read_profile | `GET /v1/admin/profiles/{agent}` | `opcards/op-read-profile.md` |
+| OP-010 | create_room | `POST /v1/rooms` | `opcards/op-create-room.md` |
+| OP-011 | post_message | `POST /v1/rooms/{room}/messages` | `opcards/op-post-message.md` |
+| OP-012 | reply | `POST /v1/rooms/{room}/messages/{seq}/replies` | `opcards/op-reply.md` |
+| OP-013 | read_room | `GET /v1/rooms/{room}/messages` | `opcards/op-read-room.md` |
+| OP-014 | read_worklog | `GET /v1/worklog` | `opcards/op-read-worklog.md` |
+| OP-015 | wake | `POST /v1/rooms/{room}/messages/{seq}/wake` | `opcards/op-wake.md` |
+| OP-016 | request_wake | `POST /v1/wakes` | `opcards/op-request-wake.md` |
+| OP-017 | fork_session | `POST /v1/sessions/{id}/fork` | `opcards/op-fork-session.md` |
+| OP-018 | post_report | `POST /v1/rooms/{room}/reports` | `opcards/op-post-report.md` |
+| OP-019 | verify_report | `POST /v1/reports/verify` | `opcards/op-verify-report.md` |
+| OP-020 | dispatch_worker | `POST /v1/workers/dispatch` | `opcards/op-dispatch-worker.md` |
+| OP-021 | worker_run_status | `GET /v1/workers/runs/{run_id}` | `opcards/op-worker-run-status.md` |
+| OP-022 | cancel_worker | `POST /v1/workers/runs/{run_id}/cancel` | `opcards/op-cancel-worker.md` |
+| OP-023..028 | ticket operations | `/v1/tickets*` | generated `opcards/` entries |
+| OP-029..031 | grant/approval operations | `/v1/grants*`, `/v1/approvals*` | generated `opcards/` entries |
+| OP-032 | read_audit | `GET /v1/audit` | `opcards/op-read-audit.md` |
+| OP-033..034 | assign | `POST /v1/assignments` | `opcards/op-assign.md` |
+| OP-035 | bump_room | `POST /v1/rooms/{room}/bump` | `opcards/op-bump-room.md` |
+| OP-036, OP-042 | status | `GET /v1/status` | `opcards/op-status.md` |
+| OP-037..039 | archive operations | `/v1/archive/*` | generated `opcards/` entries |
+| OP-040..041 | agent update/offboard | `/v1/admin/agents/*` | generated `opcards/` entries |
+| OP-043 | ingest_signal | `POST /v1/signals` | `opcards/op-ingest-signal.md` |
+| OP-044 | cycle_callback | `POST /v1/cycle` | `opcards/op-cycle-callback.md` |
+| OP-045 | notify_missing | `POST /v1/rooms/{room}/missing-replies/notify` | `opcards/op-notify-missing.md` |
+| OP-046..048 | attachment operations | `/v1/attachments*` | generated `opcards/` entries |
+
+The inventory deliberately names the base 48 ids while the machine table remains authoritative for every generated operation, including WIRE-001..009 and deprecated canonical-path aliases. Each card carries its real resolved schemas and algorithm semantics. A card that says only “generic envelope” is non-conforming.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/70-tools-endpoints.md#h-3-identity-restore-and-unresolved-boundaries -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-70-TO-H-3-IDENTITY-RESTORE-AND-UNRES-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## H.3 Identity, restore and unresolved boundaries
+
+Allocation, request, send, attempt and run identity remain separate. NEW/REUSE is a delivery label, not native allocation. Native allocation must be committed before the first assignment turn; a lost allocation response is reconciled by the same request identity and never speculative second-created. Same-profile fork defaults to `preserve_parent_snapshot`; `current_policy` is explicit and authorized. Cross-profile transfer is not invented as native fork.
+
+Every restore operation resolves current policy before activation under D-039. Archived policy is lineage/history only. Source and effective policy revisions are separate; when the archived source revision is absent, the readback is `null`/unknown rather than fabricated. A restore creates fresh identity/bond state and does not resume an archived live identity or copy a live database.
+
+Native archive import/export, storage fencing/snapshot primitives, and IF-06/IF-07 MCP fidelity remain **OPEN**. The operation cards specify required capability probes, typed unsupported/errors and safe readback; they do not claim native capability or runtime enforcement that the selected sources do not prove.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/70-tools-endpoints.md#h-4-generated-artifacts-and-verification -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-70-TO-H-4-GENERATED-ARTIFACTS-AND-VE-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## H.4 Generated artifacts and verification
+
+Run from `chd34/`:
+
+```sh
+python3 scripts/project_wire.py generate
+python3 scripts/project_wire.py check
+python3 scripts/project_wire.py negative
+```
+
+`generate` resolves every `$ref` against the bundled OpenAPI components and writes one operation schema/card per HTTP operation plus `tables/wire-operations.json`. `check` compares operation id/method/path tuples and canonical digest, and verifies every projection. `negative` mutates a parameter and proves the parity input changes. The source OpenAPI remains the canonical raw contract and is not weakened during generation.
+
+A generated artifact proves specification projection only. It does not prove a deployed controller, native Hermes allocation/import, storage linearizability/fencing, live runtime stop attestation, IF-06/IF-07 adapter fidelity or owner acceptance.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/70-tools-endpoints.md#h-5-explicitly-unsupported -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-70-TO-H-5-EXPLICITLY-UNSUPPORTED-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## H.5 Explicitly unsupported
+
+- direct agent/peer writes to `/chd/*`, `/sessions/*` or `/gaps/*`;
+- shell/CLI worker launch as authority;
+- webhook use for operations other than `signal_ingress`;
+- binary image/PDF upload or content processing;
+- blind SQLite copying into a replacement session;
+- implicit human approval, automatic live policy resync, policy widening, or connectivity-as-VP;
+- undocumented operation names, unversioned payloads, and generic envelopes standing in for typed contracts.
+  </section>
+</spec>

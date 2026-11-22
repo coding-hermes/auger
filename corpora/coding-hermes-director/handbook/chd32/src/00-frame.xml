@@ -1,0 +1,204 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd32/src/00-frame.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD32-SRC-00-FR-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd32/src/00-frame.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-00-FR-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# §A — Frame: purpose, scope, terms, and dependency boundary
+
+**Edition:** CHD-3.2 · **Status:** authored source · **Normative authority:** the build specification cited in [§A.8](#a8-authoritative-sources-and-versioned-dependencies). This section explains the package; it does not replace a volume, schema, or operation card. Where this section names a contract, the cited source owns its fields and transitions.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/00-frame.md#a-1-purpose-and-scope -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-00-FR-A-1-PURPOSE-AND-SCOPE-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## A.1 Purpose and scope
+
+CHD is a controller service that turns a VP's goal into accountable, evidenced work. The operating story is deliberately general-purpose:
+
+&gt; **VP → director → manager → supervisor → foreman → worker**
+
+The VP supplies the desired outcome and any constraints. The director owns decomposition, final decisions, acceptance review, and the decision scope delegated to managers. A manager owns an assigned slice and organizes supervisors within that delegated scope. A supervisor enforces the manager's assigned rules: it reads the stated conditions, checks evidence, coordinates the assigned foreman, and reports. A supervisor does **not** dictate how the foreman organizes workers. The foreman owns execution mechanics: it describes and adjusts work, selects and reallocates existing workers through managed dispatch, verifies their results, and reports upward. A worker executes one bounded unit and reports to its foreman.
+
+This package specifies CHD control-plane behavior: objectives, rooms, messages, assignments, tickets, admission, authorization, reports, audits, and the links to work-plane artifacts. It also specifies the integration boundary to native Hermes sessions, memory, profiles, learning, and fallback; DuckBrain persistence; boardctl-compatible ticket views; scheduler triggers; and Crier director federation. It does not rebuild those dependencies or claim capabilities not present in their cited contracts.
+
+The same path serves coding and non-coding goals. A coding goal may produce a commit, test evidence, and a reviewable artifact. A non-coding goal may reconcile bills, produce a dataset, or prepare a decision brief. Domain adapters and external connectors are separate from the generic hierarchy. Payment, publication, production change, and external sending require an explicitly configured capability and are not implied by an objective.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/00-frame.md#a-2-authority-and-responsibility -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-00-FR-A-2-AUTHORITY-AND-RESPONSIBILI-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## A.2 Authority and responsibility
+
+| Role/component | Owns | Does not own |
+|---|---|---|
+| VP surface | Objective direction, VP-configured grant ceiling, human approval where configured, cancellation | Lower-tier decomposition, worker organization, direct gateway credentials |
+| Director | Objective decomposition, criteria derivation, manager assignment, final decisions, acceptance, composition and delivery assignment | Native agent loop, worker internals, scheduler lane mutation |
+| Manager | Its assigned slice, task decomposition and decisions inside delegated scope, supervisor organization | Expanding its scope, changing criteria without an authorized revision, direct worker launch |
+| Supervisor | Prescribed conditional rules, bounded checks, foreman coordination, evidence-based escalation and verification | Policy invention, manager decisions, permissions, worker organization |
+| Foreman | Work-plane execution plan, managed worker dispatch/reallocation, worker verification, final report | CHD scheduler-lane mutation, grant issuance, changing acceptance criteria |
+| Worker | One assigned work unit and its result report | Ticket authority, acceptance, sibling coordination, direct CHD control writes |
+| Controller service | Authentication, authorization, ticket CAS, protected writes, admission ledger, gateway dispatch, report correlation, recovery and audit | Agent reasoning, Hermes memory/session implementation, local worktree contents |
+| Scheduler | Timed trigger registration and fire callbacks; one admission initiator | Gateway calls, objective decisions, direct store writes, worker organization |
+| Hermes | Agent profiles, sessions, native memory and learning, model fallback, skill execution, gateway protocol | CHD objective/ticket authority, CHD dependency satisfaction, protected `/chd` writes |
+| DuckBrain | Durable storage substrate for committed CHD records and archive records under their namespaces | Waking a gateway, validating CHD records, choosing objective transitions |
+| boardctl-compatible view | Operator projection/import/export of controller tickets | A second authority or commit/pull synchronization mechanism |
+| Crier | Authenticated, scoped transport between independent director systems | VP status, local grants, local acceptance, a new hierarchy tier |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/00-frame.md#four-independent-authority-classes -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-00-FR-FOUR-INDEPENDENT-AUTHORITY-CLA-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### Four independent authority classes
+
+CHD keeps these classes separate. `use` permits an agent to exercise a capability; `grant-use` permits conferring use from an allowed pool; `meta-grant` permits conferring bounded delegation authority; `subordinate-creation` permits creating a named tier. One class never implies another. A grantor may hold grant-use without use. VP configuration has precedence over an on-demand director delegation. Skill wording is not a grant.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/00-frame.md#a-3-component-trust-and-storage-map -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-00-FR-A-3-COMPONENT-TRUST-AND-STORAG-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## A.3 Component, trust, and storage map
+
+The controller is the only CHD component that writes protected control records and the only component that holds the gateway credential. Agents authenticate to controller tools with their own role credentials. The scheduler calls the controller's trigger/callback surface. Crier peers call the controller's federation ingress. None of these callers reaches a Hermes gateway directly.
+
+The controller reads and writes the `chd` DuckBrain namespace through its service credential. It creates the admission reservation and send manifest before dispatching a gateway request. The gateway runs the selected non-default Hermes profile and returns session/run metadata. A task assignment enters the foreman's control-plane session; the foreman's work-plane result returns as a report and artifact references. The store never wakes a gateway.
+
+Session exports follow a visibly separate path: Hermes produces a native export; an archive ingestor writes a checkpointed manifest and payload to `chd-archive`; an authorized reader later queries the archive. Project/code memory is a fourth path: a deployment-selected local or federated namespace may receive eventual observations, but it is never the target of a control write or the source of completion truth. Crier inbound data/read/lease and outbound ACK/inbox delivery are separate arrows and records.
+
+```text
+VP / scheduler / Crier peer
+        │ authenticated request (producer → controller consumer)
+        ▼
+controller: authz → ticket/CAS → protected write → admission → gateway dispatch
+        │                                      │                 │
+        │ writes /chd with fsync ack          │                 └─ controller → Hermes gateway
+        ▼                                      ▼                               │
+DuckBrain chd control state              boardctl view (read/export)           ▼
+                                                                           agent session
+                                                                                │
+                                                           foreman → managed worker run
+                                                                                │
+                                                     worker artifact/result → foreman report
+
+Hermes native export → archive ingestor → DuckBrain chd-archive → authorized reader
+project observation → optional project-memory sync (eventual; never completion authority)
+Crier peer data/read/lease → controller; controller ACK/inbox/topic → peer transport
+```
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/00-frame.md#a-4-control-plane-and-work-plane -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-00-FR-A-4-CONTROL-PLANE-AND-WORK-PLA-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## A.4 Control plane and work plane
+
+The control plane contains the durable facts needed to coordinate: `ObjectiveRecord`, `AssignmentRecord`, `TicketRecord` and `TicketEvent`, `RoomMessage`, `SendManifest`, `SessionBond`, `WorkerRun`, `Report`, criteria, grants, wait records, audits, and policy snapshots. The controller writes these through the canonical records and state machines. A local board file, repository, worktree, CI run, worker session, and artifact remain in the work plane. CHD stores an artifact reference and accountable summary, not a duplicate product.
+
+The controller ticket service owns shared ticket identity and workflow state. DuckBrain `chd` stores coordination content and event evidence. A boardctl-compatible client reads the controller API; a board export/import is a view and reconciliation input, never a competing workflow engine. `build-spec/state-machines.json` is the single machine canon. Objective state and assignment state are separate machines; an active sibling assignment may continue while another assignment waits or blocks.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/00-frame.md#a-5-canonical-terminology -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-00-FR-A-5-CANONICAL-TERMINOLOGY-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## A.5 Canonical terminology
+
+These definitions are authoritative for this package. Later sections link here rather than redefining them.
+
+| Term | Definition and boundary |
+|---|---|
+| **room** | A DuckBrain key family with an ordered, searchable message log. An objective room, task room, or space has membership and a writer policy. A room is not a Hermes session. |
+| **thread** | A `reply_to` tree inside one room. Its root and sequence identify the work branch. A task subthread can have its own session bond. |
+| **task** | One bounded piece of work with one accountable owner, criteria, dependencies, and a linked ticket. A task may produce multiple sends and runs. |
+| **session** | A native Hermes conversation identified and owned by Hermes. CHD stores a reference in a `SessionBond`; CHD does not reconstruct a transcript. |
+| **fork** | Native Hermes provisioning of a new session from a parent at a recorded point. Fork is not a delivery mode. A fork uses the configured policy snapshot or current policy according to D-038. |
+| **attempt** | One dispatch episode of a logical send against one target session. A retry or successor after waiting has a new attempt identity. |
+| **report** | The correlated result that answers one send. It carries the common tracking envelope plus requester-selected free-form, structured, or dataset content. One owed send has exactly one final report. |
+| **run** | One work-plane `WorkerRun` execution record created by managed worker dispatch. A run is not a hierarchy send. |
+| **grant** | A durable, scoped authorization record with issuer, recipient, capability, provenance, lifetime, and lineage. Grant-use, meta-grant, and use are distinct fields. |
+| **archive** | A committed native Hermes session export in the separate `chd-archive` namespace, identified by a checkpoint and coverage boundary. It is not a live session or control record. |
+| **ticket** | The controller-authoritative durable work identity: parent/child links, dependencies, owner, criteria, workflow/version, state, and linked room/send/report/artifact refs. |
+| **objective** | The VP-requested outcome represented by an objective room and an aggregate lifecycle record. It is complete only when the objective reaches `accepted`; a wake or assignment completion is not objective completion. |
+| **send** | One logical owed delivery of work to a target. A send may have several attempts. A gateway request is one HTTP POST and is not synonymous with a send. |
+| **assignment state** | Per-assignment state such as `pending`, `active`, `blocked`, `awaiting_human`, `reported`, `accepted`, `rework`, or `cancelled`. It is not the objective aggregate state. |
+| **admission** | The durable capacity reservation before dispatch. Timed scheduler fire and requested `enqueue_only`/`run_now` share one ledger. |
+| **acceptance** | The director's criteria-and-evidence decision. Manager completion, report delivery, and human approval are separate conditions. |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/00-frame.md#a-6-boundary-rules-that-prevent-look-alikes -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-00-FR-A-6-BOUNDARY-RULES-THAT-PREVEN-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## A.6 Boundary rules that prevent look-alikes
+
+1. **Scheduler trigger/admission is not gateway dispatch.** A scheduler fire asks the controller to compose/admit; the controller alone performs the gateway POST.
+2. **Controller protected writes are not agent writes.** Agents call `chd_post`, `chd_report`, ticket, grant, and read tools; the controller validates and writes `/chd/...` with its credential.
+3. **Project-memory access is not control-state access.** Optional project memory may lag; a report or acceptance write never waits for it.
+4. **Session export is not live session state.** The archive manifest proves a checkpoint and known gaps; restore imports into a new native session after compatibility checks.
+5. **Terminality is not dependency satisfaction.** `cancelled`, `failed`, and `expired` producers do not release dependents. A replacement edge or re-scope must be recorded by the director, and the replacement must be accepted with the required artifact.
+6. **Waiting is not approval.** A human wait can close an attempt while leaving the send/objective open. A timeout never grants permission. A successor attempt resumes only from recorded evidence.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/00-frame.md#a-7-supported-optional-and-deferred-boundary -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-00-FR-A-7-SUPPORTED-OPTIONAL-AND-DEF-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## A.7 Supported, optional, and deferred boundary
+
+| Capability | Status | Contract and honest limit |
+|---|---|---|
+| Six-role hierarchy, objective/assignment lifecycle | **SUPPORTED** | VOL-A rev 2.1 and `build-spec/state-machines.json`; controller owns transitions. |
+| Controller tickets and boardctl-compatible views | **SUPPORTED** | VOL-E rev 1.0; controller ticket API is authority, boardctl is a projection/import/export. |
+| CHD control-state persistence | **SUPPORTED** | DuckBrain `chd` at the pinned revision and VOL-B rev 2.2; service validates before write and requires fsync acknowledgement. |
+| Hermes sessions, profiles, native memory and fallback | **SUPPORTED dependency** | Hermes API-server contract; CHD calls create/continue/fork/readback and records the result, but does not implement Hermes internals. |
+| Managed worker dispatch | **SUPPORTED** | `chd_worker_dispatch` / `POST /v1/workers/dispatch`; existing non-default worker profiles only. |
+| Scheduler timed triggers and requested immediate admission | **SUPPORTED** | VOL-C rev 2.2 and VOL-A dual-admission contract; one durable reservation ledger. |
+| Free-form, structured, and dataset reports | **SUPPORTED** | Report v3 schema and VOL-D rev 2.2; dataset publication is queryable only after the §G journal marker covers all rows and publication metadata. |
+| Session export, scoped archive read, validated restore | **SUPPORTED contract** | Archive schema v3 and VOL-B archive procedure; native export shape/version is probed, never guessed. |
+| Owner-bounded Crier federation | **SUPPORTED contract** | VOL-D rev 2.2 / CT-15; peer connectivity never confers VP status or local grants. |
+| Local/federated project memory | **OPTIONAL** | Deployment-selected namespace and eventual sync; central control/report state remains immediate. |
+| External domain adapters (email, CRM, calendar, Git hosting, Telegram) | **OPTIONAL** | Adapter-specific credentials, scopes, and acceptance evidence are required; generic CHD does not promise every provider. |
+| Payment, paid publication, production mutation, live external send | **OPTIONAL / separately authorized** | Sandbox or explicitly configured operation only; the handbook's existence is not authorization. |
+| Temporary/ephemeral agents with implicit defaults | **SUPPORTED when explicit** | Explicit model, context, lifetime, workspace, profile, credential, capacity and archive fields are required; implicit defaults fail closed. |
+| Provider-health rerouting, sophisticated model routing, token-budget law | **DEFERRED** | Hermes owns fallback; CHD records observed metadata and does not invent a routing algorithm. |
+| Lower-tier profile creation by hierarchy agents | **DEFERRED** | Foreman may dispatch existing workers; worker profile creation remains operator-owned pending the open design item. |
+
+Status labels in this table mean: **supported** has a named contract and acceptance path; **optional** is a bounded extension and not required for the generic core; **deferred** is an explicit fail-closed boundary, not an absent dependency silently treated as present.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/00-frame.md#a-8-authoritative-sources-and-versioned-dependencies -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-00-FR-A-8-AUTHORITATIVE-SOURCES-AND-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## A.8 Authoritative sources and versioned dependencies
+
+The following are the package's dependency ledger. A cited source is a contract reference; it is not evidence that an unseen volume is supplied in the handbook package.
+
+| Dependency/source | Version or revision | Consumed contract |
+|---|---|---|
+| `build-spec/INDEX.md` | rev 2.0 | package canonicality, volume map, counts and acceptance boundary |
+| `build-spec/VOL-A-story-roles-lifecycle.md` | rev 2.1 | role matrix, objective lifecycle and master flow |
+| `build-spec/VOL-B-records-storage-recovery.md` | rev 2.2 | key grammar, records, durability, bonds, archive and recovery |
+| `build-spec/VOL-C-tools-messaging-admission-authz.md` | rev 2.2 | tools, HTTP surface, Hermes calls, admission and authorization |
+| `build-spec/VOL-D-config-acceptance-ops.md` | rev 2.2 | configuration, reports, acceptance, deployment and measurement |
+| `build-spec/VOL-E-tickets-workstate.md` | rev 1.0 | controller ticket authority, CAS transitions and board view |
+| `build-spec/VOL-E-operation-reference.md` | rev 1.0 | operation cards, errors, storage effects and evidence links |
+| `DESIGN.md` | rev 3.0 | normative red lines, CT/RL contracts and package requirements |
+| `contracts/DATA-MODEL.md` | rev 1.2 | record field ownership and key/entity relationships |
+| `contracts/ENDPOINTS.md` | rev 1.1 | HTTP endpoint shapes and response/status mapping |
+| `contracts/config.schema.json` | schema version 2 | legacy machine config reference; canonical CHD-3.2 fields are in `schemas/config.schema.json` |
+| `contracts/schemas/report-v3.schema.json` | schema version 3 | report content classes, correlation envelope and publication rules |
+| `contracts/schemas/session-archive.schema.json` | schema version 3 | SessionArchive, ExportManifest and ArchiveGapRecord |
+| `build-spec/state-machines.json` + schema | current state canon | objective/assignment/message/SEND machines and dependency outcomes |
+| DuckBrain `github.com/wojons/duckbrain` | revision `972aeb0` (`v1.1.0`) | leading-slash keys, versions, query/write behavior and fsync probe |
+| Hermes Agent API server | capability probe required; source URL is recorded in evidence | `/v1/chat/completions`, session headers, idempotency, profiles and exports/forks |
+| boardctl-compatible controller surface | `build-spec/VOL-E-tickets-workstate.md` rev 1.0 and `contracts/ENDPOINTS.md` §4.9 | ticket query, create, transition and export/import; no local board authority |
+| Crier bridge | `DESIGN.md` CT-15 and `build-spec/VOL-D-config-acceptance-ops.md` §5.3 | authenticated peer envelope, scope, ACK, dedupe and outage isolation |
+| `coding-hermes-foreman` skill | existing fleet skill; integration boundary only | work-plane board/worktree/worker loop; CHD supplies assignment and receives report |
+
+When a dependency's deployed capability probe is not available, the package states the required contract and marks the runtime fact unverified. It does not substitute a guessed version. All CHD-3.2 normative references are delivered under `handbook/chd32/` and are checked by the generated package manifest. Historical review citations remain only in `evidence/` and are not package-resolution targets.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/00-frame.md#a-9-package-manifest-and-navigation -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-00-FR-A-9-PACKAGE-MANIFEST-AND-NAVIG-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## A.9 Package manifest and navigation
+
+`handbook/chd32/manifest/package-manifest.yaml` is the complete authored-package inventory. Every normative companion named by this handbook is either reproduced under `handbook/chd32/` or listed as an explicitly non-normative external source; external URLs never resolve a package reference. `manifest/package-manifest.json` is generated from the delivered tree and carries the relative path, version, SHA-256 digest, purpose and authority for each file. `supported-catalog.yaml` is the status/dependency catalog. `register/operations.csv` maps every OP card to an actor, owning section, and authoritative card path. `figures/` contains one Mermaid source and one SVG for each required master/pair figure; `src/` contains the readable explanation and branch contracts.
+
+The handbook sections are organized by function rather than by old page count. §A and §B establish the frame and role flow. Later sections cover configuration, provisioning, rooms/sessions, tickets, persistence, tools, grants, admission, reports, archive, deployment/federation, recovery, measurement, and acceptance. A later section may explain an operation but may not redefine the entity, state machine, or field contract owned by the sources above.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/00-frame.md#a-10-boundary-failure-examples -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-00-FR-A-10-BOUNDARY-FAILURE-EXAMPLES-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## A.10 Boundary failure examples
+
+- If the gateway is unreachable, the controller keeps the durable manifest/lease and reports `runtime_draining` or transport failure; DuckBrain does not wake the gateway and the controller does not claim a report.
+- If a protected DuckBrain write is not acknowledged, the controller returns a recoverable store error and does not dispatch. Recovery reads the dedupe and primary record before replay.
+- If a ticket revision is stale, the controller returns `ticket_revision_conflict`; the caller reads the ticket, merges intent, and retries with the new revision. A board export cannot overwrite it.
+- If a peer is silent, Crier retries or dead-letters according to its bridge contract; local objectives continue. Silence does not grant scope, approval, or success.
+- If a dependency is cancelled, its dependent becomes `blocked{prerequisite_cancelled}`. The director must record a replacement, re-scope, or cancellation; cancellation never satisfies the dependency.
+
+These examples are operational consequences of the cited contracts, not a second state machine or a second figure authority.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/00-frame.md#a-10-chd-3-3-correction-contracts -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-00-FR-A-10-CHD-3-3-CORRECTION-CONTRA-S012" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## A.10 CHD-3.3 correction contracts
+
+R32 core corrections are owned by the delivered companion contracts: `contracts/request-attempt-lifecycle.md`, `schemas/attempt.schema.json`, `schemas/restore-decision.schema.json`, `tables/commit-protocol.csv`, `tables/verify-ladder.csv`, `tables/master-edge-ledger.csv`, and `runbooks/controller-backup-restore.md`. They are normative content, not identifier-only citations.
+  </section>
+</spec>

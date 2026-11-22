@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd32/opcards/op-cycle-callback-044.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD32-OP-F1DD99-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd32/opcards/op-cycle-callback-044.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD32-OP-F1DD99-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# Operation card — cycle_callback
+
+**Card identity:** `OP-044` / `cycle_callback` / `chd.operation.v1`
+**Purpose:** accept the scheduler cycle callback and admit queued work.
+**Actor/caller:** `scheduler`. Credential-derived principal is authoritative; body identity is attribution only.
+**Trigger/component/scope:** A caller invokes this operation through the controller; the controller validates and authorizes it, the single writer commits `chd` records, and only the archive ingestor writes `chd-archive`. Scope is the target named by the request and the caller's effective policy snapshot.
+**Transport:** API: `POST /v1/cycle`. MCP: `cycle_callback` with the same `chd.operation.v1` envelope. CLI: `chd cycle-callback`. Webhook: `POST /v1/signals` is supported only for `signal_ingress` (OP-043); all other operations return `bad_request` when presented as a webhook. The four doors share validation, authorization, idempotency, audit, and response semantics; door identity is audit metadata only.
+
+**Typed operation fields:** This operation's schema requires these fields before any external effect: `none beyond the common envelope`. References are locators only; secret values are forbidden.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/opcards/op-cycle-callback-044.md#preconditions-and-permissions -->
+  <section id="CHD-HANDBOOK-CHD32-OP-F1DD99-PRECONDITIONS-AND-PERMISSIONS-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Preconditions and permissions
+
+The controller is ready, the target is readable under the caller's policy, and the principal has the operation's `use` authority. `grant-use`, `meta-grant`, and `create` are checked independently when requested; `use` never implies any of them. VP policy wins conflicts, then explicit deny, credential identity, scope, expiry, lineage and approval are evaluated in that order. A missing/unreadable target is `not_found`; it is never an existence oracle. Unsupported actions are not silently inferred: direct agent writes to DuckBrain, direct scheduler calls, blind SQLite archive copying, webhook invocation of this operation, and binary image/PDF processing are unsupported unless this card explicitly says otherwise.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/opcards/op-cycle-callback-044.md#request-and-response-schema -->
+  <section id="CHD-HANDBOOK-CHD32-OP-F1DD99-REQUEST-AND-RESPONSE-SCHEMA-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Request and response schema
+
+Request is a JSON object with required `schema_version: "chd.operation.v1"`, `request_id` (1–128 characters), and `dedupe_key` (1–256 characters). Optional common fields are `correlation_id` (1–128), `principal_ref` (reference only, never a secret), `target`, and `expected_revision`; operation-specific fields are defined by `schemas/tools/cycle-callback.json`. Unknown fields, absent required values, invalid types, null-as-absent substitutions, invalid identifiers, and limits fail closed. The operation schema is machine-readable and is the only request field authority.
+
+Success is `{ok:true, operation:"OP-044", request_id, result, events, records}`. A synchronous operation returns after its primary read/commit acknowledgement. An asynchronous, queued, approval, or external-runtime result returns `202` with `state` and `poll_ref`/`approval_id`; `202` never means completed. Failure is `{ok:false, operation:"OP-044", request_id, error:{code,message,detail}}` with the catalog HTTP status.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/opcards/op-cycle-callback-044.md#ordered-algorithm-and-effects -->
+  <section id="CHD-HANDBOOK-CHD32-OP-F1DD99-ORDERED-ALGORITHM-AND-EFFECTS-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Ordered algorithm and effects
+
+1. Authenticate and derive the principal; reject `unauthenticated` and identity mismatch before reading a target.
+2. Validate the operation schema, version, enums, identifier grammar and limits.
+3. Resolve target and membership/scope without disclosing unreadable existence.
+4. Check `use`, `grant-use`, `meta-grant`, `create`, approval, policy snapshot and conflict/CAS rules.
+5. Check the request ledger and logical-work identity. Exact bytes replay the original result; changed bytes under the same dedupe key return `duplicate` or `admission_conflict`.
+6. Read the referenced records named by this card, reserve capacity when applicable, and perform the operation-specific mutation.
+7. Commit the primary record and required audit/event companions with controller fsync durability; only then acknowledge.
+8. Route wakes, scheduler admission, gateway work, bridge delivery, or report verification as separately correlated effects; none is a DuckBrain write.
+
+**Records and keys:**
+- `/chd/send/&lt;send-id&gt;/manifest` in `chd`
+- `/chd/audit/&lt;audit-seq:012d&gt;` in `chd`
+
+**Stored effects:** The primary record and required audit/event companions are committed by the controller writer. Any wake or external runtime is a separate asynchronous effect and is never claimed as a durable write. The service allocates room sequence numbers and never lets DuckBrain timestamps order messages. A failed validation writes no business state; a denial may write only the authorized audit record. Partial external effects are reconciled by the request/attempt/run identity and are not hidden by a success response.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/opcards/op-cycle-callback-044.md#errors-retry-duplicate-and-recovery -->
+  <section id="CHD-HANDBOOK-CHD32-OP-F1DD99-ERRORS-RETRY-DUPLICATE-AND-REC-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Errors, retry, duplicate, and recovery
+
+- `bad_request` → HTTP 400, `no` retryable; Fix the payload; do not retry unchanged.
+- `unauthenticated` → HTTP 401, `no` retryable; Acquire a valid credential, then retry after re-authentication.
+- `admission_conflict` → HTTP 409, `no` retryable; Read the ledger and reconcile; never blind-retry.
+- `at_capacity` → HTTP 429, `yes` retryable; Wait or enqueue; never bypass admission.
+- `duplicate` → HTTP 409, `no` retryable; Read the original request and use a new key only for new work.
+
+Exact replay with identical request bytes returns the original result and creates no second business effect. A changed request under an existing key returns the named conflict. Retryable store/transport/capacity errors reuse the same key after backoff. `unknown_execution` requires a status/readback or explicit stop proof before a new attempt; lease expiry alone never releases capacity. On restart the controller reads the durable ledger, resumes the recorded step, and preserves already committed records. No cross-system atomicity is claimed: a wake, runtime, bridge ACK, report, and archive checkpoint each have their own readback.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/opcards/op-cycle-callback-044.md#runnable-examples-and-evidence -->
+  <section id="CHD-HANDBOOK-CHD32-OP-F1DD99-RUNNABLE-EXAMPLES-AND-EVIDENCE-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Runnable examples and evidence
+
+**Happy:** submit `{"schema_version":"chd.operation.v1","request_id":"req-op-044-001","dedupe_key":"cycle_callback:work-001","target":"work-001","body":{"example":"see typed schema"}}` with every required typed body field from `schemas/tools/cycle-callback.json`; expect `2xx`, `ok:true`, `OP-044`, and the listed primary records readable under the stated namespace.
+**Error:** omit one required typed field (or use an unknown field); expect `400 bad_request`/`422 schema_validation`, no business record, and at most an audit denial. For this operation's material failure, use one of the catalog errors above and follow its caller action.
+**Duplicate:** resubmit the exact happy payload; expect the original response with no second write. Change one byte under the same dedupe key; expect `409 duplicate`/`admission_conflict` as applicable and no new effect.
+**Evidence:** read back every listed key, the request ledger, and `/chd/audit/&lt;audit-seq:012d&gt;` (or the exact archive namespace for archive records). Verify response `operation`, `request_id`, revision/digest, and effect state independently. Cleanup is operation-specific and never deletes immutable audit or archive evidence.
+
+**Not applicable:** a direct CLI shell launch, direct DuckBrain write, implicit profile/default identity, implicit permission grant, implicit wake, and undocumented side effect are explicitly unsupported for this card.
+
+**Test hook:** `T-OP-044` covers valid input, validation order, authorization denial, material failure, exact replay, changed duplicate, record readback, and restart/unknown-outcome behavior where applicable. Canonical dependencies: `schemas/tools/cycle-callback.json`, `schemas/keys.yaml`, `errors/catalog.yaml`, `register/operations.csv`, §F–§L, VOL-C §2–§8, VOL-D §2–§5.
+  </section>
+</spec>

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd32/runbooks/restore.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD32-RU-1B80F6-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/restore.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD32-RU-1B80F6-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# Runbook: replacement restore
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/restore.md#scope -->
+  <section id="CHD-HANDBOOK-CHD32-RU-1B80F6-SCOPE-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Scope
+This restores an archived session into a new local session. It never resumes or copies a live Hermes database.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/restore.md#ordered-procedure -->
+  <section id="CHD-HANDBOOK-CHD32-RU-1B80F6-ORDERED-PROCEDURE-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Ordered procedure
+
+1. Acquire an explicit archive read grant and discover the target `SessionArchive`.
+2. Select the latest committed `ExportManifest`; if none exists, stop with `restore_failed{reason:no_committed_manifest}` and retain the gap records.
+3. Fetch the payload, recompute SHA-256, and compare `payload_digest`. A mismatch stops with `restore_failed{reason:digest_mismatch}`.
+4. Check `export_schema.name == hermes.session.export` and a supported version. An unsupported version stops with `restore_failed{reason:export_version_unsupported}`.
+5. Import into a freshly created local Hermes session; never reuse the archived session id.
+6. Import the checkpoint policy snapshot. If absent, fail closed to `current_policy` and record `snapshot_missing`.
+7. Create a new bond generation, record imported checkpoint and archive identity, and route delayed old-generation messages to the retired generation.
+8. Emit a restore report with completeness, coverage window, open gaps, new session id and new bond id.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/restore.md#evidence -->
+  <section id="CHD-HANDBOOK-CHD32-RU-1B80F6-EVIDENCE-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Evidence
+Read back grant, manifest, digest, schema version, snapshot decision, new session/bond and restore report. Expected test: `T-ARC-RESTORE`; a successful archive read alone is not proof of a live-session restore.
+  </section>
+</spec>

@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd32/runbooks/archive-capture.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD32-RUNBOOKS-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/archive-capture.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD32-RUNBOOKS-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# Runbook: archive capture
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/archive-capture.md#preconditions -->
+  <section id="CHD-HANDBOOK-CHD32-RUNBOOKS-PRECONDITIONS-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Preconditions
+
+- Controller and `chd-archive` are reachable; `chd` writes report `fsync` and readback.
+- Archive ingestor credential is available to the ingestor only.
+- Native importer/exporter reports supported `hermes.session.export` versions.
+- The source session, agent, profile, and checkpoint boundary are identified.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/archive-capture.md#procedure -->
+  <section id="CHD-HANDBOOK-CHD32-RUNBOOKS-PROCEDURE-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Procedure
+
+1. Trigger at `turn_end`, configured checkpoint interval, bond retirement, or session end.
+2. Freeze the checkpoint boundary only after covered controller writes have durable `fsync` acknowledgements.
+3. Serialize the native payload; calculate byte count and `sha256`; record coverage window, room/thread refs, source host, schema name/version.
+4. Validate `export-envelope.schema.json` and write a staging object. Do not advertise staged bytes.
+5. Compare `(session_id, checkpoint_seq, payload_digest)`: exact replay returns the existing manifest; a changed digest is a conflict.
+6. Append payload, manifest, and session-index updates as prepared archive constituents; fsync and
+   read back each, then append the archive commit marker last. Do not describe these independent
+   writes as atomically committed by DuckBrain.
+7. Read back the marker, payload, manifest state, digest, checkpoint, completeness and gaps.
+8. On any failure, commit a failed manifest plus `ArchiveGapRecord`; never report a silent stop.
+9. Record retention deadline and preserve manifests/gaps required by open audits.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/archive-capture.md#evidence -->
+  <section id="CHD-HANDBOOK-CHD32-RUNBOOKS-EVIDENCE-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Evidence
+
+Capture the exact manifest key/revision, payload digest, `X-Durability` where applicable,
+coverage window, checkpoint sequence, `open_gaps`, and readback timestamp. Do not claim
+continuous backup; state the last committed checkpoint and named gaps.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/archive-capture.md#rollback-recovery -->
+  <section id="CHD-HANDBOOK-CHD32-RUNBOOKS-ROLLBACK-RECOVERY-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Rollback / recovery
+
+Do not overwrite an immutable manifest. Retry the same identity for an exact replay, or
+capture a later checkpoint that subsumes the gap and records the supersession.
+  </section>
+</spec>

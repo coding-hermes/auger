@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/build-spec/integrated/cli-catalog/interface-results.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-BUILD-SPEC-INTEGR-096509-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/build-spec/integrated/cli-catalog/interface-results.md#9-executed-evidence-and-conditional-fit-verdict -->
+  <section id="CHD-BUILD-SPEC-INTEGR-096509-9-EXECUTED-EVIDENCE-AND-CONDIT-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 9. Executed evidence and conditional fit verdict
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/cli-catalog/interface-results.md#9-1-what-ran -->
+  <section id="CHD-BUILD-SPEC-INTEGR-096509-9-1-WHAT-RAN-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 9.1 What ran
+
+This task rebuilt both binaries from the pinned source with Go **1.26.10** (verified with `go version -m`; the shell's default Go reports 1.26.5 and auto-selects the module toolchain). Byte comparison of the extracted source against the pinned Git archive covered 1,429 files with no content differences. Only scratch processes and a loopback capture server were used; no production mutations or live CHD effects were tested.
+
+The final CHD OpenAPI loaded without normalization in both real binaries: **59 operations, 59 unique persisted CLI commands, 59 MCP tools**. The exhaustive help crawl recorded **121 entries**, including root, all generated operations and native support commands. A second independent XDG generation produced identical normalized command and MCP catalogs; changing a required flag or MCP input property was detected as drift. These are reproducibility tests, **not** proof of committed-tree parity in a future implementation repository.
+
+This final regeneration used OpenAPI SHA-256 `ce81ac3f7c01e69a1eb0ba5e35bbba0c4b9f491a085e23ddf5c8c6b47950093b`. The prior 57-operation catalog is retained under `historical-catalog-a/` and `historical-catalog-b/` only as audit evidence; it is not the canonical catalog. Compared with that historical catalog, the final document adds `GET /v1/approvals/{approval_id}` (`get_approval`) and `GET /v1/effective-routing` (`effective_routing`); no prior operation was removed. The machine-readable delta is `final-evidence/catalog-delta.json`.
+
+Final-wire subprocess/HTTP/MCP battery: **30 assertions passed**, including **7 assertions that deliberately reproduce limitations**, not 30 supported product features. The earlier 15-check probe against a normalized historical 33-operation fixture is supplementary only; it is not used as final-wire conformance evidence. The final-wire suite proves read routing, path encoding, exact request body transport, process-bound MCP authentication, stdout/status behavior for 200/201/202/204 and 400/401/403/404/409/422/429/503, ignored stdin, header fallback and the limitations below.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/cli-catalog/interface-results.md#9-2-release-constraints-do-not-silently-paper-over-these -->
+  <section id="CHD-BUILD-SPEC-INTEGR-096509-9-2-RELEASE-CONSTRAINTS-DO-NOT-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 9.2 Release constraints — do not silently paper over these
+
+| ID | Observed at the pinned Muster revision | CHD interface decision / exit gate |
+|---|---|---|
+| IF-01 | Reloaded `--opening_post '{...}'` and `--participants '[...]'` produce JSON strings, despite JSON-oriented help. | Use generated raw-body override when available, otherwise native `request -b` with a complete validated JSON document. Do not advertise complex per-property flags as working until persisted type fidelity is fixed. |
+| IF-02 | `post_message --to null --reply_to 4` sends strings, not null/integer. Constants can also generate string-typed flags. | Use full JSON. Never change the canonical schema to accept the accidental strings. |
+| IF-03 | Generic request drops the URL's query string. | Put every query value in explicit `-p 'name=value'`. Generated scalar query flags were independently captured as correct. |
+| IF-04 | Formatted generated JSON changes 9007199254740993 to 9007199254740992. | Use generated `--raw` for machine-readable bodies. For generic request or byte-exact downloads use standard HTTP/Go clients where numerical fidelity matters. |
+| IF-05 | `--x--request--i-d` does not send `X-Request-ID`. Historical Idempotency-Key has the same class of defect. | Use `-H 'X-Request-ID: value'`. Do not rely on normalized header-property flags. |
+| IF-06 | MCP `post_message` rejects a valid integer/null request before HTTP because its projected schema calls those inputs strings. | Block publication of affected MCP tools until the upstream converter preserves unions. No coercion wrapper or bespoke CHD MCP executor. |
+| IF-07 | MCP `create_room` publishes only `{type: object}` / `{type: array}` for nested input, dropping items, enums, required nested fields and bounds. | Server validation is mandatory regardless. Full agent rollout additionally requires recursive schema-fidelity tests and upstream fixes; listing 59 tools alone is not readiness. |
+
+Additional source/transport observations: `request` does not consume `MUSTER_AUTH_TOKEN`; use `--auth`. Generated per-command stored origins may remain the spec's `servers` origin despite generation-time `-u`; always set runtime origin. `auth add` reads a plain line and does not implement a hidden terminal reader at this pin. Generated body requirements are often not enforced client-side. `upload_attachment_bytes` has no binary-body CLI flag: use the byte transport below. These are explicitly handled constraints, not invented capabilities.
+
+**Verdict:** Muster fits the purpose of eliminating a bespoke command framework today through its existing generated reads/scalars and full-JSON request transport. The unmodified pin does **not** fit a promise of fully typed, unrestricted MCP or complex per-field CLI inputs. Choose upstream fixes plus fail-closed exposure gating for those surfaces, not a new CHD parser. The existing integration card owns acceptance/promotion of this interface and retention of the MCP blockers. This task does not change Muster source or claim those defects are fixed.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/cli-catalog/interface-results.md#9-3-concrete-examples -->
+  <section id="CHD-BUILD-SPEC-INTEGR-096509-9-3-CONCRETE-EXAMPLES-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 9.3 Concrete examples
+
+All values here are illustrative, not authority to mutate a deployment. Replace origins/identities with authorized ones; request identity belongs **inside the wire body** where required. An Idempotency-Key header does not replace `request_id`.
+
+```sh
+# Runtime origin is explicit even after generation.
+openapi-cli read_room task-interface --since 0 --limit 100 \
+  --base-url "$CHD_API" --auth chd-operator --raw
+
+# JSON document, not stringified individual object/array flags.
+openapi-cli create_room --base-url "$CHD_API" --auth chd-operator --raw \
+  --body '{"request_id":"example-room-1","id":"task-interface","kind":"task","participants":["manager-a","manager-b"],"opening_post":{"from":"vp","kind":"task","body":"Review the interface"}}'
+
+# post_message --body is a string property, NOT a whole-body override.
+# Use native request for the complete document (preserves null/integer/array).
+openapi-cli request POST "$CHD_API/v1/rooms/task-interface/messages" \
+  --auth chd-operator -H 'Content-Type: application/json' -o json \
+  -b '{"request_id":"example-msg-1","from":"manager-a","to":null,"kind":"msg","body":"Review café","reply_to":4,"attach":[]}'
+
+# Query parameters belong in -p, not URL text.
+openapi-cli request GET "$CHD_API/v1/tickets" --auth chd-operator \
+  -p 'state=ready' -p 'limit=20' -o json
+
+# Read status after a 202; one request does not wait for completion.
+openapi-cli get_operation job-example --base-url "$CHD_API" \
+  --auth chd-operator --raw
+
+# Cancellation expresses intent, not positive stop proof or released capacity.
+openapi-cli cancel_operation job-example --base-url "$CHD_API" \
+  --auth chd-operator --raw \
+  --body '{"request_id":"example-cancel-1","reason":"Operator requested stop"}'
+
+# Byte upload: protected CURL_AUTH_CONFIG contains service-specific auth;
+# it is a 0600 curl config file, not a Muster flag or a checked-in token.
+# attachment-id is a previously staged id. Keep TLS verification enabled.
+curl --fail-with-body --silent --show-error --config "$CURL_AUTH_CONFIG" \
+  -X PUT "$CHD_API/v1/attachments/attachment-id/content" \
+  -H 'Content-Type: application/octet-stream' \
+  -H 'X-Request-ID: example-upload-1' --data-binary @artifact.bin
+# Then invoke finalize_attachment with the actual byte size and digest.
+# Curl has its OWN exit codes (HTTP error normally 22), not Muster's 0/1 contract.
+```
+
+MCP request framing example after initialization (only an approved, compatible tool view; illustrative room id):
+
+```json
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_room","arguments":{"room":"task-interface","since":0,"limit":100}}}
+```
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/cli-catalog/interface-results.md#9-4-reproduction-and-autogen-handoff -->
+  <section id="CHD-BUILD-SPEC-INTEGR-096509-9-4-REPRODUCTION-AND-AUTOGEN-H-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 9.4 Reproduction and autogen handoff
+
+The evidence attachment contains `catalog.py`, `probe_wire.py`, `verify_parity.py`, the exact input snapshot, raw catalogs/help/transport captures, checks and source/build identities. After building the pinned binaries into `bin/` beside those scripts:
+
+```sh
+python3 catalog.py openapi-final.yaml catalog-a
+python3 catalog.py openapi-final.yaml catalog-b
+python3 verify_parity.py
+python3 probe_wire.py openapi-final.yaml
+```
+
+`catalog.py` requires Python 3 plus PyYAML; `probe_wire.py` uses the standard library. `verify_parity.py` compares full stored metadata after removing only timestamp/spec path and sorting command/flag collections; it sorts MCP tools and the semantically unordered `required` arrays. Meaningful operation/flag/body/schema data is retained. The report generator consumes these artifacts rather than minting command aliases. Autogen must additionally implement recursive OpenAPI-to-MCP fidelity checks: catalog equality across runs does not imply equivalence to the source schema.
+
+Production release criteria not executed here: authenticated CHD policy denial, real durable mutations, ambiguous-disconnect idempotency, cursor consistency, stop proof, current-policy restoration, pinned upstream fixes, filtered tools authorization, private credential-store behavior on every OS, binary upload integration and regenerated-versus-committed CI. Those belong to integration/runtime acceptance, not fabricated fixture successes.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/cli-catalog/interface-results.md#10-complete-generated-operation-catalog -->
+  <section id="CHD-BUILD-SPEC-INTEGR-096509-10-COMPLETE-GENERATED-OPERATIO-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 10. Complete generated operation catalog
+
+This inventory is mechanically joined on **HTTP method + path**, not guessed from names. Every wire operation is represented, including deprecated aliases and internal/peer-only routes. A listed command/tool is **not automatically approved for agent exposure**. The principal column copies the wire profile's proposed authorization tags; enforcement remains server-side.
+
+Each entry contains exact usage and flags from persisted metadata/help, wire-required inputs, response status codes, full-body calling form and the actual MCP schema. Common flags in §4 apply to every generated operation; their exact spellings are repeated in captured help. `CLI type` is what the parser accepts, **not** a claim of correct wire type; use the documented full-body route whenever they differ. `CLI required=false` cannot relax a wire requirement. Help examples omitting required body fields are upstream syntax sketches, not valid CHD requests.
+
+In the per-operation templates, `$room`, `$id`, etc. are caller-supplied URL-safe identifiers; `$payload` is a complete schema-valid JSON document. Use generated path arguments for arbitrary strings requiring URL escaping, or percent-encode each path segment with a standard HTTP library. Templates are not commands executed against production.
+  </section>
+</spec>

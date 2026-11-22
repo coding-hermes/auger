@@ -1,0 +1,375 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd32/src/40-rooms-sessions.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD32-SRC-40-RO-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd32/src/40-rooms-sessions.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-40-RO-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# Section E — Rooms, threads, sessions and fork routing
+
+**Status:** normative handbook view. The record contracts are the schemas beside this
+section; the authoritative operational decisions remain in **VOL-B §§3.3, 7** and
+**VOL-C §4**. This section explains how those contracts fit together without creating
+a second NEW/REUSE table.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/40-rooms-sessions.md#e-1-one-room-flexible-authorized-groups -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-40-RO-E-1-ONE-ROOM-FLEXIBLE-AUTHORIZ-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## E.1 One room, flexible authorized groups
+
+A room is a permissioned work space, not a role silo. Its `kind` is `objective`,
+`task`, or `space`; `parent_room_id` records the work hierarchy. A room may carry
+multiple authorized groups and tags. Examples include `assigned-work` for the
+accountable assignees, `review` for a manager and its reviewers, `observers` for
+explicitly granted read access, and `delivery` for a recipient group. Membership
+is an explicit grant-backed record: tags select or describe scope, but a tag never
+creates authority.
+
+The controller expands a group at post time into an immutable `to_snapshot` (VOL-C
+§5.1). Later membership changes do not rewrite that snapshot. Current membership is
+used for reads and new posts. An unknown or unreadable room returns the same
+`404 not_found` response; the protected reason is audit-only. No sender field, room
+tag, role name, or Crier assertion can elevate a caller. The room schema records
+`authorized_by`, active membership and tag selectors so a reader can draw who may
+act rather than infer it from a label.
+
+Room message order is the service-allocated `seq`; a message key is
+`/chd/room/&lt;room-id&gt;/m&lt;seq:012d&gt;`. Message kinds are exactly `msg`, `question`,
+`status`, `directive`, `task`, `report`, and service-written `incident`. Legality is
+owned by VOL-C §3.6. A `task` is the assignment boundary that opens a child thread;
+its `seq` is the thread root for replies.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/40-rooms-sessions.md#e-2-thread-lineage-and-ownership -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-40-RO-E-2-THREAD-LINEAGE-AND-OWNERSH-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## E.2 Thread lineage and ownership
+
+A thread is a reply tree, not a second conversation store. The root is the assignment
+or request message; each descendant carries `reply_to` and resolves to the same
+`thread_root`. A child thread may point to a parent thread/message, but never loses
+its room, root sequence, accountable owner, or `work_uid`. The `thread.schema.json`
+record makes these joins explicit:
+
+```
+parent room ── message seq 18 (task) ──&gt; thread th-auth-18, root=18, work_uid=T-101
+                                      ├─ reply 23 ── reply 27
+                                      └─ child report 31
+```
+
+The owning bond is resolved by `(agent_id, room_id, subthread_root, work_uid)` and
+its active `generation`; room membership alone is insufficient. A reply/report with
+no matching bond is stored for audit but does not wake a session and returns
+`409 thread_not_owned`. A report whose `send_id` belongs to another bond is rejected
+as `bad_report{reason: send_mismatch}`. These checks prevent an unrelated task from
+sharing a bond accidentally.
+
+The durable work log contains room messages, references, reports, manifests and
+lineage fields. It must **not** be a fabricated transcript: CHD never reads a
+Hermes transcript and synthesizes “conversation so far” into a prompt. A NEW turn
+states the obligation and room; the agent reads the authorized room log itself.
+Hermes owns its native history and compaction; CHD retains joinable control records.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/40-rooms-sessions.md#e-3-bond-identity-concurrent-work-in-one-room -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-40-RO-E-3-BOND-IDENTITY-CONCURRENT-W-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## E.3 Bond identity: concurrent work in one room
+
+A SessionBond is the join between CHD thread identity and a native Hermes session.
+Its identity is deliberately four-dimensional:
+
+```
+(agent_id, room_id, subthread_root, work_uid) + generation
+```
+
+`bond_id` remains a durable record key (`b-YYYYMMDD-HHMM-&lt;random&gt;`), while
+`generation` selects the current bond for the tuple. Thus one agent can own two or
+more active bonds in one room. The `session-bond.schema.json` requires the native
+session id, named non-default profile, room/thread/work identity, provisioning
+lineage, and delivery mode. Capacity counts active bonds of an agent, then applies
+configured work-kind caps; it does not collapse all work into agent×room.
+
+Example: `sup-nova` in `task-auth-14` owns
+`(42,T-101)` → `b-20261109-0914-q4x7` → `sess-aa11` and
+`(57,T-205)` → `b-20261109-0917-m8k3` → `sess-bb22`. A third task is simply
+`(91,T-309)` with another bond and session, subject to `max_sessions`. A reply to
+A reply to roots 42 and 57 can only reach `sess-aa11`; root 57 can only reach `sess-bb22`.
+
+A same-profile native fork preserves D-038 policy semantics and records the parent bond,
+parent session, fork point, and explicit fork mode. A cross-profile or cross-host handoff is
+not a native fork: it is a new assignment and must use an explicit context-transfer request,
+source/target identity, selected import references, and an adapter capability probe. The target
+creates its own session bond and policy snapshot; it never receives sender authority, credentials,
+policy owner, or learned state. A missing or negative probe fails closed as
+`cross_profile_native_fork_unsupported` and creates no child session.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/40-rooms-sessions.md#e-4-provisioning-is-not-delivery -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-40-RO-E-4-PROVISIONING-IS-NOT-DELIVE-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## E.4 Provisioning is not delivery
+
+Every wake has two independent decisions:
+
+1. **Provisioning:** `create`, `fork`, or `replace` creates/obtains a session.
+2. **Delivery:** `NEW` or `REUSE` selects which session and turn receives this
+   particular message.
+
+`NEW` is a CHD delivery label. It does **not** mean “omit the session header” or
+promise that Hermes will infer freshness. The controller must resolve and persist
+`target_session_id` before it sends the first turn. `REUSE` likewise names an
+already persisted target; it is not a permission to select the latest session.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/40-rooms-sessions.md#e-4-1-supported-hermes-api-capability-and-exact-adapter-calls -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-40-RO-E-4-1-SUPPORTED-HERMES-API-CAP-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### E.4.1 Supported Hermes API capability and exact adapter calls
+
+The supported native surface is the Hermes API server, authenticated with the
+profile's bearer credential. Before activation the adapter calls
+`GET /v1/capabilities` and requires `auth.type=\"bearer\"`,
+`auth.required=true`, `features.session_resources=true`,
+`features.session_fork=true`, `features.session_chat=true`, and
+`features.session_continuity_header=\"X-Hermes-Session-Id\"`. It records the
+complete response digest, advertised endpoint map, and Hermes build/capability
+readback. A capability entry is not guessed from a URL. If a required feature is
+absent, the adapter fails closed with `hermes_capability_missing`.
+
+The following are the probed Hermes API shapes. They are native gateway calls,
+not CHD operation envelopes; all JSON is UTF-8 and the bearer value is never
+stored in a CHD record.
+
+**Create an empty session (201; no first turn is delivered):**
+
+```http
+POST /api/sessions
+Authorization: Bearer &lt;profile credential&gt;
+Content-Type: application/json
+
+{"id":"&lt;allocated child id&gt;","source":"api_server",
+ "title":"&lt;optional&gt;","system_prompt":"&lt;optional&gt;",
+ "model":"&lt;optional&gt;","provider":"&lt;optional&gt;"}
+```
+
+```json
+{"object":"hermes.session","session":{
+  "id":"&lt;requested id or server-generated id&gt;","source":"api_server",
+  "parent_session_id":null,"message_count":0,
+  "has_system_prompt":false,"has_model_config":false}}
+```
+
+**Fork an existing session (201; no first turn is delivered):**
+
+```http
+POST /api/sessions/&lt;parent_session_id&gt;/fork
+Authorization: Bearer &lt;profile credential&gt;
+Content-Type: application/json
+
+{"id":"&lt;allocated child id&gt;","title":"&lt;optional branch title&gt;"}
+```
+
+```json
+{"object":"hermes.session","session":{
+  "id":"&lt;returned child id&gt;","parent_session_id":"&lt;parent id&gt;",
+  "source":"api_server","message_count":&lt;copied count&gt;}}
+```
+
+The native fork copies the source transcript, creates the child before ending the
+source as `branched`, and then copies the messages into the child. Hermes does
+**not** accept CHD's `fork_point_seq`, `fork_mode`, or policy bytes in this body.
+CHD records `fork_point_seq` and the D-038 policy choice separately, and refuses
+the operation if it cannot prove that its recorded parent boundary was the one
+used for the native fork. Policy bytes are never smuggled into the Hermes request.
+
+CHD does not assume that create or fork supports a native `Idempotency-Key`:
+the current handlers identify create/fork by the requested id and return
+`409 session_exists` for an existing id. The CHD `gateway_request_key` remains
+in the durable manifest and may be sent only when a capability probe explicitly
+advertises idempotency for that endpoint. A create/fork retry therefore first
+reconciles `GET /api/sessions/&lt;target id&gt;` and lineage; it never relies on an
+unadvertised native idempotency promise.
+
+**First assignment turn and continuation:**
+
+```http
+POST /api/sessions/&lt;target_session_id&gt;/chat
+Authorization: Bearer &lt;profile credential&gt;
+Content-Type: application/json
+X-Hermes-Session-Id: &lt;target_session_id&gt;
+X-Hermes-Session-Key: &lt;bond session key&gt;
+
+{"message":"&lt;assignment&gt;","instructions":"&lt;optional&gt;",
+ "model":"&lt;optional&gt;","provider":"&lt;optional&gt;"}
+```
+
+```json
+{"object":"hermes.session.chat.completion","status":"completed",
+ "session_id":"&lt;target_session_id&gt;",
+ "message":{"role":"assistant","content":"&lt;reply&gt;"},
+ "usage":{},"runtime":{}}
+```
+
+The alternative selected transport is `POST /v1/chat/completions` with
+`messages:[{"role":"user","content":"&lt;assignment&gt;"}]`, `stream:false`,
+`X-Hermes-Session-Id`, and (when declared) `X-Hermes-Session-Key`; its response
+is the documented `chat.completion` envelope and echoes
+`X-Hermes-Session-Id`. The adapter records one endpoint form per bond and never
+silently switches forms on retry. The controller persists the returned
+`session.id` in the SessionBond/allocation record, fsyncs it, and only then sends
+the first turn. `NEW` therefore never means a headerless request.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/40-rooms-sessions.md#e-4-2-allocation-identity-retries-and-response-loss -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-40-RO-E-4-2-ALLOCATION-IDENTITY-RETR-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### E.4.2 Allocation, identity, retries and response loss
+
+The controller allocates in this order: `send_id` → `attempt_id` → immutable
+`allocation_id`/`target_session_id` → canonical request bytes →
+`gateway_request_key` → durable allocation/manifest → Hermes POST. For a fresh
+session, `target_session_id` is a CHD-generated safe id (`chd_&lt;allocation_id&gt;`),
+so a lost create response remains addressable. For a fork, the same allocation id
+and requested child id are used with the immutable parent id. A native server id
+must not replace the allocation id after the first durable readback.
+
+Canonical `request_bytes` are RFC 8785-style JSON: UTF-8, no insignificant
+whitespace, object keys lexicographically sorted, arrays in declared order,
+Unicode emitted unescaped except required JSON escapes, and numbers rendered in
+one canonical form. The identity object is exactly:
+
+```json
+{"schema":"chd.gateway.identity.v1","operation":"session_create|session_fork|session_chat",
+ "send_id":"...","attempt_id":"...","allocation_id":"...",
+ "target_session_id":"...","parent_session_id":"...","profile":"...",
+ "credential_scope":"profile:&lt;name&gt;/credential:&lt;stable-id&gt;","request":&lt;canonical body&gt;}
+```
+
+Absent fields are represented as `null`; secrets and bearer bytes never appear.
+`request_bytes` are the canonical UTF-8 bytes of this object. The controller
+stores `request_bytes_sha256 = sha256(request_bytes)` and derives the transport
+key as `sha256("chd-key-v1\\0" || target_scope || "\\0" || profile || "\\0" || credential_scope || "\\0" || request_bytes)`, encoded as `chd-key-v1:sha256:&lt;64 lowercase hex&gt;`. `target_scope` is the exact HTTP method/path plus immutable target identity, such as `POST /api/sessions#chd_alloc-101` or `POST /api/sessions/sess-aa11/chat#sess-aa11`; before Hermes returns an id, the allocation id is the target identity. The target scope is allocated once and cannot be edited after the manifest is committed.
+
+Persist `request_bytes`, `request_bytes_sha256`, `target_scope`, `profile`, `credential_scope` and `gateway_request_key` together. Exact replay repeats the same bytes, endpoint, headers, target, profile, credential scope, attempt and key. A changed target, profile, credential scope, or request body requires authorized reconciliation, a new attempt and a new key. Credential rotation does not mutate a retained attempt; the old credential scope remains its identity. If it is unavailable, record `credential_scope_unavailable` and authorize a successor with the new scope only after unknown execution is resolved.
+
+A timeout or lost response is `unknown_execution`. Read the allocation id/target
+first: `GET /api/sessions/&lt;target_session_id&gt;` (and for chat, run/session history)
+then inspect the request ledger. If the child exists and its parent/metadata match,
+adopt the returned id and continue; if it does not exist, repeat the exact create
+or fork bytes with the same allocation identity/key. A `409 session_exists` is
+reconciled by GET plus lineage validation, never by inventing a second child. Only
+an explicit stop/terminal decision permits a new target and successor attempt.
+A deleted/retired target is never recreated under its old Hermes id: exact keyed
+replay may return the retained result, while a new turn gets `session_not_found`
+and must use a new authorized bond/attempt/key.
+
+The single NEW/REUSE authority remains **VOL-C §4, table W1–W11 (and W12 wait
+resume)**. `tables/event-to-session.csv` cross-references those rows and includes
+provisioning separately. `create`, `fork`, `continue`, and `replace` are native
+lifecycle operations; `NEW`/`REUSE` are CHD delivery labels. A fork is never a
+delivery mode.
+
+The named profile is part of the bond. Authentication is bound to that profile;
+`default` is invalid for CHD hierarchy agents and workers. Cross-profile work is
+not a native fork: the source manager authorizes a context-reference transfer,
+the receiving profile creates its own session with its own credential, and the
+receiving bond owns its own policy snapshot. D-038 applies only to a native fork
+within the same profile/authority. The policy snapshot is a CHD authorization
+record; Hermes prompt composition, automatic recall, learning and compaction stay
+Hermes-owned and follow the native transcript/session lifetime. A new policy
+snapshot does not imply a new Hermes session, and a new Hermes session does not
+inherit CHD authority unless the adapter records it.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/40-rooms-sessions.md#e-5-delivery-selection-and-late-replies -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-40-RO-E-5-DELIVERY-SELECTION-AND-LAT-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## E.5 Delivery selection and late replies
+
+A delivery selector is computed from the message's room, thread root, work UID,
+agent and generation. It is not recomputed from “latest session” or room membership.
+When a session is lost or replaced, the old bond remains readable and is marked
+`retired`/`lost`; a new generation receives a new native session id. A delayed reply
+that names generation N is stored under generation N's thread and marked
+`routed_to: retired_generation`. It never enters generation N+1. The manager can
+roll it up from the room log under explicit lineage.
+
+This rule works under both D-038 modes. `preserve_parent_snapshot` preserves the
+parent's captured policy (including a subsequently revoked derived right);
+`current_policy` resolves the child's current policy at fork. Neither setting
+changes thread routing. A late reply's generation and thread joins remain identical
+in both fixtures in `examples/late-reply-generation/`.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/40-rooms-sessions.md#e-6-assignment-fork-and-manager-roll-up -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-40-RO-E-6-ASSIGNMENT-FORK-AND-MANAGE-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## E.6 Assignment fork and manager roll-up
+
+When a manager assigns a task, the `kind=task` message opens a child subthread. If
+the child needs the manager's working context, the controller forks the manager's
+native session at the named `fork_point_seq`; otherwise it creates a fresh child
+session. The first assignment delivery is `NEW` either way. The child replies and
+reports use `REUSE` on that branch.
+
+There are exactly two valid session-start paths for an assignment: **create/fresh**
+(a continuation-less gateway request creates a new native session) or **fork**
+(the controller asks the gateway to fork a named parent at a named point, then
+records the returned child session before delivering `NEW`). A delegation grant
+is only an authority record; it is not a session start and does not create a
+SessionBond. A later `REUSE` delivery continues an existing bond; it is not a
+third start path.
+
+In either path, the controller is the write gate: it calls the gateway with its
+credential, receives the native session id, then writes the SessionBond and
+SendManifest to `/chd` before acknowledging the delivery. The gateway never
+writes `/chd`, and the worker report returns through the foreman and controller.
+
+The manager's review does not replay the child transcript. It reads authorized
+records by id, validates the child report, and writes one parent-thread report whose
+`artifacts` contain `child_report_refs[]`, whose `summary` states the aggregation,
+and whose `send_id` links to the parent aggregation. Readers can walk
+`parent report → aggregation → child send → child bond → child thread` using record
+joins. This is a report roll-up, not a mandatory full descendant conversation.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/40-rooms-sessions.md#e-7-worked-routing-sequence -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-40-RO-E-7-WORKED-ROUTING-SEQUENCE-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## E.7 Worked routing sequence
+
+For two tasks in one room, the authoritative evidence is the set of exact records,
+not prose:
+
+1. task message `task-auth-14/m000000000042` opens root 42 and work `T-101`;
+   allocation `alloc-101` is persisted; `POST /api/sessions/sess-manager/fork`
+   with `{id:"chd_alloc-101"}` returns child `sess-aa11`; the bond is fsynced
+   before `POST /v1/chat/completions` targets `X-Hermes-Session-Id: sess-aa11`;
+   bond `b-20261109-0914-q4x7` receives the assignment as `NEW`;
+2. task message `.../m000000000057` opens root 57 and work `T-205`; a second
+   allocation/fork returns `sess-bb22`, is persisted, and its first turn targets
+   `sess-bb22`; bond `b-20261109-0917-m8k3` receives `NEW`;
+3. replies to roots 42 and 57 are independently delivered as `REUSE`; each
+   manifest carries its own send/attempt/target/profile/credential/key fields and
+   a report for T-101 cannot close T-205;
+4. manager review writes a parent report containing the child report ids and
+   `up_ref`, never an invented transcript.
+
+The complete manifests include canonical request bytes and manager-thread routes.
+A second fixture uses the identical scheduled prompt twice and proves distinct
+allocation/session/key identities. The lost-create fixture proves that a missing
+response is reconciled by allocation id and exact replay, not a second child.
+
+
+The complete manifests and machine-readable records are in the two-task and
+concurrent-bond examples. Their acceptance checks require distinct bond keys,
+thread roots and Hermes session ids.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/40-rooms-sessions.md#e-8-retained-work-log-and-operational-boundaries -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-40-RO-E-8-RETAINED-WORK-LOG-AND-OPER-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## E.8 Retained work log and operational boundaries
+
+The service is the only writer of `/chd/*`; agents use the documented CHD tools.
+Room records are ordered and durable before their wake is acknowledged. Send
+manifests distinguish logical `send_id`, `attempt_id`, native `run_id`, target
+session and bond generation. Exact retries replay by idempotency key; a changed
+payload is an admission conflict. A wait closes its current attempt and mints a
+successor on resume as VOL-C §4 specifies.
+
+The central session archive is separate from control records. It stores native
+Hermes exports, checkpoint manifests, policy snapshots and explicit gap records;
+`committed` means readable coverage, not a live resumable session. Replacement
+access is grant-gated and reads the archive through its API. This boundary keeps
+room lineage auditable without pretending that CHD owns or reconstructs Hermes
+conversation history.
+
+**References:** VOL-B §§3.1, 3.3, 5, 7.1–7.5; VOL-C §§3.2–3.6, 4, 5.1–5.6;
+VOL-D §1.11; D-014, D-025, D-038; R31-022.
+
+
+**CHD-3.3 contract:** `contracts/request-attempt-lifecycle.md` and `schemas/attempt.schema.json` own canonical request/target/attempt identity; this chapter is explanatory.
+  </section>
+</spec>

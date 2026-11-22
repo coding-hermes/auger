@@ -1,0 +1,2110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-BUILD-SPEC-INTEGR-C91D19-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#preamble -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# VOL-C — SERVICE TOOLS, MESSAGING SEMANTICS, SCHEDULER ADMISSION, EFFECTIVE AUTHORIZATION
+
+**Recovery terminology:** [re-drive](terminology.md#re-drive), [re-derive](terminology.md#re-derive), [reconcile](terminology.md#reconcile), [stop confirmation](terminology.md#stop-confirmation), [snapshot](terminology.md#snapshot), and [resync](terminology.md#resync).
+
+```
+DOC     : build-spec/VOL-C-tools-messaging-admission-authz.md
+RESOLVES: §0–§12 anchors of this volume; ids VOL-C-001..081 with 020a/020b/
+          068a/068b/068c/068d/072a/072b/072c (89 statements, one number reserved)
+          (volume -&gt; § anchors -&gt; ids: NORMATIVE-MANIFEST.md §2,
+          REFERENCE-INDEX.md §1)
+REV     : 2.2 (R31 revision pass 2026-11-09). Delta vs 2.1 (R31-026):
+          §8.3 VOLC-068d — grant lineage named field-by-field (grant_id,
+          issuer_grant_id, ancestors[], depth, max_conferable) and mirrored in
+          contracts/config.schema.json $defs.grantLineage; the conferable bound
+          is enforced with the named rejection 403 meta_grant_exceeds_authority,
+          and revocation walks ancestors[] while independent vp_configured
+          grants keep their origin. §8.7 VOLC-065 names the readback as one
+          document with two path spellings (/v1/policy/effective?session=&lt;id&gt;
+          and /v1/sessions/{id}/policy), so the VOLC-068b digest equality has a
+          single referent.
+          2.1. Delta vs 2.0 (R31-016, R31-022):
+          §4.2 decision table gains per-row session/fork outcome and owning
+          bond columns (W3 covers director→manager assignment); VOLC-080
+          records both decisions per send; §8.8 VOLC-081 — archive read
+          scopes granted only by explicit GrantRecord owned by CHD31-06, no
+          implicit read; §5.6 aggregation children resolve to exactly one
+          child thread (fixture VOLB-072).
+          Delta vs 1.1 (2.0):
+          §3.2/§3.6 one public error contract (unknown and unreadable room both
+          404 not_found; the non-member 403 is deleted) and the complete
+          seven-value kind enum with a role×room legality table (R31-002/003);
+          §4 separates session PROVISIONING (fresh | fork) from the two
+          DELIVERY modes NEW/REUSE (R31-022); §6.5 wait closes the attempt and
+          mints a successor on resume (R31-005); new §6.7 dual admission
+          (enqueue-only | run-now, N-1 proposal, R31-019); new §7 managed
+          worker dispatch replacing CLI launch (R31-021); §8.3 four
+          independent authority classes incl. meta-grant (R31-026); §8.8
+          archive read/grant scopes (R31-023); §8.9 session-policy enforcement
+          and resync (R31-027, D-038); operation inventory moved to
+          contracts/OPERATIONS.md (R31-025).
+DATE    : 2026-11-09
+IMPLEMENTS: DESIGN.md rev 3.0 CT-05/CT-07/CT-10/CT-13/CT-14;
+            DESIGN.md §3.3–3.4, §4.4–4.5, §5.1–5.5, §6.1–6.3, §11.1–11.2
+RESOLVES: F-008 (ingress + messaging tool), F-009 (reply/group/ownership),
+          F-011 (scheduler + send state machines),
+          F-012 (enforceable authorization)
+CONSUMES: contracts/DATA-MODEL.md rev 1.1, contracts/ENDPOINTS.md rev 1.1,
+          contracts/config.schema.json, contracts/config.template.yaml
+STATUS  : BUILDABLE SPEC. Requirements carry stable ids VOLC-nnn and are
+          traceable in §10. Items the review left open are marked
+          OPEN DESIGN WORK (§11) — never invented defaults.
+```
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#0-scope-and-boundaries -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-0-SCOPE-AND-BOUNDARIES-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 0. Scope and boundaries
+
+VOL-C specifies the **coordination service's own surface**: the tools the
+invocation service exposes to agent sessions (messaging, work-log), the four
+ingress doors, reply/group/fan-out semantics, the NEW/REUSE event→session
+mapping, scheduler admission and the complete send state machine, and the
+enforceable authorization model.
+
+**Hermes-owned, referenced not rebuilt** (verified against
+https://hermes-agent.nousresearch.com/docs/user-guide/features/api-server,
+fetched 2026-11-08):
+
+| Hermes capability | Contract this spec relies on |
+|---|---|
+| Session continuation | `POST /v1/chat/completions` with `X-Hermes-Session-Id: &lt;id&gt;` (existing session = next turn); a request with no continuation id starts a fresh session |
+| Session key scope | `X-Hermes-Session-Key` header (max 256 chars, no `\r\n\x00`, echoed back; advertised via `/v1/capabilities` `session_key_header`) — feeds the memory provider's stable scope |
+| Durable admission | `Idempotency-Key` header on `POST /v1/chat/completions`, `/v1/responses`, `/v1/runs`: first request runs once; exact retry replays; changed payload → `409 admission_conflict` |
+| Runs API | `POST /v1/runs` returns `run_id`; `GET /v1/runs/{id}`, `/events`; `session_id` surfaced in run status; session turn leases serialize concurrent writers |
+| Sessions REST | `POST /api/sessions` (create), `GET /api/sessions/{id}`, `DELETE /api/sessions/{id}` (deleted ids are never reused; tombstones) |
+| Failure codes | `409 admission_conflict`, `409 unknown_execution`, `503 runtime_draining`/`storage_unavailable` with `Retry-After` |
+| Session resume | Scheduler orphan-scan re-queue (DESIGN FACT-29) |
+
+VOL-C does **not** define: record schemas (VOL-A / DATA-MODEL), acceptance
+and report-verification semantics (VOL-D / F-013), bridge lifecycle
+(F-014–F-017), or the scheduler's own algorithms (existing code).
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#1-principals-and-credentials-f-012-foundation -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-1-PRINCIPALS-AND-CREDENTIALS-F-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 1. Principals and credentials (F-012 foundation)
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#1-1-principal-classes -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-1-1-PRINCIPAL-CLASSES-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.1 Principal classes
+
+Every call to any service surface authenticates to exactly one principal
+class. The class is derived from the **credential**, never from a request
+field.
+
+| Class | Credential | Issued by | Lives in |
+|---|---|---|---|
+| `vp` | VP token | operator provisioning | token file/dir named in service config |
+| `scheduler` | scheduler callback credential | operator provisioning | shared only by scheduler ↔ service |
+| `agent:&lt;agent-id&gt;` | per-agent service token | operator provisioning, one per configured agent | `token_dir` (pattern of DATA-MODEL/FACT-20) |
+| `service` | the invocation service's own credential (DuckBrain write + scheduler mutation) | operator provisioning | held by the service process only |
+
+- **VOLC-001** A request's principal class and id are established solely by
+  its credential. `from`, `as`, or body identity fields are
+  **attribution data, not authentication**: a mismatch between credential
+  identity and body identity is refused `403 identity_mismatch` and audited.
+- **VOLC-002** Gateway credentials (`gateways[].auth_token_ref`, used by the
+  service to reach Hermes gateways) and **agent-to-service credentials**
+  (agent tokens used by sessions to call service tools) are distinct
+  credential populations. No agent token is accepted at a gateway, and no
+  gateway credential is accepted at the service ingress.
+- **VOLC-003** Credentials are referenced by config (`auth_token_ref` /
+  `token_dir`), never inlined. The service loads them at startup and on
+  rotation signal; expiry and revocation are operator actions on the
+  referenced file/store: the service re-validates the credential against the
+  loaded set on every call, reloading on
+  file change or `POST /v1/admin/reload-credentials` from a `vp` or
+  `scheduler` principal. This is CREDENTIAL revocation. Permission revocation
+  is a different mechanism and never uses this path: it is session-scoped per
+  VOL-A-043 and §8.9 (snapshot), with the single per-page exception in §8.8
+  VOLC-072b. A revoked credential fails `401` with zero
+  side effects.
+- **VOLC-004** No hierarchy agent ever holds the scheduler's mutating
+  credential, the service's own DuckBrain write credential, or a gateway
+  auth token (DESIGN §6.1). Violation detection (a token presented for the
+  wrong class) is an integrity violation: refused, audited, counted.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#1-2-two-credential-planes-one-diagram -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-1-2-TWO-CREDENTIAL-PLANES-ONE-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.2 Two credential planes, one diagram
+
+```
+agents --(agent service tokens)--&gt; SERVICE TOOLS --(service credential)--&gt; DuckBrain
+agents &lt;--(gateway token, service-held)--- Hermes gateways &lt;--(scheduler callback cred)-- scheduler
+```
+
+The service is the **only** writer of `/chd/*` keys. See §2.1.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#2-the-agent-facing-service-tools-d-014-f-008-f-018 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-2-THE-AGENT-FACING-SERVICE-TOO-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 2. The agent-facing service tools (D-014, F-008, F-018)
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#2-1-write-path-decision-agent-service-duckbrain -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-2-1-WRITE-PATH-DECISION-AGENT-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.1 Write-path decision: agent → service → DuckBrain
+
+DESIGN CT-05 described sessions posting "via their role token" directly to
+DuckBrain. Three review findings force the single-writer form instead:
+F-018 explicitly prefers the agent→service→DuckBrain path; F-019 rules out
+DuckBrain's default timestamp/UUID ordering as a durable room order; UQ-7 /
+OQ-14 leave sequence allocation unresolved unless the service allocates.
+VOL-C therefore makes the normative choice:
+
+- **VOLC-005** Hierarchy agents **never write `/chd/*` keys directly to
+  DuckBrain**. All room, report, audit, and work-log writes go through the
+  invocation service's tools. The service allocates the per-room monotonic
+  `seq`, stamps the time basis (§6.3), and writes with **its own**
+  credential. Agent tokens authenticate **to the service**, not to
+  DuckBrain. (This supersedes the direct-write reading of CT-05; the
+  DuckBrain token backstop of DESIGN §6.2 layer 2 becomes defense-in-depth,
+  not the primary enforcement.)
+- **VOLC-006** Because the service is the single writer, room ordering is
+  durable by construction: `seq` values are allocated once, at write time,
+  in commit order, and never reused (F-019 durable-sequence requirement).
+  Allocation uses VOL-B §5.1's durable write-ahead mechanism (VOLB-028):
+  the service reserves fsync-acked SeqHead blocks at
+  `/chd/room/&lt;room-id&gt;/_head` before consuming sequence numbers — room
+  order is the allocated-`seq` order, NEVER DuckBrain's default
+  timestamp/UUID ordering (D4/D5 of VOL-B §1). Recovery after crash/restart
+  re-derives "next seq" per VOLB-028 (`max(max observed message seq, last
+  durable _head.next − 1) + 1`); an in-flight allocation that crashed
+  before commit leaves a gap, and gaps are legal (see VOLC-018).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#2-2-tool-surface-exposed-to-agent-sessions -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-2-2-TOOL-SURFACE-EXPOSED-TO-AG-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.2 Tool surface exposed to agent sessions
+
+The invocation service exposes these tools to every configured hierarchy
+agent session (MCP tools over the agent's own service token, per D-014
+"invocation service also exposes communication/work-log tools"). All are
+denied by default and enabled per agent by config (§8.4).
+
+**Authoritative operation reference.** The complete request, validation order, storage effect, error, retry, attachment and test contract is `build-spec/VOL-E-operation-reference.md` §2–§8. This table is the stable tool-name index; it is not a second schema.
+
+**Authoritative operation reference.** The complete request, validation order, storage effect, error, retry, attachment and test contract is `build-spec/VOL-E-operation-reference.md` §2–§8. This table is the stable tool-name index; it is not a second schema.
+
+**Authoritative operation reference.** The complete request, validation order, storage effect, error, retry, attachment and test contract is `build-spec/VOL-E-operation-reference.md` §2–§8. This table is the stable tool-name index; it is not a second schema.
+
+**Authoritative operation reference.** The complete request, validation order, storage effect, error, retry, attachment and test contract is `build-spec/VOL-E-operation-reference.md` §2–§8. This table is the stable tool-name index; it is not a second schema.
+
+**Authoritative operation reference.** The complete request, validation order, storage effect, error, retry, attachment and test contract is `build-spec/VOL-E-operation-reference.md` §2–§8. This table is the stable tool-name index; it is not a second schema.
+
+**Authoritative operation reference.** The complete request, validation order, storage effect, error, retry, attachment and test contract is `build-spec/VOL-E-operation-reference.md` §2–§8. This table is the stable tool-name index; it is not a second schema.
+
+**Authoritative operation reference.** The complete request, validation order, storage effect, error, retry, attachment and test contract is `build-spec/VOL-E-operation-reference.md` §2–§8. This table is the stable tool-name index; it is not a second schema.
+
+**Authoritative operation reference.** The complete request, validation order, storage effect, error, retry, attachment and test contract is `build-spec/VOL-E-operation-reference.md` §2–§8. This table is the stable tool-name index; it is not a second schema.
+
+**Authoritative operation reference.** The complete request, validation order, storage effect, error, retry, attachment and test contract is `build-spec/VOL-E-operation-reference.md` §2–§8. This table is the stable tool-name index; it is not a second schema.
+
+**Authoritative operation reference.** The complete request, validation order, storage effect, error, retry, attachment and test contract is `build-spec/VOL-E-operation-reference.md` §2–§8. This table is the stable tool-name index; it is not a second schema.
+
+| Tool | Purpose | Backing operation |
+|---|---|---|
+| `chd_post` | post a work message or question into a room the agent is a member of | §3.2 |
+| `chd_reply` | reply inside an existing thread (`reply_to` required) | §3.3 |
+| `chd_report` | post the turn's exactly-one report answering a `send_id` | §3.4 |
+| `chd_read_room` | read an authorized room log (own membership + referenced artifacts) | §3.5 |
+| `chd_read_worklog` | read the **authorized work log**: own rooms + own subthreads + upward references (§5.8) | §3.5 |
+| `chd_whoami` | read the agent's own bond, rooms, effective grants and session policy | §8.7, §8.9 |
+| `chd_request_wake` | request a future wake ("re-check in 2h") — NEVER self-scheduling (CT-08) | §6.6 |
+| `chd_assign` | assign work to a foreman: `enqueue_only` or `run_now` (§6.7) | §6.7 |
+| `chd_worker_dispatch` | foreman dispatches a worker run (§7) | §7.2 |
+| `chd_run_status` / `chd_run_cancel` | read or cancel a worker run (§7.3/§7.4) | §7.3–7.4 |
+| `chd_ticket_create` | create a generic ticket with parent/dependency/owner/criteria/link fields | `POST /v1/tickets` / ENDPOINTS §4.9 |
+| `chd_ticket_get` | read one ticket, allowed machine transitions and reconciliation flags | `GET /v1/tickets/{id}` / ENDPOINTS §4.9 |
+| `chd_ticket_update` | CAS update ticket metadata, graph, owner, criteria, authorization and links | `PATCH /v1/tickets/{id}` / ENDPOINTS §4.9 |
+| `chd_ticket_transition` | apply one authorized transition from the canonical state machine | `POST /v1/tickets/{id}/transitions` / ENDPOINTS §4.9 |
+| `chd_ticket_query` | keyset-filter tickets for worklists, boardctl views and recovery | `GET /v1/tickets` / ENDPOINTS §4.9 |
+| `chd_ticket_import` / `chd_ticket_export` | reconcile or export boardctl-compatible views; never local authority | `POST/GET /v1/tickets/{import,export}` / ENDPOINTS §4.9 |
+| `chd_archive_read` | read an authorized archive scope (§8.8) | §8.8 |
+| `chd_grant` / `chd_grant_revoke` | issue or revoke a grant within authority (§8.3) | §8.3 |
+| `chd_session_policy_resync` | explicit, authorized session-policy refresh (§8.9) | §8.9 |
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#2-3-ticket-tool-surface-r31-017-r31-018 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-2-3-TICKET-TOOL-SURFACE-R31-01-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.3 Ticket tool surface (R31-017/R31-018)
+
+Ticket tools are controller-routed MCP operations with identical API and CLI
+semantics. They expose one general-purpose ticket contract for coding,
+research, finance, operations, incident and decision work; they do not expose a
+second state machine. `machine_ref` is validated against
+`build-spec/state-machines.json`, and `state` is the controller's projection of
+the canonical objective or assignment machine.
+
+| Tool | Required input | Stored effect | Success / refusal |
+|---|---|---|---|
+| `chd_ticket_create` | `request_id`, title, kind, workflow binding, owner, criteria, graph/link refs | Atomic TicketRecord at `/chd/ticket/&lt;id&gt;` with `revision=1`, audit and source refs | `201`; duplicate request replays; invalid owner/graph/auth is refused before write |
+| `chd_ticket_get` | ticket id and read grant | Reads effective TicketRecord, last event, allowed canonical edges and consistency flags | `200`; unknown/unreadable is `404 not_found` |
+| `chd_ticket_update` | ticket id, `request_id`, `expected_revision`, metadata/graph/owner/criteria/link patch | CAS TicketRecord update plus audit; no implicit state transition | `200`; stale revision `409 ticket_revision_conflict`; no partial write |
+| `chd_ticket_transition` | ticket id, request id, expected revision, target state, reason/evidence | Atomic state projection, revision increment, immutable transition event and audit | `200`; illegal edge/writer `403 ticket_transition_not_allowed` |
+| `chd_ticket_query` | keyset filters and read grant | Reads ticket prefix and linked consistency state | `200` with cursor; no offset-based duplicate/missing window |
+| `chd_ticket_import` / `chd_ticket_export` | board rows/source digest or filters/format | Import reconciles by ticket id; export produces read-only board view | conflicts are reported; absence never deletes; export never grants authority |
+
+Every mutation is authorized by credential principal, ticket-family scope,
+workflow writer and required facts before the controller writes. Every accepted
+mutation carries `request_id` and `correlation_id`; reports, worker runs and
+artifacts carry `ticket_id` plus their own `send_id`/`attempt_id`/`run_id`
+where relevant. A stale or mismatched correlation is a typed refusal, not a
+best-effort attachment. See ENDPOINTS §4.9, DATA-MODEL §1.9/§2, and VOL-E §3.
+
+- **VOLC-007** The tool set above is the complete communication/work-log **and
+  work-control** surface exposed to agents. Agents have **no other** path to
+  rooms, the work log, tickets, worker runs, or the scheduler: no direct DuckBrain
+  token in-session for `chd` writes (VOLC-005), no scheduler API access, no gateway
+  credentials (VOLC-004). The operation inventory (every action, field, error and
+  evidence query) is `contracts/OPERATIONS.md` (R31-025).
+- **VOLC-008** Tool results are structured: success returns
+  `{ok: true, room, seq, key, thread?, wakes?}`; failure returns
+  `{ok: false, error: {code, message, detail}}` using the error codes of
+  §3.6 — an agent can always tell whether its write landed and where.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#3-four-door-ingress-and-message-contracts-f-008 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-3-FOUR-DOOR-INGRESS-AND-MESSAG-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 3. Four-door ingress and message contracts (F-008)
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#3-1-one-surface-four-doors-ct-14-rl-16 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-3-1-ONE-SURFACE-FOUR-DOORS-CT-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.1 One surface, four doors (CT-14, RL-16)
+
+The four doors — **API** (`POST /v1/...` HTTP), **MCP** (the MCP tool
+wrappers of ENDPOINTS §3.2 plus the agent tools of §2.2), **CLI** (`chd`
+verbs of ENDPOINTS §3.3), **webhook** (external systems via
+`POST /v1/signals`) — are one contract surface:
+
+- **VOLC-009** Every operation has identical validation, authorization,
+  idempotency, and audit semantics regardless of door. Door identity is
+  recorded in the audit record (`door` field) and nowhere else. No door is
+  privileged; authority comes from the credential, never the door
+  (R-029).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#3-2-post-post-a-message -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-3-2-POST-POST-A-MESSAGE-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.2 `post` — post a message
+
+Request payload (agent tool `chd_post`, doors API/MCP/CLI; webhook maps to
+`POST /v1/signals`):
+
+```json
+{
+  "from": "mgr-infra",                // must equal authenticated identity (VOLC-001)
+  "room": "obj-fleet",                // existing room; membership required
+  "to": "mgr-fleet-ops",              // agent id | "group" | "@agent-id" | "owner"
+  "kind": "msg",                      // msg | question | status | directive | task | report | incident
+  "body": "non-empty human-readable text",
+  "reply_to": null,                   // use chd_reply instead; null at root level
+  "cause": {                          // optional causation (§5.5)
+    "send_id": "s-20261108-1010-b3c4",
+    "objective_id": "obj-fleet",
+    "signal_id": "sig-..."
+  },
+  "dedupe_key": "optional client key"
+}
+```
+
+Validation order (each failure stops with the named error):
+
+1. Authentication → `401 unauthenticated`.
+2. Identity consistency → `403 identity_mismatch` (VOLC-001).
+3. Room exists **and** is readable by the caller → one `404 not_found`
+   otherwise (VOLC-040/056). Existence and membership are deliberately
+   indistinguishable: the check is a single lookup over the caller's
+   authorized room set, so no response shape or timing class discloses
+   whether a guessed id exists. The detailed denial cause is written to the
+   audit record only (VOLC-064).
+4. `kind` legality per room kind and role (§3.6 table) → `403 kind_not_allowed`.
+5. `to` target exists and is a member, or is `group`/`owner` → `404 not_found`.
+6. `body` non-empty, size ≤ `ingress.max_body_bytes` (default 65536) → `400 bad_request`.
+7. Idempotency check → replay behavior per VOLC-017.
+8. Human-approval policy for the caller (§8.4) → may hold the write in
+   `pending_approval` (returns `202` with `approval_id`).
+
+Success `201`:
+
+```json
+{
+  "ok": true, "room": "obj-fleet", "seq": 43,
+  "key": "/chd/room/obj-fleet/m000000000043",
+  "to_snapshot": ["mgr-fleet-ops"],
+  "wakes": ["mgr-fleet-ops"], "wake_mode": "queued|dispatched"
+}
+```
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#3-3-reply-reply-into-a-thread -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-3-3-REPLY-REPLY-INTO-A-THREAD-S012" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.3 `reply` — reply into a thread
+
+Same payload as `post` plus a **required** `reply_to: &lt;seq&gt;` identifying
+the parent message in the same room. The new message's `thread` resolves to
+the ROOT of that parent's thread (a reply to a reply carries the same root
+`thread` value — the tree is walked via `reply_to`, DATA-MODEL CT-12).
+Replying to a `kind=report` message is legal (a question about a report);
+replying to a message that does not exist in that room is `404 not_found`.
+
+- **VOLC-010** The `reply_to` model is retained unchanged (RL-12/CT-12):
+  every reply carries `reply_to` (parent seq); the root request is the
+  thread root; nesting is unbounded; agents working one task share one
+  subthread. There is no second threading mechanism.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#3-4-report-the-turn-s-report -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-3-4-REPORT-THE-TURN-S-REPORT-S013" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.4 `report` — the turn's report
+
+Payload is the **canonical report schema v3, VOL-D §3.1**: one common envelope
+plus exactly one requester-selected `content` class (`free_form`, `structured`,
+or `dataset`). The assignment supplies `required_content`, `schema_ref` when
+needed, `validation_policy`, and `completion_policy`; the service copies these
+immutable terms into the envelope and validates before persistence. The full
+machine contract and positive examples are `contracts/schemas/report-v3.schema.json`
+and `contracts/schemas/report-v3.fixture.json`.
+
+```json
+{"schema_version":3,"envelope":{"send_id":"s-20261109-1002-a1b4","attempt_id":"at-20261109-1002-c3d6","request_ref":"/chd/room/task-crier-42/m000000000043","content_digest":"sha256:...","ingest_ts":"service-stamped"},"content":{"class":"dataset","dataset_id":"ds-20261109-1102-ds01","columns":[{"name":"name","type":"string","nullable":false},{"name":"count","type":"integer","nullable":false}],"rows":[{"row_id":"r00000001","values":{"name":"alpha","count":2}},{"row_id":"r00000002","values":{"name":"beta","count":3}}],"query_contract":{"filter":"count &gt;= 2","order_by":"row_id ASC","page_size":2,"cursor_field":"row_id"}}}
+```
+
+The waiting-for-human extension shows here (VOL-D VOLD-023 field names are canonical):
+
+```json
+{
+  "send_id": "s-20261108-1010-b3c4",
+  "room": "task-crier-42",
+  "status": "done | deferred | blocked | failed | waiting_human",
+  "summary": "one paragraph, human-readable",
+  "artifacts": ["..."],                 // &gt;=1 iff status=done
+  "reason": "...",                      // required iff deferred|blocked
+  "waiting_for_human": {                // required iff waiting_human
+    "question": "approval of deploy plan", "gate_ref": "gate-deploy-1",
+    "asked_at": "service-stamped", "requested_by": "owner"
+  },
+  "next": "optional",
+  "ts": "written by the service; agent-supplied ts ignored (VOLC-012)"
+}
+```
+
+- **VOLC-011** `report` is the exactly-one report per `(send_id, attempt_id)`
+  after applying the V3 precedence in VOL-D §3.3: an exact replay is a dedupe
+  response; a different second report while open is refused
+  `409 report_already_posted`; a report after terminal closure is recorded as
+  `duplicate_ignored`. Work messages (`chd_post`) in the same turn are separate
+  writes and are unaffected (this reconciles one-write-per-room-per-turn with
+  separate messages/reports — see §5.7). The service records the audit event for
+  every non-replay rejection.
+- **VOLC-012 (v3 time/correlation).** The service stamps `seq`, `content_ref`,
+  and `ingest_ts` from its trusted clock. Freshness is `ingest_ts &gt;= dispatch_ts`
+  for the same `(send_id, attempt_id, session_ref)`; agent timestamps and
+  attached-content timestamps are evidence only. The old `report.ts &gt;=
+  dispatch_ts` wording is superseded by VOL-D VOLD-025.
+- **VOLC-013** Report validation is the verify loop's input (CT-06,
+  ENDPOINTS §4.6): schema-fail → `422 schema_validation` (or
+  `422 dataset_row_invalid`) and the report/dataset is NOT readable or
+  persisted as a published report; the failed validation is audited.
+  Unknown schema version is `422 schema_unsupported`; schema-pass is persisted
+  and the verdict is computed by VOL-D's ladder. Exact replay, changed second
+  report, and closed-work duplicate use VOL-D §3.3's single precedence table.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#3-5-read-room-log-and-authorized-work-log -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-3-5-READ-ROOM-LOG-AND-AUTHORIZ-S014" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.5 `read` — room log and authorized work log
+
+`chd_read_room(room, since?, thread?, limit?)` and
+`chd_read_worklog(scope)` map to `GET /v1/rooms/{room}/messages`
+(ENDPOINTS §4.7) with cursor pagination (`since`, `limit` 1–500, response
+`next_since`). The **authorized work log** is defined in §5.8.
+
+- **VOLC-014** Reads are served by the service (which enforces §8's
+  matrix); agents do not need DuckBrain read tokens for `chd` keys. The
+  UI chat and CLI read through the same endpoints (one read path, one
+  enforcement point).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#3-6-message-kinds-legality-and-errors -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-3-6-MESSAGE-KINDS-LEGALITY-AND-S015" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.6 Message kinds, legality, and errors
+
+The **complete** kind enum is seven values:
+`msg | question | status | directive | task | report | incident`. There is
+no other kind; storage
+(VOL-B §3.1), the §3.2 payload, tools, examples, DATA-MODEL §1.4 and this
+table use the same seven names.
+
+| `kind` | Meaning | Who may post | Legal room kinds | Why |
+|---|---|---|---|---|
+| `msg` | ordinary work message | any member | objective, task, space | conversation |
+| `question` | a question that owes an answer in-thread; participates in missing-reply detection (§6.6) | any member | objective, task, space | explicit ask |
+| `status` | progress/state post, incl. waiting-for-human notices and bond-loss notices | any member; `incident`-class system notices are service-written | objective, task, space | visibility without a wake obligation |
+| `directive` | opens an objective; also a VP direction change inside an objective | director (opening post); VP (`message.inject`) | objective only | objective framing |
+| `task` | opens a task room or a task subthread | manager (in its own task/space rooms); supervisor only for a subthread inside its own task room | task, space | work assignment |
+| `report` | the turn's exactly-one report (`chd_report`) | any member of the room it reports into | objective, task, space | owed result |
+| `incident` | escalation record (R-017) | service only | objective, task, space | audit-grade escalation |
+
+**VOLC-066 (single kind authority, R31-003).** This table is the only legality
+authority. Every prohibited use is refused `403 kind_not_allowed` naming
+`{kind, room_kind, role}`; every kind round-trips validate → store → read with the
+same name (round-trip test: VOLB-014 key/content match plus a read that returns
+the identical `kind`). Prohibited uses include: `directive` in a task or space
+room; `task` in an objective room; `report` from a non-member; `incident` from any
+agent; any kind from a principal that is not a member of the room.
+
+**Kind × role × room-kind legality matrix (R31-003).** One cell for every
+combination; ✔ = legal, `kind_not_allowed` = refused `403 kind_not_allowed`
+(a non-member caller is refused earlier, at validation step 3, with `404
+not_found` — never with a kind error, which would disclose the room).
+`owner`/VP rows: the owner posts through the VP surface under the same
+rules as the role it acts as; `message.inject` (§8) may write `directive`
+and `status` into an objective room. The service itself writes `incident`
+into any room kind and `status` bond-loss/system notices per §3.6.
+
+| `kind` | post as | objective room | task room | space room |
+|---|---|---|---|---|
+| `msg` | director | ✔ | ✔ | ✔ |
+| `msg` | manager | ✔ | ✔ | ✔ |
+| `msg` | supervisor | ✔ | ✔ | ✔ |
+| `question` | director | ✔ | ✔ | ✔ |
+| `question` | manager | ✔ | ✔ | ✔ |
+| `question` | supervisor | ✔ | ✔ | ✔ |
+| `status` | director | ✔ | ✔ | ✔ |
+| `status` | manager | ✔ | ✔ | ✔ |
+| `status` | supervisor | ✔ | ✔ | ✔ |
+| `report` | director | ✔ | ✔ | ✔ |
+| `report` | manager | ✔ | ✔ | ✔ |
+| `report` | supervisor | ✔ | ✔ | ✔ |
+| `directive` | director | ✔ | `kind_not_allowed` | `kind_not_allowed` |
+| `directive` | manager | `kind_not_allowed` | `kind_not_allowed` | `kind_not_allowed` |
+| `directive` | supervisor | `kind_not_allowed` | `kind_not_allowed` | `kind_not_allowed` |
+| `task` | director | `kind_not_allowed` | `kind_not_allowed` | `kind_not_allowed` |
+| `task` | manager | `kind_not_allowed` | ✔ (its own task rooms) | ✔ (its own space rooms) |
+| `task` | supervisor | `kind_not_allowed` | ✔ (subthread only, its own task room) | `kind_not_allowed` |
+| `incident` | director | `kind_not_allowed` | `kind_not_allowed` | `kind_not_allowed` |
+| `incident` | manager | `kind_not_allowed` | `kind_not_allowed` | `kind_not_allowed` |
+| `incident` | supervisor | `kind_not_allowed` | `kind_not_allowed` | `kind_not_allowed` |
+
+Every cell of this matrix is exactly the VOLC-066 rule restated per
+combination; the table above (per-kind `Who may post` / `Legal room
+kinds`) and this matrix are one legality authority — if they ever
+disagree, that is a spec defect (the diff check in
+`build-spec/tools/check_msg_contract.py` asserts matrix/table
+consistency for the prose-verifiable cells).
+
+**Examples (positive and negative, R31-003).** Tools that accept a kind:
+`chd_post` (§3.2), `chd_reply` (§3.3), `chd_report` (§3.4, kind fixed to
+`report`). Each documented kind appears in a positive example; each
+negative example names its error code. All doors behave identically
+(VOLC-009).
+
+Positive — one per kind:
+
+```json
+// msg — any member, any room kind
+{"from":"mgr-infra","room":"task-crier-42","to":"group","kind":"msg",
+ "body":"crier red main bisected to the retry loop"}
+// question — owes an in-thread answer; participates in §6.6 missing-reply detection
+{"from":"mgr-infra","room":"task-crier-42","to":"sup-crier","kind":"question",
+ "body":"which commit pinned the regression?"}
+// status — visibility without a wake obligation
+{"from":"sup-crier","room":"task-crier-42","to":"group","kind":"status",
+ "body":"fix staged; waiting on CI"}
+// directive — director opens an objective (objective room only)
+{"from":"director","room":"obj-fleet","to":"group","kind":"directive",
+ "body":"open obj-fleet: land the crier retry fix this cycle"}
+// task — manager opens a task subthread in its own task/space room
+{"from":"mgr-infra","room":"sp-infra","to":"sup-crier","kind":"task",
+ "body":"task: bisect crier red main on the retry loop"}
+// report — the turn's exactly-one report (chd_report, §3.4 payload)
+{"from":"sup-crier","room":"task-crier-42","send_id":"s-20261108-1010-b3c4",
+ "status":"done","summary":"bisect complete; fix merged"}
+// incident — SERVICE-written escalation; no agent ever composes this
+{"from":"service","room":"obj-fleet","kind":"incident",
+ "body":"send s-... failed 3 attempts; escalated per R-017"}
+```
+
+Negative — one per tool, each naming its error code:
+
+```json
+// chd_post: directive into a task room → 403 kind_not_allowed
+//   {kind:"directive", room_kind:"task", role:"director"}   (VOLC-066)
+{"from":"director","room":"task-crier-42","to":"group","kind":"directive",
+ "body":"(refused)"}                                   // → 403 kind_not_allowed
+// chd_post: incident composed by an agent → 403 kind_not_allowed
+{"from":"mgr-infra","room":"obj-fleet","to":"group","kind":"incident",
+ "body":"(refused)"}                                   // → 403 kind_not_allowed
+// chd_post: task in an objective room → 403 kind_not_allowed
+{"from":"mgr-infra","room":"obj-fleet","to":"sup-crier","kind":"task",
+ "body":"(refused)"}                                   // → 403 kind_not_allowed
+// chd_post: status from a principal that is not a member of the room → 404 not_found
+//   (denied at validation step 3, before the kind check — no existence oracle)
+{"from":"mgr-infra","room":"obj-private","to":"group","kind":"status",
+ "body":"(refused)"}                                   // → 404 not_found
+// chd_post: room the caller cannot read (whether or not it exists) → 404 not_found
+{"from":"mgr-infra","room":"obj-private","to":"group","kind":"msg",
+ "body":"(refused)"}                                   // → 404 not_found
+// chd_reply: reply_to names a seq that is not in that room → 404 not_found
+{"from":"mgr-infra","room":"task-crier-42","reply_to":9999,"kind":"question",
+ "body":"(refused)"}                                   // → 404 not_found
+// chd_reply: directive as a reply inside a task room → 403 kind_not_allowed
+{"from":"director","room":"task-crier-42","reply_to":12,"kind":"directive",
+ "body":"(refused)"}                                   // → 403 kind_not_allowed
+// chd_report: second different report for one (send, attempt) → 409 report_already_posted
+{"from":"sup-crier","room":"task-crier-42","send_id":"s-20261108-1010-b3c4",
+ "status":"failed","summary":"(second, differing report)"} // → 409 report_already_posted
+// chd_report: reporting into a room the caller cannot read → 404 not_found
+{"from":"mgr-infra","room":"obj-private","send_id":"s-...","status":"done",
+ "summary":"(refused)"}                                // → 404 not_found
+```
+
+Common error codes (single public contract; `contracts/ENDPOINTS.md` §5 carries the
+same table — no second variant exists):
+
+| Status | `code` | Trigger | Retryable | Client action |
+|---|---|---|---|---|
+| 400 | `bad_request` | malformed body/unknown field/bad limit | after fix | fix payload |
+| 401 | `unauthenticated` | missing/invalid token | no | re-authenticate |
+| 403 | `identity_mismatch` | body identity ≠ credential | no | use own identity |
+| 403 | `kind_not_allowed` | §3.6 legality violation | no | choose legal kind |
+| 403 | `vp_identity_misuse` | agent claiming VP | no | never; counted |
+| 403 | `approval_required` | approval gate denied/explicitly refused | no | obtain approval |
+| 403 | `policy_resync_not_granted` | resync without authority | no | request grant |
+| 403 | `tool_not_granted` | no effective `use` for the operation | no | request grant |
+| 403 | `assignment_not_grant` | assignment payload tried to mutate permissions | no | move grants to the grant path |
+| 404 | `not_found` | unknown **or** unreadable room/agent/report/ticket — one code, one shape | no | none |
+| 409 | `duplicate` | dedupe replay with different body | no | new dedupe_key |
+| 409 | `report_already_posted` | second different report for one (send, attempt) | no | amend via a new send |
+| 409 | `thread_not_owned` | reply to a subthread no live bond owns | no | post to the owning thread |
+| 409 | `admission_conflict` | Idempotency-Key already names other work | poll run | reconcile |
+| 409 | `ticket_revision_conflict` | stale `expected_revision` | yes | re-read and retry |
+| 403 | `registry_unjustified` | `space` creation without registry justification (CT-09) | no | justify or use another room kind |
+| 422 | `schema_unsupported` / `schema_validation` / `dataset_row_invalid` | unknown schema, invalid structured content, or invalid dataset row | no | fix content |
+| 422 | `attempt_target_conflict` | reused gateway key against a new target | no | mint new attempt |
+| 429 | `at_capacity` | gateway/agent at cap; message persisted, wake queued | yes, later | wait |
+| 503 | `duckbrain_unavailable` | control store down; nothing dispatches | yes, backoff | retry |
+
+- **VOLC-015** Every rejected call returns exactly one of the codes above with the
+  ENVELOPE of ENDPOINTS §1 — a real client can post, reply, ask a question, and
+  report using only these contracts, and every rejection names the failed check
+  (F-008 completion evidence). `forbidden` (bare) is not a CHD code; the
+  membership case it used to cover is `404 not_found` (R31-002).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#3-7-the-message-state-machine -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-3-7-THE-MESSAGE-STATE-MACHINE-S016" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.7 The message state machine
+
+Every accepted message travels one machine; each state is a durable
+transition recorded with the message's audit record. (Terminology note,
+integration pass: this is the **message state machine** — distinct from the
+SEND state machine of §6.4 and from the **verify ladder** rung model of
+VOL-D §2.4. "Ladder" alone always means the verify ladder.)
+
+```
+posted → accepted → persisted → dispatched → completed
+                    ↓            ↓
+                (503 path)   queued (cap full — wake queued,
+                              message already durable)
+```
+
+- **posted** — the request bytes arrived at a door.
+- **accepted** — authenticated, validated, idempotency-claimed. Idempotent
+  from here on: a crash after `accepted` replays the original response.
+- **persisted** — the service wrote `/chd/room/&lt;room&gt;/m&lt;seq&gt;` with its own
+  credential; `seq` allocated. The caller's success response is returned
+  at/after this state (the message survives even if the wake is lost).
+- **dispatched** — the router computed wake targets (§5.2) and the send
+  orchestrator composed wake sends (which then follow the SEND state
+  machine of §6.5). Under cap pressure the wake is `queued`, not lost —
+  the message itself is already `persisted` (VOLC-021).
+- **completed** — all wakes composed; terminal for the message record.
+  Message completion does NOT imply work completion (that is the send's
+  verified closure, §6.5).
+- **VOLC-016** A crash between `accepted` and `persisted` is recovered at
+  restart by the idempotency ledger: the request is re-executed exactly
+  once (its dedupe record names it accepted-but-not-persisted). A crash
+  after `persisted` never re-posts (dedupe returns the original `seq`).
+  No accepted request is lost; no message double-posts (F-007 for the
+  message plane; the send plane is §6.5). `persisted` means fsync-durably
+  persisted: the write ack is the fsync'd DuckBrain append with
+  `X-Durability == fsync` verified per the VOL-B contract (VOLB-011,
+  VOLB-037) — a `buffered`-achieved ack on an `/chd/*` key is a hard error
+  (F-019: the buffered default has no power-loss barrier, so an ack that
+  does not pin and check the durability mode overpromises persistence).
+- **VOLC-017** Idempotency: mutating operations accept `dedupe_key`.
+  Replay with identical body → original response, HTTP `200` (not `201`),
+  nothing written. Replay with differing body → `409 duplicate`. Keys are
+  scoped to the authenticated principal (mirroring Hermes' own
+  Idempotency-Key scoping) and retained ≥ 24 h.
+- **VOLC-018** `seq` gaps from crashed allocations are legal and
+  permanent; consumers must not treat gaps as lost messages. Ordering
+  guarantee: for any two persisted messages in a room, the one with the
+  lower `seq` committed first.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#3-8-artifact-references-and-access-across-managers -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-3-8-ARTIFACT-REFERENCES-AND-AC-S017" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.8 Artifact references and access across managers
+
+Artifacts are references, never copies: a commit sha, a board row id, a
+DuckBrain work-artifact key, a file path under an agent's workspace.
+
+- **VOLC-020** An artifact is addressable from any room, but **readable**
+  only via the access rule: a principal may access an artifact if
+  (a) the artifact's **home room** (the room of the message that first
+  attached it) is one of the principal's memberships, or (b) the artifact
+  was carried into one of the principal's rooms by an authorized
+  cross-room reference (below). Resolution and serving happen at the
+  service; guessed artifact ids fail `404`.
+- **VOLC-020a** Cross-room reference (authorized delivery handoff): an
+  agent may attach into room B an artifact whose home is room A only if it
+  is a member of both A and B. The service records the reference
+  (`room_B` message `attach` pointing at the home key); recipients of B
+  gain access to that artifact **only** — never to the rest of room A.
+  This is how a director hands manager 1's evidence to manager 2 without
+  opening manager 1's room.
+- **VOLC-020b** The director does NOT need communication tools of a
+  subordinate to complete a delivery handoff (F-008): the reference
+  mechanism plus a delegated sender (a communications-path agent with the
+  configured delivery capability, D-011) is the contract. Delegation of
+  *sending* is a grant (§8.3), not a tool copy.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#4-session-mapping-provisioning-and-which-event-chooses-new-vs-reuse-f-010-d-025 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-4-SESSION-MAPPING-PROVISIONING-S018" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 4. Session mapping — provisioning, and which event chooses NEW vs REUSE (F-010, D-025)
+
+Work-thread identity (room + `reply_to` tree in DuckBrain) and Hermes session
+identity (`session_key`/`X-Hermes-Session-Id`) are distinct (D-014).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#4-1-provisioning-is-not-delivery-r31-022 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-4-1-PROVISIONING-IS-NOT-DELIVE-S019" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.1 Provisioning is not delivery (R31-022)
+
+Two independent decisions are made for every wake:
+
+- **Provisioning** — how a session that does not yet exist comes into being:
+  `fresh` (continuation-less create) or `fork` (created from a parent session at a
+  recorded `fork_point_seq`, VOL-B §7.5). Fork is used when a task subthread must
+  inherit the assigner's working context; it is a native Hermes session operation,
+  never a delivery mode.
+- **Delivery** — how an already-provisioned session receives this wake: `NEW` (the
+  session's first turn) or `REUSE` (a continuation turn).
+
+A forked session still receives its assignment as `NEW` (first turn). There is no
+third delivery mode, and `fork ≠ delivery` survives into every table, figure and
+API. Each bond (VOL-B §3.3) records which provisioning produced it (`fork_mode`,
+`parent_bond_id`) and each send manifest records the delivery `mode`.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#4-2-the-delivery-decision-table -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-4-2-THE-DELIVERY-DECISION-TABL-S020" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.2 The delivery decision table
+
+This **decision table** is the exact mapping the handoff requires ("Map exactly
+which new-work/reply/scheduler events choose NEW versus REUSE"). Every row
+names the **session/fork outcome** (provisioning per §4.1) and the **owning
+bond** (the SessionBond, VOL-B §3.3, whose identity tuple
+`(agent, room, subthread_root, work_uid)` owns the send):
+
+| # | Event | Mode | Session/fork outcome | Owning bond | Rationale / D-014 anchor |
+|---|---|---|---|---|---|
+| W1 | VP opens a new objective (directive wake) | **NEW** | fresh session | new bond `(director, obj-room, directive seq, objective_id)`, gen 1 | new director request → new session |
+| W2 | Scheduler fire → director/manager clock cycle (`/v1/cycle`) | **NEW** | fresh session | new bond per cycle work item | scheduler invocations start new sessions |
+| W3 | Assigner assigns work to a subordinate — director→manager or manager→supervisor (opening task wake) | **NEW** | fresh session **or fork** of the assigner's session at `fork_point_seq` (VOL-B §7.5) — provisioning is not a delivery mode | child bond `(assignee, task-room, task-msg seq, work_uid)`, gen 1; `parent_bond_id` = assigner's bond when forked | new work for that assignee |
+| W4 | Reply-in-thread wake (someone replied to my message / my send's thread moved) | **REUSE** | existing session | the bond whose `subthread_root` matches the thread (VOLB-063) | replies preserve the back-and-forth work log |
+| W5 | Wake-on-reply targeting the bonded session mid-task | **REUSE** | existing session | the addressed send's bond | continuation of assigned work |
+| W6 | Ladder rung 0 (remind / missing-reply bump) | **REUSE** | existing session | the send's bond | CT-06/§5.1: remind is a REUSE message |
+| W7 | Ladder rung 1 (fresh session) | **NEW** | fresh session | successor bond, same identity tuple, gen + 1 | mandatory fresh-session rung |
+| W8 | Reassignment of blocked work to a different agent (Q-004 path) | **NEW** (new owner) | fresh session | new bond owned by the new agent, same `work_uid` | no contamination of the old session |
+| W9 | `reuse_policy: always-new` agent | always **NEW** | fresh session | new bond per send | config knob (DATA-MODEL §1.6) |
+| W10 | Bonded session missing/retired/unauthorized at dispatch | **NEW** + incident record | fresh session (successor) | new bond, gen + 1; old bond `retired` | Hermes deleted ids are never reused; fall forward, never mix conversations |
+| W11 | Temporary (dynamically created, lower-tier) agent wake | **NEW** (single-use session) | fresh session | ephemeral bond, retired at close | defaults OPEN DESIGN WORK §11.2 |
+| W12 | Wait resumed after recorded approval/resolution | **NEW** on a successor attempt | fresh session | successor attempt of the same send: new bond, gen + 1 | the waiting attempt is closed and never reopened (VOLB-057, VOLC-067); the successor is a fresh attempt of the same send |
+
+- **VOLC-021** The table above is exhaustive, normative, and is the **single
+  NEW/REUSE authority for the whole specification** (VOL-B §7.3 points here;
+  Q-007 anchor: per D-014 the user's description governs — new work and
+  scheduler invocations start new sessions, replies/follow-ups continue the
+  bonded session). The service
+  records the chosen mode in every send manifest (`mode: NEW|REUSE`) and
+  every wake is delivered through exactly one mode. There is no third
+  mode and no conversation reconstruction (R-019): a NEW session's prompt
+  states the obligation and names the room; the agent reads the room log
+  itself via `chd_read_*` — no synthesized "conversation so far" is ever
+  injected into a delivery prompt (RL-3).
+- **VOLC-080 (provisioning + bond are named per row).** For every wake the
+  service records BOTH decisions of §4.1 on the send manifest: the delivery
+  `mode` (NEW/REUSE) and the provisioning outcome (`fresh` |
+  `fork(parent_session_id, fork_point_seq)` | `existing`), plus the owning
+  `bond_id`. The forked-session rows (W3) get their context from the native
+  Hermes fork operation, never from prompt reconstruction; the owning bond of
+  a REUSE row is resolved by thread root match (VOLB-063), never by guessing
+  from room membership alone.
+- **VOLC-022** REUSE mechanics ride real Hermes contracts: the service
+  sends the gateway request with `X-Hermes-Session-Id`/`X-Hermes-Session-Key`
+  set to the bond's `hermes_session_id`/`session_key` (continuation; the
+  memory scope follows the session key) and an `Idempotency-Key` derived
+  from the `send_id`. NEW mechanics are the continuation-less
+  `POST /v1/chat/completions` (VOL-B VOLB-040 is the canonical NEW call —
+  `Idempotency-Key: &lt;send_id&gt;`, response echoes the created session id,
+  which the service writes into the bond; `POST /api/sessions` creation is
+  the equivalent REST form where pre-provisioning is used). The gateway
+  call runs under the agent's bound named profile — profile routing binds
+  authentication to the routed profile (hermes_gateway_check; bond field
+  `hermes_profile`, VOL-B §3.3; config binding VOLD-014). Hermes session
+  forks are available but deliberately NOT used for wake delivery — thread
+  continuity is the room log, never inherited conversation content (VOL-B
+  §7.2).
+- **VOLC-023** W10 fallback: if a REUSE dispatch is refused because the
+  session is gone (`404 not_found` / `unknown_execution`), the service
+  re-dispatches once as NEW, records an `incident{reason: bond_lost}`,
+  updates `/chd/bond/&lt;agent-id&gt;/&lt;bond-id&gt;` (marks the bond `retired`), and counts `bonds_lost_total`. The two
+  simultaneous-objectives case (F-010 evidence) resolves by bond
+  discipline: one bonded session per (agent, room bond); a second
+  concurrent objective for the same agent composes a second send with
+  mode NEW and its own thread — conversations never mix.
+- **VOLC-024** Hermes-owned lifecycle (compaction, history, fallback) is
+  consumed, not replicated: the service never reads transcripts to
+  rebuild prompts and never deletes Hermes sessions as part of room
+  housekeeping. Because Hermes memory snapshots are **frozen at session
+  start** (hermes_gateway_check caveat), a REUSE session does not observe
+  standing-rule or memory changes made after its session started: any
+  effective-rule evidence an in-flight session produces is readback-verified
+  at review time (VOL-B VOLB-022/§7.2; VOLD-034), and a rule change that
+  must be seen by an agent is picked up at its next NEW session (rung 1,
+  reassignment W8) — no immediate-propagation guarantee is assumed (D-013,
+  Q-005).
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#5-reply-group-and-fan-out-semantics-f-009 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-5-REPLY-GROUP-AND-FAN-OUT-SEMA-S021" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 5. Reply, group, and fan-out semantics (F-009)
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#5-1-recipient-snapshot-policy -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-5-1-RECIPIENT-SNAPSHOT-POLICY-S022" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.1 Recipient snapshot policy
+
+- **VOLC-025** At post time the service expands `to` into an immutable
+  `to_snapshot` stored on the message: `to: "&lt;agent-id&gt;"` → `[id]`;
+  `to: "@id"` → `[id]`; `to: "group"` → all current members **minus the
+  sender**; `to: "owner"` → the VP principal(s) configured for that room.
+  Later membership changes never alter a past message's snapshot (audit
+  stability). Notification/wake decisions use the snapshot; read access
+  always follows current membership (§8.2).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#5-2-notification-and-wake-rules -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-5-2-NOTIFICATION-AND-WAKE-RULE-S023" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.2 Notification and wake rules
+
+- **VOLC-026** Targeting decides **who is WOKEN**, never who can read
+  (RL-6). The router wakes exactly the snapshot targets, each wake
+  composing a send that obeys per-gateway `max_inflight` and per-agent
+  `max_sessions` (CT-13): at capacity the wake queues (`429 at_capacity`
+  on the interactive path; message stays `persisted`). The sender's own
+  wake is suppressed (no self-echo, RL-6) — including the owner.
+- **VOLC-027** `kind=question` messages participate in missing-reply
+  detection like any send: the addressed target must reply in-thread or
+  report by `verify.deadline_s`, else CT-11's mechanical detection fires
+  (notify caller + bump, riding §5.1's ladder, counted
+  `missing_reply_total`).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#5-3-group-expansion-and-one-accountable-owner -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-5-3-GROUP-EXPANSION-AND-ONE-AC-S024" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.3 Group expansion and one accountable owner
+
+- **VOLC-028** A directive sent to a **group** of managers expands into
+  one send per recipient (each with its own `send_id`, its own ladder,
+  its own report). Each send names exactly one **accountable owner** (the
+  recipient agent). A deliverable therefore has either one owner, or N
+  sends each with its own owner — never a group-owned deliverable. The
+  parent's aggregation record (§5.6) tracks the set.
+- **VOLC-029** Duplicates and partial replies are handled deterministically:
+  duplicate reports for the same `send_id` are refused (VOLC-011); a
+  recipient that closes `verified` while siblings are still open leaves
+  the aggregation open; a sibling that fails or escalates follows its own
+  ladder without re-waking the closed sibling. The aggregation completes
+  only when every child send is in a terminal state (§5.6).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#5-4-causation-and-correlation-ids -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-5-4-CAUSATION-AND-CORRELATION-S025" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.4 Causation and correlation ids
+
+Tickets are the stable join key for both coding and non-coding work. Every
+service-created ticket operation also carries `request_id` and `correlation_id`;
+worker/report operations carry `ticket_id` alongside `objective_id`,
+`assignment_id`, `send_id`, `attempt_id`, `run_id`, `session_ref`, and
+`artifact_ref` where applicable. The controller persists these values in the
+TicketRecord `meta` object, audit event, and linked CHD record. A report or
+artifact with a mismatched ticket or send is rejected as `bad_report` or
+`ticket_link_conflict`, never heuristically attached. Correlation ids are
+opaque, stable across retries, and do not authorize access.
+
+- **VOLC-030** Every service-created entity carries correlation ids:
+  `objective_id` (root), `send_id` (per wake), `signal_id` (ingress),
+  `report_id`, `run_id` (Hermes run, when known). Messages may carry
+  `cause {send_id?, objective_id?, signal_id?}` (§3.2). A report echoes
+  the `send_id` it answers; its `content_ref` pins the message key.
+  Correlation ids are immutable and are the join keys for every audit and
+  aggregation query (F-009 causation/correlation requirement).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#5-5-cross-room-upward-references -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-5-5-CROSS-ROOM-UPWARD-REFERENC-S026" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.5 Cross-room upward references
+
+- **VOLC-031** An upward report (supervisor→manager, manager→director)
+  may carry `up_ref: {room, seq}` referencing the subthread that
+  justifies it. Upward means **child-room → parent-room along the
+  hierarchy that created the rooms**; the service validates that the
+  referencing agent is a member of both rooms and that the parent
+  relation holds (objective→task lineage is recorded at room creation).
+  Recipients gain read access to the referenced thread only (same
+  reference-grant semantics as VOLC-020a). Downward and lateral
+  references without dual membership are refused `404 not_found` — the
+  referenced room is treated as nonexistent for that caller (the same
+  single non-member contract as §3.2, R31-002); the detailed denial
+  cause is recorded in the audit record only.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#5-6-completion-aggregation -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-5-6-COMPLETION-AGGREGATION-S027" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.6 Completion aggregation
+
+- **VOLC-032** For a fan-out (group directive or multi-child objective), the
+  service maintains an aggregation record on the parent send: children,
+  per-child state, and an aggregate state = `open | all_verified |
+  partially_closed{detail} | any_escalated`. Each child entry names the child
+  `send_id` and the child thread it resolves to
+  `(room, subthread_root)` — and **each supervisor result resolves to exactly
+  one child thread**: the child `send_id` maps to one bond (VOL-B §3.3) whose
+  identity tuple fixes one `(room, subthread_root)`; a send that resolves to
+  zero or multiple threads is refused `409 thread_not_owned` (VOLB-063) and
+  can never enter the aggregation. The parent's own report/acceptance flow
+  (VOL-D) consumes only the aggregate
+  state; the director never polls child rooms to learn it. A drained
+  subtree (every child `deferred{reason: drained}`) aggregates to
+  `deferred{drained}` per DESIGN §5.6. The worked end-to-end trace with
+  exact record ids is fixture VOLB-072 (VOL-B §7.5).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#5-7-one-write-per-room-per-turn-reconciled -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-5-7-ONE-WRITE-PER-ROOM-PER-TUR-S028" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.7 One write per room per turn, reconciled
+
+- **VOLC-033** The handbook's one-write-per-room-per-turn rule is
+  normative **for reports**: exactly one `report` per (send, turn) per
+  room (VOLC-011). Work messages (`msg`, `question`) are separate,
+  individually-sequence writes and may be many per turn; the report, when
+  the turn owes one, is the agent's **last** write to that room in that
+  turn (the service enforces ordering by rejecting a work message posted
+  after the turn's report: `409 report_already_posted` guards the tail).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#5-8-authorized-work-log-discovery -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-5-8-AUTHORIZED-WORK-LOG-DISCOV-S029" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.8 Authorized work-log discovery
+
+- **VOLC-034** "The overall work log" an invocation can discover =
+  **authorized context only**: (a) every room the agent is a member of,
+  (b) every subthread in those rooms, (c) every artifact/thread
+  explicitly referenced into those rooms (VOLC-020a/VOLC-031). It is
+  **never** "all rooms" (D-014 scope note; F-009 completion evidence:
+  global ≠ unrelated-room access). `chd_read_worklog` returns rooms (a)
+  and merged references (c) with per-room cursors; the service computes
+  the set from current membership + recorded references — an agent cannot
+  widen it, and a guessed room id simply is not in the set (it gets
+  `404`, not a leak).
+- **VOLC-035** The work log persists across invocations: because it is
+  derived from durable membership and reference records (not from session
+  memory), a NEW session (W1/W2/W8/W10) re-discovers the same authorized
+  log. This is the mechanism that makes fresh sessions usable without
+  history reconstruction.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#6-scheduler-admission-and-send-state-machines-f-011 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-6-SCHEDULER-ADMISSION-AND-SEND-S030" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 6. Scheduler admission and send state machines (F-011)
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#6-1-clock-registration-and-time-basis -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-6-1-CLOCK-REGISTRATION-AND-TIM-S031" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 6.1 Clock registration and time basis
+
+**Plain-prose operation.** The service triggers registration at startup or config change. It reads the validated trigger configuration and scheduler clock, checks lane identity and clock skew, writes the registration result and effective timestamps, and uses those timestamps for deadlines. Normal example: `chd-mgr-m1` is registered and its callback carries the scheduler timestamp. Failure example: clock skew exceeds the configured bound; the readiness check writes an alarm and refuses silent deadline processing.
+
+- **VOLC-036** All timed work is registered as NORMAL scheduler trigger
+  lanes (CT-02/RL-1) at service startup and on config change, landed
+  through the scheduler's validated config path (R-014). Lane identities
+  are stable: `chd-&lt;cycle&gt;` for the director sync, `chd-mgr-&lt;agent-id&gt;`
+  for per-manager clocks, `chd-followup-&lt;send-id&gt;` for follow-up timers
+  (§6.6). The service owns **no clock of its own** and never runs a local
+  scheduler.
+- **VOLC-037** Time basis: the **scheduler's clock** is authoritative.
+  All service-recorded timestamps (`dispatch_ts`, deadlines, `ts`) are
+  RFC 3339 UTC taken from the service host, which MUST be NTP-synced
+  against the same source as the scheduler; deadline comparisons use the
+  timestamps the service itself stamped (never agent clocks). Drift
+  beyond `ingress.max_clock_skew_s` (default 5 s) is a startup readiness
+  failure (alarm, not silent tolerance). The accepted cycle boundary is the
+  scheduler fire callback: `cycle_start=ts` on the `/v1/cycle` record and
+  `cycle_end` is recorded only after all sends composed by that fire reach a
+  terminal or waiting state. Startup-to-first-status is outside the cycle and
+  is measured separately; a cycle cannot be inferred from a process restart,
+  endpoint wake, or counter snapshot.
+
+- **Clock-boundary readback.** Registration evidence names
+  `lane_id`, `schedule`, `clock_source: scheduler`, `registered_at`, `config_digest`
+  and `last_fire_ts`; an acceptance query must read the scheduler registration
+  and the cycle ledger together. The service owns no local clock or hidden
+  cycle boundary.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#6-2-timed-callback-contract-post-v1-cycle -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-6-2-TIMED-CALLBACK-CONTRACT-PO-S032" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 6.2 Timed callback contract (`POST /v1/cycle`)
+
+**Plain-prose operation.** The scheduler triggers the callback with its lane, cycle, timestamp, and dedupe key. The service reads the callback ledger and pending work, checks the credential and dedupe key, writes composed sends and deadlines with fsync, and returns 2xx only after the durable acknowledgement. Normal example: a replayed fire returns the retained response without composing a second send. Failure example: persistence fails; the service returns 5xx, writes no false success, and lets the scheduler retry the same dedupe key.
+
+The scheduler's fire is the callback of CT-02 (schema per ENDPOINTS
+§3.4): `{cycle, lane, namespace, ts, dedupe_key}`.
+
+- **VOLC-038** Auth: the scheduler callback credential only; failure is
+  `401`, terminal, no retry flood (FACT-12). A replayed `dedupe_key`
+  (same lane, same fire) returns the recorded original response — the
+  cycle is **not** re-executed (idempotent fire).
+- **VOLC-039** Ack point and 2xx semantics: the service returns `2xx` to
+  the scheduler when the fire has been **durably acknowledged** — the
+  cycle's work items (sends to compose, deadlines to arm) are persisted
+  fsync-durably with `X-Durability == fsync` verified (VOL-B VOLB-011/
+  VOLB-037; the buffered default has no power-loss barrier — F-019), so a
+  crash after the 2xx loses nothing. The 2xx body reports
+  `sends_composed` / `sends_queued` / `bump_requests` truthfully; "all
+  queued under backpressure" is still a valid `2xx` (the callback itself
+  succeeded; ENDPOINTS §3.4). `5xx` is returned only when the service
+  could not persist the ack — in that case the scheduler's retry re-fires
+  and dedupe makes it safe.
+- **VOLC-040** Retry: the scheduler retries transport/5xx failures with
+  its own bounded backoff; the service applies no additional retry to
+  callbacks (one mechanism only). A callback that exhausts the
+  scheduler's retries is visible as a gap in the cycle ledger and counted
+  `cycle_fire_failures_total` — it never silently skips deadline
+  arithmetic: deadlines are absolute (VOLC-037), so a late fire still
+  evaluates correctly.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#6-3-bump-admission-results-fairness-queue-persistence -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-6-3-BUMP-ADMISSION-RESULTS-FAI-S033" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 6.3 Bump/admission results, fairness, queue persistence
+
+**Plain-prose operation.** The harness or authorized immediate requester triggers admission through the scheduler bump or the bounded run-now path. It reads manifests, caps, gateway capacity, and the shared reservation ledger; checks permissions and dedupe identity; writes `admitted`, `queued`, `expired`, or named refusal; and exposes the result to the caller. Normal example: full capacity produces a durable queued manifest that the next fair cycle dispatches. Failure example: a duplicate request uses the same assignment identity; the ledger returns the retained reservation and the harness sends no second gateway request.
+
+- **VOLC-041** Admission for a wake is requested ONLY via the scheduler
+  bump API (`POST /api/v1/projects/{name}/bump`, FACT-14) or the
+  owner-approved `wake_once` extension (Q-6) — R-003/R-018. The service
+  records per send an admission result: `admitted | queued | expired |
+  refused{reason}`. `refused` occurs only on contract errors (unknown
+  lane, auth gate) and is an incident; capacity never refuses — capacity
+  queues (RL-15).
+- **VOLC-042** Fairness: within one gateway queue, sends dispatch
+  FIFO by `composed_ts` with aging (a queued send's effective priority
+  rises with wait time so a steady stream of new sends cannot starve an
+  old one); across gateways, dispatch is independent (fan-out, §3.4).
+  `orchestration.max_fanout` bounds wakes composed per cycle (default 12).
+- **VOLC-043** Queue persistence: the send queue IS the DuckBrain send
+  manifests (`/chd/send/&lt;send-id&gt;/manifest`, state `queued`). A restart
+  re-derives the queue from manifests; nothing queues only in memory.
+  Crash windows: manifest written before admission request → a crash
+  between the two re-derives as "admission request not yet sent"
+  (re-request; bump idempotent per `dedupe_key`); no admitted-but-unrecorded
+  state can exist, so no admission capacity can leak (F-007 evidence for
+  the send plane).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#6-4-the-send-state-machine-complete -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-6-4-THE-SEND-STATE-MACHINE-COM-S034" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 6.4 The SEND state machine (complete)
+
+**Plain-prose operation.** The send orchestrator triggers each transition from a durable manifest. It reads the current state and transition evidence, checks the guard and owner, writes the next state before the external effect, and emits the matching metric and audit record. Normal example: a fresh correlated report changes `await_report` to `verified` and closes the send. Failure example: a transport check fails before delivery; the orchestrator writes `paused:unreachable`, holds the deadline and capacity, and resumes only after a healthy check.
+
+Owner of every transition: the **send orchestrator** (service). Each send
+row is the manifest; all states are durable before effects.
+
+```
+            ┌──────────┐  admission   ┌──────────┐ gateway 2xx ┌────────────┐
+ composed ──▶  queued  ├─────────────▶─ admitted ├────────────▶─ dispatched │
+ (per wake) └──────────┘  accepted    └──────────┘             └─────┬──────┘
+      │            │ 2×cycle expiry        │ gateway terminal error   │ verify.deadline_s
+      │            ▼                       ▼                          ▼
+      │      deferred{backpressure}  failed{dispatch_error}   ┌─────────────┐
+      │            ▲                          ▲               │ await_report │
+      │            │                          │               └─┬────┬──────┘
+      │        re-queued by next cycle          │   fresh report  │    │ no report / bad report
+      │            │                          │                 ▼    ▼
+      │            │                          │          ┌──────────┐ verify ladder (VOL-D §2.4)
+      │            │                          │          │ verified │──▶ closed{verified}
+      │            │                          │          └──────────┘        │
+      │            │                          │            escalate rung 2 ──▶ closed{escalated}
+      │            │                          │
+      │            │                          │ valid waiting_human report
+      │            │                          ▼
+      │            │                      ┌─────────┐ resolution evidence
+      │            │                      │ waiting │──────────────▶ composed (successor)
+      ▼            │                      └─────────┘
+ cancelled ◀───────┴──────────────────────────┘ (any pre-dispatch state, VP/director only)
+```
+
+- **VOLC-044** States and owners (every state names entry, exit, recovery;
+  F-011 completion evidence). The bullets are **generated** from
+  `build-spec/state-machines.json` (the machine canon, schema
+  `state-machines.schema.json`) by `tools/gen_state_machines.py`;
+  `tools/check_state_machines.py` proves the chart above and these bullets equal
+  the canon:
+&lt;!-- SM-CANON:SEND-STATES:BEGIN --&gt;
+  - `composed` — wake decided, manifest written. Exit: queued or cancelled. Recovery: none needed (not yet effective).
+  - `queued` — durable in manifest, awaiting admission. Exit: `admitted`, `deferred{backpressure}` (2×cycle expiry), or `cancelled`. Recovery: re-derived from manifest at restart (VOLC-043).
+  - `admitted` — bump accepted. Exit: `dispatched` (gateway 2xx) or `failed{dispatch_error}` (terminal auth rejection, FACT-12) or back to `queued` (scheduler admitted the lane but did not pick the send before expiry).
+  - `dispatched` — gateway accepted the POST. Exit: `await_report`. Recovery: scheduler's orphan-scan/CONTINUATION machinery (FACT-29); a send still `dispatched` past `verify.deadline_s` enters the ladder as `no_report`.
+  - `await_report` — report expected by `dispatch_ts + verify.deadline_s`. Exit: `verified`, `waiting`, or ladder entry (`no_report`/`bad_report`).
+  - `waiting` — a valid `waiting_human` report closed the current attempt and opened a durable wait. The logical send remains non-terminal. Exit: `composed` only after recorded resolution evidence mints a successor attempt; timers never resume it.
+  - `verified` — a FRESH valid report closed the send (`report.ts &gt;= dispatch_ts`, machine-checked, R-031). This state is the **verified-success closure** F-011 requires; it is recorded in the manifest and counted `sends_verified_total`. Exit: `closed{verified}`.
+  - `deferred` — `deferred{reason}` — reasons: `backpressure` (queued past 2×cycle), `parent_down` (§5.2), `drained` (§5.6). A deferred send is dropped from the active queue; the next scheduled cycle supersedes it (no unbounded queue). Not a failure; counted `sends_deferred{reason}`.
+  - `failed` — `failed{reason}` — terminal failure: `dispatch_error`, `report_failed` (explicit `status: failed` report), ladder exhausted → escalates before closing. Every failure names its reason and is counted.
+  - `cancelled` — VP or (within delegated authority) director cancels a send in any pre-`await_report` state; the manifest records who and why. Cancellation of an in-flight wake is best-effort: the manifest is closed `cancelled` and, if the gateway call had not been made, nothing dispatches; if it had, the ladder is stopped and the agent's eventual report is accepted but marked `cancelled` (work may have run — cancellation is not retroactive erasure; audit keeps the lineage).
+  - `closed` — `closed{reason}` — terminal: `verified | escalated | expired`. Every closure writes a durable record (R-017 analog).
+&lt;!-- SM-CANON:SEND-STATES:END --&gt;
+- **VOLC-045** Queue expiry and "cycle": the 2×cycle staleness of
+  DESIGN §3.4 is defined as **2 × the cooldown interval of the trigger
+  lane that owns the send's cycle** — for the director sync cycle, twice
+  the director lane's cron period; for a message-driven send with no
+  owning lane, `orchestration.stale_after_s` (default floor 60 s, set to
+  the hierarchy's nominal cycle). The owning lane id is stored on the
+  manifest at compose time, so expiry is computable even if config
+  changes later. Expired queued sends → `deferred{backpressure}`,
+  counted, dropped.
+- **VOLC-046** Unreachable recovery: a gateway-wide outage surfaces as
+  scheduler failure backoff (§5.4); sends to that gateway pause as
+  `paused:unreachable` (DESIGN §9), are excluded from ladder burn, and
+  resume on the first healthy gateway check. A paused send's deadline
+  arithmetic is suspended (deadline = dispatch + deadline_s measured
+  over non-paused time), so an outage does not convert into
+  `no_report` failures.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#6-5-waiting-for-human-vs-failures-d-012 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-6-5-WAITING-FOR-HUMAN-VS-FAILU-S035" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 6.5 Waiting-for-human vs failures (D-012)
+
+**Plain-prose operation.** The harness triggers this path when a report declares `waiting_human` or when the deadline finds silence. It reads the report status, gate id, attempt, and current manifest; checks whether the report is valid and whether approval evidence exists; writes the wait record and terminal attempt; and propagates the wait upstream. Normal example: a valid gate question closes the current attempt, opens `/chd/wait/&lt;gate-id&gt;`, and later mints a successor attempt after recorded approval. Failure example: a timer expires without approval; the harness escalates visibility, writes no approval, does not resume, and never counts the wait as `missing_reply`.
+
+- **VOLC-047** *(superseded by VOLC-067 — kept for lineage; do not implement
+  the `closed{waiting}`-for-the-send reading).*
+- **VOLC-067 (wait closes the ATTEMPT, not the send — R31-005).**
+  `status: waiting_human` is a valid report outcome, not a failure. On a valid
+  waiting report the harness:
+  1. closes the **current attempt** as `closed{waiting}` (attempt-level terminal;
+     its `attempt_id` never reopens);
+  2. releases the attempt's capacity slot, because the attempt is provably
+     finished (a report arrived; nothing is still executing);
+  3. creates the durable wait record `/chd/wait/&lt;gate-id&gt;` = `{gate_id,
+     send_id, attempt_id, agent, question, requested_by, asked_at, state:
+     waiting|resolved|cancelled, resolved_at?, resolution_ref?}`;
+  4. records the logical send in the machine's `waiting` state (the send is
+     non-terminal), so ownership and obligation survive; the state-machine
+     successor edge is `waiting → composed`, never `await_report → composed`;
+  5. retains `send_id`, `gate_id`, `attempt_id`, the target snapshot, report
+     correlation, and wait record indefinitely until resolution/cancellation;
+  6. propagates the wait upward as `kind=status` notices carrying the same
+     `gate_id` (supervisor → manager → director), and sets the objective's
+     aggregate waiting marker.
+
+  **Wait semantics table (normative):**
+
+  | Item | Waiting attempt | Logical send / successor |
+  |---|---|---|
+  | Terminality | Current `attempt_id` is terminal and never reopens | Send remains open in machine state `waiting` |
+  | Capacity | Slot released only because a correlated report proves this attempt stopped | No slot is reserved while the wait is unresolved |
+  | Correlation | Retain `send_id`, `attempt_id`, `gate_id`, target snapshot, report ref, and wait record | Successor links `supersedes_attempt_id` and keeps the same `send_id` |
+  | Resume mode | No automatic resume; timer/follow-up is visibility only | Recorded resolution mints a NEW attempt/session-target and composes `queued` |
+  | Post-resume evidence | None can be inferred from approval | Fresh successor report, correlation, artifact, and criteria checks are required for `verified` |
+  | Approval | Required guard evidence for the resume edge | Approval alone is never a verified work result |
+
+  The wait table is normative: the current attempt is terminal, the logical send
+  remains open, the slot is released only because the report proves this attempt
+  stopped, and resume requires a NEW successor attempt plus a fresh correlated
+  report. Approval evidence is necessary to resume but is never itself a verified
+  work result; the successor's report still requires normal criteria/artifact checks.
+
+  On recorded resolution (explicit approval, or a prior authorization the
+  director holds for that specific gate, recorded with its authority ref), the
+  harness mints a **successor attempt** — new `attempt_id`, `attempt+1`, same
+  `send_id` — composes it as NEW (W12), and the resumed work must post a fresh
+  report for the successor attempt. Approval alone never yields `verified`:
+  only the successor attempt's fresh, correlated report can close the send.
+  A wait timeout changes nothing: it is visibility escalation (VOL-D §3.4),
+  never approval, never a close, never an auto-resume.
+- **VOLC-048** Silence is never approval: no timer, timeout, or expiry
+  grants an approval gate (D-012; Q-006: the per-assignment
+  completion/approval condition governs, and an explicit stop-until-approval
+  gate must hold). A waiting_human chain advances only
+  on (a) explicit human action through a VP surface, or (b) prior
+  authorization the director holds for that specific gate (then the
+  director continues and records which authorization it used). The
+  **approval gate itself has no expiry** — waiting resolution always
+  requires recorded approval evidence. The wait-level timers are
+  visibility mechanisms only and never resolve anything: VOL-C's single
+  bounded follow-up (§6.6) asks the waiting agent; VOL-D's
+  `verify.wait_timeout_s` (VOLD-023) re-enters the **verify ladder at
+  rung 2** when a wait stays unresolved — an escalation for visibility
+  (incident to parent room / owner page), never an approval, never a
+  close, never an auto-resume. VOLC-067's closed waiting attempt and the wait
+  record persist until human resolution regardless of any timer.
+- **VOLC-049** Counted failures vs valid waits: waiting_human reports are
+  excluded from `missing_reply_total`, ladder rung counts, and
+  dry-run-throttle artifact counting; they increment
+  `waits_opened_total`/`waits_resolved_total`. A send that produces
+  neither report nor waiting_human by deadline is `no_report` (a failure
+  path) — the distinction is mechanical on the report's `status` field.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#6-6-follow-up-timers-without-reminder-loops-d-012-rl-11-interplay -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-6-6-FOLLOW-UP-TIMERS-WITHOUT-R-S036" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 6.6 Follow-up timers without reminder loops (D-012, RL-11 interplay)
+
+**Plain-prose operation.** The service triggers at most one follow-up lane for a wait record. It reads the gate state and follow-up count, checks that the wait changed and the cap is not exceeded, writes one question and its audit record, and leaves the wait unresolved. Normal example: one question asks whether the agent still needs the gate and the count increments once. Failure example: the gate is unchanged after the question; the service writes no second timer, does not reset the wait, and does not page repeatedly.
+
+- **VOLC-050** A wait record may arm **at most one** follow-up timer per
+  gate per waiting agent, registered as a `chd-followup-&lt;gate-id&gt;`
+  trigger lane at a configured interval (`verify.followup_after_s`,
+  default 86400). When it fires, the service sends ONE follow-up message
+  (a `question` kind: "still waiting on &lt;gate&gt;?") to the waiting agent's
+  room — and that is all: the fire does not reset the wait, does not
+  increment ladder counters, and does not re-page anyone.
+- **VOLC-051** Loop bound: a waiting agent may answer a follow-up with a
+  fresh waiting_human report **only if** the wait record changed (new
+  gate id or an explicit human contact recorded); an unchanged wait does
+  NOT re-arm a new timer (the gate has one live follow-up timer, ever).
+  Total follow-ups per gate are capped at `verify.max_followups`
+  (default 2); beyond the cap the service stops and the wait simply
+  persists until human resolution. There is no path by which follow-up
+  timers compose into repeated wake cycles (no uncontrolled reminder
+  loops).
+- **VOLC-052** Missing-reply vs waiting: CT-11's mechanical detection
+  treats a `waiting_human` report (or a `question` reply) as "the reply
+  came"; only true silence after `verify.deadline_s` starts the
+  notify-caller + bump ladder. A target that answered with waiting_human
+  is reported to the caller as `waiting`, never as `missing`.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#6-7-dual-admission-enqueue-only-and-run-now-r31-019-d-022-d-029 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-6-7-DUAL-ADMISSION-ENQUEUE-ONL-S037" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 6.7 Dual admission: enqueue-only and run-now (R31-019, D-022, D-029)
+
+The scheduler is **not** the only initiator. A supervisor (or a director on a
+delegated path) may do exactly two things with a foreman assignment:
+
+| Operation | Meaning | Effect on the target |
+|---|---|---|
+| `enqueue_only` | place the work in the queue; a later scheduled wake picks it up | message + manifest persisted; **no gateway call now** |
+| `run_now` | request execution as soon as capacity permits | same durable records, plus an immediate dispatch attempt |
+
+**VOLC-073 (two operations, one contract).** Both operations are called on the
+controller (`POST /v1/assignments` with `admission: enqueue_only | run_now`, tool
+`chd_assign`). They share: authorization (the caller must hold `foreman.assign` or
+its own tier's assign right), the same assignment/ticket records, the same
+per-gateway and per-agent capacity, the same send/attempt identity and the same
+audit. `enqueue_only` never forces a wake; `run_now` never bypasses capacity.
+
+**Capacity and admission ownership — N-1 PROPOSED (not user-confirmed).** The
+design choice is where an immediate request is admitted. The proposal, marked as
+proposed because the user expressly left it open:
+
+- **Single admission point per gateway, owned by the controller.** The controller
+  holds the authoritative, durable capacity ledger for each gateway and agent,
+  derived from send manifests exactly as §3.4 does (no second counter). A
+  `run_now` request performs one atomic compare-and-reserve:
+  `reserve(send_id, gateway, agent) → ok | at_capacity | duplicate`.
+- **Scheduler cooperation, not duplication.** A timed wake still arrives through
+  the scheduler's bump path; the controller's reservation is the same primitive
+  for both producers, so the two paths cannot both claim the same slot. Where the
+  deployment requires scheduler-granted admission, the controller issues the bump
+  and records `admission_source: scheduler`; where it runs controller-local
+  admission, it records `admission_source: controller_local`. Both are visible in
+  the manifest, so an operator can see which path ran.
+- **Why this shape:** one ledger, two producers, one atomic reservation. Two
+  independent ledgers (scheduler count + controller count) would each be correct
+  alone and wrong together — that is the exact double-dispatch failure R31-019
+  requires us to prevent.
+- **Reversible default:** `admission.run_now_owner: "controller_local"` with
+  `admission.scheduler_bump_fallback: true`. If the deployment's scheduler is the
+  only holder of admission authority, flip the first value; the reservation
+  primitive and the manifests do not change.
+- **Race rule:** timed tick and `run_now` for the same assignment are ordered by
+  the reservation primitive; the loser observes `duplicate` and returns the
+  winner's `send_id`/`attempt_id` (idempotent, never a second attempt).
+- **Failure behaviour:** controller cannot reach the capacity store → `503
+  admission_unavailable`, nothing dispatched, request stays `queued` (never
+  silently dropped); scheduler unreachable on the bump path → backoff and retry,
+  same dedupe key.
+- **Recovery:** restart re-derives the ledger from manifests; a reservation
+  without a manifest write is invisible and therefore harmless; a manifest without
+  a reservation is re-admitted once (dedupe by `send_id`).
+
+**Full-cap response.** `run_now` at cap returns `202 {state: "queued",
+reason: "at_capacity", queue_position}` for an interactive caller and `429
+at_capacity` for a synchronous one; in both cases the message and manifest are
+durable and the send is dispatched when a slot frees. `enqueue_only` always
+returns `202 {state: "queued"}`.
+
+**Duplicate request identity.** Every request carries `request_id`; replay with the
+same `request_id` returns the original manifest ids and performs no new work. Two
+different request ids that name the same logical unit of work (same ticket +
+same assignee + same open send) are refused `409 duplicate` with the existing
+`send_id`, so a supervisor retry cannot double-dispatch an assignment.
+
+**Race tests (acceptance).** Concurrent scheduler tick + `run_now` for one
+assignment under cap 1 → exactly one dispatch, one attempt, one manifest; the other
+producer observes `duplicate`. Same race with cap already full → both queue, one
+dispatch on release, no lost request.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#6-9-scheduler-surface-summary-what-vol-c-adds-to-it -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-6-9-SCHEDULER-SURFACE-SUMMARY-S038" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 6.9 Scheduler surface summary (what VOL-C adds to it)
+
+Nothing in VOL-C changes scheduler scheduling algorithms (R-003/R-018): the
+scheduler still runs its lanes, cooldowns and bump API. What VOL-C adds is a
+controller-side reservation for the second initiator (§6.7, N-1 PROPOSED) plus the
+trigger lanes named
+per VOLC-036, the callback contract VOLC-038..040, and the
+bump-result bookkeeping VOLC-041..043. `wake_once` remains owner-gated
+(Q-6) and, if adopted, slots into VOLC-041 without changing this volume.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#7-managed-worker-dispatch-and-run-control-r31-021-d-024 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-7-MANAGED-WORKER-DISPATCH-AND-S039" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 7. Managed worker dispatch and run control (R31-021, D-024)
+
+The CLI launch prescription is replaced. A foreman no longer shells out to
+`hermes chat -q` from its own session; it calls one structured, HTTP-backed
+operation that the controller executes against the correct gateway and profile.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#7-1-transport-decision-documented-not-assumed -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-7-1-TRANSPORT-DECISION-DOCUMEN-S040" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.1 Transport decision (documented, not assumed)
+
+**VOLC-074.** Worker dispatch SHALL be `foreman → controller → gateway`. The
+foreman calls the controller's dispatch endpoint with its own service token; the
+controller validates authority and capacity, then performs the gateway POST with
+its gateway credential, exactly as it does for any other wake (harness-only write
+rule, VOLC-005). A direct foreman→gateway transport is NOT part of this revision;
+if a deployment enables it, it must be an explicitly authorized, configured route
+(`worker.direct_gateway: true`) that still uses the controller's reservation and
+audit, and it is out of the rev-2.0 conformance envelope. Hermes-native delegation
+tools that inherit the foreman's runtime are explicitly **not** the contract: they
+share the foreman's profile and provider, which D-023 forbids for workers.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#7-2-dispatch-request-contract -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-7-2-DISPATCH-REQUEST-CONTRACT-S041" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.2 Dispatch request contract
+
+`POST /v1/workers/dispatch` (tool `chd_worker_dispatch`), agent principal only:
+
+```json
+{
+  "request_id": "wr-20261109-1015-a1b2",
+  "worker": { "agent_id": "wrk-crier-03", "profile": "chd-worker-crier-03",
+              "role": "worker" },
+  "work": { "ticket_id": "CRIER-412", "assignment_id": "a-...",
+            "room": "task-crier-42", "thread_root": 41,
+            "send_id": "s-...", "parent_bond_id": "b-..." },
+  "instructions": { "body_ref": "/chd/room/task-crier-42/m000000000041",
+                    "criteria_ref": "CRIER-412#criteria",
+                    "inline_instructions": "optional bounded text" },
+  "workspace": { "workdir": "/srv/work/crier-412", "scope": ["repo", "tmp"] },
+  "runtime": { "provider": "deepseek", "model": "deepseek-flash",
+               "context_window": 160000, "max_turns": 40 },
+  "provisioning": { "mode": "fresh | fork", "fork_point_seq": 41 },
+  "admission": { "mode": "run_now | enqueue_only" },
+  "dedupe_key": "CRIER-412:attempt:1"
+}
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `request_id` | string | yes | Idempotency identity; replay returns the same run |
+| `worker.agent_id` / `worker.profile` | string | yes | Profile MUST be non-default and distinct; sharing is `422 profile_not_distinct` |
+| `work.*` | strings | yes | Must resolve to live records, and the caller must own/be authorized on them |
+| `instructions.body_ref` | key | yes | The assignment message; the worker reads it itself (no prompt synthesis) |
+| `instructions.inline_instructions` | string | no | ≤ 8 KiB, recorded verbatim |
+| `workspace.workdir` | abs path | yes | Must be inside the worker's configured allowed roots (`422 workspace_not_allowed`) |
+| `runtime.*` | strings/ints | no | Absent = worker's configured runtime; present = must be within the caller's delegation pool |
+| `provisioning.mode` | enum | yes | `fork` requires `fork_point_seq` and a live parent session |
+| `admission.mode` | enum | yes | §6.7 semantics |
+| `dedupe_key` | string | yes | One logical dispatch |
+
+**VOLC-075.** The controller validates in this order: authentication → caller role
+(foreman or above) → work-record existence and ownership → worker profile
+distinctness and existence → workspace allowed root → runtime within pool →
+admission → dispatch. A rejection names one error from §3.6 and writes an audit
+row; it writes no run record.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#7-3-run-identity-status-progress-result -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-7-3-RUN-IDENTITY-STATUS-PROGRE-S042" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.3 Run identity, status, progress, result
+
+**VOLC-076.** Each dispatch creates a durable `WorkerRun` record:
+
+```
+{ run_id: "wrun-...", request_id, send_id, attempt_id, worker, profile,
+  gateway, workspace, state: queued|admitted|running|succeeded|failed|
+  cancelled|uncertain|unreachable, started_ts, ended_ts?, exit_reason?,
+  progress: {last_beat_ts, turns, tokens, artifacts[]},
+  result_ref: {room, seq} | null }
+```
+
+at `/chd/worker/&lt;run_id&gt;`. Reads: `GET /v1/workers/runs/{run_id}` (owner foreman,
+director, VP). Progress is a heartbeat write at most once per
+`worker.progress_interval_s` (default 60); it is observation, never a completion
+claim. The **result** is the worker's report posted into its task room
+(`kind=report`, correlated `send_id`); the run becomes `succeeded` only when that
+report is verified (CT-06) — a process exit code is not a verdict.
+
+**VOLC-077 (asynchrony).** Dispatch returns `202 {run_id, state}` immediately.
+The foreman may poll the run, read the room, or wait for the wake-on-report; it
+must not block its own turn on worker completion.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#7-4-cancel-timeout-recovery -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-7-4-CANCEL-TIMEOUT-RECOVERY-S043" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.4 Cancel, timeout, recovery
+
+**VOLC-078.** `POST /v1/workers/runs/{run_id}/cancel` (foreman/director, or VP)
+performs: mark `cancelled` intent → `POST /v1/runs/{run_id}/stop` on the gateway →
+await run-status confirmation (VOLB-060) → release the slot only on
+`proven-stopped`. Cancellation is not retroactive erasure: work already produced
+stays as artifacts and the report (if any) is kept, annotated `cancelled`.
+Timeout uses the same path when `runtime.max_turns` or `worker.timeout_s` is
+exceeded, with `exit_reason: timeout`.
+
+**VOLC-079 (restart and retry).** The request/run pair is idempotent:
+a controller restart re-reads `queued|admitted` runs and re-drives them;
+`running` runs are reconciled by run status exactly as sends are (VOLB-060).
+Retry of a dispatch with the same `request_id` returns the original `run_id`; a
+retry with a new `request_id` for the same `(ticket, worker, attempt)` is refused
+`409 duplicate`. A failed run never silently becomes a second worker launch: the
+foreman decides whether to retry, and the audit shows both runs.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#7-5-foreman-verification-handoff -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-7-5-FOREMAN-VERIFICATION-HANDO-S044" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.5 Foreman verification handoff
+
+The foreman's own verification loop is unchanged (D-004): it reads the worker's
+report, samples artifacts, runs its gates, and posts exactly one final report for
+its own send (VOL-A-016). What changes is only the *launch* mechanism: no shell, no
+CLI process wrangling, no inherited environment. The worker's separate profile,
+provider credentials, session store and workspace come from its own configuration
+(D-023, VOL-D Pt II).
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#8-enforceable-authorization-f-012 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-8-ENFORCEABLE-AUTHORIZATION-F-S045" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 8. Enforceable authorization (F-012)
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#8-1-the-three-vp-grants-named-separately-ct-10-r-026 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-8-1-THE-THREE-VP-GRANTS-NAMED-S046" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 8.1 The three VP grants, named separately (CT-10/R-026)
+
+VP authority is exactly three grants, configured and enforced separately:
+
+1. **`objective.create`** — open objective rooms (VP-supplied directives).
+2. **`message.inject`** — post messages (any legal kind except
+   `incident`) into rooms the VP may touch.
+3. **`room.read`** — read rooms the VP may touch.
+
+Each is a boolean in `vp.grants` with an independent room scope list
+(`vp.grants.rooms` — config data, never discovered). ENDPOINTS §2's
+"default-allow" language is hereby scoped: a VP token enables the
+**operation classes** it holds, within the **configured room scope**;
+the owner's full-access VP token is simply one configured instance where
+all three grants are true with the full room list. (Reconciles
+ENDPOINTS §2 with DESIGN §11.1; DESIGN is normative.)
+
+- **VOLC-053** The three grants are independent: a VP with read but not
+  inject gets read-only; with inject but not create can post into
+  existing rooms only. Enforcement is per operation at the service
+  boundary, and each denied attempt is audited with the grant that was
+  missing.
+- **VOLC-054** Harness-internal agents are **default-deny as VP**
+  (R-026): an agent token presenting `as: "vp"` or calling a VP-only
+  endpoint is refused `403 vp_identity_misuse`, audited, and counted as
+  an integrity violation (§6.3).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#8-2-per-role-operation-resource-matrix-enforced-at-the-service -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-8-2-PER-ROLE-OPERATION-RESOURC-S047" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 8.2 Per-role operation/resource matrix (enforced at the service)
+
+Operations: `room.post`, `room.reply`, `room.report`, `room.read`,
+`room.create`, `wake.request` (via `chd_request_wake` → trigger registration),
+`send.cancel`, `grant.use/grant`, `agent.create`, `worker.dispatch`,
+`ticket.write`, `archive.read`.
+
+| Role \ Operation | room.post/reply/question | room.report | room.read | room.create | wake.request | send.cancel | grant | agent.create | worker.dispatch | ticket.write | archive.read |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| supervisor | own task rooms (member) | own rooms | own rooms + referenced | — | **assigned foreman only: `chd_assign` with `enqueue_only` or `run_now`; own ticket/thread refs; controller authz+capacity** | — | — | — | — | own tickets' fields per workflow | granted scopes only (§8.8) |
+| manager | own task/objective/space rooms (member) | own rooms | own rooms + children's task rooms (read) + referenced | `task` rooms | own rooms | own children's sends (within delegated authority) | per config pool | per config | — (foreman-owned) | own family's tickets | granted scopes only |
+| director | any hierarchy room it is a member of; may be added to any | own rooms | **all rooms in its namespace** (hierarchy oversight) + referenced | `objective` rooms (and `task` per D-005 opt-in) | any | any hierarchy send | within delegatable authority (incl. meta-grant) | per D-005 setting | — | all tickets in its namespace | all archive scopes in its namespace |
+| **foreman** | own task rooms + subthreads it owns | own rooms | own rooms + child worker subthreads + referenced | subthreads inside its task room (`task` kind) | own rooms | own worker runs' sends | — | **workers only, if `create_worker` is enabled** (OPEN-OW-3) | **own workers only** (`chd_worker_dispatch`) | linked ticket fields it owns | none by default |
+| worker | its assignment subthread only | own subthread | its own subthread + referenced assignment | — | — | — | — | — | — | — | — |
+| peer (`crier:&lt;peer-id&gt;`) | mapped local rooms per trust policy; `origin=peer` | mapped rooms; provenance retained | mapped rooms | only if explicitly scoped + locally permitted | per trust policy, never from sender id | — | explicit GrantRecord only; never implicit VP | — | — | mapped tickets per scope | explicit archive grant only |
+| vp | per its three grants (§8.1) | — | per grant 3 | per grant 1 | per grant 2 (wake endpoint) | rooms in scope | — | — | — | per config | per configured scope |
+| scheduler | — | — | — | — | fires cycles only | — | — | — | — | — | — |
+| service | (writes everything, service credential) | | | | | | | | | | |
+
+- **VOLC-055** This matrix is the **enforced** policy, not documentation:
+  every tool call and endpoint call is checked against it at the service boundary. The supervisor wake cell is the exact allowed-request set: only `chd_assign` for an assigned foreman, `admission=enqueue_only|run_now`, own ticket/assignment/room/thread refs, and controller authorization/capacity checks. It cannot create agents, dispatch workers, mutate lanes, change permissions, or target another supervisor's room. A `none` cell means the call is refused before any resource is touched; a "none" cell means the call is refused before any resource
+  Where the matrix says "per config", the per-agent config
+  of §8.4 supplies the value. The foreman row is present because the foreman
+  is a principal: it must be able to report into its task room and dispatch its
+  own workers without tripping an "enforced deny" (R31-008).
+- **VOLC-056** Room-read enforcement: `room.read` is checked against
+  **current membership** on every request. Membership is enforced even
+  when the caller guessed the room key — `404 not_found` (indistinguishable
+  from nonexistent) for both unknown and unreadable rooms; **key secrecy
+  is not an access control mechanism** (F-012). A guessed-key probe is
+  still audited (caller, attempted key) but rate-limited response
+  differences are avoided (no existence oracle). The same one-code rule
+  applies to tickets and archive scopes.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#8-3-the-four-authority-classes-including-meta-grant-d-009-d-016-d-032 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-8-3-THE-FOUR-AUTHORITY-CLASSES-S048" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 8.3 The four authority classes, including meta-grant (D-009, D-016, D-032)
+
+Permissions are four independently held classes; possessing one never implies
+another:
+
+- **use** — may exercise the operation/tool/resource itself;
+- **grant_use** — may confer (parts of) a `use` permission from a named **allowed
+  pool** onto subordinate agents within a named **scope**;
+- **meta_grant** — may confer **authority to delegate further** (the right to make
+  grantors), bounded by `recipient_scope` and `downstream_rights`;
+- **create** — may create subordinate agents (per D-005 setting; lower-tier policy
+  OPEN, §11.1).
+
+- **VOLC-057** A grantor may hold `grant` on a pool containing tools it cannot
+  `use` (D-009 is normative; Q-008 boundary: wording — skill or role text — never
+  substitutes for the effective grant). Conversely `use` never implies `grant`, and
+  skill wording alone is **never** an effective grant (F-012): effective
+  permissions are computed exclusively from config grants and recorded
+  `GrantRecord`s; skill text, prompts, and role descriptions are ignored by the
+  enforcement layer.
+- **VOLC-058** Grant origins, recorded on every effective permission:
+  `vp_configured` (VP-configured grants are already granted — no director
+  grant needed, D-016), `director_grant` (on-demand, valid only within
+  the director's delegatable authority) and `manager_grant` (a manager that
+  itself holds `grant_use`/`meta_grant` within its scope). **VP configuration wins
+  conflicts** with any delegation (D-016): enforcement computes
+  `effective = vp_configured ∪ (derived ∩ delegatable_authority)`, and a derived
+  grant can never widen anything a VP setting narrows.
+- **VOLC-059** Grant lifecycle: created via the service's grant operation
+  (audited), scoped (capability + resource scope + optional expiry), revocable by
+  the granting agent or immediately by any VP. **Revocation does not reach into an
+  existing session**: enforcement for a live session uses its
+  `SessionPolicySnapshot` (VOLB-051, §8.9); future sessions resolve current grants
+  and therefore drop revoked-derived rights. Forked-session behavior is not inferred
+  from the word "future": the explicit two-mode rule and existing/future
+  classification are VOLC-069/§8.9 and VOLB-051. All grants — VP-configured and
+  dynamic — appear in the effective readback (§8.7/§8.9) with their origin and lineage.
+
+- **VOLC-068 (meta-grant, R31-026).** A `meta_grant` record carries
+  `capability`, `resource_scope`, `recipient_scope` (roles/agents/tiers),
+  `downstream_rights ⊆ {use, grant_use, meta_grant}` and `lineage`. Issuance rules:
+  1. the grantor must itself hold `meta_grant` for that capability and scope, and
+     the issuance must cite it as `authority_ref`;
+  2. the new grant's capability, scope, recipients and downstream rights must be a
+     **subset** of the grantor's authority — no self-expansion, no widening, no
+     third-party substitution;
+  3. lineage is appended and immutable; cycles are rejected;
+  4. VP configuration is the root authority and can neither be exceeded nor
+     revoked by a derived grant.
+  Rejections: `403 meta_grant_exceeds_authority`, `403 grant_outside_pool`,
+  `409 grant_cycle`. Issuance, rejection, replay (same `dedupe_key` → original
+  grant id) and revocation are audited; `GET /v1/policy/effective` shows each
+  grant's `kind`, `origin`, `authority_ref` and lineage. Delegation applies to
+  tools, skills, room/ticket/archive storage and profile/state operations alike —
+  one model, four classes; the resource vocabulary differs, the semantics do not.
+
+- **VOLC-068a (delegation of grant in practice).** Four acceptance cases must
+  behave as stated: (a) user without the grant cannot call; (b) grantor without use
+  can grant, cannot call; (c) grantor without meta-grant cannot mint another
+  grantor; (d) authorized delegation-of-grant succeeds only within the issuer's
+  recipient/scope caps, and readback agrees at both ends.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#8-3-1-policy-resolver-truth-table-r31-026-d-032 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-8-3-1-POLICY-RESOLVER-TRUTH-TA-S049" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 8.3.1 Policy-resolver truth table (R31-026, D-032)
+
+The resolver runs one ordered pass per request. Each rule below is named so a
+test, an audit row and a readback line can cite it; the first rule that decides
+ends the pass.
+
+| Rule | Question | Decides |
+|---|---|---|
+| **R0 snapshot binding** | Is the request inside an existing session? | only grants listed in that session's `SessionPolicySnapshot` (§8.9) are inputs; a grant issued after the snapshot is invisible to it |
+| **R1 use** | Is the capability in `permissions.use.capabilities` AND the resource inside `permissions.use.resource_scope`? | allow / deny, no inference from any other class |
+| **R2 grant_use** | Same test against `permissions.grant` | decides issuance only; says nothing about the issuer's own use |
+| **R3 confer_delegation** | Does the issuer hold `permissions.confer_delegation` for the capability and scope, cited as `authority_ref`? | without it the issuance is `403 meta_grant_exceeds_authority` |
+| **R4 subset and caps** | Is the requested grant ⊆ issuer bound ∩ configured limits (`max_conferable`, `recipients`, `max_depth`, `max_grants`, `expires_within_s`)? | deny on any overflow |
+| **R5 VP precedence** | Does a VP row contradict the derived right (narrower scope, explicit exclusion)? | VP wins; audit `grant_conflict` |
+| **R6 revocation, issuance** | Does the lineage of the cited `authority_ref` reach a revoked or expired ancestor? | issue-time denial, immediate |
+| **R7 revocation, use** | Same question, for an existing session whose snapshot carries the grant? | the snapshot governs: use continues for the life of the session |
+| **R8 archive contract** | For archive scopes: are selectors, scope, expiry/revocation and per-page authorization present (§8.8)? | incomplete contract is denied, never defaulted |
+| **R9 archive per-page** | Archive read mid-session? | re-evaluated at every page against current grants (§8.8 VOLC-072b) — the one named exception to R7 |
+
+| # | Case | Principal holds | Request | Decision | Rule | Code / audit |
+|---|---|---|---|---|---|---|
+| 1 | user without grant | nothing | call `telegram.send` | **deny** | R1 | `403 tool_not_granted` |
+| 2 | grantor without use | `grant` on `telegram.send`, no `use` | grant to a subordinate, then send itself | grant **allow**, own send **deny** | R2 then R1 | `403 tool_not_granted` on the send |
+| 3 | grantor without meta-grant | `grant` only, no `confer_delegation` | issue a grant whose `downstream_rights` = `{grant_use}` | **deny** | R3 | `403 meta_grant_exceeds_authority` |
+| 4 | authorized delegation-of-grant | `confer_delegation` on `room.post`, `max_conferable = [room.post]` | issue `meta_grant` to `sup-crier` with `downstream_rights = {use}` | **allow**; child lineage = issuer lineage + child id; readback shows the child at both ends | R3, R4 | audit `grant_issued` |
+| 5 | downstream exceeds issuer bound | as row 4 | issue `meta_grant` with `max_conferable = [room.post, telegram.send]` | **deny** | R4 | `403 meta_grant_exceeds_authority` |
+| 6 | depth exceeded | `confer_delegation` with `max_depth = 1` | confer at hop 2 | **deny** | R4 | `403 meta_grant_exceeds_authority` (depth) |
+| 7 | outstanding grants at cap | `max_grants = 3`, 3 live | issue a fourth | **deny** | R4 | `403 grant_limit_exceeded` |
+| 8 | VP conflict | director-issued use on `task-crier` (read + post) | read `task-crier` where the VP row excludes it | **deny** | R5 | audit `grant_conflict` naming both sources |
+| 9 | revoked ancestor, existing session | snapshot carries G3; lineage G1→G2→G3; G1 revoked | use G3 in the live session | **allow** | R7 | audit `grant_used_after_ancestor_revocation` |
+| 10 | revoked ancestor, new issuance | same lineage, citing G3 as `authority_ref` | issue G4 now | **deny** | R6 | `403 authority_revoked` |
+| 11 | grant after snapshot | snapshot taken before G5 was issued | use G5 in that session | **deny** | R0 | `403 tool_not_granted`, cause `not_in_snapshot` |
+| 12 | unresolved edge: expiry lands inside the request | G6 expires at 12:00:00Z, request opens 11:59:59.9Z | use G6 | **deny** (fail-closed) and the edge is recorded | R6 | `403 tool_not_granted`, audit `grant_expired_inflight` |
+| 13 | archive grant without selectors | `grant` on `archive.read.cross_agent`, no selectors | read another agent's archive | **deny** | R8 | `403 grant_scope_incomplete` |
+| 14 | archive grant revoked mid-session | snapshot carries the archive grant; grant revoked after page 2 | read page 3 | **deny** | R9 | `403 tool_not_granted`, cause `revoked` |
+
+&gt; **SUPERSEDED — NOT A RULE (R31-027, D-033).** Earlier drafts of this volume
+&gt; said a revocation "takes effect at the next request". That sentence is
+&gt; withdrawn: it contradicted session-bound permission lifetime, because a live
+&gt; session would silently lose a right it was admitted with, mid-conversation,
+&gt; with no snapshot to point at. It survives here only as an explicitly retired
+&gt; quotation so a reader arriving from an old revision is redirected. The
+&gt; normative model is §8.9 `SessionPolicySnapshot`: revocation binds **issuance
+&gt; immediately** (R6 — no new grant may cite a revoked ancestor) and binds an
+&gt; **existing session at that session's snapshot boundary** (R7), with archive
+&gt; page reads re-evaluated per page (R9, VOLC-072b). Nothing in this package may
+&gt; reinstate a per-request revocation rule; the grep assertion in
+&gt; `build-spec/tools/check_authz_contract.py` (case G) fails the package if this
+&gt; phrase reappears outside a block marked SUPERSEDED.
+
+- **VOLC-068b (readback equality).** `GET /v1/policy/effective?session=&lt;bond-id&gt;`
+  returns the session's snapshot contents unchanged, including its `policy_rev`
+  and the `policy_snapshot_id` the bond carries (VOLB-051); called without a
+  session, the same endpoint returns the current VP resolution. A session
+  readback that differs from its snapshot by even one granted capability is a
+  §6 integrity defect, not a stale cache: the acceptance test compares digests.
+- **VOLC-068c (one vocabulary, two spellings).** The spec names the four classes
+  `use`, `grant_use`, `meta_grant`, `create`; `contracts/config.schema.json`
+  spells the first three as `permissions.use`, `permissions.grant`,
+  `permissions.confer_delegation` and keeps `create` on the per-agent
+  `create_subordinate` key for v2/v3 compatibility. The mapping is total and
+  one-directional — a key appearing in both spellings is a load error
+  `permission_key_conflict` — so a reviewer never has to guess which name is
+  normative.
+- **VOLC-068d (grant lineage and the conferable bound).** A delegated grant is
+  materialized as a `GrantRecord` whose schema-visible lineage block
+  (`contracts/config.schema.json` `$defs.grantLineage`, carried on the issued
+  scope as `lineage`) names `grant_id`, `issuer_grant_id` (the grant the issuer
+  cited as its own authority; `null` only for a VP root), the immutable
+  root-first `ancestors[]` chain ending at `issuer_grant_id`, `depth`, and this
+  grant's own `max_conferable`. Two bounds gate every issuance: the record's
+  `max_conferable ⊆` the issuer's `max_conferable`, and the requested envelope
+  (`capabilities`, `resource_scope`, `recipients`) ⊆ the issuer's configured
+  scope. **A downstream grant exceeding the issuer's bound is rejected with
+  `403 meta_grant_exceeds_authority`** and audited (`{actor, issuer_grant_id,
+  requested, bound, reason}`); the record is never written in a widened form.
+  The revocation check of §8.3.1 rules R6/R7 walks `ancestors[]`, so revoking a
+  root grant fails issuance along the whole chain while leaving independent
+  `vp_configured` grants — which carry no lineage — untouched.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#8-4-per-agent-configured-permissions-and-approval-policy-d-008 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-8-4-PER-AGENT-CONFIGURED-PERMI-S050" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 8.4 Per-agent configured permissions and approval policy (D-008)
+
+Each agent's config carries (additive to config.schema.json — schema
+delta listed in §12):
+
+```json
+"permissions": {
+  "use": {                        // class: use
+    "capabilities": ["chd_post", "chd_reply", "chd_report", "chd_read_room",
+                     "chd_read_worklog", "chd_request_wake"],
+    "resource_scope": ["room:task-*", "room:obj-*"],
+    "recipients": { "roles": [], "agents": [], "tiers": ["self"] },
+    "limits": { "max_depth": 0, "max_grants": 0, "max_conferable": [],
+                "expires_within_s": 3600, "require_approval": false }
+  },
+  "grant": {                      // class: grant_use
+    "capabilities": ["chd_post"],
+    "resource_scope": ["room:task-*"],
+    "recipients": { "roles": ["supervisor"], "agents": [], "tiers": ["worker"],
+                    "allowed_pools": ["pool-msg-self"] },
+    "limits": { "max_depth": 0, "max_grants": 4,
+                "max_conferable": ["chd_post"], "expires_within_s": 86400,
+                "require_approval": false }
+  },
+  "confer_delegation": {          // class: meta_grant (D-032)
+    "capabilities": ["chd_post"],
+    "resource_scope": ["room:task-*"],
+    "recipients": { "roles": ["manager"], "agents": [], "tiers": ["supervisor"],
+                    "allowed_pools": ["pool-msg-self"] },
+    "limits": { "max_depth": 1, "max_grants": 2,
+                "max_conferable": ["chd_post"], "expires_within_s": 86400,
+                "require_approval": true }
+  }
+},
+"create_subordinate": "supervisor",   // class: create; tier bound per D-005 (VOLD-010)
+"tool_allow_pool": [],                // pool items this agent may USE if granted
+"approvals": {
+  "human_approval_required": false,
+  "gates": ["delegation"]             // named operations needing human sign-off
+}
+```
+
+The three scopes are required-nothing and default-deny: an absent `permissions`
+block denies use, grant and confer alike (no implicit any-of-three). `use`
+carries the only legal `recipients` value (`tiers: ["self"]`, no roles, no
+agents) because use is never delegable; `grant` and `confer_delegation` carry
+the recipient/limit fields the resolver enforces at issuance
+(§8.3.1 rule R4, VOLC-068c key mapping).
+
+- **VOLC-060** The service tool set of §2.2 is exposed to an agent **only
+  for operations in its `permissions.use.capabilities` list** — tools outside the list
+  are hidden (not merely denied) at the MCP surface. Human-approval
+  policy (D-008) is enforced per agent at the service boundary: when the
+  policy names an operation, the service holds the write in
+  `pending_approval` (returns `202 approval_id`) and notifies the
+  configured approver through the VP surface; the operation executes
+  only on recorded approval and is refused `403 approval_required` on
+  explicit denial. There is **no universal approval policy** — approval
+  behavior is exactly each agent's configured policy (F-012).
+- **VOLC-061** Approval gates and grants compose: an approval policy can
+  require human sign-off for operations the agent is otherwise granted;
+  a granted permission cannot bypass a configured approval gate, and no
+  timeout converts a pending approval into an approval (D-012 holds at
+  the tool boundary too).
+- **VOLC-062** Delegated work inherits enforcement, not authority: when a
+  manager assigns work, the *supervisor's own* effective permissions
+  govern its service calls. Goal/assignment text never widens permissions
+  (no implicit grant by assignment — F-005 boundary, enforced here).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#8-5-credentials-for-service-calls-vs-delegated-delivery -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-8-5-CREDENTIALS-FOR-SERVICE-CA-S051" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 8.5 Credentials for service calls vs delegated delivery
+
+- **VOLC-063** Gateway credentials (service→Hermes) and agent-to-service
+  credentials (§1.1) are separate populations with separate rotation
+  (VOLC-002/003). A delegated delivery (e.g., a communications-path
+  supervisor sending a file to the human via Telegram, D-011) uses that
+  agent's OWN configured delivery credentials and its OWN approval
+  policy; the service never shares one agent's external-channel
+  credential with another.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#8-6-audit -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-8-6-AUDIT-S052" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 8.6 Audit
+
+- **VOLC-064** Every service call — allowed or denied, any door, agent or
+  VP or scheduler — writes one audit record (`/chd/audit/&lt;ts&gt;-&lt;id&gt;`,
+  service-written): `{actor, principal_class, door, operation, resource,
+  decision, missing_grant?, grant_origin?, dedupe_key?, cause_ids,
+  approval_id?, ts}`. Audit is written on the denied path too (a denial
+  without an audit row is a defect). Audit records are read-back via
+  `chd_read_worklog`-adjacent admin reads for VP only.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#8-7-effective-policy-readback -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-8-7-EFFECTIVE-POLICY-READBACK-S053" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 8.7 Effective-policy readback
+
+- **VOLC-065** `GET /v1/policy/effective?agent=&lt;id&gt;` (VP; or self via
+  `chd_whoami`) returns the computed effective permissions: every `use`
+  permission with its origin (`vp_configured` | `director_grant` +
+  grantor), grant pools/scopes, approval policies, room memberships, and
+  the config revision it was computed from. The readback is generated
+  from the same enforcement structure that gates calls (no second
+  policy path), so what an agent is told it may do is exactly what the
+  service will allow. **One document, two path spellings** (same pattern as
+  VOLC-068c): `/v1/sessions/{id}/policy` (VOLB-052, VOL-D §1.11) and
+  `/v1/policy/effective?session=&lt;id&gt;` are *the same document* — identical
+  bytes, identical `policy_rev`, identical digest — and the digest equality of
+  VOLC-068b applies to both. For a forked session the document MUST also return
+  `fork_mode` (`preserve_parent_snapshot` or `current_policy`), the effective
+  `policy_rev`, `policy_snapshot_id`, and per-grant provenance/lineage; the
+  fixture in VOL-D §4.4 proves these fields agree with both rows of the fork
+  truth table in §8.9. Two implementations of one document, or any field
+  present on one path and absent on the other, is a §6 integrity defect.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#8-8-archive-scopes-own-history-room-log-cross-agent-audit-r31-023-d-026-d-027 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-8-8-ARCHIVE-SCOPES-OWN-HISTORY-S054" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 8.8 Archive scopes: own history, room log, cross-agent audit (R31-023, D-026/D-027)
+
+Archive access is a distinct resource family with its own grants, not a wider
+`room.read`. Three scopes exist:
+
+| Scope | Contents | Selector | Typical holder |
+|---|---|---|---|
+| `own_history` | the caller's own current and prior sessions (live and archived) | `{agents: [self]}` | every agent (granted by default) |
+| `room_log` | messages/reports in rooms the caller may read, including archived references | `{rooms: [...]}` | room members |
+| `cross_agent_archive` | another named agent's exported sessions in the archive namespace | `{agents, profiles?, sessions?, threads?, max_checkpoint?}` | auditor supervisors, explicitly granted |
+
+- **VOLC-070 (independent grant of access).** The right to **read** an archive and
+  the right to **grant** archive access are separate records. A manager may grant
+  `cross_agent_archive` only if it holds `grant_use` (or `meta_grant`) for
+  `archive.read` over the target agent's storage; the manager role alone confers
+  nothing (D-026). The grant names: target agent/profile, allowed sessions or
+  threads (or `all_sessions_of_agent`), `max_checkpoint_seq` (a read ceiling),
+  expiry, and whether sub-delegation is permitted. VP configuration bounds the
+  maximum scope; a grant exceeding it is refused `403 grant_outside_pool`.
+- **VOLC-071 (authorization on every read).** Archive reads are paginated keyset
+  reads served by the archive service. Every page re-checks the grant, the
+  expiry and the selector — authorization is never cached across pages. A read
+  outside the grant returns `404 not_found` (same one-code rule). Every read writes
+  an access-audit record `{actor, grant_id, scope, selector, page_cursor,
+  records_read, ts}`; a read without an audit row is a defect.
+- **VOLC-072 (completeness, freshness, unavailable data).** A response states the
+  archive manifest's `completeness`, `checkpoint_seq` and `covered_through_ts`, so
+  the auditor knows what it did **not** see. Declared gaps are returned as gap
+  records, not omitted silently. When the archive is unavailable the read fails
+  `503 archive_unavailable` — never an empty success, never a fabricated "no
+  records". Revocation is enforced on the next page (and on a new request within
+  the same session); activation is immediate on grant creation.
+- **VOLC-072a (audit assignment/result flow).** An audit is a normal assignment:
+  the manager creates a ticket/assignment whose criteria name the target archives
+  the questions to answer; the auditor reads centrally (no source-host login,
+  no host credential), and its report cites exact archive keys + revision/checkpoint
+  for every finding. The report returns through the owning subthread (VOLB-065).
+  The manager's acceptance review checks each citation resolves (existence and
+  revision are machine-checkable), not that the prose is agreeable.
+- **VOLC-072b (the one named exception to snapshot-stable authority).** Archive
+  reads are the single exception to §8.9 VOLC-069: a session snapshot does NOT
+  extend an archive-read grant past its revocation, expiry or selector narrowing,
+  because the archive spans other agents' sessions and the read itself is
+  paginated verification work. Every page is authorized against **current** grant
+  records (`session_policy.archive_grant_evaluation: "per_page_current"` in
+  `contracts/config.schema.json`); a grant revoked after page N denies page N+1
+  with `403 tool_not_granted`, cause `revoked`, and the denial is audited with the
+  grant id and page cursor. Use of ordinary (non-archive) capabilities in the same
+  session continues under R7 unchanged. A session holding **no** archive grant —
+  including a session whose only archive access came from a scope that was
+  withdrawn before the session began — is denied `404 not_found` per the single
+  public error contract (§3.6), never an empty page.
+- **VOLC-072c (why this is safe to make an exception).** The exception is bounded
+  on the other side by the snapshot: the archive grant's *scope* (agents,
+  selectors, `max_checkpoint_seq`) is frozen at session start, so a per-page
+  re-check can only ever narrow what the session was allowed to read, never widen
+  it. Residual-risk note: the asymmetry is deliberate and stated (freshness of
+  authorization over stability of authorization); no other capability family may
+  adopt it without a new decision.
+- **VOLC-081 (grant record ownership — no implicit read).** The three scopes
+  above are the ONLY archive read scopes; each is held by an explicit
+  GrantRecord (`capability.archive.read`, `resource_scope.archive_scopes`,
+  VOL-B §3.13). Even `own_history` is a granted default, not an inferred
+  right: it exists because VP configuration grants it, and it can be
+  withheld. There is **no implicit read** — no role, membership, or config
+  block alone confers archive access (the `archive` config block bounds the
+  max grantable scopes; it grants nothing). The grant-record schema and the
+  selector grammar for archive scopes (including the QA-1..QA-5 query
+  selectors, VOL-B §5.10) are owned by **CHD31-06**; archive read MUST NOT
+  ship ahead of that record.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#8-9-session-policy-enforcement-fork-modes-and-resync-r31-027-d-033-d-038 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-8-9-SESSION-POLICY-ENFORCEMENT-S055" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 8.9 Session policy enforcement, fork modes, and resync (R31-027, D-033, D-038)
+
+This section uses [snapshot](terminology.md#snapshot) and [resync](terminology.md#resync) with their package definitions; the rules below specify only this service's endpoint inputs, checks, and writes.
+
+**VOLC-069 (enforcement by snapshot).** Every session gets a
+`SessionPolicySnapshot` at creation (fresh or fork) and uses it for the session's
+lifetime. Enforcement reads the snapshot; it does not re-resolve grants per call.
+Snapshot content, lineage and storage are VOL-B §3.11; the operations are:
+
+| Operation | Endpoint / tool | Authority | Effect |
+|---|---|---|---|
+| read effective policy | `GET /v1/sessions/{id}/policy`, `chd_whoami` | self, director, VP | snapshot + `policy_rev` + origins + fork mode |
+| resync | `POST /v1/sessions/{session_id}/policy-resync`, `chd_session_policy_resync` | the agent's own session-policy authority or a `session.policy_resync` grant | new revision, one atomic write |
+| fork | provisioning (§4.1) | assigner | child snapshot per `fork_mode` |
+
+**Fork modes (default and alternate).**
+`session.fork_policy: "preserve_parent_snapshot" | "current_policy"`, default
+`preserve_parent_snapshot`, scope = global with per-agent override; a per-project
+override may narrow but never widen the VP setting. Activation is at fork creation
+and at explicit resync; **never retroactive** to existing sessions. A fork copies
+`grants`, effective `policy_rev`, `policy_snapshot_id`, each grant's provenance and
+lineage (`origin`, `grant_id`, `authority_ref`/`ancestors`), and expiry values; it
+also records `parent_session_id`, `parent_bond_id`, `fork_mode`, and `fork_point_seq`.
+
+| Fork mode | After a parent grant is revoked before the fork | Independent VP-configured grant | Child revision/readback |
+|---|---|---|---|
+| `preserve_parent_snapshot` (default) | **Keeps** the revoked-derived grant copied from the parent snapshot; no re-resolution | **Survives**, with `origin: vp_configured` | Copies parent's effective `policy_rev` and provenance/lineage; readback reports this mode |
+| `current_policy` | **Drops** the revoked-derived grant by resolving current VP/grant records | **Survives**, with `origin: vp_configured` | Uses current effective revision and current provenance/lineage; readback reports this mode |
+
+- `preserve_parent_snapshot` → the child copies the parent's grants and
+  `policy_rev` verbatim. Rights whose source was revoked after the parent session
+  began remain effective for the child (D-033/D-038 default). This is intentional:
+  a session's authority is what it started with.
+- `current_policy` → the child resolves grants against current VP configuration and
+  current grant records; rights derived from a revoked ancestor are absent.
+- A tool call never triggers a refresh under either mode. **Preserve-parent mode
+  never auto-resyncs**: neither a revocation, policy activation, read, write, nor
+  grant issuance may silently invoke resync. Negative case: a post-revocation tool
+  call against an untouched preserve-parent session returns according to its copied
+  snapshot and leaves `policy_rev` unchanged; only the explicit operation below can
+  change it.
+
+**In-flight operation semantics.** At a fork boundary, the parent operation already
+authorized continues under the parent's snapshot; a child read/write/grant issuance
+starts only after the child snapshot is atomically written. At explicit resync, a
+read or write already authorized continues under its prior revision, while the next
+authorization boundary uses the new revision. A grant issuance already admitted
+continues only for its current request, but its authority is checked against current
+revocation/lineage rules; a new issuance after resync uses the new snapshot and may
+not cite a revoked authority. Policy activation changes the mode for future forks
+(and future sessions); it does not rewrite an existing snapshot or an in-flight read,
+write, or grant issuance. Each operation class is therefore snapshot-bound at its
+authorization boundary, not at an arbitrary later request.
+
+**Resync contract.** Body `{expected_policy_rev, reason, approval_ref?}`.
+Authorization: the caller must be the session's own session-policy authority or hold
+an explicit `session.policy_resync` grant from an authority that may resync that
+agent; the request is VP-bound to the target agent/session, and every allow or denial
+is audited. Effect: compute current policy, write exactly one new snapshot revision
+(`policy_rev + 1`), audit `{actor, session, from_rev, to_rev, reason, approval_ref}`,
+and return the new revision. If `expected_policy_rev` is stale → `409
+policy_revision_conflict`, no write. Unauthorized → `403 policy_resync_not_granted`,
+audited. If `session.resync.enabled` is false, the operation is refused with
+`403 policy_resync_disabled`, audited, and no snapshot changes. The configured
+authorization sources are `session_policy_authority` and `session.policy_resync`;
+any caller must match one and remain VP-bound to the target session. Atomicity: either the
+new revision is committed and readable, or nothing changed — no partial grant set.
+Limits: resync can only remove revoked-derived rights or pick up newly granted rights
+**within the agent's configured use pool**; it can never widen beyond VP configuration.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#9-reference-walkthroughs-trace-to-acceptance-demonstration -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-9-REFERENCE-WALKTHROUGHS-TRACE-S056" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 9. Reference walkthroughs (trace to acceptance demonstration)
+
+Every walkthrough below identifies the actor that triggers the case, the records it reads, the check it performs, the write or external operation, and the evidence of success. The normal sentence describes the accepted path; the failure sentence identifies the named refusal, wait, or unknown branch. A requirement ID is traceability only.
+
+Each walkthrough is addressable as §9.n.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#9-1-guessed-key-read -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-9-1-GUESSED-KEY-READ-S057" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 9.1 Guessed key read
+
+Supervisor token calls `chd_read_room("obj-exec")` (a room it is not in).
+Service: membership check fails → `404 not_found`, audit row written, no
+key-space disclosure. (VOLC-056, F-012 evidence.)
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#9-2-agent-claims-vp -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-9-2-AGENT-CLAIMS-VP-S058" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 9.2 Agent claims VP
+
+Manager token calls `POST /v1/signals` with `as: "vp"` → `403
+vp_identity_misuse`, counted. (VOLC-054.)
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#9-3-grantor-grants-a-tool-it-cannot-use -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-9-3-GRANTOR-GRANTS-A-TOOL-IT-C-S059" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 9.3 Grantor grants a tool it cannot use
+
+Config: manager M has `permissions.grant.capabilities: ["artifact.send_to_user"]`,
+no `permissions.use` entry for it. M grants it to supervisor S for one gate; S's
+delivery call succeeds under S's own approval policy; M could not have made that
+call. Variant (meta-grant absent): M also lacks `permissions.confer_delegation`,
+so M's grant carries `downstream_rights: {use}` only — an attempt to include
+`{grant_use}` is refused `403 meta_grant_exceeds_authority`
+(§8.3.1 rows 2–3).
+(VOLC-057.)
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#9-4-vp-precedence -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-9-4-VP-PRECEDENCE-S060" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 9.4 VP precedence
+
+VP config denies S `terminal`-class tools; a director grant naming the
+same pool is recorded but the effective readback still shows the denial
+origin `vp_configured` and the call is refused. (VOLC-058.)
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#9-5-group-fan-out-with-one-late-sibling -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-9-5-GROUP-FAN-OUT-WITH-ONE-LAT-S061" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 9.5 Group fan-out with one late sibling
+
+Director directive → two manager sends; M1 verified, M2 no_report → M2's
+ladder runs to rung 1; aggregation stays `open` the whole time and closes
+only when M2 closes. Duplicates of M1's report are refused.
+(VOLC-028/029/032.)
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#9-6-waiting-vs-failure -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-9-6-WAITING-VS-FAILURE-S062" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 9.6 Waiting vs failure
+
+Supervisor posts `waiting_human{gate}` → wait record, no ladder, no
+`missing_reply`; one follow-up timer fires once; unchanged wait → no
+re-arm. Meanwhile a silent sibling's send goes `no_report` →
+notify+bump ladder. (VOLC-047..052.)
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#9-7-wrong-request-report-rejected-despite-fresh-timestamp -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-9-7-WRONG-REQUEST-REPORT-REJEC-S063" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 9.7 Wrong-request report rejected despite fresh timestamp
+
+Report names `send_id` S-1 but arrives after S-2's dispatch with S-2's
+context: correlation join fails → `bad_report{reason: send_mismatch}`
+(freshness alone never closes a send; VOL-D owns the full ladder, VOL-C
+supplies the enforced `send_id` join and service-stamped timestamps).
+(VOLC-012/030.)
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#10-traceability-requirements-to-findings-decisions-evidence -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-10-TRACEABILITY-REQUIREMENTS-T-S064" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 10. Traceability — requirements to findings, decisions, evidence
+
+| Req | Finding / Decision | Requirement summary | Completion evidence |
+|---|---|---|---|
+| VOLC-001..004 | F-012 | Principal classes; credential separation, reference, expiry/revocation | §1 walkthroughs; denied paths audited |
+| VOLC-005..006 | F-018, F-019, UQ-7 | Agent→service→DuckBrain single-writer; durable seq | §2.1; ordering test in M3/M5 |
+| VOLC-007..008 | D-014, F-008 | Tool surface + structured results | §2.2; real client posts/replies/asks/reports |
+| VOLC-009 | CT-14, RL-16, R-029 | Four doors, one surface | §3.1; same audit across doors |
+| VOLC-010..015 | F-008, F-009 | post/reply/report payloads, kinds, validation, errors | §3.2–3.6; rejected calls carry explicit errors |
+| VOLC-016..018 | F-007, F-008 | State ladder, crash windows, idempotency, seq gaps | §3.7; failure injection in M4 |
+| VOLC-020, VOLC-020a, VOLC-020b | F-008 | Artifact reference/access across managers; delegated handoff | §3.8; cross-manager walkthrough |
+| VOLC-021..024 | F-010 (mapping), D-014 | NEW/REUSE decision table on real Hermes APIs | §4; two-objectives + lost-bond cases |
+| VOLC-025..027 | F-009, RL-6 | Snapshot, notification, question-kind reply duty | §5.1–5.2 |
+| VOLC-028..029 | F-009 | Group expansion, one accountable owner, duplicates/partials | §5.3; fan-out walkthrough |
+| VOLC-030..031 | F-009 | Correlation ids; cross-room upward references | §5.4–5.5 |
+| VOLC-032 | F-009 | Completion aggregation | §5.6 |
+| VOLC-033 | F-009 | One-write-per-room-per-turn reconciled | §5.7 |
+| VOLC-034..035 | D-014, F-009 | Authorized work-log discovery | §5.8; no unrelated-room access |
+| VOLC-036..037 | F-011 | Clock registration; time basis | §6.1 |
+| VOLC-038..040 | F-011 | Callback schema/auth/retry/ack; 2xx semantics | §6.2; ENDPOINTS §3.4 |
+| VOLC-041..043 | F-011 | Bump results, fairness, queue persistence | §6.3; M3 acceptance |
+| VOLC-044..046 | F-011 | Full send state machine incl verified closure, cancellation, expiry, unreachable | §6.4; every state has owner/entry/exit/recovery |
+| VOLC-047..049 | D-012, F-011 | waiting_human vs failures; silence ≠ approval | §6.5 |
+| VOLC-050..052 | D-012, RL-11 | Bounded follow-up timers, no reminder loops | §6.6 |
+| VOLC-053..054 | CT-10, R-026, D-016 | Three VP grants; internal default-deny | §8.1 |
+| VOLC-055..056 | F-012 | Enforced matrix; membership on guessed keys | §8.2; walkthroughs 1 |
+| VOLC-057..059 | D-009, D-016 | use/grant/create; origins; VP precedence; revocation | §8.3; walkthroughs 3–4 |
+| VOLC-060..062 | D-008, F-005 | Per-agent permissions + approval policy at tool boundary | §8.4 |
+| VOLC-063 | F-012 | Gateway vs agent credentials; delegated delivery creds | §8.5 |
+| VOLC-064..065 | F-012 | Audit incl. denials; effective-policy readback | §8.6–8.7 |
+
+| **VOLC-066..072a** | R31-002/003/005/019/021/023/026/027 | Kind legality; attempt-close wait; dual admission; worker dispatch; meta-grant; archive scopes; snapshot enforcement | §3.6, §6.5, §6.7, §7, §8.3, §8.8, §8.9 |
+| **VOLC-073..079** | R31-019/021 | enqueue-only/run-now; dispatch transport, request, run record, cancel, retry | §6.7, §7 |
+| **VOLC-080, VOLC-081** | R31-022, R31-016 | Decision table rows name provisioning outcome + owning bond; archive read scopes granted only by explicit GrantRecord owned by CHD31-06 | §4.2, §8.8 |
+| **VOLC-068a, VOLC-068b, VOLC-068c, VOLC-068d, VOLC-072a** | R31-026, R31-023 | Delegation-of-grant cases; grant lineage + conferable bound enforced with a named rejection; audit assignment flow | §8.3, §8.8 |
+
+Requirement count: **89** requirement statements — `VOLC-001..VOLC-081` with one
+number reserved and unallocated inside the range (80 numbered, contiguous apart
+from that reserved number) plus the lettered variants `VOLC-020a`, `VOLC-020b`,
+`VOLC-068a`, `VOLC-068b`, `VOLC-068c`, `VOLC-068d`, `VOLC-072a`, `VOLC-072b`,
+`VOLC-072c`. Rev-2.0 additions: 066–079 and three lettered variants. Rev-2.1
+additions: 080–081. Rev-2.2 additions: `VOLC-068d` (grant lineage and the
+conferable bound, R31-026). `VOLC-047` is retained as a superseded lineage
+marker pointing at `VOLC-067` (never implemented in its old form).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#11-open-design-work-explicitly-not-invented-here -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-11-OPEN-DESIGN-WORK-EXPLICITLY-S065" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 11. OPEN DESIGN WORK (explicitly not invented here)
+
+Each item is addressable as §11.n so cross-volume references resolve to a
+stable anchor.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#11-1-lower-tier-foreman-worker-provisioning-contracts -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-11-1-LOWER-TIER-FOREMAN-WORKER-S066" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 11.1 Lower-tier (foreman/worker) provisioning contracts
+
+creation policy, permissions and session mapping for tiers below supervisor
+(F-002/D-009 left open). The foreman row of §8.2 states what is *enforced*
+now; whether a foreman may create workers (`create_worker`) is OPEN-OW-3.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#11-2-temporary-agent-defaults-w11 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-11-2-TEMPORARY-AGENT-DEFAULTS-S067" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 11.2 Temporary-agent defaults (W11)
+
+the exact default profile (model, caps, lifetime, workspace) for
+dynamically created agents (D-015 leaves defaults open; N-6). VOL-C pins
+only: temp agents are single-NEW-session and must still carry a
+non-default profile.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#11-3-owner-paging-transport-q-4 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-11-3-OWNER-PAGING-TRANSPORT-Q-S068" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 11.3 Owner paging transport (Q-4)
+
+VOL-C defines the wait/incident records; the page transport is
+owner-configured.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#11-4-wake-once-extension-shape-uq-3-q-6 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-11-4-WAKE-ONCE-EXTENSION-SHAPE-S069" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 11.4 `wake_once` extension shape (UQ-3/Q-6)
+
+VOL-C is written to ride bump or wake_once without change.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#11-5-skill-composition-conflict-policy-f-005-vol-b -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-11-5-SKILL-COMPOSITION-CONFLIC-S070" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 11.5 Skill composition conflict policy (F-005/VOL-B)
+
+VOL-C consumes the composed role; wording-vs-grant separation (VOLC-057)
+holds for any composition order.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#11-6-standing-rule-acceptance-integration-d-013-d-010 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-11-6-STANDING-RULE-ACCEPTANCE-S071" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 11.6 Standing-rule acceptance integration (D-013/D-010)
+
+effective rule provenance is VOL-D's input; VOL-C only guarantees the
+audit trail that evidences it.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#11-7-n-1-admission-ownership-for-immediate-work-proposed -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-11-7-N-1-ADMISSION-OWNERSHIP-F-S072" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 11.7 N-1 — admission ownership for immediate work (PROPOSED)
+
+Not user-confirmed: controller-local reservation with scheduler-bump
+fallback (§6.7). Reversible via `admission.run_now_owner`.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#11-8-n-7-queue-timers-and-performance-budgets-proposed -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-11-8-N-7-QUEUE-TIMERS-AND-PERF-S073" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 11.8 N-7 — queue timers and performance budgets (PROPOSED)
+
+The defaults in §6.5/§6.6 are bounded and measured, not universal law.
+Operator adjusts.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#11-9-archive-export-native-import-mechanics -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-11-9-ARCHIVE-EXPORT-NATIVE-IMP-S074" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 11.9 Archive export/native-import mechanics
+
+Owned by VOL-F §2.2; this volume only defines the read contract (§8.8).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/build-spec/VOL-C-tools-messaging-admission-authz.md#12-contract-deltas-this-volume-requires -->
+  <section id="CHD-BUILD-SPEC-INTEGR-C91D19-12-CONTRACT-DELTAS-THIS-VOLUME-S075" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 12. Contract deltas this volume requires
+
+1. DATA-MODEL: report schema v3 (`waiting_for_human` with `question, gate_ref,
+   asked_at, requested_by`; `content_variant`; `attempt_id`), the complete kind
+   enum, bond identity fields, and the new record families — all now carried in
+   `contracts/DATA-MODEL.md` rev 2.0 (no delta remains open).
+2. Key families: `/chd/wait`, `/chd/audit`, `/chd/aggregation`, `/chd/ticket`,
+   `/chd/report`, `/chd/dataset`, `/chd/grant`, `/chd/policy`, `/chd/worker` —
+   canonical `chd` namespace, leading slash required (VOL-B §2).
+3. config.schema.json v4 delta (delivered in `contracts/`): per-agent
+   `permissions`/`approvals`; `sessions.fork_policy` + per-agent override;
+   `vp.grants.*`; `verify.followup_after_s`, `verify.max_followups`,
+   `verify.wait_timeout_s`; `ingress.max_body_bytes`, `ingress.max_clock_skew_s`;
+   `admission.run_now_owner`; `worker.*`; `capacity.*`; `storage.*`.
+4. ENDPOINTS.md: §2 VP re-scope; §4.5 `missing-replies/notify` treats
+   `waiting_human` repliers as answered; §5 single error table; new worker,
+   ticket, archive, grant and policy-resync routes; foreman/peer actor rows.
+5. Rev-2.1 deltas (R31-016/022, delivered): `contracts/DATA-MODEL.md` rev 1.2 —
+   DATA-MODEL §1.6 bond identity
+   `(agent, room, subthread_root, work_uid)` + generation with key grammar and
+   the two-concurrent-tasks worked example (fixture VOLB-067); new
+   DATA-MODEL §1.10 ExportManifest and DATA-MODEL §1.11 SessionArchive;
+   DATA-MODEL §2 bond key per bond-id + `chd-archive` key families.
+   `contracts/config.schema.json` —
+   optional `archive` block (namespace / export_trigger /
+   checkpoint_cadence_s / retention_days / read_scopes) and optional
+   `sessionBond.fork_policy`. `contracts/schemas/session-archive.schema.json`
+   is the committed record schema, validated by
+   `build-spec/tools/validate_archive_schema.py`.
+  </section>
+</spec>

@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd32/runbooks/operator-acceptance.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD32-RU-BF8EDB-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/operator-acceptance.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD32-RU-BF8EDB-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# Operator acceptance runbook
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/operator-acceptance.md#preconditions -->
+  <section id="CHD-HANDBOOK-CHD32-RU-BF8EDB-PRECONDITIONS-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Preconditions
+
+1. Work from a clean checkout containing `handbook/chd32/fixtures`, the harness,
+   matrices and section sources.
+2. Confirm the run is fixture mode. Do not enter production credentials into a
+   fixture. Live adapters require a separate authorization and end-to-end proof.
+3. Choose an evidence export directory with enough space for retained JSON.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/operator-acceptance.md#execute -->
+  <section id="CHD-HANDBOOK-CHD32-RU-BF8EDB-EXECUTE-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Execute
+
+```sh
+set -eu
+for n in $(seq -w 1 10); do
+  python3 handbook/chd32/harness/run_scenario.py "wf-$n" \
+    --evidence-dir handbook/chd32/evidence/runs
+ done
+```
+
+The command must exit zero for every scenario. Inspect each printed
+`expected=... observed=...` pair and each generated `report.json`; do not accept
+console labels without the stored bodies.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/operator-acceptance.md#check-the-critical-gates -->
+  <section id="CHD-HANDBOOK-CHD32-RU-BF8EDB-CHECK-THE-CRITICAL-GATES-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Check the critical gates
+
+Open the reports and verify these negative outcomes are observed and retained:
+
+| Probe | Required outcome | Do not accept |
+|---|---|---|
+| wrong profile | `denied/profile_mismatch` | worker effect |
+| cross-owner leak | `denied/owner_scope_denied` | record visibility |
+| unauthorized meta-grant | `denied/meta_grant_not_allowed` | widened grant |
+| duplicate external action | `duplicate/already_applied` with one effect | second effect |
+| lost acknowledged work | `paused/unknown_execution` | blind replay or release |
+| false completion | `rework/criteria_failed` | terminal completion |
+| capacity leak | paused unknown while reservation is held | released slot |
+| unrecoverable archive lineage | `denied/archive_lineage_missing` | fabricated restore |
+
+The corresponding audit/evidence query must appear in the report. A counter is
+not a substitute for the record.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/operator-acceptance.md#coverage-and-handover -->
+  <section id="CHD-HANDBOOK-CHD32-RU-BF8EDB-COVERAGE-AND-HANDOVER-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Coverage and handover
+
+Check that `invariant-coverage.csv` has a positive and negative evidence row for
+every invariant, and `test-matrix.csv` maps all eight gates. Check the evidence
+folders contain `report.json`, `observed-records.json` and `fixture-copy.json`.
+Record any unsupported or pending live adapter explicitly. A passing fixture is
+not domain readiness, deployment proof or owner acceptance.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/operator-acceptance.md#recovery-and-cleanup -->
+  <section id="CHD-HANDBOOK-CHD32-RU-BF8EDB-RECOVERY-AND-CLEANUP-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Recovery and cleanup
+
+If a step fails, preserve the entire run directory, identify the first mismatch,
+and rerun only after the fixture or harness correction is committed. Never edit
+a report to make it pass. After the evidence bundle is exported and retention
+requirements are met, remove only the isolated fixture namespace; retain the
+reports and failed-run history.
+  </section>
+</spec>

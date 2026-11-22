@@ -1,0 +1,281 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd32/runbooks/controller-backup-restore.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD32-RU-D6D464-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/controller-backup-restore.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD32-RU-D6D464-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# Controller backup and restore runbook v2
+
+**Authority:** R32-017; Section 14 (physical PDF 80–82), with the controller boundary
+introduced in Sections 12–13 (PDF 74–79). This is the controller disaster-recovery
+contract. It does not replace `runbooks/replacement-restore.md`, which restores a
+native Hermes session from `chd-archive`.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/controller-backup-restore.md#1-two-different-recovery-products -->
+  <section id="CHD-HANDBOOK-CHD32-RU-D6D464-1-TWO-DIFFERENT-RECOVERY-PRODU-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 1. Two different recovery products
+
+A **session export checkpoint** is an opaque, native `hermes.session.export` payload
+for one `(agent, profile, session_id)` in `chd-archive`. Its manifest proves only the
+listed checkpoint window, digest, format/version and declared gaps. It is historical
+session evidence and an input to replacement-session import; it is not a copy of
+controller state, a live-session continuation, or a backup of rooms, tickets, grants,
+sends, reservations, configuration or assets.
+
+A **controller backup** is a consistent, integrity-verified snapshot of the
+controller-authoritative records and the references needed to reconstruct control
+state. It is identified by `backup_id`, a schema version, a committed `commit_seq`
+high-water boundary, source controller identity, retention policy and a complete
+per-object digest manifest. A controller backup may reference immutable session
+archive manifests and payload locations, but it does not absorb or rewrite their
+payloads. A backup is not successful merely because one controller node returned
+`fsync`: the backup must be readable from a node-loss-safe independent target and
+must pass the verification and restore-drill checks below.
+
+The two products have separate authorities and acknowledgement points:
+
+| Product | Authority | Contains | Does not prove |
+|---|---|---|---|
+| Session export checkpoint | archive ingestor, `chd-archive` | Native session payload, export manifest, checkpoint window, policy-history reference and gaps | Controller state, remote-run terminality, current authorization or resumability |
+| Controller backup | controller backup writer, backup target | `chd` control/coordination records, index references, configuration and non-secret credential references | That an external effect did not occur after the boundary, or that a remote run is stopped |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/controller-backup-restore.md#2-backup-boundary-and-contents -->
+  <section id="CHD-HANDBOOK-CHD32-RU-D6D464-2-BACKUP-BOUNDARY-AND-CONTENTS-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 2. Backup boundary and contents
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/controller-backup-restore.md#2-1-consistent-boundary -->
+  <section id="CHD-HANDBOOK-CHD32-RU-D6D464-2-1-CONSISTENT-BOUNDARY-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.1 Consistent boundary
+
+1. Enter `backup_pending` and persist a backup intent. Stop new mutations and
+   scheduler registration, or invoke the supported consistent-snapshot mechanism.
+   Existing remote runs are not stopped by a backup.
+2. Acquire the controller writer lease and record `(controller_id, boot_id,
+   fence_epoch)`. Take a snapshot at the last valid outer commit marker and record
+   its `commit_seq` high-water mark. Records without a valid marker are excluded
+   from the visible snapshot and retained as recovery evidence.
+3. Copy canonical records in key order, preserving identities, revisions, tombstones,
+   journal intents, step receipts and commit markers. Do not copy an uncontrolled
+   live database or claim a filesystem image is a logical backup.
+4. Capture the backup manifest and all object digests to an independent target. The
+   target must be outside the failure domain of the source controller and must be
+   readable without the old controller.
+5. Recompute the manifest digest, read back the commit marker and sampled heads, and
+   verify the target from a second reader. Only then mark the backup `verified` and
+   resume mutations. A failed or partial attempt remains `failed`/`incomplete` with
+   its gap list; it is never advertised as a usable backup.
+
+The captured boundary is a point-in-time control snapshot, not a promise that work
+outside the boundary did not happen. The manifest records the RPO window and all
+remote execution observations known at capture time.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/controller-backup-restore.md#2-2-required-inventory -->
+  <section id="CHD-HANDBOOK-CHD32-RU-D6D464-2-2-REQUIRED-INVENTORY-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.2 Required inventory
+
+The backup MUST include the following record families, or explicitly record a
+named, operator-approved gap that makes the backup unusable for dispatch:
+
+| Family | Required contents and invariants |
+|---|---|
+| Coordination | Room records, room heads, messages, subthread roots, objectives, assignments, waits, reports, audit/recovery events; preserve sequence heads and immutable revisions. |
+| Tickets/workflows | Ticket records, workflow id/version/machine reference, dependency graph, transition events, CAS revisions and derived-board cursor; the controller remains authoritative. |
+| Dispatch and execution | Request/dedupe claims, send manifests, attempt records, worker-run records, target/profile/credential scopes, admission reservations, leases, gateway request keys, step receipts and commit markers. |
+| Grants and policy | Grant/delegation lineage, approvals, revocations, expiry, policy snapshots and effective-policy/config revisions. Archived policy remains evidence; it is not silently activated by restore. |
+| Configuration and identity | Versioned desired/effective configuration, schema version, profile/agent/host/gateway registry, capability/readiness results, controller routing and retention policy digests. Embedded secret values are forbidden. |
+| Secure credential references | Credential issuer/namespace, stable reference name or id, version/generation, scope, expiry and reattachment status. Secret values, bearer tokens, private keys and decrypted material are forbidden. |
+| Assets | Artifact/attachment metadata, immutable content references, digests, byte counts, publication state, retention/tombstone state and external object-store locator. Asset bytes are copied only when the configured asset backup includes them; otherwise the manifest names the independent immutable target and gap. |
+| Archive indexes | `chd-archive` session indexes, committed/failed/superseded manifests, checkpoint/gap records, retention/tombstone metadata and payload references/digests. Native export payloads are not converted into controller records. |
+| Recovery and retention | Backup intent/commit/verification records, crash-window evidence, open incidents, held-capacity decisions, tombstones, retention policy revision and legal/audit holds. |
+
+The inventory is closed: an implementation cannot omit a family merely because its
+current row count is zero; it records an empty, verified prefix and high-water mark.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/controller-backup-restore.md#2-3-integrity-and-retention -->
+  <section id="CHD-HANDBOOK-CHD32-RU-D6D464-2-3-INTEGRITY-AND-RETENTION-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.3 Integrity and retention
+
+Each object row has its canonical key, schema version, revision, commit sequence,
+byte count and SHA-256. The top-level manifest is content-addressed by its canonical
+bytes. Verification checks: manifest self-digest, every object digest, monotone
+revisions, dense event ordering where required, commit-marker membership, namespace
+separation, archive index/payload references, and no secret-like field or value.
+Equal-revision different bytes stop the backup and create
+`integrity_equal_rev_conflict`; neither side is chosen.
+
+Retention is recorded as policy revision plus `retention_until` for each family.
+Backup retention cannot shorten an open audit, incident, legal hold, unresolved
+remote run, capacity hold, or evidence lineage. Expired payloads may be tombstoned
+only with a durable tombstone and preserved digest/manifest/gap/audit row. A
+retention job never turns an unavailable object into an empty successful restore.
+At least one verified backup must remain outside the source failure domain for the
+configured recovery window; a single local copy is not node-loss protection.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/controller-backup-restore.md#3-credential-reattachment-without-secret-copying -->
+  <section id="CHD-HANDBOOK-CHD32-RU-D6D464-3-CREDENTIAL-REATTACHMENT-WITH-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 3. Credential reattachment without secret copying
+
+The backup stores only a `CredentialReference`:
+`{issuer, namespace, reference_id, version_or_generation, scope_digest,
+expires_at, required_for}`. It stores no token, password, API key, private key,
+secret-bearing environment value, or reversible ciphertext. The backup verifier
+rejects a field named as secret material and scans serialized values before commit.
+
+During restore, the operator authorizes the new controller to the credential issuer.
+The new controller resolves each reference by exact issuer/namespace/id and requests
+an ephemeral validation or lease without logging the returned secret. Reattachment
+must prove the reference generation and scope match the restored profile/config,
+then record `reattached` or a typed failure in the restore report. Credential
+rotation is a new revision, not an in-place rewrite of the backup. Missing, expired,
+revoked or scope-mismatched references leave the dependent profile and dispatch
+non-ready; they are never replaced by a guessed/default credential.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/controller-backup-restore.md#4-restore-target-and-ordering -->
+  <section id="CHD-HANDBOOK-CHD32-RU-D6D464-4-RESTORE-TARGET-AND-ORDERING-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 4. Restore target and ordering
+
+Restore is to a new controller node and a new controller namespace. The old
+controller is absent or externally fenced. A fresh `boot_id`, writer lease and
+strictly greater `fence_epoch` are required; an uncertain old owner keeps the new
+controller read-only. Restore never reuses the old process identity, rewrites
+history, or copies a live SQLite/profile directory into place.
+
+The replacement performs this order:
+
+1. **Stage:** acquire the new target, validate supported backup/schema versions,
+   independent-target reachability, manifest self-digest and all object digests.
+2. **Load:** restore records through the fenced writer while preserving keys,
+   revisions, tombstones, journal/commit-marker history, archive indexes and
+   retention metadata. Reject newer schemas, duplicate identities and equal-revision
+   conflicts.
+3. **Reattach:** validate configuration, profile/agent/gateway identity, asset
+   references and every secure credential reference. Keep unresolved profiles
+   non-dispatchable.
+4. **Rebuild:** reconstruct room heads, ticket/workflow graph, pending sends,
+   reservations, policy indexes, archive indexes and derived worklists from
+   canonical records; never use a board file or in-memory queue as authority.
+5. **Reconcile:** inspect every non-terminal attempt and remote run using its
+   retained `run_id`, `admission_id`, `execution_generation`, gateway key and
+   target scope. Query status, `resolve-unknown`, and correlated session history
+   before any new external POST.
+6. **Gate:** execute the readiness gates in §6 and persist a restore report with
+   every mapped, terminal, pending, held, blocked and unresolved item.
+7. **Enable:** publish `ready` and register scheduler triggers only after all gates
+   pass. Until then, status/reads may be served but dispatch returns
+   `503 controller_recovery_incomplete`.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/controller-backup-restore.md#5-remote-run-reconciliation-and-capacity-policy -->
+  <section id="CHD-HANDBOOK-CHD32-RU-D6D464-5-REMOTE-RUN-RECONCILIATION-AN-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 5. Remote-run reconciliation and capacity policy
+
+A remote run is classified only from correlated evidence:
+
+| Observation | Restored action | Capacity |
+|---|---|---|
+| `proven-stopped` with matching terminal report/effect | Append a terminal manifest revision and expose existing evidence; do not POST again. | Release only after the terminal write is durable. |
+| `proven-running` with matching run and heartbeat | Reattach the existing attempt and continue bounded observation; no new attempt or POST. | Held and renewed under the new controller lease. |
+| `unreachable` after all bounded reads | Set `paused:unreachable`, page and retry reconciliation. | Held; expiry is not stop proof. |
+| `uncertain` because identities/status cannot settle the boundary | Set `paused:uncertain`, create an operator decision record and preserve all evidence. | Held; never silently dropped or reused. |
+
+A completed side effect is never replayed. An uncertain outcome is not a license to
+start a replacement attempt. A replacement may be authorized only after proven stop
+(or an explicit positive-stop authority permitted by the governing policy), with a
+new attempt identity and a durable explanation of why the old effect cannot recur.
+Delayed replies from an old generation route to `retired_generation` and cannot
+close a replacement send.
+
+Capacity is charged to the attempt/run reservation, not to process liveness. A
+held reservation survives restore, controller restart, lease expiry, archive
+import, wait and report paths. It is released only after `proven-stopped` evidence
+and a durable release record, or the separately configured emergency operator
+attestation with actor, authority, evidence and reason. The uncertain-capacity
+policy is fail-closed: prefer refusing new work to exceeding a configured cap.
+`unresolved_hold_s` is a paging/escalation deadline, never automatic release.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/controller-backup-restore.md#6-readiness-gates-before-dispatch-resumes -->
+  <section id="CHD-HANDBOOK-CHD32-RU-D6D464-6-READINESS-GATES-BEFORE-DISPA-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 6. Readiness gates before dispatch resumes
+
+The replacement MUST remain `recovering`/`read_only` until every mandatory gate is
+true and read back from the new controller:
+
+- new writer lease and fence epoch are externally confirmed; old ownership is
+  absent or fenced;
+- backup manifest, object digests, schema versions, commit markers and sampled
+  records verify with no equal-revision conflict;
+- `chd` durability sentinel returns the configured achieved durability, not merely
+  local `fsync`; the independent backup target is readable;
+- configuration/profile/agent/gateway mappings and reattached credential references
+  validate by exact generation and scope;
+- room heads, ticket/workflow revisions, manifests/attempts, reservations,
+  grants/policies, assets and archive indexes complete ordered scans;
+- all non-terminal remote runs have a durable reconciliation decision; uncertain or
+  unreachable runs have held capacity and an owner/escalation record;
+- archive gaps and retention holds are visible, and all cited work/evidence keys
+  resolve without treating missing payloads as success;
+- scheduler registrations and gateway/capability probes read back successfully;
+- a zero-scheduled-trigger assertion proves that readiness checks with no queued
+  work and no scheduled fire make no scheduler-caused gateway call; an authorized
+  immediate request is a separate controller-admission test; and
+- the restore report, incident/audit record and post-restore queries are durable.
+
+Any failed gate leaves dispatch refused and returns a typed failure. It does not
+silently discard capacity, recreate work, or claim a successful restore.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/controller-backup-restore.md#7-isolated-restore-drill-required-acceptance-scenario -->
+  <section id="CHD-HANDBOOK-CHD32-RU-D6D464-7-ISOLATED-RESTORE-DRILL-REQUI-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 7. Isolated restore drill (required acceptance scenario)
+
+The drill uses a verified backup whose manifest and independent-target readback are
+recorded before the test. It intentionally destroys or fences the old controller;
+no read from the old node is allowed during restore. The fixture contains one
+completed send with a durable terminal report and one admitted/dispatched remote
+run whose response was lost, so its outcome is uncertain.
+
+1. Verify the backup id, top-level digest, commit high-water mark, per-family
+   inventory and retention/credential-reference inventory. Confirm the backup has
+   no secret material and that its `chd-archive` index references resolve.
+2. Remove network/process access to the old controller and start a replacement
+   with a fresh identity. Attempted dispatch before readiness must return
+   `503 controller_recovery_incomplete`; record that no gateway call occurred.
+3. Restore into the new namespace. Read back the completed send and its report;
+   the completed side effect remains one effect and is not replayed.
+4. Reconcile the uncertain run by status, `resolve-unknown` and correlated history.
+   The fixture deliberately leaves it unsettled. The restored manifest becomes
+   `paused:uncertain`, its original reservation remains held, and the controller
+   records an escalation owner; it does not create a second POST or silently free
+   the slot.
+5. Reattach credentials by reference only. Read back issuer, reference id,
+   generation and scope status; the report must contain no secret value.
+6. Query rooms, ticket/workflow history, manifests/attempts, grants/policies,
+   assets and archive indexes. Every expected key and evidence digest is readable;
+   declared archive gaps remain declared.
+7. Run all §6 gates. The controller must remain refused while the uncertain run or
+   any other gate is unresolved. After the drill's operator supplies the permitted
+   positive-stop decision (or a later probe proves stop), write the durable
+   reconciliation and capacity-release record, rerun the gates, and only then
+   permit dispatch.
+
+Required drill evidence is `backup_id`, manifest/digests, old-controller-absent
+proof, new `(controller_id, boot_id, fence_epoch)`, pre-readiness `503`, one
+completed effect with no replay, one uncertain run with held capacity, credential
+reference-only readback, all family queries, gate results, and the final readiness
+transition. The drill fails if any side effect is replayed, held capacity vanishes,
+any evidence becomes unreadable, a secret enters the backup/report, or dispatch is
+allowed before reconciliation.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/controller-backup-restore.md#8-failure-codes-and-status-vocabulary -->
+  <section id="CHD-HANDBOOK-CHD32-RU-D6D464-8-FAILURE-CODES-AND-STATUS-VOC-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 8. Failure codes and status vocabulary
+
+`backup_incomplete`, `backup_digest_mismatch`, `backup_target_unreadable`,
+`secret_material_in_backup`, `schema_version_unsupported`,
+`integrity_equal_rev_conflict`, `writer_lease_held_or_unknown`,
+`credential_reference_unavailable`, `asset_reference_unavailable`,
+`remote_run_uncertain`, `remote_run_unreachable`, `capacity_hold_active`, and
+`controller_recovery_incomplete` are durable typed outcomes. `verified`,
+`restoring`, `recovering`, `read_only`, `ready`, `paused:uncertain`,
+`paused:unreachable`, and `failed` are distinct states; none is inferred from a
+process exit, local fsync, elapsed lease, scheduler reply or empty query.
+  </section>
+</spec>

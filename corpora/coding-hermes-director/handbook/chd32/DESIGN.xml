@@ -1,0 +1,1546 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd32/DESIGN.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD32-DESIGN-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# CODING-HERMES-DIRECTOR — HARNESS DESIGN SPEC
+
+```
+DOC        : coding-hermes-director DESIGN
+REV        : 3.0 (owner red lines applied; supersedes v2.0)
+DATE       : 2026-11-07
+METHOD     : coding-hermes-nasa-spec (Rumsfeld → facts → contracts → quorum)
+STATUS     : PRE-BUILD. Every existing-code claim cites file:line read on
+             2026-11-07. Every unmeasured claim is marked SPIKE or
+             told-by-operator and cannot back a MUST.
+```
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#changelog-v1-0-v2-0-owner-s-red-lines -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-CHANGELOG-V1-0-V2-0-OWNER-S-RE-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## CHANGELOG — v1.0 → v2.0 (owner's red lines)
+
+Each row is one owner red line, what changed, and where it landed.
+
+| # | Red line | What changed from v1 | Landed in |
+|---|----------|----------------------|-----------|
+| RL-1 | NO new scheduling engine; the harness registers **normal scheduler triggers** whose fire calls back INTO the harness API; scheduler is trigger/callback-only and never dispatches a gateway | Deleted the harness-owned `wake_schedule` table (v1 §3.3). The harness now registers ordinary scheduler trigger lanes whose per-lane `gateway_url` points at the harness API (FACT-27); on fire, the scheduler POSTs the tick to the harness. The controller owns the shared reservation and is the only gateway HTTP dispatcher. `wake_once` remains owner-gated | §2.1, §2.2 (CT-02, CT-03), §3.1, §3.3, §3.5; OQ-6 marked superseded |
+| RL-2 | Harness owns (a) the gateway↔agent mapping, (b) each role's **skill list**, injected into gateways | New harness config registry: `[[gateways]]` + per-agent `gateway` binding and `skills` lists; the harness provisions them into the gateways and registers the triggers. This replaces v1's bare `[[agents]]` sketch | §3.2; config schema mirror in the skill's `fleet-config-schema.yaml` |
+| RL-3 | Conversations are NEVER reconstructed from "last N messages". Exactly two delivery modes: (a) brand-new session with the message, (b) reuse the existing session with a new message | Deleted v1 §4.1 (reconstructed conversation premise) and §4.3 (history restore / `CONVERSATION SO FAR` tails) entirely. CT-04 now names the two modes; the verify ladder's rungs are re-expressed in those modes | §2.2 (CT-04, CT-06), §4.1; §5.1 reconciled |
+| RL-4 | DIRECTOR makes **OBJECTIVES**, sent to a manager's gateway (or a group of managers). An OBJECTIVE IS A CHAT ROOM (DuckBrain-backed, human-readable like Slack). Every agent also has its OWN session, and that session is BONDED to an objective. Future extension (note only): two directors / cross-fleet director-to-director with shared managers | The channel model (v1 §4.2) is replaced by rooms: objective rooms (director + one or more managers), session bonding as config data, and a note-only future-extension subsection | §4.1, §4.2, §4.7; config: `session.bond` + room `kind: objective` |
+| RL-5 | MANAGERS make **TASKS** (goals/stories — word flexible) and send them to supervisors in another DuckBrain chat room; each agent still has its own bonded session | Task rooms added (`kind: task`, manager + its supervisors); bonding unchanged from RL-4 | §4.3; config: room `kind: task` |
+| RL-6 | Chat semantics baked INTO DuckBrain: owner can post (no self-echo), replies to a person or the group, @-handles later wake exactly one agent while the message stays searchable in the log, sub-threads supported; a finished task's report arrives AS a chat message with the report attached | New chat-semantics section defining room key families (`room/&lt;id&gt;/&lt;seq&gt;`, ordered, searchable), owner no-echo, reply targeting, @-wake, threads, and report-as-message (report JSON rides as the message attachment) | §4.4, §4.5; key layout in the skill's `chat-protocol.md` |
+| RL-7 | Per-GATEWAY concurrency limits ARE the backpressure; managers are BOUND to a gateway; responses are event-driven (a finishing supervisor replies into the chat, which wakes the manager); agents never schedule themselves — scheduled wakes arrive as chat messages | v1's host-load gates (§5.5) are re-based: the harness enforces `max_inflight` per gateway (config, RL-2) when composing sends. Event-driven wake-on-reply defined. Self-scheduling ban restated as R-021 | §3.4, §4.4 (wake-on-reply), §5.5; R-021 |
+| RL-8 | MANAGERS CAN TALK TO MANAGERS (they have spaces); a **responsibilities registry** (manager→X, supervisor→Y) is built into the config schema and the DuckBrain layout | Manager-to-manager rooms (`kind: space`) allowed; per-agent `responsibility` field in config, mirrored by the harness to DuckBrain `registry/&lt;agent-id&gt;` keys; room membership may cite the registry | §3.2, §4.4, §6.3; R-022 |
+| RL-9 | Prefer real libraries over hand-rolling; survey and name candidates (Go and/or Python), verify they exist and are maintained, cite repo + one-line fit, NO winner — owner weighs | New library-candidates section with verified repos (web search 2026-11-07), one-line fits, tradeoffs, and the rejected AutoGen; owner decision added as Q-7 | §10; Q-7; FACT-30, FACT-31 |
+
+Unchanged by red lines: the verify ladder (§5.1, re-based on session modes
+only), read-scoping enforcement (§6.2, channel→room wording), the
+fully-deferred-fleet invariant (§5.6), and the multi-host section (§9,
+intact).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#changelog-v2-0-v3-0-owner-s-second-red-line-batch -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-CHANGELOG-V2-0-V3-0-OWNER-S-SE-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## CHANGELOG — v2.0 → v3.0 (owner's second red-line batch)
+
+Each row is one owner red line, what changed, and where it landed.
+
+| # | Red line | What changed from v2 | Landed in |
+|---|----------|----------------------|-----------|
+| RL-10 | CONFIRMED: the scheduler calls the director-harness; the director-harness calls the gateway. Two hops, always | Was implicit in CT-02/CT-03; now normative (R-023) and drawn as HOP 1 / HOP 2 in the component diagram. No path spawns a hierarchy agent directly from the scheduler, and no path reaches a gateway except through the harness | §2.1, §3.3; R-023 |
+| RL-11 | MISSING-REPLY handling: when a message is sent agent→agent, the reply might never come. The harness must (a) notify the CALLER that their reply never arrived and (b) send a BUMP to the session that was supposed to produce the report. Detection is mechanical: the agent neither replied nor came back with an attached work report | New missing-reply handling placed INSIDE the existing remind→fresh→escalate ladder (it extends that ladder, does not fork it): on mechanical detection the harness notifies the sender's agent and bumps the target's bonded session with a fresh-report obligation; counted as `missing_reply_total` | §5.1 (ladder extension), §3.4 (counters); CT-11 |
+| RL-12 | REPLIES ARE THREADED: replying means replying IN A SUBTHREAD of the original request. Multiple supervisors (or supervisor+manager) working one task share the SAME subthread; threads nest arbitrarily (tag an agent → it replies → that reply is itself replyable → the thread goes down as deep as needed) | v2's "sub-threads are reads over the same family (thread = root seq reference)" is replaced by a real tree: every message carries `reply_to` (parent seq); the root is the original request; one branch per task; depth unbounded. Updated in the body AND the skill's `chat-protocol.md` | §4.4; CT-12; skill `references/chat-protocol.md` |
+| RL-13 | THE VP ROLE: the owner's own agent surface (Hermes, Claude Code, anything that speaks MCP or calls the API correctly) talks to the director AS the VP — it sends messages and chats just like a manager. Hermes has a TOOL to call the director. The director-harness's OWN agents (managers/supervisors) can NOT act as VP unless explicitly granted | VP documented as a first-class caller role with explicit grants: create objectives, inject messages, read rooms it names; default-deny for harness-internal agents (new §6.1 table row) | §11.1; CT-10; §6.1 |
+| RL-14 | PER-AGENT INSTANCE LIMITS: the same agent can run MULTIPLE sessions at once — that needs its own limit per agent (max concurrent live sessions of one agent id), separate from per-gateway `max_inflight` | New per-agent `max_sessions` config requirement, enforced by the send orchestrator at dispatch, next to — never derived from — the gateway cap | §3.4, §3.6; CT-13 |
+| RL-15 | ALL DATA IN DUCKBRAIN: every room, message, report, session bond, registry entry, and limit is stored in DuckBrain. The service config carries the LIMITS: max concurrent agents on a Hermes gateway AND max concurrent agents of a given TYPE in parallel — scheduling is always allowed, RUNNING is what the cap gates | DuckBrain named the sole durable store, extended with bond and limit key families (`chd/bond/&lt;agent-id&gt;`, `chd/limits/&lt;scope&gt;`); typed caps (per-gateway, per-type) gate RUNNING only — scheduling/bumping is never refused for capacity | §4.5, §3.4, §3.6; CT-13 |
+| RL-16 | SIGNAL SURFACES: the harness drives Hermes harnesses via signals from API / MCP / CLI / webhook. Callers are VPs (other agents), the scheduler acting as VP, or a UI chat for the user | The four ingress points enumerated as ONE contract surface with shared auth, shared semantics, one audit record — no door is privileged | §11.2; CT-14 |
+| RL-17 | UI CHAT: a UI chat so the owner can follow along and watch the hierarchy work — read-only follower view by default; posting = acting as VP | New UI-chat section: default read-only follower over the room logs; the send box is a VP grant, not a bystander feature | §11.3 |
+| RL-18 | CRIER BRIDGE: bridge support for the crier fleet-bus integration — a bridge adapter so director rooms/events can reach crier and vice versa | Bridge section written from the crier README read 2026-11-07 (relay topics fire-and-forget, durable lease/ACK inboxes, per-agent webhook delivery, federation): outbound room events → crier topics/inboxes; inbound crier messages → room messages through the harness ingress | §11.4; CT-15; FACT-32 |
+| RL-19 | CONFIG DEPTH: the config covers workdir, skills, tools include/exclude rulesets, explicit model, context limits, max turns, token budgets, and the limits from RL-14/RL-15 | Requirements list added as a config-depth section; the concrete schema is the contracts task's deliverable — the spec names the required knobs and points at `contracts/`, it does not define the schema twice | §3.6 |
+| RL-20 | STALE REPORTS: a PREVIOUS report may be delivered as a message, but the reply contract still requires a FRESH report for the current request — an attached old report does not satisfy the verify loop (report must be newer than the request it answers; harness checks `report.timestamp &gt; request.timestamp`) | Fresh-report rule added to the report contract and the verify loop: a machine-checked freshness comparison; an older report is `bad_report{reason: stale}` and re-enters the ladder | §4.5, §5.1; CT-06 |
+
+Unchanged by this batch: the multi-host section (§9) and the
+library-candidates section (§10) — no RL-10..RL-20 row touches them.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#0-frame -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-0-FRAME-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 0. Frame
+
+**System.** `coding-hermes-director` is a harness that runs a hierarchy of
+Hermes agents — one **director**, several **managers**, several
+**supervisors** — layered *above* the existing foremen/workers of the
+coding-hermes fleet, as a first-class system inside/alongside Hermes.
+
+**One idea.** The hierarchy is *config the harness holds*, spoken through
+*chat rooms in DuckBrain*, timed by *the existing scheduler*: the harness
+registers ordinary scheduler triggers and answers when they fire; it never
+owns a schedule, never spawns directly, and never reconstructs a
+conversation — a message reaches an agent only as a brand-new session's
+first turn or an existing session's next turn, and every cycle ends in a
+report the harness verifies before more work is admitted.
+
+**Why this exists (the waste it must kill).** The fleet already
+demonstrated the failure class this spec must make impossible: a foreman
+lane ran 213 dry-run ticks and burned 346M tokens in 48h
+(`FACT-22`, told-by-operator) because `admission_mode="tasks"` admits on
+workable rows alone (`FACT-01`, `FACT-02`) and the sanctions that exist
+(adaptive cooldown, dry-run throttle) were disabled or unreachable
+(`FACT-05`). A three-level hierarchy of chatting agents multiplies that
+failure surface by every edge in the org chart. The director harness must be
+built so a fully-deferred fleet *idles* rather than *converses*.
+
+**Readers.** (a) The **owner** decides the quorum items in §7; (b) a
+**worker/foreman** must be able to build one milestone (§8) from this file
+plus the cited source without inventing a contract; (c) a **judge** must be
+able to grade every acceptance criterion in §8 as run/pass/fail.
+
+**Scope boundary (explicit).** This spec does NOT cover: changing foreman
+or worker prompts (they are untouched); the scheduler's packer/admission
+algorithms (reused, not modified, except where §3.5 names an extension);
+DuckBrain internals (used over its HTTP API only — the chat system of §4.4
+is *defined* as DuckBrain key families, not a fork of DuckBrain); Muster
+internals (borrowed, at most, for MCP tool exposure — `OQ-4`). Cross-fleet
+director-to-director federation is OUT of scope for the v2 build; it is
+recorded as a future extension, note only (§4.7).
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#1-rumsfeld-matrix -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-1-RUMSFELD-MATRIX-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 1. Rumsfeld Matrix
+
+Sinks: each quadrant names where its contents land downstream
+(facts ledger → §A.1; open questions → §A.2; risks → §5; normative
+statements → §2–§8).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#1-1-known-knowns-verified-each-row-is-in-the-facts-ledger-a-1 -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-1-1-KNOWN-KNOWNS-VERIFIED-EACH-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.1 Known knowns (verified — each row is in the facts ledger §A.1)
+
+| # | Fact | Source |
+|---|------|--------|
+| K1 | The fleet scheduler is a Go daemon at `~/coding-hermes-scheduler/coding-herms-scheduler`; admission modes are `cooldown` (cron semantics) and `tasks` (work-driven) | `internal/scheduler/admission_mode.go:16-32` (FACT-01) |
+| K2 | tasks-mode admits immediately when the board holds a WORKABLE row; the workable scanner requires open status + not-blocked + all `depends_on` terminal | `internal/scheduler/board_workable.go:20-84` (FACT-02) |
+| K3 | A lane whose board resolves outside its own workdir is "time-based" — the tasks waiver is refused (SCHED-GAP-141) | `internal/scheduler/admission_mode.go:37-75` (FACT-03) |
+| K4 | Builder lanes whose own board is drained are deferred with reason `tasks_no_work` instead of dispatched (SCHED-GAP-1656) | `internal/scheduler/admission_mode.go:24-29` (FACT-04) |
+| K5 | Adaptive cooldown is per-lane opt-out (`adaptive_cooldown=0` is legal and observed in fleet config) and a tasks-mode lane keeps only its floor pin | `internal/scheduler/adaptive_cooldown.go:104-115,186-205` (FACT-05) |
+| K6 | The dry-run throttle suspends a lane at 10 consecutive no-artifact ticks (warn at 5), per SCHED-GAP-17000 | `internal/database/dry_run_throttle.go:14-28` (FACT-06) |
+| K7 | The cooldown authority is the DB row; fleet.toml values import as operator pins and can never *lower* a pin | `internal/config/loader.go:881-893` (FACT-07) |
+| K8 | Unknown `admission_mode` values are rejected at config load | `internal/config/loader.go:484-493` (FACT-08) |
+| K9 | Concurrency: `SlotPool` caps concurrent ticks fleet-wide per pool; namespaces carry `max_concurrent` | `internal/scheduler/slot_pool.go:27,90-91`; `internal/database/models.go:589` (FACT-10) |
+| K10 | Tick execution is a gateway POST carrying a prompt and an optional session key, "so Hermes records it as sessions.session_key for durable tick attribution" | `internal/scheduler/gateway_client.go:467-487` (FACT-11) |
+| K11 | Gateway 401/403 is terminal (`ErrGatewayKeyRejected`) — no retry flood | `internal/scheduler/gateway_client.go:19-25` (FACT-12) |
+| K12 | Board-wake (ADV-R07 Option C): a watcher only ADDS evaluation triggers; "wall-clock cooldown remains the SOLE admission authority. Nothing here can veto, skip, or delay a spawn" | `internal/scheduler/board_wake.go:14-38` (FACT-13) |
+| K13 | There is an existing bump API: `POST /api/v1/projects/{name}/bump` | `internal/api/bump_test.go:12-15` (FACT-14) |
+| K14 | Scheduler mutations pass one fail-closed auth choke point; with auth off every mutation is refused with 503 | `internal/api/auth_gate.go:9-13` (FACT-15) |
+| K15 | `~/.hermes/fleet.toml` defines namespaces with `max_concurrent`, `admission_mode`, `default_prompt`; `coding-hermes` namespace is `admission_mode="tasks"`, `max_concurrent=10` | `~/.hermes/fleet.toml:53-67` (FACT-16) |
+| K16 | Blackout windows (DeepSeek peak-price ×2) exist at scheduler level | `~/.hermes/fleet.toml:8-11` (FACT-17) |
+| K17 | DuckBrain answers `/health` with `{"status":"healthy",...}` at `http://127.0.0.1:3000` | probe, 2026-11-07 (FACT-18) |
+| K18 | DuckBrain `POST /api/memories` without an API key returns **401** — writes are authenticated | probe, 2026-11-07 (FACT-19) |
+| K19 | DuckBrain role tokens exist as files at `~/.duckbrain/&lt;role&gt;.token` (e.g. `bunker-foreman.token`, `axiom-foreman.token`) | `ls ~/.duckbrain/` (FACT-20) |
+| K20 | Hermes gateway tick timeout default is 3600s (`gateway_timeout: 3600`) | `~/.hermes/config.yaml:241` (FACT-21) |
+| K21 | Workers are spawned today as `hermes chat -q "&lt;brief&gt;" -m &lt;model&gt; --provider &lt;provider&gt; -s &lt;session&gt;` from inside a foreman session | `~/.hermes/fleet.toml:67` (`default_prompt`) (FACT-23) |
+| K22 | Retired tick-driver scripts are gated at both the config loader and the API write path, with a pinned three-way parity test | `internal/api/retired_drivers.go:14-38`; `internal/config/retired_drivers.go:14-24` (FACT-09) |
+| K23 | The tick's POST target is resolvable PER LANE: `gateway_url` at lane level (then namespace, then daemon global) — SCHED-GAP-1712. A lane whose `gateway_url` names the harness API delivers its tick fire to the harness | `internal/config/config.go:440-445` (FACT-27) |
+| K24 | The namespace carries its own `gateway_url`/`gateway_key` middle tier of the same resolution | `internal/config/config.go:512-518` (FACT-28) |
+| K25 | Sessions are resumable after gateway drop or daemon restart: the orphan scan re-queues ticks with a CONTINUATION prompt through the normal slot pool (SCHED-GAP-091) | `internal/scheduler/session_resume.go:13-30` (FACT-29) |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#1-2-known-unknowns-articulated-unverified-register-a-2 -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-1-2-KNOWN-UNKNOWNS-ARTICULATED-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.2 Known unknowns (articulated, unverified — register §A.2)
+
+The highest-value unknowns, each with a probe and a falsifier:
+
+- **UQ-1 (blocking, M2).** Does a Hermes gateway session *continue
+  conversation context* when a second prompt is sent with the same
+  `session_key` (`FACT-11` shows the scheduler already transmits one)?
+  This decides how strong REUSE mode (§4.1) is: full conversation
+  continuation vs a delivered message with no memory of prior turns.
+  Probe: two gateway POSTs, same key, second asks "what did I just say".
+  Falsifier: second answer shows no memory of the first prompt → REUSE
+  mode is attribution-only; multi-turn context then lives in the ROOM LOG,
+  which agents read themselves (§4.4) — never harness-reconstructed. The
+  verify-loop re-prompt (§5.1) is self-contained either way.
+- **UQ-2 (blocking for §6.2 backstop).** DuckBrain read API shape
+  (`GET`/query endpoints) and whether tokens can be *namespace-scoped* (a
+  token valid for one namespace only). Probe: read the DuckBrain route
+  table; mint a scoped token and try a cross-namespace read. Falsifier: if
+  scoping does not exist, read-scoping (§6.2) must be enforced **entirely**
+  at the harness router, and DuckBrain tokens stay host-trusted.
+- **UQ-3 (non-blocking, M3).** Whether `POST /projects/{name}/bump`
+  (`FACT-14`) can express "admit once at time T" or only "raise admission
+  frequency for N ticks". Determines how scheduled wakes request admission
+  (§3.3). Falsifier: bump body fields admit only `remaining_ticks`-style
+  knobs → propose the `wake_once` extension in §3.5 as a scheduler PR.
+- **UQ-4 (non-blocking).** Muster's MCP surface shape (what a tool exposed
+  via Muster looks like to a Hermes session). Told-by-operator only
+  (`FACT-24`). Falsifier: Muster cannot expose per-namespace tools → role
+  tool grants (§6.1) fall back to Hermes config profiles alone.
+- **UQ-5 (non-blocking).** The exact Hermes knob for per-session tool
+  restriction (config profiles vs CLI flags on `hermes chat`). Falsifier:
+  no per-session restriction exists → tool grants degrade to
+  harness-side sandboxing and the §6.1 matrix marks those rows UNVERIFIED.
+- **UQ-6 (non-blocking, M5).** DuckBrain's search surface over room keys
+  (full-text? prefix only?) — decides how much of "searchable chat log"
+  (§4.4) DuckBrain provides vs what the harness indexes. Probe: read the
+  DuckBrain API docs; try a query endpoint. Falsifier: no server-side
+  search → the harness keeps a lightweight inverted index over room keys
+  and DuckBrain remains the durable store only.
+- **UQ-7 (non-blocking, M3).** DuckBrain room-write atomicity: do two
+  agents appending to the same room concurrently always get distinct,
+  monotonic `&lt;seq&gt;` values (server-allocated), or can they race? Probe:
+  concurrent POSTs to one key family; read back the sequence. Falsifier:
+  client-chosen seq can collide → the harness allocates seq through a
+  single writer (its own API) and agents POST through it.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#1-3-unknown-unknowns-techniques-named-each-lands-as-a-risk-or-a-design-decision -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-1-3-UNKNOWN-UNKNOWNS-TECHNIQUE-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.3 Unknown unknowns (techniques named; each lands as a risk or a design decision)
+
+- **Assumption inversion** on K10 ("sessions are fire-and-forget"): if a
+  re-prompt *does* continue a session (REUSE mode, §4.1), a stuck session
+  keeps its whole conversation on every remind — including the confusion
+  that made it stall. Design consequence: the fresh-session rung of the
+  ladder (§5.1) is *mandatory*, not optional, even when REUSE re-prompts
+  "work".
+- **Cross-domain analogy** (Kubernetes operator / Airflow scheduler): a
+  hierarchy where leaves schedule themselves degenerates into
+  thundering-herd; the fix everywhere else is *one owner of the queue and
+  workload, centralized admission*. Imported as D-002 (§3.1) — in v2 the
+  existing scheduler IS that single admission authority and the harness
+  adds no second one (RL-1).
+- **Scale extremes** at 100× (100 agents chatting): naive agent-to-agent
+  messaging is O(n²) sessions. Room-based messaging (§4.2–§4.4) and
+  per-gateway concurrency limits (§3.4) exist precisely for this; the
+  design caps fan-out at `orchestration.max_fanout` (default 12, matching
+  the foreman wave budget in `FACT-16`'s default_prompt).
+- **Second-order effects** (success case): if the director works, foremen
+  get *better* task selection — which hides the director's own failures
+  ("fleet looks fine, hierarchy does nothing"). Consequence: §8 milestones
+  require the harness's own observability (send ledger, outcome counters),
+  not just fleet health.
+- **Day-one state**: before the first trigger is registered, the harness
+  must show zero agents woken, zero rooms, zero sends — and the fleet must
+  run exactly as today. Normative: **the director harness is additive; with
+  an empty config it is a no-op** (R-012).
+- **Unexpressible failure**: if a session cannot record "I failed" (no
+  report message posted), every downstream count lies. Consequence: the
+  report contract (§4.5) defines an explicit `failed` status, and
+  "no report at deadline" is a *distinct, countable* state (§5.1).
+- **Adversary view**: an agent that benefits from appearing productive.
+  It posts a report claiming `done` with no artifact. Consequence: report
+  verification (§4.5) requires an artifact reference for `done`, and the
+  harness samples artifact existence (M5 criterion).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#1-4-unknown-knowns-operator-held-constraints-made-explicit -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-1-4-UNKNOWN-KNOWNS-OPERATOR-HE-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.4 Unknown knowns (operator-held constraints, made explicit)
+
+- **N-1.** The scheduler's own law: *nothing added to the system may veto,
+  skip, or delay a spawn* — the G1/G7 ruling quoted at
+  `internal/scheduler/board_wake.go:34-38` (`FACT-13`). The director
+  inherits this law: **the hierarchy orders and requests; it never
+  overrides admission** (R-003).
+- **N-2.** Both stores must agree on every write: scheduler changes land
+  in `~/.hermes/coding-hermes/scheduler.db` **and** `~/.hermes/fleet.toml`
+  (told-by-operator, `FACT-26`; pin-import mechanics at `FACT-07`).
+  Any director config that adds lanes must go through the pinned
+  loader/API path, never by editing the DB directly (R-014).
+- **N-3.** "Fast when there is work, slow when it is only perpetual stuff"
+  — the owner's stated intent for tasks mode (quoted at
+  `internal/scheduler/admission_mode.go:44-46`). The director adopts the
+  same doctrine for its own wakes (R-013).
+- **N-4.** Stated non-goal inherited from fleet history: the director must
+  NOT re-introduce retired driver scripts or custom `command` lanes
+  (`FACT-09` exists because that class of config rotted).
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#2-component-diagram-and-contracts -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-2-COMPONENT-DIAGRAM-AND-CONTRA-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 2. Component Diagram and Contracts
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#2-1-component-diagram -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-2-1-COMPONENT-DIAGRAM-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.1 Component diagram
+
+```mermaid
+flowchart TB
+    subgraph HC["harness config (harness.toml — RL-2)"]
+        REG["Registries&lt;br/&gt;agents · gateway binding · skills per role&lt;br/&gt;responsibilities · room membership"]
+    end
+
+    subgraph SCH["EXISTING scheduler daemon — trigger/callback authority"]
+        TL["trigger lanes (normal cooldown lanes)&lt;br/&gt;gateway_url = harness API (FACT-27)"]
+        ADM["callback delivery + cooldown state&lt;br/&gt;no gateway dispatch; no CHD capacity ledger"]
+    end
+    subgraph RES["DIRECTOR CONTROLLER — reservation owner"]
+        RSRV["shared atomic reservation ledger&lt;br/&gt;scheduled callback + immediate run_now"]
+    end
+
+    subgraph CALLERS["callers — signal ingress (RL-16)"]
+        VP["VP callers (RL-13)&lt;br/&gt;owner's agent surface (Hermes tool, Claude Code, MCP/API)&lt;br/&gt;scheduler acting as VP · owner via UI chat (RL-17)"]
+    end
+
+    subgraph H["director-harness (new service, NO scheduling engine)"]
+        API["signal ingress — ONE surface, four doors:&lt;br/&gt;API · MCP · CLI · webhook (RL-16)&lt;br/&gt;fire callback: the trigger calls the harness,&lt;br/&gt;the harness calls itself back into its cycle"]
+        SO["Send Orchestrator&lt;br/&gt;per-gateway concurrency · fanout caps"]
+        VR["Verify Loop&lt;br/&gt;report check · re-prompt ladder"]
+        RT["Chat Router&lt;br/&gt;room membership · wake routing (@-handles)"]
+    end
+
+    subgraph HR["Hermes runtime"]
+        GW["Hermes gateways&lt;br/&gt;one per host (§9), concurrency-limited"]
+        SESS["agent sessions&lt;br/&gt;own system prompt · skills · bonded to objective&lt;br/&gt;(director / manager / supervisor)"]
+    end
+
+    DB[("DuckBrain chat store&lt;br/&gt;rooms = key families, ordered seq&lt;br/&gt;searchable · reports as messages&lt;br/&gt;bonds · registry · limits (RL-15) — the ONLY store")]
+
+    BR["Crier bridge (RL-18)&lt;br/&gt;rooms ↔ crier topics / inboxes"]
+
+    REG --&gt;|"register trigger lanes&lt;br/&gt;(scheduler API, N-2)"| TL
+    TL --&gt;|"HOP 1 — scheduler calls&lt;br/&gt;the harness (tick fire, RL-10)"| API
+    VP --&gt;|"VP signals (same surface&lt;br/&gt;as the fire callback)"| API
+    API --&gt; SO
+    SO --&gt;|"admission request (bump, FACT-14)"| ADM
+    ADM --&gt;|"HOP 2 — harness calls the gateway:&lt;br/&gt;gateway POST + session_key (FACT-11, RL-10)"| GW
+    GW --&gt; SESS
+    SESS --&gt;|"room messages + reports&lt;br/&gt;x-api-key (FACT-19)"| DB
+    RT --&gt;|"resolve membership,&lt;br/&gt;compute wakes"| DB
+    VR --&gt;|"REUSE or NEW session message"| GW
+    VR --&gt;|"close / escalate"| SO
+    RT &lt;--&gt;|"room events out ·&lt;br/&gt;crier messages in"| BR
+```
+
+Plane note: `HC`, `H`, and `DB` are the director system. The scheduler and
+the gateways are *existing* components the harness calls and configures;
+the hierarchy agents are ordinary Hermes sessions bound to gateways by
+config (§9 keeps the multi-host meaning of "gateway"). The dispatch path
+is exactly TWO hops (RL-10): the scheduler calls the harness (HOP 1), the
+harness calls the gateway (HOP 2) — the scheduler never spawns a hierarchy
+agent directly, and nothing reaches a gateway except through the harness.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#2-2-component-contracts -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-2-2-COMPONENT-CONTRACTS-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.2 Component contracts
+
+Each contract states what a caller may rely on and what the producer may
+not break. Producer/consumer both named.
+
+**CT-01 — Config registry (harness-owned; RL-2).**
+Producer: the operator (and, in M1, the config loader). Consumers: every
+harness component. Content: `[[gateways]]` (id, url, transport,
+`auth_token_ref`, `max_inflight`) and `[[agents]]` (id, role, `gateway`
+binding, `skills` list, `responsibility`, session bonding, room
+membership, triggers). The harness is the ONLY owner of this mapping: no
+agent may edit its own binding, skills, or membership (§6.3). The harness
+provisions skill lists INTO the named gateways and derives everything
+scheduler-side from this one file (R-001).
+
+**CT-02 — Trigger registration → scheduler (RL-1).**
+Producer: the harness. Consumer: the existing scheduler. The harness
+registers NORMAL scheduler lanes/triggers (cooldown mode, validated config
+path `FACT-07`/`FACT-08`, two-store agreement `N-2`) for the director and,
+individually, for any manager needing its own clock. Each trigger lane's
+per-lane `gateway_url` names the harness API (`FACT-27`) — so when the
+trigger fires, the scheduler POSTs the tick to the harness. Idempotent on
+`dedupe_key`. The harness owns NO wake table of its own (supersedes v1
+§3.3; OQ-6 superseded in §A.2).
+
+**CT-03 — Harness → scheduler (admission request).**
+On a fire callback, the harness calls itself back into its cycle path and
+requests admission through the scheduler's existing public surface — the
+bump API `POST /api/v1/projects/{name}/bump` (`FACT-14`) or, if UQ-3
+resolves to "extension needed", the small `wake_once` extension of §3.5.
+**The harness never spawns directly**; the scheduler remains the sole
+admission authority (`FACT-13`, R-003, R-018). Backpressure: the
+orchestrator respects per-gateway `max_inflight` (§3.4, RL-7) and the
+namespace `max_concurrent` it configured (`FACT-16`); the scheduler may
+admit less.
+
+**CT-04 — Scheduler → gateway → session (the only two delivery modes; RL-3).**
+Unchanged transport: gateway POST with prompt, model, provider, and
+`session_key` (`FACT-11`). The harness adds exactly one decision — the
+session mode:
+- **NEW**: a brand-new session (fresh session key); the message is its
+  first turn.
+- **REUSE**: the agent's existing bonded session (same session key); the
+  message is its next turn.
+There is no third mode. The harness NEVER reconstructs conversation
+history into the prompt (no "last N messages", no `CONVERSATION SO FAR` —
+v1 §4.1/§4.3 are deleted). Context lives in the room log, which agents
+read themselves (§4.4). Auth rejection is terminal (`FACT-12`).
+
+**CT-05 — Session → DuckBrain (room writes + reports).**
+Every hierarchy session, on every wake, posts zero or more chat messages
+to rooms it is a member of and exactly one report message (§4.5),
+authenticated with its role token (`FACT-19`, `FACT-20`). Key layout in
+§4.4. The session has no other write surface for these key families.
+Room-append sequencing is race-safe by UQ-7's outcome.
+
+**CT-06 — Verify loop.**
+Consumer of CT-05. `Verify(send_id, agent_id) → verified | no_report |
+bad_report | failed`. `verified` requires a FRESH report (RL-20): the loop
+machine-checks `report.timestamp &gt; request.timestamp` — an attached older
+report does not satisfy the loop and is `bad_report{reason: stale}`. On
+`no_report`/`bad_report`, runs the ladder of
+§5.1, expressed in the only two session modes: remind = a REUSE-mode
+message into the bonded session (up to N=2; `FACT-11` makes the key
+plumb-through possible; UQ-1 decides how much context survives), then one
+**NEW session**, then **escalate** into the parent's room and, at the top,
+to the owner. The NEW-session rung needs no history restore: the prompt
+states the obligation, and the agent reads the room for context.
+
+**CT-07 — Chat Router (membership + wake routing).**
+Producer: sessions (via DuckBrain writes). Consumer: the router. When a
+message lands in a room (including a `kind=report` message), the router
+resolves membership and computes which agent sessions to wake — exact
+target for a person-directed reply or `@handle`, all other members for a
+group-directed one — subject to per-gateway limits (§3.4). **The router is
+the only component that resolves room membership**; sessions are told
+their own rooms and never learn another room's keys (§6.2 for the
+enforcement point).
+
+**CT-08 — Scheduling ownership rule.**
+Agents never schedule themselves (R-021). An agent may REQUEST a future
+wake ("do this in 2 hours") by asking the harness; the harness registers
+it as a normal scheduler trigger (CT-02) and, when it fires, the wake
+comes back as a chat message into the agent's room/session. An agent
+self-scheduling outside that path is a violation counted as a bad report
+(§4.5).
+
+**CT-09 — Responsibilities registry (RL-8).**
+The config's `responsibility` field per agent is the authoritative
+registry; the harness mirrors it to DuckBrain keys
+(`registry/&lt;agent-id&gt;`, §4.4) so any agent (and any human reader) can
+resolve "who owns X" without reading the harness config. Manager-to-manager
+rooms (`kind: space`) are config data whose membership SHOULD be
+justified by the registry; the router refuses to deliver into a space
+whose members do not both carry a registry entry (M5 acceptance).
+
+**CT-10 — VP caller role (RL-13).**
+Producer: VP callers. Consumer: the harness ingress (CT-14). A VP is any
+of the owner's own agent surfaces — Hermes (which has a TOOL to call the
+director), Claude Code, anything that speaks MCP or calls the harness API
+correctly. A VP talks to the director AS a first-class caller: it sends
+messages and chats just like a manager does. VP grants, exactly three:
+create objectives (open rooms), inject messages into rooms it names, read
+rooms it names. **Harness-internal agents (managers, supervisors, the
+director's own sessions) can NOT act as VP unless explicitly granted** —
+default-deny, one §6.1 table row, one config grant per agent. Every VP
+signal leaves the same audit record regardless of which door it entered.
+
+**CT-11 — Missing-reply handling (RL-11).**
+Producer: the harness verify loop. Consumers: the caller agent and the
+target agent. When a message is sent agent→agent, the reply might never
+come; failure is detectable MECHANICALLY — the target agent neither
+posted a reply message nor came back with an attached work report. On
+detection the harness does BOTH: (a) notifies the CALLER (the agent
+above) that their reply never arrived, and (b) sends a BUMP to the
+session that was supposed to be producing the report. This is an
+extension of the existing remind→fresh→escalate ladder (§5.1) — it rides
+those rungs, it does not fork a second mechanism.
+
+**CT-12 — Threaded replies (RL-12).**
+Producer: every replying session. Consumer: the chat router. A reply is a
+message IN A SUBTHREAD of the original request: each message carries
+`reply_to` (its parent seq); the original request is the ROOT; one branch
+per task; nesting is unbounded (a reply to a reply is itself replyable).
+Multiple supervisors — or a supervisor and its manager — working ONE task
+share the SAME subthread. The thread is data over the room's single
+DuckBrain log (walk `reply_to` over `chd/room/&lt;room-id&gt;/&lt;seq&gt;`), never a
+second store; wake targeting is unchanged (§4.4).
+
+**CT-13 — Per-agent instance limits + typed caps; DuckBrain is the only store (RL-14, RL-15).**
+Producer: the send orchestrator. Consumers: every dispatch. Two INDEPENDENT
+limits: (1) per-agent `max_sessions` — the max concurrent LIVE sessions of
+one agent id, because the same agent can run multiple sessions at once —
+separate from and never derived from (2) per-gateway `max_inflight`. The
+service config also carries the typed caps: max concurrent agents on a
+Hermes gateway AND max concurrent agents of a given TYPE in parallel.
+**Scheduling is always allowed; RUNNING is what the cap gates** — a wake
+is scheduled and queued, not refused, when a cap is full. All durable
+state — every room, message, report, session bond, registry entry, and
+limit — is stored in DuckBrain (key families §4.5); there is no second
+durable store.
+
+**CT-14 — Signal ingress: one surface, four doors (RL-16).**
+Producer: the harness. Consumers: VPs, the scheduler acting as VP, and
+the owner's UI chat (§11.3). The harness drives Hermes harnesses via
+signals arriving at exactly four ingress points — API, MCP, CLI, webhook
+(§11.2) — enumerated as ONE contract surface: same authentication, same
+VP-signal semantics, same audit record, no door privileged. The
+scheduler's tick fire (CT-02) is a signal on the same surface, with the
+scheduler acting as VP.
+
+**CT-15 — Crier bridge (RL-18).**
+Producer: the bridge adapter. Consumer: the crier fleet bus (`~/crier`,
+FACT-32). A bridge adapter so director rooms/events can reach crier and
+vice versa: outbound, a configured room event is published to a crier
+topic or delivered to a crier agent's durable inbox; inbound, a retrieved
+crier message becomes a room message posted through the harness ingress
+(CT-14), passing the same auth and audit as any VP message. No hierarchy
+contract (verify loop, ladder, caps) reads or writes crier; a crier
+outage degrades the bridge only (§11.4).
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#3-scheduling-scheduler-callback-no-new-engine -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-3-SCHEDULING-SCHEDULER-CALLBAC-S012" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 3. Scheduling: Scheduler Callback, No New Engine
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#3-1-decision-d-001-d-002-config-holding-harness-on-the-existing-scheduler -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-3-1-DECISION-D-001-D-002-CONFI-S013" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.1 Decision D-001/D-002: config-holding harness on the existing scheduler
+
+**D-001 (revised for RL-1).** The harness is a **config holder + callback
+service on the EXISTING scheduler** — not a second scheduling engine. The
+scheduler already owns everything the hierarchy must not re-implement:
+admission (`admission_mode.go`), concurrency slots (`slot_pool.go:27,90-91`,
+`FACT-10`), cooldown pins with DB authority (`loader.go:881-893`,
+`FACT-07`), budget caps, blackout windows (`FACT-17`), gateway spawn with
+error classification (`FACT-11`, `FACT-12`), and a fail-closed mutation
+gate (`FACT-15`). v1's harness-owned `wake_schedule` table is DELETED:
+the wake schedule is the scheduler's own trigger rows (CT-02), keeping ONE
+admission authority (R-018).
+
+**D-002.** Agents never self-schedule. All wakes are admitted by the
+existing scheduler. The harness's role is narrower than v1's: hold the
+config (RL-2), register triggers, answer fire callbacks, enforce
+per-gateway concurrency, and verify reports. This is the same shape the
+scheduler itself chose for board wakes — "the watcher only ADDS evaluation
+triggers" (`FACT-13`) — applied one level up.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#3-2-the-harness-config-gateways-skills-responsibilities-rl-2-rl-7-rl-8 -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-3-2-THE-HARNESS-CONFIG-GATEWAY-S014" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.2 The harness config: gateways, skills, responsibilities (RL-2, RL-7, RL-8)
+
+One file, `harness.toml`, operator-owned (R-001). The full schema mirror
+lives in the skill's `fleet-config-schema.yaml` (schema_version 2);
+
+```toml
+# harness.toml — the ONE hierarchy config. The harness derives from it:
+# scheduler trigger lanes (§3.3), gateway skill injection, room
+# provisioning, and the DuckBrain responsibilities registry.
+
+[[gateways]]
+id            = "gw-main"
+url           = "http://127.0.0.1:8642"
+transport     = "loopback"      # loopback | tailscale | ssh-tunnel | direct (§9)
+max_inflight  = 4               # per-gateway concurrency limit (§3.4, RL-7)
+
+[[gateways]]
+id            = "gw-bunker"
+url           = "http://bunker-host.tailnet:8642"
+transport     = "tailscale"
+auth_token_ref = "bunker-gw"
+max_inflight  = 2
+
+[[agents]]
+id             = "mgr-infra"
+role           = "manager"
+gateway        = "gw-main"      # BINDING: this manager runs on this gateway
+skills         = ["coding-hermes-manager", "coding-hermes-foreman"]  # injected by the harness (RL-2)
+responsibility = "infra: crier, lore, bunker foreman lanes"          # registry entry (RL-8)
+session        = { bond = "objective", reuse_policy = "reuse-until-wedged" }
+triggers       = ["0 */6 * * *"]     # registered as scheduler trigger lanes (§3.3)
+rooms          = ["obj-infra", "space-infra-ops"]   # memberships (config data, never discovered)
+
+[[agents]]
+id             = "sup-crier"
+role           = "supervisor"
+gateway        = "gw-main"
+skills         = ["coding-hermes-supervisor-subagent-base"]
+responsibility = "crier lane data-gathering and bounded actions"
+session        = { bond = "task" }
+triggers       = []              # supervisors are woken by messages, not clocks
+rooms          = ["task-crier-*"]
+```
+
+Field semantics the rest of the spec relies on:
+
+- `gateway` — the binding (RL-2, RL-7): every agent runs on exactly one
+  named gateway; §9's multi-host endpoint fields (`transport`,
+  `auth_token_ref`) live on the gateway row, so host routing and
+  concurrency are decided in ONE place.
+- `skills` — the role's skill list (RL-2). The harness writes these into
+  the named gateway's session configuration and re-writes them on config
+  change; agents never edit their own skill list.
+- `responsibility` — the registry entry (RL-8), mirrored by the harness to
+  DuckBrain `chd/registry/&lt;agent-id&gt;` so the org chart is readable by
+  agents and humans alike.
+- `session` — bonding (RL-4): `bond` names what the session is attached to
+  (an objective room, a task room, or the agent's own work);
+  `reuse_policy` selects between the two delivery modes of CT-04 and is
+  the only knob that can override REUSE (→ NEW) for a wedged session.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#3-3-trigger-registration-and-the-fire-round-trip-rl-1 -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-3-3-TRIGGER-REGISTRATION-AND-T-S015" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.3 Trigger registration and the fire round trip (RL-1)
+
+**Two hops, always (RL-10, R-023).** The call path is now CONFIRMED and
+normative: the scheduler calls the director-harness, and the
+director-harness calls the gateway. Two hops, every dispatch — the
+scheduler never spawns a hierarchy agent directly, and the harness never
+reaches an agent except through its gateway.
+
+1. **Registration.** At startup (and on config change), the harness
+   registers one scheduler trigger lane per configured clock: the
+   director's sync lane and any per-manager lanes. Each is a NORMAL
+   cooldown-mode lane in the `director` namespace, landed through the
+   validated config path (`FACT-08`, `FACT-07`, two-store agreement
+   `N-2`). Its per-lane `gateway_url` names the harness API (`FACT-27`,
+   `FACT-28`); its payload names the callback (`cycle=director-sync` or
+   `cycle=manager-&lt;id&gt;`).
+2. **Fire.** The scheduler's cooldown clock admits the trigger lane and
+   POSTs the tick to the harness API — the trigger calls the main system.
+3. **Call-back.** The harness receives the fire and calls itself back into
+   its cycle path: compose sends (§3.4), request admission for woken
+   agents via bump (`FACT-14`), and return 2xx to the scheduler so the
+   trigger tick completes cleanly. The scheduler logs the trigger tick
+   like any other; the harness's own ledger records what the cycle did.
+
+If UQ-3 resolves to "bump cannot express admit-once", the `wake_once`
+extension (§3.5) replaces step 3's admission request — the round trip
+itself does not change.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#3-4-backpressure-is-per-gateway-concurrency-rl-7 -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-3-4-BACKPRESSURE-IS-PER-GATEWA-S016" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.4 Backpressure IS per-gateway concurrency (RL-7)
+
+- **The limit is per gateway.** Each `[[gateways]]` row carries
+  `max_inflight` — the number of concurrent agent requests that gateway
+  may run. Managers are BOUND to a gateway (§3.2), so the director waking
+  thirty managers fans out across gateways, never into one.
+- **The limit is ALSO per agent (RL-14).** The same agent id can run
+  MULTIPLE sessions at once, so each `[[agents]]` row carries its own
+  `max_sessions` — the max concurrent LIVE sessions of that one agent id
+  — separate from, and never derived from, the gateway's `max_inflight`.
+  A gateway with headroom can still be at an agent's own cap; the
+  orchestrator checks BOTH before dispatch (CT-13).
+- **Caps gate RUNNING, never scheduling (RL-15).** The service config
+  carries the typed limits: max concurrent agents on a Hermes gateway,
+  and max concurrent agents of a given TYPE in parallel. Scheduling is
+  always allowed — a wake is composed and queued even when a cap is full;
+  RUNNING is what the cap gates. A queued send is a scheduled agent
+  waiting its turn, not a refused one.
+- **The harness enforces it.** Before sending to any agent, the
+  orchestrator checks the target gateway's inflight count (its own
+  counter, cross-checked with scheduler running-tick reads where
+  available, OQ-10). At the limit, sends for that gateway QUEUE — nothing
+  is dispatched. Queued sends age with exponential backoff on
+  re-composition; a send older than `orchestration.stale_after` (default
+  2× cycle) is marked `deferred{reason: backpressure}`, counted, and
+  dropped (the next scheduled cycle supersedes it — no unbounded queue).
+- **Event-driven responses.** An agent finishing its turn replies into the
+  chat room (CT-05); the router sees the message and wakes the addressed
+  agent(s) (CT-07) — subject to the same per-gateway limits. No agent
+  polls; no agent schedules itself (R-021). A scheduled future wake
+  ("do this in 2 hours") rides a registered scheduler trigger (CT-08) and
+  arrives as a chat message.
+- **Scheduler-side authority is untouched.** Namespace `max_concurrent`
+  and SlotPool caps apply regardless of what the harness requests
+  (`FACT-10`, `FACT-16`); blackout windows still shift cost (`FACT-17`).
+  The hierarchy is deliberately configured to *lose* to production lanes:
+  director namespace weight low, `reserved=0`.
+- **Monitoring.** Every send has a row in a `send_log`: send_id, room,
+  thread id (RL-12), target, session mode (NEW/REUSE), gateway, dispatch
+  timestamps, verify outcome (CT-06), close reason. Counters:
+  `sends_total`, `sends_deferred{reason}`, `reports_missing_total`,
+  `missing_reply_total` (RL-11), `reprompts_total{rung}`,
+  `gateway_inflight{gateway}`, `sessions_live{agent}` (RL-14). A send
+  closes when its row reaches a terminal state or the deadline
+  (`verify.deadline_s`, default 1800) expires.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#3-5-reuse-vs-extension-of-the-scheduler-daemon -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-3-5-REUSE-VS-EXTENSION-OF-THE-S017" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.5 Reuse vs extension of the scheduler daemon
+
+**Reused unchanged:** admission, packer, SlotPool, cooldown pins, budgets,
+blackouts, gateway client, auth gate, board-freshness reading — and now
+ALSO the trigger surface itself (CT-02), which v1 proposed to duplicate.
+
+**Ridden as-is if possible:** wave/send admission via the bump API
+(`POST /api/v1/projects/{name}/bump`, `FACT-14`). SPIKE (UQ-3): bump's
+body semantics (raise frequency vs admit-once) must be confirmed; the
+bump test asserts only the 200 contract.
+
+**Extension (only if UQ-3 falsifies bump):** a `wake_once` admission
+request — either a bump body field or a small API route — meaning "make
+lane L eligible for exactly one admission at or before T; if not picked,
+expire". It must respect the scheduler's law: it may add an evaluation
+trigger, never force a spawn (`FACT-13`). Config must land through the
+loader's validated path (`FACT-08` mode validation; `FACT-07` pin
+authority), keeping the two-store agreement (`N-2`).
+
+**Why not a harness-side cron calling `hermes chat` directly:** that is
+the worker-spawn pattern today (`FACT-23` — a foreman shells out to
+`hermes chat -q`). It works for one worker because the foreman is present
+to verify. A hierarchy with no one watching would repeat the dry-run
+failure class; the harness *is* the watcher — but a watcher that owns no
+clock (RL-1).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#3-6-config-depth-what-the-harness-config-must-cover-rl-19 -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-3-6-CONFIG-DEPTH-WHAT-THE-HARN-S018" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.6 Config depth — what the harness config must cover (RL-19)
+
+The config file of §3.2 is the WHOLE hierarchy surface. Beyond the v2
+fields (gateways, agent bindings, skills, responsibilities, rooms,
+triggers — RL-2/RL-7/RL-8), it must cover, per agent and per gateway:
+
+- `workdir` — where the agent's sessions run;
+- `skills` — the injected skill list (RL-2), re-named here because RL-19
+  requires it explicitly;
+- `tools.include` / `tools.exclude` — rulesets passed into the session
+  configuration (the exact per-session knob in Hermes is SPIKE UQ-5; the
+  config REQUIREMENT exists regardless of how Hermes implements it);
+- explicit `model` — never inherited by accident;
+- `context_limit` and `max_turns` — per-session ceilings;
+- `token_budget` — per-session/per-agent spend ceiling;
+- `max_sessions` — the RL-14 per-agent concurrent-live-session limit;
+- the RL-15 typed caps — max concurrent agents on a Hermes gateway, and
+  max concurrent agents of a given TYPE in parallel.
+
+These are the REQUIREMENTS this spec makes normative. The concrete schema
+(field names, types, validation rules) is the contracts task's
+deliverable and lands in `contracts/` beside this file — this spec points
+at it; it does not define the schema a second time.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#4-objectives-tasks-and-the-duckbrain-chat-system -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-4-OBJECTIVES-TASKS-AND-THE-DUC-S019" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 4. Objectives, Tasks, and the DuckBrain Chat System
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#4-1-session-model-owned-sessions-and-the-only-two-delivery-modes-rl-3-rl-4 -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-4-1-SESSION-MODEL-OWNED-SESSIO-S020" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.1 Session model: owned sessions and the only two delivery modes (RL-3, RL-4)
+
+Every agent — director, manager, supervisor — has its OWN session: its own
+system prompt, its own skills (injected per RL-2), its own work. Sessions
+are ordinary Hermes sessions; there is no resident process to message, and
+the harness NEVER composes a conversation out of stored messages (v1's
+history restore is deleted). When anything needs an agent to act, the
+harness delivers a message to that agent's session in one of exactly two
+modes:
+
+- **REUSE** — send the message into the agent's existing bonded session
+  (same `session_key`). `reuse_policy` in §3.2 governs when REUSE is
+  retired in favor of NEW (default: reuse until the ladder of §5.1
+  declares the session wedged).
+- **NEW** — create a brand-new session and make the message its first
+  turn.
+
+Both modes use the controller dispatch path (CT-03, CT-04): a scheduled fire reaches the controller callback and the controller performs the shared reservation and gateway POST; an authorized immediate request reaches the same controller primitive without a scheduler lane. The scheduler is trigger/callback-only; the gateway spawns and Hermes records the `session_key` (`FACT-11`; resume semantics `FACT-29`). Whether REUSE carries full conversational context is UQ-1; the design works either way because durable context lives in the room log (§4.4), which agents read themselves — opening a room and reading is an agent tool action, not harness prompt-reconstruction.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#4-2-objectives-are-chat-rooms-rl-4 -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-4-2-OBJECTIVES-ARE-CHAT-ROOMS-S021" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.2 OBJECTIVES are chat rooms (RL-4)
+
+The DIRECTOR makes objectives. An objective is sent directly to a
+manager's gateway — or to a group of managers when the objective needs
+one — and an objective IS A CHAT ROOM:
+
+- Backed by DuckBrain key families (§4.4): `chd/room/&lt;objective-id&gt;/&lt;seq&gt;`,
+  one ordered, searchable log per objective.
+- Readable by a HUMAN like a Slack group: every agent message is a
+  message — visible, ordered, attributed (`from`), searchable. No harness
+  translation layer; the room is the artifact.
+- Membership: the director + one or more managers (config data, §3.2).
+  The director's objective message is the room's first directive; manager
+  replies, questions, and reports accumulate in the same log.
+- Each participant's OWN session is BONDED to the objective
+  (`session.bond = "objective"`, §3.2): the objective is not a prompt the
+  agent once received — it is the room the agent's session is attached
+  to, and every wake lands as a message in that room.
+
+**Future extension (note only, not in scope):** two directors, or
+cross-fleet director-to-director rooms with shared managers. Nothing in
+the room schema precludes it (a room's members are config data; a second
+director is another member), but no v2 milestone builds it, and the
+security model of §6 assumes exactly one director per namespace until the
+owner rules otherwise.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#4-3-tasks-are-chat-rooms-rl-5 -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-4-3-TASKS-ARE-CHAT-ROOMS-RL-5-S022" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.3 TASKS are chat rooms (RL-5)
+
+MANAGERS make tasks — goals, stories; the word is flexible — and send
+them to supervisors in another DuckBrain chat room:
+
+- `chd/room/task-&lt;id&gt;/&lt;seq&gt;`, members = the manager + its supervisors
+  for that task (config data, §3.2).
+- The manager's task message is the room's opening post; supervisors do
+  bounded work and reply into the room; each agent still has its own
+  bonded session (`session.bond = "task"`).
+- A supervisor finishing replies INTO the chat (CT-05); that reply WAKES
+  the manager (event-driven, RL-7) — subject to per-gateway limits (§3.4).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#4-4-chat-semantics-baked-into-duckbrain-rl-6-rl-8 -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-4-4-CHAT-SEMANTICS-BAKED-INTO-S023" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.4 Chat semantics, baked into DuckBrain (RL-6, RL-8)
+
+The chat system is DuckBrain key families — not a harness-internal
+invention. One ordered family per room, searchable:
+
+- **Layout.** `chd/room/&lt;room-id&gt;/&lt;seq&gt;` — `&lt;seq&gt;` monotonic per room
+  (writer: the sending session via its role token, `FACT-19`/`FACT-20`;
+  race-safety per UQ-7). Threads are a TREE over the same family (RL-12,
+  below); nothing is stored outside the room's single log.
+- **Message content** is JSON:
+  `{from, to, room, seq, reply_to?, kind: msg|directive|task|report|incident,
+  body, attach?: [report keys], ts}`.
+- **Threads are a tree (RL-12).** Replying to a message means replying IN
+  A SUBTHREAD of the original request: a message may carry
+  `reply_to: &lt;seq&gt;` (its parent), and the chain of `reply_to` links is
+  the thread. The ROOT of a thread is the original request message; there
+  is one branch per task; threads NEST ARBITRARILY — tag an agent, it
+  replies, that reply is itself replyable, and the thread goes down as
+  deep as needed. Multiple supervisors (or a supervisor and its manager)
+  working ONE task share the SAME subthread: they all reply into the
+  branch the task hangs from. The tree is read by walking `reply_to` over
+  the room's single log — never a second store.
+- **Owner posting.** The human (owner) can post into any room (`from:
+  owner`). The harness does NOT deliver the owner's own message back to
+  the owner — no self-echo. The message is in the log; the owner reads it
+  there like everyone else.
+- **Replies target a person or the group.** `to: "&lt;agent-id&gt;"` routes the
+  wake to that one agent; `to: "group"` wakes all other members (subject
+  to gateway limits). The log itself is indifferent — every message is
+  visible to every member, targeting only decides who is WOKEN.
+- **@-handles (later).** `to: "@&lt;agent-id&gt;"` — an explicit single-agent
+  wake; the message still lives in the room log for search regardless of
+  whether the target is online. The @-wake feature may lag the build
+  (flagged at M5); person-directed `to:` works from day one.
+- **Search.** Rooms are DuckBrain keys; any member (and any human with
+  DuckBrain access) can search the log. UQ-6 probes how much search
+  DuckBrain provides natively.
+- **Registry keys.** `chd/registry/&lt;agent-id&gt;` — the responsibilities
+  registry mirrored by the harness (CT-09); a manager-to-manager room's
+  membership is justified by these entries (RL-8).
+- **Manager-to-manager spaces.** Rooms of `kind: space` connect managers
+  whose `responsibility` entries overlap (RL-8); they are config data,
+  and the router refuses membership the registry does not justify
+  (CT-09, M5).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#4-5-the-report-contract-owed-by-every-agent-every-wake -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-4-5-THE-REPORT-CONTRACT-OWED-B-S024" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.5 The report contract (owed by every agent, every wake)
+
+A finished task's report arrives AS a chat message with the report
+attached (RL-6): the agent posts `kind=report` into its room; the report
+JSON is the attachment. The receiving agent opens it or not — the log
+records both ways.
+
+Namespace: `chd` (director namespace; DuckBrain supports namespaces —
+told-by-operator, consistent with per-project token files at `FACT-20`).
+
+| Key | Writer | Content |
+|-----|--------|---------|
+| `chd/room/&lt;room-id&gt;/&lt;seq&gt;` | the agent | message JSON; `kind=report` carries the report object as its attachment; `reply_to` places it in its subthread (RL-12) |
+| `chd/registry/&lt;agent-id&gt;` | **harness only** | responsibilities registry mirror (CT-09) |
+| `chd/bond/&lt;agent-id&gt;` | **harness only** | the agent's SESSION BOND record — what its session is attached to (RL-15) |
+| `chd/limits/&lt;scope&gt;` | **harness only** | the effective typed caps mirrored from service config: per-gateway and per-type concurrent-agent limits, per-agent `max_sessions` (RL-14/RL-15) |
+| `chd/send/&lt;send-id&gt;/manifest` | **harness only** | send composition record (replaces v1's wave manifest) |
+
+**All data in DuckBrain (RL-15).** Every room, message, report, session
+bond, registry entry, and limit is stored in DuckBrain — the families
+above are the complete set, and there is no second durable store. The
+service config is the AUTHORITY for the limits; the `chd/limits/&lt;scope&gt;`
+keys mirror them so agents and the UI (§11.3) read the effective caps
+without reading the config. A harness build that persists any of this
+anywhere else violates R-028.
+
+**Fresh-report rule (RL-20).** A PREVIOUS report may be delivered as a
+message — an agent is free to point at an older report for context — but
+the reply contract still requires a FRESH report for the current request:
+the report must be NEWER than the request it answers. The verify loop
+machine-checks `report.timestamp &gt; request.timestamp`; an attached old
+report does not satisfy the loop and is `bad_report{reason: stale}`
+(CT-06), which re-enters the ladder of §5.1.
+
+Report JSON (validated by the verify loop; a report failing validation is
+`bad_report`):
+
+```json
+{
+  "send_id": "s-20261107-1530-a1b2",
+  "agent": "sup-crier",
+  "room": "task-crier-42",
+  "status": "done | deferred | blocked | failed",
+  "summary": "one paragraph, human-readable",
+  "artifacts": ["board row id", "commit sha", "duckbrain key"],
+  "next": "optional: what the next cycle should do",
+  "ts": "2026-11-07T15:31:00Z"
+}
+```
+
+Rules: `status=done` requires ≥1 artifact reference; the harness samples
+artifact existence (M5). `deferred` requires a reason; a cycle whose every
+send defers closes as **drained** (§5.6). Custom report tables (e.g. a
+director-defined fleet-health table) are optional DuckBrain tables
+declared by the director; agents write rows only into tables named in
+their `grants` (§6.1).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#4-6-read-scoping-survived-from-v1-re-pointed-at-rooms -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-4-6-READ-SCOPING-SURVIVED-FROM-S025" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.6 Read scoping (survived from v1, re-pointed at rooms)
+
+The v1 read-scoping guarantees survive unchanged in meaning, with
+"channel" → "room": an agent may read its OWN log and the logs of rooms
+it is a member of; never another pair's room, never a room it is not in.
+The enforcement point is §6.2 (router primary, token backstop). Room
+membership is config data (§3.2) plus the registry justification of
+CT-09 — never discovered by agents.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#4-7-future-extension-cross-fleet-note-only-rl-4 -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-4-7-FUTURE-EXTENSION-CROSS-FLE-S026" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.7 Future extension — cross-fleet (note only, RL-4)
+
+Two directors, or director-to-director rooms across fleets with shared
+managers, are a natural extension of the room model (members are data).
+Explicitly NOT built in v2: no milestone, no security ruling, no config
+surface. Recorded so the room schema is not accidentally narrowed.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#5-failure-modes -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-5-FAILURE-MODES-S027" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 5. Failure Modes
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#5-1-session-never-writes-its-report-the-ladder -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-5-1-SESSION-NEVER-WRITES-ITS-R-S028" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.1 Session never writes its report — the ladder
+
+Deadline: `verify.deadline_s` (default 1800) after dispatch, well inside
+the gateway tick timeout (`FACT-21`). The ladder speaks only the two
+session modes of CT-04 — it never reconstructs history (RL-3).
+
+1. **Rung 0 — remind (REUSE).** Post a remind message into the agent's
+   bonded session ("your report for room `…` is missing; post it now").
+   Up to `N=2` times, spaced `verify.remind_gap_s` (default 300). Whether
+   context persists across these prompts is UQ-1; the remind is
+   self-contained either way.
+2. **Rung 1 — fresh session (NEW).** One brand-new session; the prompt
+   states the report obligation first and names the room. The agent reads
+   the room itself for context (§4.4). Rationale: a fresh session escapes
+   a wedged context, and per §1.3 this rung is mandatory even when rung 0
+   "worked".
+3. **Rung 2 — escalate.** Mark the send `escalated`; post a
+   `kind=incident` message to the agent's parent room. The director
+   aggregates incidents; three incidents from the same agent in a rolling
+   24h is an owner-page (§7).
+4. Every rung is counted (`reprompts_total{rung}`); the send row records
+   which rung closed it. **No rung silently resets the counters.**
+
+**Missing replies (RL-11, CT-11).** The ladder also covers the case
+where the REPLY to an agent→agent message never comes. Detection is
+mechanical: the target agent neither replied (no message in the
+subthread, RL-12) nor came back with an attached work report. On
+detection the harness does BOTH:
+
+- (a) **notify the CALLER** — the agent above, whose message went
+  unanswered — that their reply never arrived; and
+- (b) **send a BUMP to the session** that was supposed to be producing
+  the report — a REUSE-mode message restating the fresh-report
+  obligation (below), riding rung 0's cadence.
+
+The bump then walks the SAME rungs: remind → fresh session → escalate.
+A missing reply that survives rung 1 becomes an escalated incident
+exactly like a missing report, counted as `missing_reply_total` (§3.4).
+This extends the ladder; it does not fork a second mechanism.
+
+**Every rung demands a FRESH report (RL-20).** A re-prompt — remind or
+bump — restates the current request's obligation, and only a report
+newer than that request closes the loop (`report.timestamp &gt;
+request.timestamp`, machine-checked); an attached older report re-enters
+the ladder as `bad_report{reason: stale}`.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#5-2-a-manager-stops-responding -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-5-2-A-MANAGER-STOPS-RESPONDING-S029" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.2 A manager stops responding
+
+Same ladder, rung 2 posts the incident to the **director's** room.
+If the manager accumulates `escalations &gt;= 3` in 24h, the harness sets
+its dependents' sends to `deferred{reason: parent_down}` — children are
+not left self-scheduling — and pages the owner. Recovery is automatic
+on the manager's next verified report.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#5-3-duckbrain-down -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-5-3-DUCKBRAIN-DOWN-S030" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.3 DuckBrain down
+
+Health: the harness polls `/health` (`FACT-18`) with a 10s interval.
+**Write path down: sends do not dispatch at all** — a cycle whose reports
+cannot be persisted is a cycle whose verify loop cannot close, so
+dispatching it only manufactures unaccountable sessions. Queued sends
+back off exponentially and the send log records `duckbrain_unavailable`.
+No agent is woken into a black hole. (v1's degraded-empty-history read
+path is deleted with history reconstruction itself; with rooms as the
+context store, no store means no dispatch.)
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#5-4-gateway-down -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-5-4-GATEWAY-DOWN-S031" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.4 Gateway down
+
+The scheduler already classifies gateway failures: auth rejection is
+terminal, transport/5xx are transient with bounded retry and Retry-After
+honored (`FACT-11`, `FACT-12`). The harness adds nothing here; it observes
+sends stuck in `dispatched` past deadline and treats them per §5.1. A
+gateway-wide outage (multiple agents on one gateway failing the same
+cycle) surfaces through the scheduler's existing failure events; the
+harness pauses send composition to that gateway when the scheduler
+reports failure backoff on its lanes. Session resume after gateway drop
+or daemon restart is the scheduler's own SCHED-GAP-091 machinery
+(`FACT-29`) — resumed sessions continue under REUSE semantics.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#5-5-load-gates-per-gateway-concurrency-is-the-mechanism-rl-7 -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-5-5-LOAD-GATES-PER-GATEWAY-CON-S032" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.5 Load gates — per-gateway concurrency is the mechanism (RL-7)
+
+- Harness-side gates before composition: per-gateway `max_inflight`
+  (§3.4) and `orchestration.max_fanout` (default 12). If a target gateway
+  is at its limit, its sends queue — this IS the backpressure; there is
+  no separate harness-side load probe beyond it (v1's host-load probe is
+  subsumed; a gateway limit that reflects its host's capacity replaces a
+  generic load average).
+- Scheduler-side authority: namespace `max_concurrent` and SlotPool caps
+  apply regardless of what the harness requests (`FACT-10`, `FACT-16`);
+  blackout windows still shift cost (`FACT-17`). The hierarchy is
+  deliberately configured to *lose* to production lanes: director
+  namespace weight low, `reserved=0`.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#5-6-fully-deferred-fleet-must-idle-not-burn -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-5-6-FULLY-DEFERRED-FLEET-MUST-S033" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.6 Fully-deferred fleet must idle, not burn
+
+This is the invariant the 213-dry-run incident (`FACT-22`) demands:
+
+- A cycle whose every send reports `deferred` (or whose supervisors report
+  their foremen produced only `tasks_no_work`-class deferrals, `FACT-04`)
+  closes as **drained**. A drained cycle schedules **no** follow-up wake,
+  sends **no** chat messages, and the director's next cycle proceeds at
+  its normal pin — it does not accelerate.
+- Hierarchy lanes are `admission_mode="cooldown"` with operator pins
+  (`§3.2`): unlike the tasks lanes that caused the incident
+  (`FACT-01`, `FACT-05`), a hierarchy lane with nothing to say re-admits
+  only at its pin. `adaptive_cooldown` stays **on** for hierarchy lanes
+  (it is only safe to disable where a workable-row gate exists —
+  `FACT-05`) so repeated no-artifact hierarchy cycles also pace up.
+- The dry-run throttle (`warn 5 / suspend 10`, `FACT-06`) applies to
+  hierarchy lanes too: ten consecutive cycles with no artifact and no
+  directive that changed anything suspend the lane and page the owner.
+- **Normative R-013:** a hierarchy cycle that changes nothing must be
+  cheaper than the cycle before it, bounded below by "no wake at all".
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#6-security -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-6-SECURITY-S034" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 6. Security
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#6-1-tool-grants-by-role -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-6-1-TOOL-GRANTS-BY-ROLE-S035" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 6.1 Tool grants by role
+
+Hermes sessions receive tool access via configuration; the per-session
+knob is SPIKE UQ-5. Grants are *config-defined per agent* in
+`harness.toml` and denied by default:
+
+| Role | DuckBrain | Scheduler API | Shell / spawn | Fleet config (fleet.toml, scheduler.db) |
+|------|-----------|---------------|----------------|------------------------------------------|
+| supervisor | rw own rooms + own report messages | read-only (status, board) | none | none |
+| manager | rw own rooms + children's room reads | read-only | none | none |
+| manager↔manager (space) | rw the space rooms their registries justify | read-only | none | none |
+| director | rw own rooms + all room reads | read + **wake requests via harness**, never direct lane writes | none | none |
+| harness service | full `chd` ns | write: trigger registration + bump/wake requests, holding its own credential | n/a | writes only via loader/API path (`N-2`) |
+| **vp** (owner's agent surface — Hermes, Claude Code, MCP/API callers; RL-13) | read + post ONLY in rooms it names, via the harness ingress | none | none | none |
+
+The VP is a first-class caller role (CT-10), not a hierarchy role: it
+chats into rooms just like a manager does, with exactly three grants —
+create objectives, inject messages, read rooms it names. **Harness-internal
+agents can NOT act as VP unless explicitly granted** — default-deny; a
+grant is one operator-written config flag per agent, and §6.3's write-gate
+rejects any agent-supplied request for it.
+
+Agents never receive the scheduler's write credential, worker-spawn
+commands, or fleet.toml access. A supervisor therefore cannot dispatch
+workers (`FACT-23`'s `hermes chat` path is not in its grants) and cannot
+re-run foreman ticks.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#6-2-read-scoping-enforcement-point-survived-from-v1-room-wording -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-6-2-READ-SCOPING-ENFORCEMENT-P-S036" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 6.2 Read-scoping enforcement point (survived from v1, room wording)
+
+Two layers, one primary:
+
+1. **Primary — the chat router (CT-07) at wake time.** The router
+   is the only resolver of room membership; a session is *told* its own
+   rooms and never learns the key names of rooms it does not belong to.
+   An agent that cannot name a key cannot request it.
+2. **Backstop — DuckBrain token scoping (UQ-2).** If DuckBrain can issue
+   namespace-scoped tokens (`FACT-20` shows per-role token files exist),
+   each agent's token confines it to its own namespace even against a
+   colluding session. If UQ-2 falsifies scoping, this layer is documented
+   as absent and layer 1 carries the guarantee alone — recorded as a
+   known limitation, not hidden.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#6-3-what-prevents-a-supervisor-from-minting-managers -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-6-3-WHAT-PREVENTS-A-SUPERVISOR-S037" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 6.3 What prevents a supervisor from minting managers
+
+Minting a manager = creating a scheduler lane, a harness agent entry, a
+DuckBrain identity, or a registry entry. Blocked at each path:
+
+- **Lane creation is a scheduler mutation**, and every mutation passes
+  the fail-closed auth gate — with auth off, mutations are refused 503
+  before any handler runs (`internal/api/auth_gate.go:9-13`, `FACT-15`).
+  Only the harness service holds a mutating credential (§6.1).
+- **Agent config lives in `harness.toml`, operator-owned**, not in any
+  DuckBrain key an agent can write; the harness loads it at startup and
+  does not accept agent-written config keys (they are not in the CT-05
+  write families).
+- **DuckBrain identities are tokens on disk** (`FACT-20`), provisioned by
+  the operator per agent; a supervisor's token confers no ability to mint
+  another token (SPIKE: token-minting API surface — if DuckBrain exposes
+  one, it is operator-gated and outside every agent grant).
+- **Registry entries are harness-written** (CT-09): an agent cannot grant
+  itself a responsibility, and a manager-to-manager space without
+  registry justification is refused by the router (§4.4).
+- **Precedent:** the fleet already gates "config that looks schedulable
+  but drives something retired" at two pinned write paths (`FACT-09`).
+  The same pattern is required for the harness: any agent-supplied string
+  that would name a lane, model, room, or responsibility must be rejected
+  at the harness's own write gate (M4 acceptance).
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#7-quorum-decision-section -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-7-QUORUM-DECISION-SECTION-S038" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 7. Quorum / Decision Section
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#7-1-the-owner-must-decide-blocked-on-owner-not-the-director -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-7-1-THE-OWNER-MUST-DECIDE-BLOC-S039" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.1 The owner must decide (blocked on owner, not the director)
+
+| # | Decision | Why it is owner-level | Default if delegated |
+|---|----------|----------------------|----------------------|
+| Q-1 | Hierarchy shape: how many managers, which domains, which foremen supervised, and which gateway each binds to | org design; determines cost floor | none — spec blocks on this |
+| Q-2 | ~~Wake-schedule persistence~~ **RESOLVED by v2 (RL-1):** no harness wake store exists — triggers are scheduler rows registered through the API | — | closed; OQ-6 superseded |
+| Q-3 | Budget: hierarchy lanes' daily/weekly caps and model tiers | spends money; the 346M-token incident (`FACT-22`) is the cautionary tale | cheapest capable model for supervisor tier |
+| Q-4 | Escalation contact and transport for owner-pages (§5.1/5.2) | personal channel of the owner | none — pages queue until set |
+| Q-5 | Grant ceiling: anything above §6.1's table | security policy | table as written is the ceiling |
+| Q-6 | Any `wake_once` scheduler extension (§3.5) | modifies the fleet's admission authority (`FACT-13` law) | ride bump only (no extension) |
+| Q-7 | Library selection (§10): adopt a chat-store / persistence / orchestration library, or hand-roll on DuckBrain | dependency and maintenance posture | hand-roll on DuckBrain keys (smallest dependency surface) |
+| Q-8 | Per-gateway `max_inflight` values per host | capacity planning; wrong values either strand sends or overload hosts | gateway defaults of §3.2 (4 main / 2 remote) |
+| Q-9 | Crier bridge scope (RL-18): which rooms/events bridge, topic naming, whether any crier consumer gets VP grants | external-coupling policy; crier is shared fleet infrastructure | bridge nothing until a room is configured `bridge: crier`; inbox delivery (not relay publish) as the default outbound path |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#7-2-the-director-may-decide-within-recorded-policy -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-7-2-THE-DIRECTOR-MAY-DECIDE-WI-S040" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.2 The director may decide (within recorded policy)
+
+Send composition and ordering; re-prompt timing within N and the gap;
+deferred/drained classification per §5.6; room housekeeping (log compaction
+policies it requests, never executes unilaterally); incident aggregation
+thresholds it reports to the owner.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#7-3-escalation-ladder-single-canonical -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-7-3-ESCALATION-LADDER-SINGLE-C-S041" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.3 Escalation ladder (single, canonical)
+
+```
+agent blocked/failed
+  → parent agent room (incident message, §4.4)
+    → director (aggregates; may re-send or defer subtree, §5.2)
+      → owner page (Q-4): triggers = 3 incidents/24h per agent,
+        lane suspended by dry-run throttle (§5.6),
+        or any §6 integrity violation
+```
+
+Every rung writes a durable record (DuckBrain incident message + send
+log); an escalation that leaves no record is a defect (R-017).
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#8-milestones-single-session-sized-foreman-verifiable -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-8-MILESTONES-SINGLE-SESSION-SI-S042" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 8. Milestones (single-session sized, foreman-verifiable)
+
+Each milestone fits one dispatched worker session. Acceptance criteria are
+runnable; a foreman verifies them without interviewing the worker.
+
+**M1 — Config + registry onboarding.**
+Create `harness.toml` per §3.2 (gateways with `max_inflight`, agent
+bindings, skills, responsibilities), the `director` namespace with
+`admission_mode="cooldown"` and pins, landed through the validated config
+path (`FACT-08`, `FACT-07`), plus `scheduler.db`/`fleet.toml` two-store
+agreement (`N-2`), plus the DuckBrain registry mirror (CT-09).
+*Accept:* `harness.toml` parses; loader rejects a deliberately bad
+`admission_mode` in a test; registry keys exist in `chd/registry/` for
+every configured agent; zero hierarchy lanes enabled.
+
+**M2 — Harness API + trigger registration (the callback round trip).**
+Harness service registering CT-02 trigger lanes (per-lane `gateway_url` =
+harness API, `FACT-27`), answering fire callbacks, and registering a wake
+for an unknown agent → 400.
+*Accept:* a registered trigger fires on schedule, the scheduler POSTs to
+the harness, the harness logs the callback and returns 2xx; with zero
+scheduled trigger lanes registered and no fire, the harness emits no
+scheduler-caused gateway traffic in a 10-minute soak (assert via scheduler
+log absence). An authorized immediate request remains a separate controller
+admission path. **Blocked on UQ-1
+measurement** (REUSE-mode context persistence) — run the probe first;
+record the result in this spec's facts ledger.
+
+**M3 — Admission riding + per-gateway backpressure.**
+Send orchestrator requesting admission via bump (`FACT-14`),
+per-gateway `max_inflight` enforcement (§3.4), send_log.
+*Accept:* a scripted cycle of 3 test lanes produces exactly 3 gateway
+spawns, all through the scheduler (assert spawn provenance in
+scheduler.db); sends exceeding a gateway's `max_inflight` queue without
+dispatching; UQ-3 resolved with a written answer in `_facts.md`.
+
+**M4 — Report-as-message + verify ladder.**
+CT-05/CT-06 and the §5.1 ladder end-to-end against a stub agent that can
+be told to post, stall, or fail.
+*Accept:* missing report → 2 REUSE reminds → 1 NEW session → escalated
+incident message exists in the parent room; `status=done` without
+`artifacts` → `bad_report`; a supervisor-supplied lane-name string is
+rejected by the harness write gate (§6.3).
+
+**M5 — Rooms, owner posting, @-wake routing, read scoping.**
+Room provisioning, owner no-echo, person/group reply routing,
+sub-thread reads, registry-justified spaces, read scoping per §6.2.
+*Accept:* a room's log shows every agent message attributed and ordered;
+owner post appears once (no echo back); a person-directed reply wakes
+exactly the target; a composed prompt for agent A contains A's room keys
+and **grep-verifiably not** a foreign room's key material; a space whose
+members lack registry entries is refused; DuckBrain-down drill → sends
+queue, nothing dispatches (§5.3).
+
+**M6 — Drained-fleet invariant.**
+§5.6 wiring: drained-cycle close, adaptive pacing on hierarchy lanes,
+throttle handoff.
+*Accept:* a simulated fleet where every foreman defers produces a drained
+cycle, zero subsequent hierarchy spawns before the next pin, and
+`sends_deferred{reason=drained}` incremented. **Ends with a measurement:**
+7-day soak of the live hierarchy reporting token spend vs the
+pre-director baseline — the design's own gate (per the skill's Phase 10
+rule).
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#9-multi-host-deployment-topology -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-9-MULTI-HOST-DEPLOYMENT-TOPOLO-S043" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 9. Multi-host deployment topology
+
+**Requirement (owner directive):** the config knows which manager or supervisor lives on which
+host. The harness orchestrates a network of many Hermes systems, not one machine — managers and
+supervisors may sit on separate hosts (or separate profiles on one host), reached over Tailscale,
+reverse SSH tunnels, LAN port rules, or loopback. The full section lives in
+`sections/9-multi-host.top.md` and is summarized here; it is a first-class requirement, not an
+afterthought.
+
+- **A host is anything running one addressable Hermes gateway** — another machine, another
+  profile on this machine, or this machine (loopback). All three are the same thing to the config.
+- **Each agent row gains endpoint fields**: `gateway` (the Hermes URL that runs it), `transport`
+  (`tailscale | ssh-tunnel | direct | loopback`), `auth_token_ref`. Role, grants, report key,
+  wake triggers and channels are unchanged — the director/manager/supervisor contract is
+  identical on every host; only the config gains the endpoint.
+- **The harness is the only cross-host hop.** A manager on host B reaching its supervisor on
+  host C hands the message to the harness, which wakes C's supervisor. Read-scoping (§4.2) and
+  the report contract (§4.6) are therefore enforced at ONE point, and no supervisor ever holds
+  another host's credentials.
+- **Partitions are a report shape, not an error state**: an unreachable host yields MISSING
+  reports (a visible absence — the dead-man rule), its wake rows pause as `paused:unreachable`
+  instead of burning the re-prompt ladder against a dead socket, and the first healthy gateway
+  check restores them.
+- **Transports never fail over silently**: a config that says `tailscale` fails loudly when the
+  tailnet is down; it does not leak to a LAN route.
+- **Scale**: one harness, dozens of gateways; host count is bounded by the owner's network, not
+  by the design.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#10-library-candidates-rl-9 -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-10-LIBRARY-CANDIDATES-RL-9-S044" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 10. Library candidates (RL-9)
+
+The owner asked the build to prefer real libraries over hand-rolling for
+mapping/tracking/messaging. All repos below were verified to exist and be
+actively maintained via web search on 2026-11-07 (`FACT-30`), except where
+explicitly marked rejected. **No winner is picked** — the owner weighs
+these (Q-7). One line of fit and one line of tradeoff each.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#10-1-chat-room-store-rooms-ordered-logs-search-threads -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-10-1-CHAT-ROOM-STORE-ROOMS-ORD-S045" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 10.1 Chat-room store (rooms, ordered logs, search, threads)
+
+| Candidate | Repo (verified 2026-11-07) | Fit | Tradeoff |
+|-----------|---------------------------|-----|----------|
+| Mattermost | `mattermost/mattermost-server` (Go; ~31k★ self-hosted Slack alternative) | Channels + threads + full-text search out of the box; API-driven rooms a human can read like Slack | A whole second server beside DuckBrain; duplicates the "chat baked into DuckBrain" ruling (RL-6) unless DuckBrain is dropped as room store |
+| Zulip | `zulip/zulip` (Python/Django team chat) | Stream+topic model maps 1:1 to rooms + sub-threads (RL-6); strong search | Heavyweight (Python + PostgreSQL stack); owner posting and per-agent tokens need a bot-integration layer |
+| Centrifugo / Centrifuge | `centrifugal/centrifugo` (Go realtime server) + `centrifugal/centrifuge` (embeddable Go library) | Embeddable channel/pub-sub with recovery — could carry live room delivery on top of DuckBrain's durable keys | Transport only, not a store: still needs DuckBrain (or other) for the durable ordered log |
+| NATS JetStream | `nats-io/nats.go/jetstream` (Go client; persistent ordered streams) | Per-subject ordered persistent streams ≈ room key families with server-allocated sequence (answers UQ-7's ordering worry) | No built-in human-readable room UI or search; adds a messaging server to operate |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#10-2-session-persistence -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-10-2-SESSION-PERSISTENCE-S046" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 10.2 Session persistence
+
+| Candidate | Repo (verified 2026-11-07) | Fit | Tradeoff |
+|-----------|---------------------------|-----|----------|
+| LangGraph checkpointers (SQLite) | `langchain-ai/langgraph` → `langgraph-checkpoint-sqlite` (PyPI; sync+async SQLite saver) | Battle-tested thread/session persistence if any harness-side session bookkeeping is built in Python | Python-only; the harness would drag a LangChain-shaped dependency for what is mostly Hermes-native session keys |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#10-3-agent-orchestration-frameworks -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-10-3-AGENT-ORCHESTRATION-FRAME-S047" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 10.3 Agent orchestration frameworks
+
+| Candidate | Repo (verified 2026-11-07) | Fit | Tradeoff |
+|-----------|---------------------------|-----|----------|
+| CrewAI | `crewAIInc/crewai` (Python; crews + event-driven flows) | Role-based hierarchies with task delegation close to the director/manager/supervisor shape | Would substitute its own runtime for Hermes sessions + the existing scheduler — in tension with RL-1's "no new engine" |
+| Microsoft Agent Framework | `microsoft/agent-framework` (Python/.NET; GA 2026-04, AutoGen's successor) | Maintained multi-agent workflows with durable state | Same tension as CrewAI; .NET/Python runtime assumptions |
+| Eino | `cloudwego/eino` (Go LLM app framework; ByteDance-backed) | If the harness is written in Go, orchestration/graph composition without leaving the language | Framework gravity: its abstractions can drift from the scheduler-callback shape |
+| LangChainGo | `tmc/langchaingo` (Go LangChain port) | Go-native LLM plumbing (memory, chains) for harness internals | Weaker maintenance signal than the others (community-transition note on the package page); memory ≠ durable rooms |
+| ~~AutoGen~~ (REJECTED) | `microsoft/autogen` | — | **Archived**: maintenance mode, no significant new features; successor is Microsoft Agent Framework (`FACT-31`) — fails the red line's "verified maintained" bar |
+
+Reading of the field for the owner: the chat-store candidates either
+replace DuckBrain as room store (Mattermost, Zulip) or complement it
+(Centrifugo, NATS); the orchestration candidates all risk re-introducing a
+scheduling engine v2 just banned; the persistence candidate matters only
+if the harness keeps session state outside Hermes. Hand-rolling on
+DuckBrain key families (§4.4) remains the smallest-dependency option and
+is the delegated default in Q-7.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#11-callers-signal-surfaces-and-the-crier-bridge -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-11-CALLERS-SIGNAL-SURFACES-AND-S048" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 11. Callers, Signal Surfaces, and the Crier Bridge
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#11-1-the-vp-caller-role-rl-13-ct-10 -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-11-1-THE-VP-CALLER-ROLE-RL-13-S049" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 11.1 The VP caller role (RL-13, CT-10)
+
+The owner's own agent surface talks to the director as the **VP** — a
+first-class caller role, peer to the hierarchy roles but outside the
+org chart:
+
+- **Who is a VP.** Hermes (which has a TOOL to call the director), Claude
+  Code, anything that speaks MCP or calls the harness API correctly. A VP
+  sends messages to the director and chats just like a manager does.
+- **Grants, exactly three.** A VP may (1) create objectives (open
+  rooms), (2) inject messages into rooms, (3) read rooms it names. The
+  room names a VP may touch are config data (`vp.grants.rooms` in the
+  contracts schema), never discovered.
+- **Default-deny inside the harness.** The director-harness's OWN agents
+  — managers, supervisors, the director's sessions — can NOT act as VP
+  unless explicitly granted (§6.1 table, §6.3 write gate). A hierarchy
+  session presenting VP signals without the grant is a §6 integrity
+  violation.
+- **Audit.** Every VP signal gets the same audit record (ingress log,
+  CT-14) whichever door it used; a VP message into a room is a room
+  message like any other — `from: vp/&lt;surface-id&gt;`, searchable (RL-15).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#11-2-signal-surfaces-one-contract-four-doors-rl-16-ct-14 -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-11-2-SIGNAL-SURFACES-ONE-CONTR-S050" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 11.2 Signal surfaces — one contract, four doors (RL-16, CT-14)
+
+The harness drives Hermes harnesses via SIGNALS. The ingress is ONE
+contract surface with four doors; the caller classes are VPs (other
+agents), the scheduler acting as VP, and a UI chat for the user:
+
+| Door | Shape | Typical callers |
+|------|-------|-----------------|
+| **API** | HTTP POST to the harness ingress endpoint (the same endpoint a trigger lane's `gateway_url` names, `FACT-27`) | VPs (other agents); the scheduler acting as VP on tick fire (CT-02) |
+| **MCP** | the director exposed as MCP tools (e.g. the Hermes tool that calls the director) | VPs — Hermes, Claude Code, any MCP-speaking surface |
+| **CLI** | the harness CLI command (scripting, operator console) | the owner/operator; cron scripts |
+| **webhook** | inbound HTTP webhook from external systems | external automations granted VP |
+
+Whatever enters any door is the SAME VP-signed signal: same
+authentication, same grants check (§11.1), same room-write rules, same
+audit record. No door is privileged; a caller's authority comes from its
+VP grant, never from which door it picked.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#11-3-ui-chat-rl-17 -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-11-3-UI-CHAT-RL-17-S051" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 11.3 UI chat (RL-17)
+
+A UI chat so the owner can follow along and watch the hierarchy work:
+
+- **Read-only follower view by default.** The owner sees the rooms —
+  every message, thread, and report — rendered from the DuckBrain logs
+  (RL-15: the UI adds no store of its own, it reads `chd/*` keys).
+- **Posting = acting as VP.** The send box is a VP grant, not a bystander
+  feature: a message posted through the UI enters through the harness
+  ingress (§11.2) with the same VP grants, the same audit record, and the
+  same no-self-echo rule (§4.4) as any other VP signal.
+- **Watching must never cost.** The follower view is pure read; it wakes
+  no agent, consumes no session, and appears in no send_log.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#11-4-crier-bridge-rl-18-ct-15-fact-32 -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-11-4-CRIER-BRIDGE-RL-18-CT-15-S052" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 11.4 Crier bridge (RL-18, CT-15, FACT-32)
+
+The fleet already runs a crier Go bus for agent messages
+(`~/crier/README.md`, read 2026-11-07 — `FACT-32`). Its relevant
+surfaces, as the README documents them: a **relay** pub/sub where agents
+publish events to topics over HTTP/WS (`POST /relay/publish`,
+fire-and-forget, events delivered to subscribers exactly as published
+— `{"topic":"&lt;published topic&gt;","event":&lt;event&gt;}` — and DROPPED when a
+topic has zero subscribers); durable **per-agent inboxes** with
+lease-based delivery, ACK, TTL, idempotency keys, long-poll
+(`GET /agents/{id}/inbox?wait_seconds=N`) and a mesh `INBOX_NOTIFY`
+wake frame; per-agent **webhook delivery** (`PATCH /agents/{id}` with a
+`webhook` config); and bus-to-bus **federation**.
+
+The bridge is an adapter the harness may configure per room — bridge
+support, not a dependency:
+
+- **Outbound (director → crier).** A room configured `bridge: crier`
+  has its events forwarded by the bridge: published to a crier topic
+  (topic naming per config, e.g. `chd/room/&lt;room-id&gt;`) when subscribers
+  are live, or delivered into a crier agent's durable inbox when the
+  receiver must not lose the event — the README is explicit that a relay
+  publish to an empty topic is dropped by design, so durable inbox
+  delivery is the default for anything that matters.
+- **Inbound (crier → director).** The bridge long-polls a configured
+  crier inbox; each retrieved (leased, ACKed) message becomes a room
+  message `from: crier/&lt;agent-id&gt;` posted through the harness ingress
+  (§11.2) — the same auth, grants check, and audit as any VP signal.
+- **Failure containment.** No hierarchy contract reads or writes crier:
+  the verify loop, the ladder, and the caps (CT-06, §5.1, CT-13) run
+  entirely on DuckBrain state (RL-15). A crier outage degrades the
+  bridge only — rooms keep their own durable log, and undeliverable
+  bridge traffic is dropped loudly (counted), never silently: a relay
+  publish the bridge cannot confirm counts as a failed bridge delivery,
+  mirroring crier's own `WEBHOOK_FAILED`-style error-notification shape.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#appendix-a-registers -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-APPENDIX-A-REGISTERS-S053" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Appendix A. Registers
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#a-1-facts-ledger-id-claim-how-measured -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-A-1-FACTS-LEDGER-ID-CLAIM-HOW-S054" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### A.1 Facts ledger (id → claim → how measured)
+
+| id | claim | how measured | confidence |
+|----|-------|--------------|------------|
+| FACT-01 | scheduler admission modes cooldown/tasks | read `internal/scheduler/admission_mode.go:19-36` | read-from-code |
+| FACT-02 | tasks admits on workable rows | read `internal/scheduler/board_workable.go:20-84` | read-from-code |
+| FACT-03 | foreign-board lanes are time-based | read `admission_mode.go:46-75` | read-from-code |
+| FACT-04 | builder deferral `tasks_no_work` | read `admission_mode.go:33-36` | read-from-code |
+| FACT-05 | adaptive cooldown opt-out; tasks lane keeps floor pin | read `adaptive_cooldown.go:104-115,186-205` | read-from-code |
+| FACT-06 | dry-run warn 5 / suspend 10 | read `internal/database/dry_run_throttle.go:14-28` | read-from-code |
+| FACT-07 | DB is cooldown authority; toml imports as pins | read `internal/config/loader.go:881-893` | read-from-code |
+| FACT-08 | admission_mode validated at load | read `loader.go:484-493` | read-from-code |
+| FACT-09 | retired-driver gates, pinned parity | read `internal/api/retired_drivers.go:14-38`, `internal/config/retired_drivers.go:14-24` | read-from-code |
+| FACT-10 | SlotPool + namespace max_concurrent | read `slot_pool.go:27,90-91`, `models.go:589` | read-from-code |
+| FACT-11 | spawn = gateway POST w/ session_key | read `gateway_client.go:467-487` | read-from-code |
+| FACT-12 | 401/403 terminal, no retry flood | read `gateway_client.go:19-25` | read-from-code |
+| FACT-13 | board wake adds triggers only; cooldown sole authority | read `board_wake.go:10-26` | read-from-code |
+| FACT-14 | bump API `POST /api/v1/projects/{name}/bump` | read `internal/api/bump_test.go:12-15` | read-from-code |
+| FACT-15 | fail-closed mutation gate | read `internal/api/auth_gate.go:9-13` | read-from-code |
+| FACT-16 | fleet.toml namespace caps/modes | read `~/.hermes/fleet.toml:53-67` | read-from-code |
+| FACT-17 | blackout windows ×2 price hours | read `~/.hermes/fleet.toml:8-11` | read-from-code |
+| FACT-18 | DuckBrain /health healthy | curl probe 2026-11-07 | measured |
+| FACT-19 | DuckBrain POST /api/memories → 401 unauthenticated | curl probe 2026-11-07 | measured |
+| FACT-20 | per-role token files at ~/.duckbrain/ | `ls ~/.duckbrain/` | measured |
+| FACT-21 | gateway_timeout 3600 | read `~/.hermes/config.yaml:241` | read-from-code |
+| FACT-22 | 213 dry-runs / 346M tokens / 48h on crier-foreman | tasking brief (operator) | told-by-operator |
+| FACT-23 | worker spawn via `hermes chat -q` | read `~/.hermes/fleet.toml:67` | read-from-code |
+| FACT-24 | Muster can expose MCP | tasking brief (operator) | told-by-operator |
+| FACT-25 | delegate_task max depth 2 | runtime environment | told-by-operator |
+| FACT-26 | scheduler.db + fleet.toml must agree on writes | tasking brief (operator); mechanics at FACT-07 | told-by-operator |
+| FACT-27 | per-lane `gateway_url` (SCHED-GAP-1712): tick POST target resolves lane &gt; namespace &gt; global — a trigger lane can target the harness API | read `internal/config/config.go:440-445` | read-from-code |
+| FACT-28 | namespace-level `gateway_url`/`gateway_key` middle tier | read `internal/config/config.go:512-518` | read-from-code |
+| FACT-29 | session resume-after-restart: orphaned ticks re-queued with a CONTINUATION prompt via the normal slot pool (SCHED-GAP-091) | read `internal/scheduler/session_resume.go:13-30` | read-from-code |
+| FACT-30 | library candidates of §10 verified to exist and be maintained | web search, 2026-11-07 (mattermost/mattermost-server; zulip/zulip; centrifugal/centrifugo + centrifuge; nats-io/nats.go jetstream; langchain-ai/langgraph + langgraph-checkpoint-sqlite; crewAIInc/crewai; microsoft/agent-framework; cloudwego/eino; tmc/langchaingo) | measured |
+| FACT-31 | AutoGen archived (maintenance mode, no significant new features); Microsoft Agent Framework GA 2026-04 is the official successor | web search, 2026-11-07 | measured |
+| FACT-32 | crier message surfaces: relay pub/sub (`POST /relay/publish` to topics, fire-and-forget, dropped on zero subscribers; events delivered as `{"topic":…,"event":…}`), durable per-agent inboxes (lease/ACK/TTL, idempotency keys, long-poll `wait_seconds`, mesh `INBOX_NOTIFY` wake), per-agent webhook delivery (`PATCH /agents/{id}`), bus-to-bus federation | read `~/crier/README.md` §1, §4, §5, 2026-11-07 | read-from-docs |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#a-2-open-questions-register -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-A-2-OPEN-QUESTIONS-REGISTER-S055" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### A.2 Open questions register
+
+| id | question | bucket (now / after build / owner) | probe | falsifier |
+|----|----------|-----------------------------------|-------|-----------|
+| OQ-1 (UQ-1) | does same-session_key re-prompt continue context (REUSE mode strength)? | now (M2 gate) | two gateway POSTs, same key | no memory → REUSE is attribution-only; room log is the context agents read |
+| OQ-2 (UQ-2) | DuckBrain read API + namespace-scoped tokens? | now | route table + scoped-token mint | no scoping → router-only enforcement |
+| OQ-3 (UQ-3) | bump = admit-once or frequency raise? | now (M3 gate) | read bump handler + live probe | frequency-only → wake_once extension (owner Q-6) |
+| OQ-4 (UQ-4) | Muster MCP surface shape | after build | describe Muster tools | no per-ns tools → config-profile grants only |
+| OQ-5 (UQ-5) | per-session tool restriction knob in Hermes | now | hermes docs/config | none → sandbox-only grants, matrix rows UNVERIFIED |
+| OQ-6 (UQ-6 in v1) | ~~wake store: own DB vs shared scheduler.db~~ **SUPERSEDED by v2 RL-1**: the wake schedule is the scheduler's own trigger rows (CT-02); no harness wake store exists | closed | — | — |
+| OQ-7 | DuckBrain token-minting surface exposed to agents? | now | read DuckBrain API | exposed → must be operator-gated before M4 |
+| OQ-8 | hierarchy lane model tiers vs DeepSeek price windows (FACT-17) | owner (Q-3) | owner ruling | — |
+| OQ-9 | verify deadline vs gateway timeout interplay (1800 vs 3600, FACT-21) | after M3 | measure real verify latency | deadline &gt; effective tick time → tune |
+| OQ-10 | does scheduler expose per-lane running-tick reads for gateway-inflight cross-checks? | now | read API surface | no → harness relies on its own inflight counters alone |
+| OQ-11 | can the harness READ a gateway's own inflight/queue state, or is `max_inflight` purely harness-side accounting (§3.4)? | now | gateway docs/config | no readable knob → harness counters are the sole enforcement (spec already assumes this) |
+| OQ-12 | DuckBrain search surface over room keys (full-text? prefix?) — how much of "searchable" (§4.4) is native? | now (M5) | read API docs + query probe | none → harness-side inverted index; DuckBrain stays durable store only |
+| OQ-13 | library selection: adopt any §10 candidate or hand-roll on DuckBrain keys? | owner (Q-7) | owner ruling | — |
+| OQ-14 | room-append seq allocation under concurrent writers: server-allocated monotonic seq, or race? | now (M3) | concurrent POSTs to one key family | collision → harness-side single-writer seq allocator (UQ-7) |
+| OQ-15 | which rooms/events bridge to crier, with what topic naming, and does any crier consumer need VP grants? | owner (Q-9) | owner ruling + crier route read | no bridged rooms → CT-15 stays an unexercised adapter |
+
+**Count: 15 open questions.** OQ-1 and OQ-3 gate milestones (M2, M3);
+OQ-8 and OQ-13 are owner decisions; OQ-6 is closed by the v2 red line;
+OQ-15 is the v3 crier-bridge scope; the rest are resolvable by build time.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/DESIGN.md#a-3-requirements-index-normative-statements-pinned-in-body -->
+  <section id="CHD-HANDBOOK-CHD32-DESIGN-A-3-REQUIREMENTS-INDEX-NORMATI-S056" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### A.3 Requirements index (normative statements pinned in body)
+
+R-001 one source of truth for agent config (§3.2, M1) · R-003 hierarchy
+never overrides admission (§3.1, from N-1/FACT-13) · R-012 empty config =
+no-op (§1.3) · R-013 a no-change cycle idles, never accelerates (§5.6) ·
+R-014 all scheduler writes via validated loader/API path (§6.1, N-2) ·
+R-017 every escalation leaves a durable record (§7.3) · R-018 NO new
+scheduling engine: all triggers and admission are the existing
+scheduler's; the harness registers normal trigger lanes and never spawns
+directly (§3.1, §3.3, RL-1) · R-019 conversations are never reconstructed:
+messages reach sessions only as NEW or REUSE delivery (§4.1, CT-04, RL-3)
+· R-020 objectives and tasks are DuckBrain chat rooms; every agent owns a
+session bonded to one (§4.2, §4.3, RL-4/RL-5) · R-021 agents never
+schedule themselves; scheduled wakes arrive as chat messages; per-gateway
+`max_inflight` is the backpressure the harness enforces (§3.4, CT-08,
+RL-7) · R-022 the responsibilities registry is config data mirrored to
+DuckBrain; manager-to-manager spaces must be registry-justified (§3.2,
+CT-09, RL-8) · R-023 the call path is TWO hops, always: the scheduler
+calls the director-harness, the director-harness calls the gateway; no
+direct scheduler→agent spawn, no gateway path that bypasses the harness
+(§2.1, §3.3, RL-10) · R-024 a missing agent→agent reply — detected
+mechanically: no reply and no attached work report — notifies the caller
+AND bumps the owing session, riding the §5.1 ladder (§5.1, CT-11, RL-11)
+· R-025 replies are threaded: a reply lives in a subthread of the
+original request; agents working one task share one subthread; threads
+nest unboundedly (§4.4, CT-12, RL-12) · R-026 the VP is a first-class
+caller role with three grants (create objectives, inject messages, read
+named rooms); harness-internal agents are default-deny as VP without an
+explicit owner grant (§6.1, §11.1, CT-10, RL-13) · R-027 per-agent
+concurrent-live-session limits (`max_sessions`) are per-agent config,
+separate from per-gateway `max_inflight` (§3.4, CT-13, RL-14) · R-028
+all director data — rooms, messages, reports, session bonds, registry
+entries, limits — is stored in DuckBrain; the typed caps (per-gateway
+agents, per-type agents) gate RUNNING only, never scheduling (§4.5,
+§3.4, CT-13, RL-15) · R-029 signals enter via exactly four doors — API,
+MCP, CLI, webhook — as one contract surface with shared auth and audit
+(§11.2, CT-14, RL-16) · R-030 the UI chat is a read-only follower view
+by default; posting through it is acting as VP (§11.3, RL-17) · R-031 a
+stale report never satisfies the verify loop: `report.timestamp &gt;
+request.timestamp`, machine-checked (§4.5, §5.1, CT-06, RL-20) · plus
+the contract set CT-01…CT-15 (§2.2), each of which is
+normative for its named producer/consumer.
+
+*Verification of this document: mermaid blocks balanced (two flowcharts —
+§2.1 component diagram and the §4.4-adjacent trees live in the skill's
+chat-protocol.md; fences matched); every existing-code claim carries a
+file:line from the 2026-11-07 reads recorded in §A.1 (library claims cite
+the 2026-11-07 web searches, FACT-30/FACT-31; the crier bridge cites the
+README read, FACT-32); unverified mechanisms are marked SPIKE with
+named unknowns, not stated as fact. v1.0 → v2.0 and v2.0 → v3.0 deltas
+are each enumerated in the CHANGELOG above, one row per owner red line
+(RL-1…RL-9 and RL-10…RL-20 respectively).*
+  </section>
+</spec>

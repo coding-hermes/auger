@@ -1,0 +1,1476 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD32-BU-514A4E-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# VOL-A — OPERATING STORY, ROLE AUTHORITY, AND THE OBJECTIVE LIFECYCLE
+
+**Recovery terminology:** [re-drive](terminology.md#re-drive), [re-derive](terminology.md#re-derive), [reconcile](terminology.md#reconcile), [stop confirmation](terminology.md#stop-confirmation), [snapshot](terminology.md#snapshot), and [resync](terminology.md#resync).
+
+```
+DOC     : build-spec/VOL-A-story-roles-lifecycle.md
+RESOLVES: §1–§9 anchors of this volume; ids VOL-A-001..053
+          (volume -&gt; § anchors -&gt; ids: `manifest/package-manifest.json`,
+          `build-spec/REFERENCE-INDEX.md` §1)
+REV     : 2.1 (R31 revision pass 2026-11-09). Delta vs 2.0: federation operating story
+          for owner-bounded director collaboration and local VP precedence (R31-029).
+          Delta vs 1.1:
+          §1.1 admission is no longer scheduler-only and session exports live in
+          a separate archive class (R31-016/019); new §1.3 terminology defined
+          once; §2.1 per-agent profile invariant (R31-020); §2.2 matrix separates
+          agent creation / worker launch / request-wake / direct scheduling and
+          adds the foreman principal (R31-008); §2.5 fourth authority class
+          (R31-026); §2.7 snapshot-based revocation (R31-027/D-033/D-038);
+          §3.4 dual admission; §3.5 managed worker dispatch replaces CLI
+          (R31-021); §3.7 control-plane tickets replace the two-touch-point
+          claim (R31-018); §4.1 canonical 14-state machine with a full
+          transition table (R31-010); §4.3 dependency satisfaction (R31-009);
+          new §5 master flow + five role-pair contracts (R31-017). Sections 5–8
+          of rev 1.1 are now 6–9; requirement ids are unchanged and new ids
+          continue the VOL-A family.
+DATE    : 2026-11-09
+COVERS  : F-002, F-003, F-004 (evidence/r32-review/inputs/02-DETAILED-FEEDBACK.txt)
+GOVERNS : D-001, D-003, D-004, D-008, D-009, D-010, D-011, D-012, D-013,
+          D-016 (quoted or cited by id; no D-decision is restated as changed)
+SOURCES : DESIGN.md rev 3.0 (normative), contracts/DATA-MODEL.md,
+          contracts/ENDPOINTS.md, contracts/config.template.yaml,
+          coding-hermes-foreman skill (read 2026-11-08),
+          Hermes platform contracts — https://hermes-agent.nousresearch.com/docs
+STATUS  : BUILDABLE SPEC VOLUME. Every requirement carries a stable id
+          (VOL-A-nnn) and maps to its finding(s). Items the review left
+          open are marked OPEN DESIGN WORK (§8) — never resolved by
+          invention here.
+CANON   : `../evidence/r32-review/inputs/03-REVIEW-LOG.json` is the
+          included canonical review record (owner-supplied). The question
+          answers Q-003/Q-004/Q-006/Q-007/Q-008, verified Hermes gateway facts
+          (`hermes_gateway_check`), and DuckBrain dependency corrections
+          (`correct_duckbrain`) are consumed where they touch this volume;
+          see §1.4 and §8.
+```
+
+Companion volumes (other authors): VOL-B records/sessions/scheduler contracts
+(F-006–F-007, F-019), VOL-C tools/ingress/auth (F-008–F-012), VOL-D
+reports/acceptance/operations (F-013–F-015, F-016–F-018). Where a contract in
+those volumes is load-bearing for a VOL-A requirement, it is referenced, not
+redefined.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#1-operating-story -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-1-OPERATING-STORY-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 1. OPERATING STORY
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#1-1-the-system-in-one-narrative -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-1-1-THE-SYSTEM-IN-ONE-NARRATIV-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.1 The system in one narrative
+
+**Plain-prose execution rule (D-028).** The VP triggers an objective by sending its objective record to the director. The director reads the objective, criteria, current ticket state, and applicable grants; it checks ownership and dependencies, writes the assignment and ticket transition through the controller, and sends the bounded work to the manager. The manager reads the assignment and ruleset, checks that its slice is authorized, writes the supervisor assignment, and receives a report. The supervisor reads the manager's conditions and evidence, checks the foreman's result against those conditions, and writes either a verified upward report or a blocked/waiting report. The foreman reads the work unit and criteria, checks its managed worker result, and writes the report and artifact references. A normal example is a release objective whose two evidence children finish before the director writes `accepted`. A failure example is a missing artifact: the supervisor writes `failed` or `blocked` with the missing reference, the director does not infer success, and an unknown remote run remains held for [reconcile](terminology.md#reconcile) rather than being replayed blindly.
+
+The owner works through a **VP surface** — their own Hermes agent, or any
+surface speaking MCP/API/CLI to the director harness (RL-13, CT-10, DESIGN.md §11.1–11.2). The VP hands the director an **objective**: a requested outcome,
+not a task list. The director — a configured Hermes agent with its own skills,
+model, context window, and permission set (D-008) — owns the objective from
+that moment: it decomposes the objective, decides which managers owe which
+parts, and carries the VP's completion conditions downward.
+
+Managers are configured agents too. Each manager takes the slice of the
+objective it owns, breaks it into **tasks**, and organizes supervisors in a
+task chat room. Supervisors execute **prescribed conditional rules** — they do
+not hold decision authority (D-003); they gather evidence, run bounded checks,
+and coordinate foremen. Foremen are the execution experts of the existing
+coding-hermes fleet: a foreman receives a task, describes and adjusts the work,
+manages and reallocates workers, and reports results (D-004). Workers execute
+single units of work.
+
+Everything the hierarchy *says* lives in chat rooms backed by DuckBrain
+(RL-4/RL-5/RL-6): an objective **is** a room, a task **is** a room, every
+message is attributed and searchable, and every agent's wake ends in a report
+posted as a message (CT-05, §4.5 DESIGN.md). Everything the hierarchy *must
+remember to function* — rooms, messages, reports, session bonds, registry
+entries, limits, send manifests, **tickets and their transitions**, grants and
+session-policy snapshots — is CHD control state in the DuckBrain `chd`
+namespace (RL-15, CT-13). Work itself — code, worktrees, CI runs, worker
+sessions, local board files — lives where Hermes and the fleet already put it
+and is referenced by artifact refs in reports (§3.6; the F-002 boundary).
+
+**Authoritative shared work state is in the control plane, not in a repository
+file** (D-021, R31-018). A ticket lives at `/chd/ticket/...`; agents read and
+update it through controller-routed tools. A local JSONL board may be exported or
+imported as a view, but it is never the authority and no agent commits/pulls it
+to synchronize with another agent. This replaces the rev-1.1 "two-touch-point"
+claim: the planes now touch at assignment in, result out, **and** ticket state
+read/write through the controller.
+
+Native Hermes **session exports** are a third store (`chd-archive`), separate from
+control state and from room messages (D-017/D-018, R31-016). An export exists so a
+replacement agent can inspect what a lost session knew; it is not a live session
+and not a control record (the archive contract).
+
+Admission has **two initiators** (D-022/D-029, R31-019). The scheduler remains the
+authority for timed work, and a supervisor may additionally (a) enqueue work for a
+later wake or (b) request immediate execution when the target gateway has
+capacity. Both paths use one durable reservation ledger; neither bypasses
+capacity, agent limits or permissions. The harness never spawns directly and never
+owns a clock (R-018, R-021): it registers ordinary scheduler triggers, answers
+their fire callbacks, accepts bounded run-now requests, and delivers every message
+to an agent as exactly one of the two Hermes delivery modes — NEW session or REUSE
+of the bonded session (CT-04, R-019). Session *provisioning* (fresh or fork) is a
+separate decision from delivery mode (VOL-B §7.5, VOL-C §4.1).
+
+Every agent and every worker runs under its **own non-default Hermes profile**
+(D-023, R31-020). Profile identity is part of the agent's configuration
+(`hermesBinding.profile`), is bound to its gateway credentials, and is checked at
+session creation; a missing or shared profile fails closed. Profile isolation is
+not an OS sandbox — it separates session stores, memory and credentials, not
+privileges on the host.
+
+Hermes owns the agent loop, persistent sessions, memory, learning, skill
+execution, model fallback, and profile behavior; CHD coordinates capable agents
+and never rebuilds those mechanisms (review Scope boundary; D-013 treats
+standing-rule integration as a Hermes dependency contract).
+
+When work blocks, the blocker travels upward as evidence, not as a request to
+invent authority: a supervisor reports per its rules, a manager reports
+blocked, and the director — only if the VP authorized grant authority — may
+either reassign the blocked slice to a suitable manager or grant a permission
+from the VP-authorized pool (D-009). Ownership and evidence survive the move.
+When a manager reports completion, that is not acceptance: the director runs
+acceptance review against VP-supplied, director-derived, and standing-rule
+criteria, and only then does the objective move toward acceptance (D-010;
+detail of criteria/evidence contracts is VOL-D, F-013).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#1-2-federation-operating-story-r31-029-d-035 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-1-2-FEDERATION-OPERATING-STORY-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.2 Federation operating story (R31-029, D-035)
+
+**Plain-prose federation rule.** A director triggers federation by sending a scoped request through Crier. The receiving bridge reads the peer identity, local onboarding record, requested scope, and dedupe key; it checks local VP policy, writes the accept/deny/pending audit record, and forwards only an approved objective or report to the local director. Normal example: a correlated peer report updates the local ticket and returns the same peer request id. Failure example: a peer asks for an out-of-scope action; the bridge writes `403 peer_scope_denied` or `202 pending_local_approval`, produces no autonomous side effect, and preserves the request for review.
+
+A deployment may include one owner coordinating several independent client
+directors, or two owners collaborating across their own director systems. These
+are examples of the federation contract, not a universal topology. Each owner
+retains a local VP, director, managers, supervisors, foremen, workers, control
+store and approval policy. A peer director is not a new internal hierarchy tier.
+
+Crier is the transport between directors; it is not an authority bridge. The
+receiving director authenticates the configured `crier:&lt;peer-id&gt;` identity,
+looks up its operator-created onboarding record, and evaluates the requested
+objective/message/room/ticket scopes against local VP policy. The inbound request
+is mapped to a local peer actor with `origin=peer`, `peer_id`, and a stable
+`peer_request_id`; a remote `as: vp` claim is never accepted. Local VP
+precedence is absolute: the local VP is the only VP for local decisions, and a
+peer sender id cannot create or widen a grant. Delegated work uses the explicit
+GrantRecord and lineage rules in VOL-C §8.3; a peer trust record alone is not a
+VP grant.
+
+The normal trace is: peer request → authenticated/scoped local actor → local
+approval or denial → local director ticket/objective → permitted downstream work
+→ correlated report/reply. The correlation tuple carries
+`peer_request_id`, local `objective_id`/`ticket_id`, and `peer_report_id`.
+Retries reuse the peer request id and replay the mapping; duplicates do not make
+a second objective. Out-of-scope or untrusted work produces a durable denial
+(`403 peer_scope_denied`) or, when configured, `202 pending_local_approval` with
+no autonomous side effect. A bridge outage isolates federation traffic while
+local objectives continue. Internal reinvocation of the same local director is
+a separate local path, not autonomous peer federation.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#1-3-what-this-volume-specifies -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-1-3-WHAT-THIS-VOLUME-SPECIFIES-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.3 What this volume specifies
+
+- The six roles — VP, director, manager, supervisor, foreman, worker — with an
+  explicit responsibility/authority matrix, delegated decision scopes, and the
+  **four** independent authority classes (use / grant-use / meta-grant /
+  subordinate-creation) (§2; F-003, R31-008, R31-026).
+- The per-agent non-default profile invariant and its consequences for identity,
+  credentials and state (§1.1, §2.1; R31-020).
+- The hierarchy-to-foreman assignment/result contract and the four explicit
+  boundaries — dual admission, managed worker dispatch, schedule control, durable
+  storage with authoritative control-plane tickets (§3; F-002, R31-018/019/021).
+- The complete objective lifecycle: decomposition through acceptance, including
+  dependencies, queue/blocked states, reassignment, cancellation, direction
+  changes, cross-manager composition with separately delegated delivery,
+  aggregation, and the wake-completion vs objective-completion distinction
+  (§4; F-004, R31-009/010).
+- The master end-to-end flow and five role-pair contracts with inputs, triggers,
+  actions, stores, calls, outputs, recipients and failure/rework paths (§5;
+  R31-017).
+- A traced example skeleton that the acceptance demonstration must be able to
+  instantiate end-to-end, naming the decision owner at every branch (§6).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#1-4-canonical-terminology-defined-once-linked-everywhere -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-1-4-CANONICAL-TERMINOLOGY-DEFI-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.4 Canonical terminology (defined once, linked everywhere)
+
+These terms have exactly one meaning in the package; later volumes link here
+instead of redefining.
+
+| Term | Meaning |
+|---|---|
+| `VP` | the owner's calling surface and the grant ceiling; not an org-chart tier |
+| director / manager / supervisor / foreman / worker | the six-role hierarchy of §2.1 |
+| `room` / `thread` | a DuckBrain key family and a `reply_to` tree inside it |
+| `task` | one bounded piece of work with one accountable owner |
+| `ticket` | the authoritative control-plane work item (VOL-E); a task's durable identity |
+| `workflow` | a registered, versioned state machine a ticket follows (VOL-E) |
+| `session` | a Hermes conversation (id minted by Hermes) |
+| `fork` | provisioning a new session from a parent session at a recorded point — **never a delivery mode** |
+| `bond` | CHD's durable join of (agent, room, subthread, work) to a Hermes session |
+| `attempt` | one dispatch episode of a send against one target session |
+| `run` | one worker execution record (`WorkerRun`, VOL-C §7.3) |
+| `gateway request` | exactly one HTTP POST to a Hermes gateway |
+| `send` | one logical owed piece of work, delivered by one or more attempts |
+| `report` | the exactly-one result message answering a send |
+| `dataset` | a schema-validated, queryable multirow report variant |
+| `grant` / `meta-grant` | a conferred right / the right to confer delegation rights |
+| `snapshot` | see [recovery terminology](terminology.md#snapshot); this volume uses the `SessionPolicySnapshot` record |
+| `archive` | a committed native session export in `chd-archive`; not a live session |
+| `checkpoint` | the coverage boundary (`checkpoint_seq`, `covered_through_ts`) of an archive |
+| `restore` | importing an archive into a new session; validated, never a blind DB copy |
+| `lease` | a capacity hold whose expiry is a **detection** deadline, not proof of stop |
+| `admission` | the durable capacity reservation that precedes dispatch |
+| `enqueue-only` / `run-now` | the two admission operations (§3.4, VOL-C §6.7) |
+
+Two distinctions must survive into every later section:
+
+- **send ≠ attempt ≠ gateway request.** A logical send may be attempted more than
+  once, including against a fresh session; a gateway request is one POST.
+- **fork ≠ delivery mode.** Fork provisions a native session; delivery selects
+  NEW or REUSE for a wake.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#1-4-master-scenario-and-trace-contract-r31-017-d-020 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-1-4-MASTER-SCENARIO-AND-TRACE-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.4 Master scenario and trace contract (R31-017, D-020)
+
+This section is the readable master scenario. The normative handoff ledger in
+§5.1 is the machine-checkable companion: every row has all eight required
+fields, and the two traces below use the same ticket and event identities.
+The coding trace is `REL-412`; the non-coding trace is `BILL-77`. Neither
+scenario changes the generic ticket contract.
+
+| Scenario | Start | Decomposition | Execution | Aggregation and delivery | End-to-end evidence |
+|---|---|---|---|---|---|
+| Coding (`REL-412`) | VP opens release-readiness objective and criteria | Director creates `REL-412` plus child tickets `REL-412-INFRA`, `REL-412-AUDIT`, and `REL-412-HTML`; dependencies point to the two evidence children | Managers assign supervisors; supervisors assign foremen; controller admission and managed worker dispatch create runs | Reports are verified, the composing child is released only after both prerequisites are accepted, and the director reviews the HTML artifact | W1–W11, `ObjectiveRecord`, `TicketRecord`, `AssignmentRecord`, `RoomMessage`, `SendManifest`, and `Report` refs; VOL-A §5, VOL-B §3.14, VOL-C §6.7 |
+| Non-coding (`BILL-77`) | VP requests reconciliation of an invoice batch | Director creates a `decision` ticket and child tickets for invoice extraction, exception review, and owner delivery | Managers coordinate supervisors; foreman uses a bounded data-processing work unit; no repository or coding assumption is introduced | Exception report and reconciliation table are rolled up; owner receives the accepted report through the configured delivery assignment | Same controller ticket operations and CHD records; VOL-E VOLE-001/002, VOL-A §5, VOL-D §3 |
+
+The ticket is the join key across both traces. A local worktree, spreadsheet,
+CI result, or other artifact is evidence linked from the ticket; it is never a
+replacement for the ticket state or transition event.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#canonical-review-log-items-consumed-in-this-volume -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-CANONICAL-REVIEW-LOG-ITEMS-CON-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### Canonical review-log items consumed in this volume
+
+- **Q-004 (answered).** When a manager cannot complete an assignment with its
+  configured capabilities: report blocked upward; the director chooses an
+  authorized permission change or reassignment; human escalation remains
+  governed by configured approval and grant authority. Consumed as the
+  normative shape of VOL-A-030/031/039 — the manager does not delegate to a
+  peer on its own initiative.
+- **Q-006 (answered).** The director specifies the completion/approval
+  condition **per assignment** and passes it down; continue-versus-wait
+  follows existing human authorization, and an explicit stop-until-approval
+  must hold. Consumed in VOL-A-015 (assignment contents), VOL-A-027 (criteria
+  attach at decomposition) and VOL-A-037 (approval gates hold).
+- **Q-008 (answered).** Named role skill overrides are allowed when authorized
+  by VP config or a valid on-demand director delegation; VP config prevails in
+  conflict. Consumed in §2.1 (role composition) and VOL-A-010.
+- **Q-003 (partially answered).** Manager-creation and supervisor-creation are
+  configurable permissions; **foreman/worker creation scope still requires
+  contract clarification** — recorded as OW-1, reinforcing D-005's scope note.
+- **Q-007 (open integration clarification; do not block).** The NEW/REUSE
+  event mapping is an open integration item owned by VOL-B (F-010); this
+  volume references the two delivery modes only as Hermes-backed facts and
+  does not block on the mapping (OW-7).
+- **Hermes gateway facts (review-log `hermes_gateway_check`, official docs).**
+  Hermes provides REST session creation, continuation, metadata/history and
+  forks; continued sessions retain memory-provider recall between turns; named
+  profile routing binds authentication to the routed profile. These are the
+  platform contracts NEW/REUSE maps onto (CT-04, F-010 → VOL-B) — CHD does not
+  rebuild them. Caveat consumed in VOL-A-036: Hermes documents **session-start
+  frozen memory snapshots**, so immediate propagation of newly learned
+  standing rules to in-flight sessions is not guaranteed — acceptance requires
+  effective-rule evidence, not assumed propagation (D-013).
+- **DuckBrain dependency corrections (review-log `correct_duckbrain`, wojons/
+  duckbrain rev 972aeb0).** Memory keys **must start with `/`** — key examples
+  in this volume are normalized to `/chd/...` (older shapes in DESIGN.md and
+  the contracts, written without the leading slash, need the same
+  normalization at the VOL-B record contracts, F-019). Same-key writes create **independent versions** and the
+  buffered default durability has **no power-loss barrier** — key-version
+  selection and the durability/ack contract are record-layer matters pinned in
+  VOL-B (F-007/F-019); this volume's control-state requirements (VOL-A-023/
+  024/025) require that VOL-B contract to exist, and no key in this volume
+  relies on default timestamp ordering.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#2-role-authority-model-f-003 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-2-ROLE-AUTHORITY-MODEL-F-003-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 2. ROLE AUTHORITY MODEL (F-003)
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#2-1-the-six-roles -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-2-1-THE-SIX-ROLES-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.1 The six roles
+
+CHD defines exactly six roles. The first three are hierarchy roles inside the
+director harness's own configuration (DESIGN §3.2, DATA-MODEL §1.1); the
+foreman and worker are the fleet's existing execution tier reached *through*
+the hierarchy; the VP is a caller role outside the org chart (RL-13).
+
+1. **VP** — the owner's calling surface (owner's Hermes agent via its
+   director-calling tool, Claude Code, MCP/API/CLI/webhook callers, the
+   scheduler acting as VP, the UI chat send box) (RL-13, CT-10, CT-14,
+   §11.2 DESIGN.md). Gives direction to the director; holds the grant ceiling.
+2. **Director** — the single hierarchy decision owner (D-003). Organizes
+   managers, owns final decisions, delegates decision scope to managers, runs
+   acceptance review, and escalates to the VP when ambiguity or authority
+   limits are reached.
+3. **Manager** — organizes supervisors for a slice of an objective (D-001).
+   Makes decisions **within the delegated decision scope the director granted
+   it** (D-003); escalates ambiguity upward rather than expanding its own
+   authority. Some managers may create supervisors per configuration (D-009).
+4. **Supervisor** — executes **prescribed conditional rules** for bounded work
+   and coordinates foremen (D-001, D-003). A supervisor's rules can send it to
+   check, gather, verify, compare, and report — they cannot silently acquire
+   manager authority (F-003 completion evidence).
+5. **Foreman** — execution expert for a work area (D-004). Receives a task,
+   describes and adjusts the work, manages and reallocates workers, verifies
+   their output, and reports upward. The foreman's operating loop is the
+   existing coding-hermes-foreman skill machinery (board reads, worktrees,
+   worker dispatch, gates) — CHD does not redesign it (§3 of this volume).
+6. **Worker** — executes a single assigned unit of work and reports to its
+   foreman. Workers hold no hierarchy authority and no hierarchy messaging
+   duties: they reach the hierarchy only through their foreman.
+
+**Apparent sub-directors are not a seventh tier.** What looks like a
+sub-director is an invocation of the same director under a different room or
+cycle (D-015); no additional hierarchy tier exists between director and
+managers.
+
+**Roles are configurations, not ranks.** Each director, manager, supervisor,
+foreman and worker is a configured AI agent with its own toolset, permission
+list, workspace, approval policy, provider/model, context settings and **its own
+non-default Hermes profile** (D-008, D-015, D-023). Two agents sharing a profile
+is a validation error (`profile_shared`), and any agent running in `default` is a
+conformance failure: sessions, memory and credentials must be attributable per
+agent (R31-020; contract VOL-D §1.6/§2). Role composition (project instructions +
+base role template + named specialization, with authorized specialization
+overriding base behavior) is a configuration-contract matter (VOL-D Pt I); this
+volume pins only the authority consequences: a named specialization may override
+base role behavior/permissions **when authorized** (D-016; Q-008: overrides
+allowed when authorized by VP config or valid on-demand director delegation), and
+precedence is VP-configuration &gt; director delegation (D-016, Q-008).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#2-2-role-responsibility-authority-matrix -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-2-2-ROLE-RESPONSIBILITY-AUTHOR-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.2 Role / responsibility / authority matrix
+
+"Decides" = the role may commit a decision without upward approval *within the
+named scope*. "Executes" = the role acts under rules it does not author.
+"May not" rows are normative — violating them is an integrity violation, not a
+style issue (§6.3 DESIGN.md pattern).
+
+| Capability | VP | Director | Manager | Supervisor | Foreman | Worker |
+|---|---|---|---|---|---|---|
+| Issue/modify objectives | **Decides** (creates objectives, injects direction, changes VP direction) | Proposes; receives | May not | May not | May not | May not |
+| Decompose objective into manager assignments | May not | **Decides** (owner of decomposition) | Decides own task decomposition within delegated scope | May not | Describes/adjusts own work plan (D-004) | May not |
+| Delegate decision scope | Holds the grant ceiling | **Decides** delegation to managers (D-003) | May not re-delegate decision scope downward | May not | May not | May not |
+| Routine task decisions | — | Owns all final decisions not delegated (D-003) | **Decides within delegated scope**; ambiguity escalates up (D-003) | Executes conditional rules only (D-003) | Decides execution mechanics: work description, adjustment, worker management/reallocation (D-004) | Decides nothing beyond executing the unit |
+| **Control-plane agent creation** | Configures (operator-owned config, CT-01) | Only if `director.created-managers = on` (D-005) | Only if `created-supervisors = on` (D-009) | **Denied — service rejects `agent.create`** | **Denied — worker profile creation is operator-owned; may request an existing worker only** | **Denied** |
+| **Work-plane worker launch (managed dispatch)** | **Denied** | **Denied** | **Denied — may assign a foreman** | **Denied — may request foreman execution via `chd_assign`** | **Allowed — `chd_worker_dispatch`, existing ready worker only** | **Denied** |
+| **Request-wake (`enqueue_only`)** | Allowed VP signal scope → controller auth check | **Allowed** within delegated scope → controller | **Allowed** for assigned subordinate → controller | **Allowed only for its assigned foreman queue; request set = `chd_assign` + `enqueue_only` + own task/thread refs** | Allowed for own rooms → controller | **Denied** |
+| **Immediate execution (`run_now`)** | **Denied** | **Allowed** within delegated scope → bounded controller admission | **Allowed** for assigned foreman → bounded controller admission | **Allowed only for assigned foreman, readiness/capacity checked; request set = `chd_assign` + `run_now` + own task/thread refs** | **Allowed** for own worker runs via managed dispatch; shared cap applies | **Denied** |
+| **Direct scheduling (lane mutation)** | Configures via operator path | **Denied at runtime** | **Denied** | **Denied** | **Denied** | **Denied** |
+| **Ticket read/write** | Per config | All tickets in namespace | Own family's tickets | Own assigned tickets' workflow fields | Linked tickets it owns | **Denied** |
+| Grant permissions to others | **Source of all grant authority**; VP-configured permissions are already granted (D-016) | On-demand grants **only within VP-delegated pool** (D-009, D-016) | Only if given grant authority from an allowed pool (D-009) | **Denied** | **Denied** | **Denied** |
+| **Confer delegation authority (meta-grant)** | **Holds the root** | Only if VP granted `meta_grant` with recipient/scope caps (D-032) | Only if granted `meta_grant` by a holder | **Denied** | **Denied** | **Denied** |
+| Override admission | **Denied** | **Denied (R-003)** | **Denied** | **Denied** | **Denied** | **Denied** |
+| Report upward | N/A (is the top) | To VP | To director | To manager | **Allowed — `room.report` with role token to supervisor** | To foreman |
+| Escalate | N/A | To VP/owner page (§7.3 DESIGN.md) | To director | To manager | To supervisor | To foreman |
+| Accept work | Final human sign-off where configured (D-010 open items §8) | **Acceptance review owner** (D-010) | Reports completion; is NOT acceptance (D-010) | Verifies per rules | Verifies workers (D-004) | — |
+
+**Allowed-request set (R31-008):** a supervisor may request only `chd_assign` for a
+foreman already assigned in its task room, with `admission=enqueue_only|run_now`,
+`ticket_id`, `assignment_id`, `room`, `thread_root`, instruction/criteria refs,
+and its own authorization proof. The controller checks the assignment edge,
+current profile readiness, gateway/agent capacity, and the shared reservation
+atomically. A supervisor cannot create agents, dispatch workers, mutate lanes,
+change permissions, or target another supervisor's room. This list is identical
+to VOL-C §8.2 and ENDPOINTS §4.11.
+
+**VOL-A-041 (matrix completeness, R31-008).** The matrix SHALL distinguish four
+different acts that rev 1.1 conflated: **control-plane agent creation**,
+**work-plane worker launch**, **request-wake** (enqueue for a later wake) and
+**direct scheduling** (mutating lanes). The foreman SHALL appear as a principal
+with the permissions it needs to report and to dispatch its own workers; a
+supervisor SHALL be able to perform exactly the requests its written workflow
+names (assign/enqueue/run-now/wake) without hitting an "enforced deny". The
+enforced implementation matrix is VOL-C §8.2; the two tables agree row for row.
+
+**VOL-A-001** (F-003, D-001, D-003, D-004): CHD SHALL define exactly the six
+roles above; every hierarchy message, decision, and report SHALL name an agent
+whose role is one of the six, and apparent sub-director activity SHALL be
+attributed to the single director agent (D-015).
+*Evidence obligation: a traced task names the decision owner at every branch.*
+
+**VOL-A-002** (F-003, D-003): Decision authority SHALL follow the matrix: the
+director owns all final decisions except the decision scope it explicitly
+delegated to a named manager; a supervisor's execution SHALL be limited to its
+prescribed conditional rules; a supervisor action SHALL never widen a manager's
+delegated scope. Ambiguity beyond written scope SHALL escalate upward (D-003),
+never be resolved sideways.
+
+**VOL-A-003** (F-003, D-004): The foreman's execution expertise SHALL be
+preserved as an authority in its own right: given a task, the foreman decides
+how the work is described, adjusted, split across workers, reallocated
+mid-flight, and verified — CHD coordinates the foreman through assignment and
+result contracts (§3) and SHALL NOT prescribe the foreman's internal
+work-management steps.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#2-3-delegated-decision-scope -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-2-3-DELEGATED-DECISION-SCOPE-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.3 Delegated decision scope
+
+**VOL-A-004** (F-003, D-003, D-008): Each manager's delegated decision scope
+SHALL be explicit configuration data (part of the agent config the VP/operator
+owns; D-008), naming the decision classes the manager may commit (e.g. task
+ordering, worker-wave sizing, board-row selection within its responsibility
+domain) and the classes it may not (e.g. changing completion conditions,
+granting permissions, cross-domain reassignment). The default where config is
+silent SHALL be **no delegated decision scope** (deny-by-default, matching
+DESIGN §6.1's grant posture).
+
+**VOL-A-005** (F-003, D-003): A manager operating beyond its delegated scope —
+including a decision that produces a report claiming an outcome its scope
+cannot authorize — SHALL produce an incident path: the harness/verify loop
+treats the out-of-scope commitment as `bad_report` material per CT-06/§5.1
+mechanics (owned in detail by VOL-D), and the decision itself is void pending
+director or VP action.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#2-4-supervisor-conditional-actions-rules-not-authority -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-2-4-SUPERVISOR-CONDITIONAL-ACT-S012" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.4 Supervisor conditional actions — rules, not authority
+
+**VOL-A-006** (F-003, D-003): A supervisor's behavior SHALL be expressed as
+prescribed conditional rules of the form *condition → bounded action →
+report*. Bounded actions are: read/check a named artifact, run a bounded
+verification probe, gather evidence, compare against a rule threshold, post a
+message, wake the manager, coordinate a foreman per the task room's
+assignment. A supervisor SHALL NOT: open rooms, create agents, grant
+permissions, reassign tasks to other managers, alter completion conditions, or
+commit any decision class named in a manager's delegated scope (VOL-A-004).
+
+**VOL-A-007** (F-003): A supervisor rule whose condition cannot be resolved by
+the written rules (ambiguous evidence, contradictory conditions, threshold
+unknown) SHALL produce an escalation message to its manager with the evidence
+attached — never a improvised decision. This is the mechanical meaning of
+"supervisors execute prescribed conditional rules rather than receiving
+decision authority" (D-003).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#2-5-the-four-distinct-permission-classes -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-2-5-THE-FOUR-DISTINCT-PERMISSI-S013" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.5 The four distinct permission classes
+
+The review requires that use, grant, meta-grant and subordinate-creation
+permissions are never inferred from one another (D-009, D-032). This volume pins
+the semantics and the pools; enforcement contracts (service-boundary checks, audit,
+revocation readback) are VOL-C §8 (F-012, R31-026).
+
+**VOL-A-008** (D-009, D-032, F-003, F-012): CHD SHALL model four independent
+permission classes per agent:
+- **use** — the agent may exercise the capability itself;
+- **grant-use** — the agent may confer a capability from a named allowed pool onto
+  a named subordinate;
+- **meta-grant** — the agent may confer the right to delegate further (make another
+  grantor), bounded by recipient scope and downstream rights;
+- **subordinate-creation** — the agent may create instances of a named tier.
+
+Possession of any one class SHALL NOT imply another. An agent MAY hold grant
+authority for a capability it cannot itself use (D-009: "an agent may have
+authority to grant a capability from an allowed pool without having permission
+to exercise that capability itself"); this MUST be validated in the acceptance
+demonstration (handoff: "a grantor authorized to grant a tool it cannot use").
+
+**VOL-A-042 (meta-grant semantics, R31-026).** A meta-grant SHALL name the
+capability, resource scope, permitted recipients and allowed downstream rights. A
+grantor SHALL NOT confer a meta-grant broader than its own, SHALL NOT issue one
+without citing the authority that permits it, and SHALL NOT create a cycle. The
+grant lineage (VP root → … → issued grant) SHALL be durable and readable at both
+ends. A director may not use a meta-grant to escape a VP denial: VP configuration
+remains the root (VOL-A-010). Enforcement, rejection codes and readback are
+VOL-C §8.3 (VOLC-068).
+
+**VOL-A-009** (D-009, F-003, F-012): Each grant-class grant SHALL name its
+**allowed pool** explicitly: the set of capabilities grantable, the tiers of
+grantee permitted, and any scope limits (rooms, workdirs, duration). Empty
+pool = no grant authority. The pool's ceiling is set by VP configuration; a
+director may sub-delegate only inside it (D-016: VP configuration wins
+conflicts with director delegation).
+
+**VOL-A-010** (D-016, F-003): Permissions configured by the VP in agent config
+SHALL require no director grant — they are already VP grants (D-016). Director
+on-demand grants apply only to changes within its delegatable authority, SHALL
+carry provenance (`origin: vp-config | director-grant:&lt;send/id&gt;`), and SHALL
+lose to VP configuration on any conflict (D-016). Skill wording alone SHALL
+NOT be read as an effective permission grant (F-012 boundary; enforcement
+VOL-C).
+
+**VOL-A-011** (D-005, D-009, F-003): Subordinate-creation SHALL be governed by
+explicit settings: `director.created-managers = on/off` (D-005: managers are
+typically predefined; a setting can permit the director to create managers;
+**default is OPEN DESIGN WORK** — §8, OW-2) and per-manager
+`created-supervisors = on/off` (D-009: "some managers may create supervisors
+according to configuration"). Foremen and workers below the supervisor tier
+SHALL NOT be created by any hierarchy agent in this revision; lower-tier
+creation policy is **OPEN DESIGN WORK** (D-005 scope note; §8, OW-1).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#2-6-escalation-paths -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-2-6-ESCALATION-PATHS-S014" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.6 Escalation paths
+
+**VOL-A-012** (F-003, D-003, D-009): Every escalation SHALL be a durable
+incident record in the parent room (R-017: an escalation that leaves no record
+is a defect). The canonical ladder is DESIGN §7.3: agent blocked/failed →
+parent agent room (incident message) → director (aggregates; may re-send or
+defer subtree) → owner page at the DESIGN.md §7.3 triggers. Role-specific escalation
+reasons in this volume's lifecycle: ambiguity beyond decision scope (VOL-A-002,
+VOL-A-007), blocked work (D-009), waiting-for-human (D-012), authority limits
+on grants (VOL-A-009: a needed grant outside the allowed pool escalates to the
+holder of the larger pool, ultimately the VP).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#2-7-revocation-paths -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-2-7-REVOCATION-PATHS-S015" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.7 Revocation paths
+
+**VOL-A-013** (F-003, F-012 boundary; **superseded in part by VOL-A-043**).
+Revocation SHALL mirror grant origin: the VP (via config change, taking effect per
+config-activation rules — VOL-D §1.1) revokes VP-configured permissions; a
+director-granted permission is revoked by the granting agent or by VP override (VP
+configuration wins conflicts, D-016). Revocation SHALL be recorded with provenance
+so effective-policy readback shows the current state. A director SHALL NOT revoke a
+VP-configured permission by issuing a conflicting delegation. The rev-1.1 rule
+that scheduled permission revocation for the session's following turn is
+**superseded** (RETIRED, not quoted here — retired wording preserved in
+the retained review evidence under `evidence/r32-review/inputs/` so the package contains no live occurrence of the retired wording)
+by VOL-A-043 for session-scoped rights.
+
+**VOL-A-043 (session-lifetime revocation, R31-027, D-033, D-038).** Revocation
+SHALL operate at the **session boundary**, not the request boundary:
+
+1. Every session holds a `SessionPolicySnapshot` (VOL-B §3.11) captured at
+   creation and at every fork; effective enforcement for that session reads the
+   snapshot.
+2. An **existing** session retains the permissions that were effective for it when
+   it started. A revoked ancestor grant does not reach into it.
+3. A **future** session (new session, new fork, replacement, restore without a
+   snapshot) resolves current valid grants: rights derived from revoked authority
+   are absent; independent VP grants keep their own origin and remain.
+4. A fork follows the configured `sessions.fork_policy`:
+   `preserve_parent_snapshot` (default) copies the parent snapshot verbatim,
+   `current_policy` resolves at fork time.
+5. An explicit, authorized **policy resync** is the only way an existing session's
+   effective set changes; it is never automatic, never triggered by a tool call.
+6. "Existing vs future" is defined exactly as above across fork, restart,
+   replacement and restore; a restore that cannot find the archived snapshot fails
+   closed to `current_policy` and records `snapshot_missing`.
+7. A revoked grantor MAY still hold `use` in its existing session, but SHALL NOT be
+   able to issue new downstream grants: issuance is evaluated against current
+   authority, not the snapshot. This edge is explicit, not inferred.
+
+The operations, errors and readback are VOL-C §8.9; the acceptance variants are WF-08
+plus the D-038 session-policy tests in `acceptance/`.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#3-hierarchy-to-foreman-integration-boundaries-f-002 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-3-HIERARCHY-TO-FOREMAN-INTEGRA-S016" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 3. HIERARCHY-TO-FOREMAN INTEGRATION BOUNDARIES (F-002)
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#3-1-the-reconciliation-problem-stated -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-3-1-THE-RECONCILIATION-PROBLEM-S017" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.1 The reconciliation problem, stated
+
+Three rules collide at the foreman tier:
+
+1. The review requires foremen/workers **beneath the supervisor tier**
+   (F-002, D-001).
+2. The **foreman skill** (coding-hermes-foreman, read 2026-11-08) runs a
+   delivery loop that: reads JSONL boards with `boardctl`, dispatches workers
+   by launching CLI sessions (`hermes chat -q …` from inside the foreman's own
+   session — the pattern recorded as FACT-23 in DESIGN.md), creates git
+   worktrees, runs GitReins judges, and performs **self-pause** and schedule-
+   adjacent actions in its own tick loop.
+3. CHD norms say: agents never self-schedule (R-021), nothing reaches a
+   gateway except through the harness (R-023 two-hop rule), and DuckBrain is
+   the only durable store **for CHD control state** (RL-15 as scoped by the
+   review: "DuckBrain-only persistence means CHD control state only").
+
+The resolution is a **two-plane model**: the foreman simultaneously lives in
+CHD's *control plane* (as an addressable agent that receives assignments and
+owes reports through rooms) and in the fleet's *work plane* (its existing tick
+loop, board, worktrees, workers). The planes touch at exactly two points —
+assignment in, result out — and the boundaries below name what each plane
+owns.
+
+**VOL-A-014** (F-002): CHD SHALL treat a foreman as a two-plane agent: in the
+control plane it is a room-member agent that receives task assignments and
+posts reports (CT-05 semantics); in the work plane it is the existing foreman
+skill loop whose internals (board reads, worktree creation, worker dispatch,
+judges, gates) are outside CHD's contracts. CHD SHALL NOT re-specify, wrap, or
+replace the foreman skill's internal loop.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#3-2-assignment-contract-control-plane-foreman -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-3-2-ASSIGNMENT-CONTRACT-CONTRO-S018" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.2 Assignment contract (control plane → foreman)
+
+**VOL-A-015** (F-002, D-001, D-004): A foreman assignment SHALL be a task-room
+message (kind `task`, per DATA-MODEL §1.4) posted by the coordinating
+supervisor's side of the task room — concretely: the supervisor coordinates
+foremen per D-001, and the assignment message carries: the objective id and
+task room, the bounded work description, the completion conditions passed down
+**unchanged** from the director's assignment unless an authorized change is
+recorded (D-012; criteria-provenance detail VOL-D F-013), the artifact
+expectations, and the completion/approval condition the director specified for
+this assignment, passed down unchanged (Q-006, D-012; criteria-provenance
+detail VOL-D F-013), and the report deadline implied by `verify.deadline_s`
+(DESIGN §5.1). Assignment delivery to the foreman's session uses the same two-mode
+NEW/REUSE path as every other agent (CT-04) — the foreman's gateway/session
+plumbing is unchanged fleet plumbing (FACT-11).
+
+**VOL-A-016** (F-002, D-004): Within one assignment, the foreman MAY issue
+multiple progress messages and SHALL post exactly one final report per owed
+send (CT-05: zero or more chat messages, exactly one report message per wake).
+The foreman's report follows the DATA-MODEL §1.5 report shape (`status:
+done|deferred|blocked|failed`, artifacts required for `done`, freshness rule
+RL-20).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#3-3-result-contract-foreman-control-plane -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-3-3-RESULT-CONTRACT-FOREMAN-CO-S019" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.3 Result contract (foreman → control plane)
+
+**VOL-A-017** (F-002): A foreman result SHALL reach the hierarchy only as a
+report/progress message in its task room (CT-05), authenticated with its role
+token (FACT-19/FACT-20); the verify loop (CT-06) and the missing-reply ladder
+(CT-11, RL-11) apply to foreman sends exactly as to supervisor sends. Artifact
+references in the report (board row ids, commit shas, CI run ids) point INTO
+the work plane; the harness samples artifact existence per DESIGN §4.5/M5.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#3-4-boundary-1-admission-two-initiators-one-ledger -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-3-4-BOUNDARY-1-ADMISSION-TWO-I-S020" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.4 Boundary 1 — Admission (two initiators, one ledger)
+
+**VOL-A-018** *(superseded by VOL-A-044 — kept for lineage; the scheduler-only
+reading must not survive anywhere.)*
+
+**VOL-A-044 (dual admission, R31-019, D-022/D-029).** A foreman wake SHALL be
+admitted through exactly one of two initiators:
+
+1. **Timed** — the harness's registered trigger lane fires, the harness composes
+   the send, and admission follows the configured path (scheduler bump or
+   controller-local reservation; VOL-C §6.7 records which).
+2. **Requested** — a supervisor (or a director on a delegated path) calls
+   `chd_assign` with `admission: enqueue_only | run_now`. `enqueue_only` places the
+   work for a later wake; `run_now` attempts immediate execution.
+
+Both initiators share one durable capacity ledger derived from send manifests
+(no second counter), one dedupe identity per request, and one atomic reservation
+primitive; concurrent requests for the same assignment resolve to one dispatch and
+the loser receives the winner's ids (VOL-C §6.7). Neither path may exceed
+per-gateway `max_inflight`, per-agent `max_sessions`, or permissions. No hierarchy
+agent may mutate scheduler lanes (VOL-A-022).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#3-5-boundary-2-worker-launching -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-3-5-BOUNDARY-2-WORKER-LAUNCHIN-S021" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.5 Boundary 2 — Worker launching
+
+Rev 1.1 said the foreman launches workers by CLI from inside its own session
+(FACT-23). That prescription is **superseded** (D-024, R31-021): CLI-launched
+Hermes inherits the foreman's environment, profile and provider, which contradicts
+the per-agent profile invariant (§2.1). Workers are launched through a managed,
+structured dispatch.
+
+**VOL-A-019** *(superseded by VOL-A-045 — kept for lineage; no CLI worker launch
+is conforming.)* **The managed dispatch contract is the only live rule.**
+
+**VOL-A-045 (managed worker dispatch, R31-021, D-024).** A foreman SHALL dispatch
+workers only through `chd_worker_dispatch` (controller endpoint
+`POST /v1/workers/dispatch`, VOL-C §7). The request names the worker and its
+non-default profile, the work records (ticket/assignment/room/thread/send), the
+instruction reference, the workspace, and optionally the runtime settings. The
+controller validates authority, profile distinctness, workspace scope and capacity,
+creates a durable `WorkerRun`, and executes the gateway POST. The foreman receives
+a `run_id`, observes progress and result asynchronously, and verifies the result
+itself (D-004). A worker run is **not** a hierarchy send: it is a work-plane
+execution whose result reaches the hierarchy only as the foreman's report
+(VOL-A-017).
+
+**VOL-A-020** (F-002, R-021): Hierarchy agents SHALL NOT acquire schedule
+control through worker launching. The foreman's own tick cadence and self-
+pause behaviors, as implemented by the existing skill and governed today by the
+scheduler's admission/cooldown machinery (FACT-01/FACT-05/FACT-06), remain
+exactly as they are; CHD neither grants nor audits them as hierarchy actions.
+A foreman's *self-pause of its fleet lane* is a work-plane event: if it bears
+on a CHD assignment, it surfaces as a `deferred`/`blocked` report reason, not
+as a CHD schedule mutation.
+
+**VOL-A-021** (F-002 — OPEN DESIGN WORK, narrower in rev 2.0): the dispatch
+contract now states the fields a foreman reports (run ids, progress, result,
+artifacts), because the run record makes them observable. Still OPEN: whether
+worker-run counts feed typed caps (`max_parallel` per role) or remain advisory,
+and whether a foreman may hold `create_worker` to provision a new worker profile
+without an operator. Until decided, the foreman may dispatch **existing** workers
+only; worker profile creation stays operator-owned (§8, OW-3).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#3-6-boundary-3-schedule-control -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-3-6-BOUNDARY-3-SCHEDULE-CONTRO-S022" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.6 Boundary 3 — Schedule control
+
+**VOL-A-022** (F-002, R-021, CT-08): No hierarchy role — including foremen —
+may create, alter, or delete scheduler lanes as a hierarchy action. An agent
+that wants a future wake asks the harness (CT-08). Foreman skill behavior that
+ touches schedule-adjacent state (self-pause, lane prompts) is work-plane behavior
+ owned by the existing scheduler/config machinery, unchanged by CHD.
+
+**Capacity and lease rule (R31-006).** Schedule admission and caps are governed by
+VOL-B §6.4/§6.7's manifest-derived ledger. A lease expiry is only a bounded
+reconciliation trigger: it is never proof that a remote run stopped and never by
+itself releases a gateway or agent slot. The run-status owner must obtain a
+terminal run result or correlated terminal report before release; `running`,
+`unknown`, and `unreachable` retain the slot. In a partition where the old harness
+may still execute, a second harness is refused by the writer-lease startup gate
+(VOL-B §4.4), so availability is sacrificed before exceeding the configured cap.
+
+Schedule ownership restatement: no hierarchy role — including foremen —
+may create, alter, or delete scheduler lanes as a hierarchy action. An agent
+that wants a future wake asks the harness (CT-08). Foreman skill behavior that
+touches schedule-adjacent state (self-pause, lane prompts) is work-plane
+behavior owned by the existing scheduler/config machinery (FACT-07/FACT-15),
+unchanged by CHD. The hierarchy's only schedule instrument is trigger
+registration and wake requests by the harness itself (CT-02, CT-08).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#3-7-boundary-4-durable-storage-control-state-vs-work-artifacts -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-3-7-BOUNDARY-4-DURABLE-STORAGE-S023" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.7 Boundary 4 — Durable storage: control state vs work artifacts
+
+**VOL-A-023** (F-002, RL-15 scoped, revised for D-021): The DuckBrain-only
+invariant SHALL apply to **CHD control state**: room/message/report keys, registry
+mirrors, session bonds, limits, send manifests, **tickets and ticket events,
+grants and policy snapshots** (DATA-MODEL §2 / VOL-B §2 key families). The
+following SHALL be explicitly OUTSIDE the invariant and stay where the existing
+machinery puts them:
+- **local** board files and GitReins task records used as working views (they are
+  exports/imports of ticket state, never the authority — VOL-A-046);
+- git worktrees, commits, CI runs and their evidence;
+- worker sessions and their Hermes session storage (Hermes-owned);
+- agent memory, skill files, and learned context (Hermes-owned — review Scope
+  boundary: "distinguish native Hermes memory/session/skill storage and work
+  artifacts").
+Control-plane references to work-plane state are artifact *refs* in reports
+(DATA-MODEL §1.5 `artifacts`), never copies.
+
+**VOL-A-046 (authoritative shared tickets, R31-018, D-021).** Shared work state
+SHALL live in the control plane and be accessed through controller-routed tools
+(VOL-E). A local board file SHALL be treated as a mirror/import view: it may be
+regenerated from the ticket store, may not be edited as authority, and is never
+synchronized between agents by commit/pull. Two agents reading/updating one ticket
+do so through the controller; transitions are authorized and revision-checked
+(`expected_revision`, VOLE-009); a restart preserves committed state because the
+store, not the working copy, holds it. This replaces the rev-1.1 claim that the
+planes touch at exactly two points: ticket reads and updates are additional
+control-plane interactions, and they are enumerated in VOL-E §3.
+
+**VOL-A-024** (F-002): A CHD component that requires durable hierarchy
+authority data (assignment ownership, delegated scopes, grant provenance,
+objective state) SHALL store it as CHD control state under the VOL-B record
+contracts (F-006) — never in work-plane files (boards, repos) and never in
+Hermes memory. Conversely, work products SHALL NOT be duplicated into DuckBrain
+"just in case"; the room log carries the reference and the accountable summary
+(RL-6: the report arrives as a message).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#3-8-the-full-assignment-result-loop-drawn -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-3-8-THE-FULL-ASSIGNMENT-RESULT-S024" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.8 The full assignment/result loop, drawn
+
+**Plain-prose loop explanation.** The manager triggers an assignment by writing a task-room message. The router reads membership and wake targets; the harness checks admission and profile authority, writes the send manifest, and dispatches through the gateway. The foreman reads the work unit and criteria, manages the worker, checks returned artifacts, and writes one final report to the room. A normal example is a worker commit linked to a verified report that closes the send. A failure example is a report with the wrong ticket or missing artifact: the harness writes `bad_report` or `blocked`, keeps the ticket open, and reports the exact evidence instead of re-deriving success from a wake. The arrow `router → wake target` is routing only; DuckBrain never wakes the gateway.
+
+```mermaid
+sequenceDiagram
+    participant M as Manager (delegated scope)
+    participant S as Supervisor (conditional rules)
+    participant R as Task room (/chd/room/task-*/m&lt;seq&gt;)
+    participant F as Foreman (work plane)
+    participant W as Workers (work plane)
+    M-&gt;&gt;R: kind=task message (assignment, conditions passed down unchanged, D-012)
+    Note over R: router resolves membership, wakes target (CT-07)
+    R-&gt;&gt;F: wake via controller admission→gateway (R-023), NEW/REUSE (CT-04)
+    F-&gt;&gt;W: managed controller dispatch: describe, adjust, dispatch/reallocate workers (D-004, VOL-A-045)
+    W--&gt;&gt;F: work-plane results (commits, boards, CI refs)
+    F-&gt;&gt;R: progress messages; exactly one final report per owed send (CT-05, VOL-A-016)
+    Note over R: verify loop checks report vs send (CT-06, RL-20)
+    R-&gt;&gt;S: report message wakes supervisor/manager (event-driven, RL-7)
+    S-&gt;&gt;M: rule-bound check + upward summary; ambiguity escalates (VOL-A-007)
+```
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#4-the-complete-objective-lifecycle-f-004 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-4-THE-COMPLETE-OBJECTIVE-LIFEC-S025" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 4. THE COMPLETE OBJECTIVE LIFECYCLE (F-004)
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#4-1-objective-state-model -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-4-1-OBJECTIVE-STATE-MODEL-S026" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.1 Objective state model
+
+An objective is a room (`obj-*`, DATA-MODEL §1.3) and a control-state record.
+The room carries the human-readable story; the state record (VOL-B F-006
+schema) carries machine-readable status. States:
+
+&lt;!-- SM-CANON:OBJ-STATES:BEGIN --&gt;
+| State | Meaning | Owner of exit |
+|---|---|---|
+| `created` | VP objective received; room opened (ENDPOINTS §4.1 shape) | director |
+| `decomposing` | director deriving manager assignments + criteria | director |
+| `assigned` | ≥1 manager owes work; ownership recorded (§4.3) | managers |
+| `in-progress` | work proceeding in waves; wakes close with reports | managers/supervisors/foremen |
+| `queued` | composed send waiting on a cap/backpressure (RL-15: scheduling always allowed, RUNNING is gated) | harness |
+| `blocked` | dependency or authority gap; evidence recorded (§4.5) | reporting agent → director |
+| `escalated` | blocked item on the escalation ladder (§2.6) | director |
+| `awaiting-human` | explicit human-wait propagated upward (D-012) | VP/human |
+| `in-acceptance` | all manager completions in; director acceptance review running (D-010) | director |
+| `rework` | acceptance review rejected; named reasons flow down (D-010; VOL-D F-013 detail) | director |
+| `composing` | cross-manager aggregation stage (D-011, §4.7) | director/aggregating manager |
+| `delivering` | separately delegated delivery stage (D-011, §4.7) | director or delivery-delegated manager |
+| `accepted` | director acceptance complete; delivery evidence closed (VOL-D F-013 owns delivery evidence) | director (+ VP where human sign-off configured, D-008/D-010) |
+| `cancelled` | VP withdrew or superseded the objective (§4.6) | VP/director |
+&lt;!-- SM-CANON:OBJ-STATES:END --&gt;
+
+Transitions that the report/verify machinery owns (`in-progress` exits, ladder
+behavior, timers) are VOL-D (F-013) and DESIGN §5.1; this volume pins the
+lifecycle semantics.
+
+&lt;!-- SM-CANON:OBJ-DIAGRAM:BEGIN --&gt;
+```mermaid
+flowchart LR
+    created[created]
+    decomposing[decomposing]
+    assigned[assigned]
+    in-progress[in-progress]
+    queued[queued]
+    blocked[blocked]
+    escalated[escalated]
+    awaiting-human[awaiting-human]
+    in-acceptance[in-acceptance]
+    rework[rework]
+    composing[composing]
+    delivering[delivering]
+    accepted[accepted]
+    cancelled[cancelled]
+    created --&gt; decomposing
+    decomposing --&gt; assigned
+    assigned --&gt; in-progress
+    in-progress --&gt; queued
+    queued --&gt; in-progress
+    in-progress --&gt; blocked
+    blocked --&gt; escalated
+    escalated --&gt;|"grant (D-009)"| in-progress
+    blocked --&gt; awaiting-human
+    awaiting-human --&gt; in-progress
+    escalated --&gt;|"reassign"| assigned
+    in-progress --&gt; in-acceptance
+    in-acceptance --&gt; rework
+    rework --&gt; in-progress
+    in-acceptance --&gt; composing
+    composing --&gt; delivering
+    delivering --&gt; accepted
+    created --&gt; cancelled
+    decomposing --&gt; cancelled
+    assigned --&gt; cancelled
+    in-progress --&gt; cancelled
+    queued --&gt; cancelled
+    blocked --&gt; cancelled
+    escalated --&gt; cancelled
+    awaiting-human --&gt; cancelled
+    in-acceptance --&gt; cancelled
+    rework --&gt; cancelled
+    composing --&gt; cancelled
+    delivering --&gt; cancelled
+    %% terminal: accepted, cancelled
+```
+&lt;!-- SM-CANON:OBJ-DIAGRAM:END --&gt;
+```
+
+**VOL-A-047 (canonical transition table, R31-010).** The table below is the only
+objective transition authority; the diagram illustrates it and introduces no state
+or edge that is absent here. There are exactly **14** states (the rev-1.1
+"thirteen-state heading over fourteen rows" defect is fixed by this count). Every
+transition names its guard, its owner, its writer and its recovery behavior. This
+table, the state table above and the diagram are **generated** from
+`build-spec/state-machines.json` (the machine canon, schema
+`state-machines.schema.json`) by `tools/gen_state_machines.py`;
+`tools/check_state_machines.py` proves the prose equals the canon.
+
+&lt;!-- SM-CANON:OBJ-TRANSITIONS:BEGIN --&gt;
+| # | From → To | Guard (all must hold) | Owner | Writer | If the write is lost / interrupted |
+|---|---|---|---|---|---|
+| T1 | created → decomposing | directive message persisted; director acknowledged | director | harness control-state writer | restart re-reads the objective record; `created` re-enters on the next director wake |
+| T2 | decomposing → assigned | ≥1 assignment record with exactly one owner; criteria set version written | director | harness control-state writer | partial decomposition is visible (assignments exist, state not advanced); re-run idempotently |
+| T3 | assigned → in-progress | first send for an owner admitted or queued | harness | harness control-state writer | manifests re-derive; state advances on the first dispatched send |
+| T4 | in-progress → queued | any open send is capacity-queued and no other send is running | harness | harness control-state writer | queue is re-derived from manifests; a queued objective with a running sibling is a defect (VOL-A-048) |
+| T5 | queued → in-progress | a slot frees and a send dispatches | harness | harness control-state writer | idempotent re-dispatch by send dedupe |
+| T6 | in-progress → blocked | a report `status=blocked` with structured evidence | reporting agent | harness control-state writer | blocked record persisted before the state write; state re-derived from the report |
+| T7 | blocked → escalated | director recorded the decision to escalate (grant/reassign/VP/human) | director | harness control-state writer | escalation record is the guard; a missing state write is repaired from the incident record |
+| T8 | escalated → in-progress | unblock recorded (grant effective, reassignment active, authorization recorded) | director | harness control-state writer | resumed send uses a successor attempt; no duplicate work (VOLB-057) |
+| T9 | blocked → awaiting-human | explicit human gate named (`gate_ref`) | reporting agent → director | harness control-state writer | wait record persisted first; objective state re-derived from it |
+| T10 | awaiting-human → in-progress | recorded resolution evidence (approval or prior authorization with authority ref) | VP/human → director | harness control-state writer | a timeout never satisfies this guard; state stays until evidence exists |
+| T11 | escalated → assigned | reassignment recorded with new owner | director | harness control-state writer | ownership moves with the evidence trail; old owner's reports stay referenced |
+| T12 | in-progress → in-acceptance | every accountable owner has a verified report; no open blocking send | director | harness control-state writer | acceptance starts only from verified sends; a late report cannot force the transition |
+| T13 | in-acceptance → rework | ≥1 criterion rejected with reason and rework scope | director | harness control-state writer | rejection record is durable; rework assignment references the original report |
+| T14 | rework → in-progress | rework assignment active | director/manager | harness control-state writer | state derived from the rework assignment |
+| T15 | in-acceptance → composing | only when the completion condition includes cross-manager composition | director | harness control-state writer | composition assignment exists before the state moves |
+| T16 | composing → delivering | composed artifact exists and its lineage is recorded | director | harness control-state writer | artifact ref is the guard |
+| T17 | delivering → accepted | delivery evidence present (when required) AND all criteria satisfied AND configured human approval recorded | director (+VP) | harness control-state writer | a channel ACK alone never satisfies this guard (VOLD-031) |
+| T18 | any non-terminal → cancelled | VP cancel, or director cancel within delegated authority | VP/director | harness control-state writer | downstream sends close `deferred{objective-cancelled}`; evidence persists |
+&lt;!-- SM-CANON:OBJ-TRANSITIONS:END --&gt;
+
+**VOL-A-048 (aggregate vs per-assignment state, R31-010).** The objective state is
+an **aggregate**: it never claims that every assignment is in the same phase.
+Each `AssignmentRecord` carries its own state (`pending | active | blocked |
+awaiting_human | reported | accepted | rework | cancelled`, VOL-B §3.6), and the
+objective's state is computed by a stated rule:
+
+- any assignment `blocked` and unresolved → objective `blocked` (or `escalated`
+  once the director acts);
+- any assignment `awaiting_human` → objective `awaiting-human` unless another
+  branch is actively running, in which case the objective stays `in-progress` with
+  a recorded waiting marker (active siblings are legal);
+- all assignments `accepted` → `in-acceptance`;
+- any assignment `cancelled` → the objective records a cancellation marker; it
+  does not silently become `accepted`.
+
+An objective showing `accepted` while any assignment is open is a defect
+(VOL-A-025). The acceptance demonstration traces a rejection, a cancellation and a
+resume on this table.
+
+**VOL-A-025** (F-004): Every objective SHALL carry exactly one lifecycle state
+from the table above at any moment, recorded in CHD control state with the
+transition evidence (the room messages that caused it); an objective with
+concurrent contradictory states (e.g. `accepted` with an open `blocked`
+dependency) is a defect the director must resolve before closing.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#4-2-decomposition-and-assignment-ownership -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-4-2-DECOMPOSITION-AND-ASSIGNME-S027" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.2 Decomposition and assignment ownership
+
+**VOL-A-026** (F-004, D-001, D-003): The director decomposes each objective
+into manager assignments; each assignment names exactly one **accountable
+owner** manager (one owner per deliverable — F-009's rule, restated as a
+lifecycle invariant), the completion conditions carried down (D-012), and any
+dependencies on sibling assignments. Decomposition is a director decision
+class (VOL-A-002); a manager may further decompose its slice into tasks for
+supervisors, but ownership of the manager-level deliverable does not transfer
+without director action (reassignment, §4.6).
+
+**VOL-A-027** (F-004, D-010, Q-006): The director SHALL define acceptance criteria
+when the VP supplied none, and may extend supplied criteria to cover
+additional requirements (D-010). Criteria provenance (`vp-supplied`,
+`director-derived`, `standing-rule`) and versioning are VOL-D (F-013);
+lifecycle-wise, criteria attach to the objective at `decomposing` and every
+downstream assignment carries the director-specified conditions unchanged
+unless an authorized change is recorded (D-012, F-013).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#4-3-dependencies -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-4-3-DEPENDENCIES-S028" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.3 Dependencies
+
+**VOL-A-028** (F-004): Assignments MAY declare dependencies on sibling
+assignments (`depends_on`, mirroring the fleet board concept at K2). A
+dependent assignment SHALL NOT be dispatched to its manager while any
+dependency is unsatisfied (definition in VOL-A-049); dependency readiness is
+checked at send composition (harness mechanics, CT-13/§3.4 DESIGN.md) and
+reflected in the objective state (`queued` when cap-waiting, `blocked` when a
+dependency is unsatisfied and will not resolve without action).
+
+**VOL-A-049 (dependency satisfaction ≠ terminality, R31-009).** Terminality is
+not success. A dependency is **satisfied** only when its producing assignment
+ends in `accepted` (or `reported` + verified) **and** supplies the artifact the
+dependent work needs. Outcomes are classified:
+
+| Dependency outcome | Releases dependent work? | What happens |
+|---|---|---|
+| `accepted` with required artifact(s) | yes | normal dispatch |
+| `accepted` without a required artifact | no | dependent reports `blocked{reason: missing_prerequisite_artifact}` |
+| `cancelled` | **no** | dependent does **not** silently proceed; it becomes `blocked{reason: prerequisite_cancelled}` and the director decides |
+| `failed` | no | dependent blocks; ladder/escalation applies |
+| `expired` (producing send closed `closed{expired}`, or its wait lapsed) | **no** | dependent holds; the director re-dispatches the expired producer or cancels the dependent |
+| replaced by a documented replacement assignment | yes, when the replacement is `accepted` and supplies the artifact | the dependency edge is re-pointed to the replacement (`replaces` field), recorded with the director's authority |
+
+This table is the prose face of the machine-checkable canon:
+`build-spec/state-machines.json` (`dependency_outcomes`) is the authority, and
+`tools/check_state_machines.py` walks the machines to prove that a cancelled,
+failed or expired prerequisite with no replacement cannot reach any dispatch
+transition — every release from `blocked` requires a director-recorded grant,
+reassignment or replacement edge (VOL-A-050).
+
+**VOL-A-050 (cancellation propagation).** Cancelling an assignment SHALL mark
+every direct dependent `blocked` with `prerequisite_cancelled`, notify the owning
+manager, and leave the objective aggregate `blocked` until the director either
+(a) records a replacement assignment, (b) re-scopes the dependent, or (c) cancels
+the dependent. A cancelled prerequisite never "releases" dependent artifact work
+merely by being terminal, and a dependent never invents a substitute artifact.
+
+This is a coordination contract, not agent reasoning: the harness computes
+satisfaction from records; an agent may not declare a dependency satisfied.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#4-4-queue-and-blocked-states -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-4-4-QUEUE-AND-BLOCKED-STATES-S029" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.4 Queue and blocked states
+
+**VOL-A-029** (F-004, RL-15): `queued` is a normal, counted state: scheduling
+is always allowed; a cap-full gateway queues the send (`429 at_capacity`,
+message persisted, wake queued — ENDPOINTS §4.2/§5). Queue aging and the
+`deferred{reason: backpressure}` close are DESIGN §3.4. Queueing is never a
+failure of the objective and SHALL NOT trigger the failure ladder by itself.
+
+**VOL-A-030** (F-004, D-009, D-012, Q-004): `blocked` SHALL always carry structured
+evidence: what blocks, who owns the unblock, and what authority would be
+required (reassignment? a grant? human input?). The reporting agent keeps
+ownership of the blocked work until the director acts — a blocked report does
+not silently transfer or drop the assignment. A manager blocked on capability
+reports upward; it does not delegate to a peer on its own initiative (Q-004).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#4-5-reassignment-cancellation-changed-vp-direction -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-4-5-REASSIGNMENT-CANCELLATION-S030" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.5 Reassignment, cancellation, changed VP direction
+
+**VOL-A-031** (F-004, D-009, Q-004): On a blocked escalation, the director may
+(1) reassign the blocked slice to a suitable manager/team, or (2) grant a
+permission — only if the VP authorized that grant authority and the capability
+is in the allowed pool (D-009, VOL-A-009; the director's grant-or-reassign
+choice is the Q-004 ruling). Reassignment transfers the
+assignment record with its full evidence trail to the new owner; the prior
+owner's reports and artifacts remain in the room log and remain referenced by
+the objective record. Ownership and evidence are preserved across the move.
+
+**VOL-A-032** (F-004): Cancellation: the VP may cancel an objective at any
+state; the director marks it `cancelled`, posts a directive to every involved
+room, and downstream in-flight sends are closed as `deferred{reason:
+objective-cancelled}` (reason naming per §3.4 counters). Cancellation does not
+delete evidence: the room log and state record persist as control state.
+
+**VOL-A-033** (F-004, D-016): A change of VP direction is a VP message into
+the objective room (CT-10/§11.1: inject messages into rooms it names). The
+director SHALL treat it as a criteria/decomposition revision: record the
+revision in control state, re-decompose affected assignments, and propagate
+changed conditions downward as a **recorded authorized change** (D-012/
+F-013: conditions flow down unchanged *unless an authorized change is
+recorded*). In-flight work that the revision invalidates is re-scoped or
+cancelled per VOL-A-032 mechanics at the assignment level.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#4-6-cross-manager-composition-and-separately-delegated-delivery-d-011 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-4-6-CROSS-MANAGER-COMPOSITION-S031" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.6 Cross-manager composition and separately delegated delivery (D-011)
+
+**VOL-A-034** (F-004, D-011): The director can request work from different
+managers in sequence, then assign another manager to combine the reports into
+a summary artifact (e.g. HTML). Composition is a **separate assignment** with
+its own owner, its own report, and dependency links to every composed
+assignment; artifact lineage (which report/artifact fed which section) SHALL
+be recorded in the composing assignment's report artifacts. Artifact
+generation, acceptance, and delivery are separate stages (D-011 scope note).
+
+**VOL-A-035** (F-004, D-011): Delivery is a distinct, delegable stage: the
+director may deliver if it is equipped (holds the configured communication
+capability itself), or delegate delivery through a communications manager to a
+supervisor with the configured capability to send the artifact to the human
+via the configured channel (Telegram is illustrative, not mandatory — D-011).
+An agent delivering to a human needs the *use* permission for that channel;
+an agent delegating delivery needs only the authority to assign the stage —
+use/grant distinction per VOL-A-008. No VP message-authorizing signal is
+implied by this spec: nothing is sent externally by this document's existence
+(D-011 scope; review Coverage note).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#4-7-aggregation-and-acceptance-d-010 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-4-7-AGGREGATION-AND-ACCEPTANCE-S032" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.7 Aggregation and acceptance (D-010)
+
+**VOL-A-036** (F-004, D-010): Manager-reported completion is NOT acceptance.
+When all owner managers of an objective report completion, the director SHALL
+start acceptance review: verify each completion against the objective's
+criteria (VP-supplied, director-derived, standing-rule — with provenance and
+per-criterion evidence; detail VOL-D F-013), apply persistent standing rules
+to applicable work (D-010; integration owned by Hermes learning per D-013,
+with effective-rule evidence required by acceptance — F-006/F-013 boundary),
+and only then mark the objective `accepted`. There is no universal
+acknowledgement rule (D-012); acceptance conditions come from the objective's
+criteria alone.
+
+**VOL-A-037** (F-004, D-010, D-008): Where the VP configuration requires human
+approval for the director (D-008 approval policy), `accepted` is reachable
+only after that approval; explicit human-wait propagates upward, prior
+authorization can permit continuation, and explicit approval gates hold —
+silence and timeouts grant nothing (D-012). Timer/status contracts for waits
+are VOL-D (F-013); **waiting-interval defaults are OPEN DESIGN WORK**
+(§8, OW-4).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#4-8-wake-completion-vs-objective-completion -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-4-8-WAKE-COMPLETION-VS-OBJECTI-S033" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.8 Wake-completion vs objective-completion
+
+**VOL-A-038** (F-004): The two completions SHALL never be conflated:
+- **Wake completion**: one dispatched send closed by a fresh, verified report
+  (CT-05/CT-06, RL-20) — the unit the verify loop and ladder operate on.
+- **Objective completion**: the lifecycle state `accepted`, reached only via
+  §4.7 after all accountable owners report, composition and delivery stages
+  close, and configured approvals hold.
+A verified report moves its send to terminal; it never moves the objective by
+itself. Conversely, an objective's acceptance requires evidence at every
+level — upstream reports feed the director's review (F-004 completion
+evidence: "one objective from VP request through multi-manager work and
+upstream evidence").
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#4-9-the-blocked-escalated-granted-reassigned-resumed-path-end-to-end -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-4-9-THE-BLOCKED-ESCALATED-GRAN-S034" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.9 The blocked → escalated → granted/reassigned → resumed path, end to end
+
+**VOL-A-039** (F-004, D-009, D-012, Q-004): The canonical blocked path SHALL preserve
+ownership and evidence at every hop:
+1. Foreman/supervisor detects blocker → posts `status=blocked` report with
+   evidence (VOL-A-030); keeps ownership.
+2. Manager verifies the blocker is beyond its delegated scope (else it
+   resolves it — VOL-A-004) → reports blocked upward to the director.
+3. Director records `escalated`, then either:
+   a. **reassigns** (VOL-A-031) — ownership moves with the evidence trail; or
+   b. **grants** (VOL-A-009/010) — a director grant from the VP-authorized
+      pool, provenance-recorded, enforceable at the VOL-C boundary; or
+   c. **escalates to VP** — the needed authority exceeds the director's
+      delegatable pool (D-009/D-016); or
+   d. **waits for human** — the blocker is an explicit human-input gate
+      (D-012): `awaiting-human`, propagated upward; prior authorization may
+      permit continuation, an explicit approval gate holds.
+4. On unblock, the resumed assignment continues with the same objective
+   record, same room threads (history preserved in the log, R-025), and the
+   blocked interval visible in evidence — resumed work never restarts as if
+   untouched, and no duplicate work is created (F-013's duplicate/late rules,
+   VOL-D).
+5. Every hop writes a durable record (VOL-A-012, R-017).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#4-10-changed-requirement-handling-summary -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-4-10-CHANGED-REQUIREMENT-HANDL-S035" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.10 Changed-requirement handling summary
+
+**VOL-A-040** (F-004, D-012, D-016): Requirements change through exactly three
+doors: a VP direction change (VOL-A-033), a director criteria extension
+(VOL-A-027, D-010), or an authorized change recorded on a delegated
+assignment (D-012). All three produce versioned, provenance-carrying records;
+downstream assignments inherit changed conditions only through one of these
+doors. A manager or supervisor SHALL NOT originate a requirement change.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#5-master-flow-and-role-pair-contracts-r31-017-d-020 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-5-MASTER-FLOW-AND-ROLE-PAIR-CO-S036" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 5. MASTER FLOW AND ROLE-PAIR CONTRACTS (R31-017, D-020)
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#5-1-the-master-flow-end-to-end -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-5-1-THE-MASTER-FLOW-END-TO-END-S037" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.1 The master flow, end to end
+
+The following handoff ledger is normative, not illustrative. A checker MUST
+reject a row when any of its eight contract cells is empty. `req/anchor` is the
+traceability cell: it names the requirement id and the section anchor that
+settles the operation. The same ledger is used for both `REL-412` (coding) and
+`BILL-77` (invoice reconciliation, non-coding). Event coverage is W1–W11,
+with the authoritative event semantics in VOL-C §4.2; no pair table invents a
+new event vocabulary.
+
+| Handoff | Input | Trigger | Allowed actions | Stored records | Tool/API call | Output | Report recipient | Failure/rework path | req/anchor |
+|---|---|---|---|---|---|---|---|---|---|
+| H1 VP → director | Objective text, criteria, constraints, grant ceiling | VP directive accepted by the controller | VP opens/revises/cancels; director reads and acknowledges; no lower role changes VP intent | `ObjectiveRecord`, opening `RoomMessage`, criteria revision, audit | `chd_post` / `POST /v1/signals`; controller ticket create follows | Objective `created` then `decomposing`; objective room id | VP receives acknowledgement/status; director receives work | Invalid or conflicting directive is rejected and audited; a valid direction change creates a new revision and rework path | VOL-A-025/033/051, §1.4/§4.1 |
+| H2 director → manager | Owned slice, criteria, dependency edges, parent objective | Director decomposition completes | Director creates/reassigns/cancels child work and ticket; manager accepts or reports blocked; no manager self-reassigns | `TicketRecord` parent/child edges, `AssignmentRecord`, `DelegationRecord` when applicable, task-room opening message | `chd_ticket_create`, `chd_ticket_update`, `chd_assign`, `POST /v1/rooms/*/messages` | Manager-owned ticket in `pending`/`active`, with one accountable owner | Manager receives assignment; director receives acceptance/blocker | Missing capability → manager reports blocked; director grants, reassigns, waits, or escalates. Cancelled prerequisite blocks dependents and does not release them | VOL-A-026/028/030/049/050/052, §4.2–§4.5; VOL-E VOLE-003/005 |
+| H3 manager → supervisor | Manager slice, written rules, task criteria, ticket/thread refs | Manager task split is ready | Manager opens task subthread and assigns; supervisor executes rules, reports ambiguity, or returns rework; no supervisor invents policy | Child `TicketRecord`, `AssignmentRecord`, `RoomMessage` thread, `SessionBond` (W3) | `chd_assign`, `chd_post`, `chd_read_room`; W3 provisioning/delivery rule | Supervisor has a bounded task and acceptance conditions | Supervisor receives work; manager receives status/block/rework | Ambiguous condition escalates with evidence; failed check returns to same ticket/thread as rework; unauthorized state change is refused | VOL-A-006/007/015/051/052, §5.3–§5.4; VOL-C §4.2 W3 |
+| H4 supervisor → foreman | Bounded task, criteria, workspace, deadline, admission mode | Supervisor selects a foreman under the written rules | Supervisor may `enqueue_only` or `run_now`; foreman plans execution; neither mutates permissions | Ticket update, `SendManifest`, `AssignmentRecord`, `SessionBond` (W3), audit | `chd_assign` / `POST /v1/assignments`; controller reservation | Foreman assignment queued or admitted with one send/attempt identity | Foreman receives work; manager receives assignment status | Capacity full returns durable `queued`; duplicate request returns existing send; denied authority is audited; rework preserves ticket lineage | VOL-A-041/044/052, §3.4/§5.5; VOL-C VOLC-073 |
+| H5 controller → foreman | Authorized send, reservation, target gateway/profile, body/criteria refs | Reservation succeeds or queue later drains | Controller validates authz, capacity, profile, workspace, then dispatches; controller alone writes control keys | `SendManifest`, `WorkerRun`, `SessionBond`, ticket event/audit | `chd_worker_dispatch` / `POST /v1/workers/dispatch` | Run `queued`/`admitted`/`running`; gateway request id | Foreman sees run status; supervisor sees queued/admitted outcome | Store unavailable → `503`, no dispatch; wrong profile/workspace → fail closed with no run; uncertain gateway result is reconciled before slot release | VOL-A-045/046/053, §3.5/§3.7; VOL-C VOLC-074/075/076 |
+| H6 foreman → worker | One work unit, instructions ref, criteria, workspace, non-default worker profile | Managed dispatch accepted | Foreman dispatches/reallocates/queries/cancels; worker executes only its unit and reports; no worker changes ticket authority | `WorkerRun`, child `TicketRecord` link, worker `RoomMessage` report, artifact refs | `chd_worker_dispatch`, `chd_run_status`, `chd_report` | Verified worker report and artifacts, or explicit blocked/failed result | Foreman receives result; supervisor receives final foreman roll-up | Timeout/cancel requires proven stop; failed run may be retried with new attempt identity; wrong/stale report is rejected and remains visible | VOL-A-003/016/017/045/052, §3.5/§5.6; VOL-C §7 |
+| H7 worker → foreman | Report envelope correlated to ticket/send/attempt and artifact refs | Worker completes or reaches a bounded failure/wait | Worker posts exactly one report; foreman verifies and may retry/rework; worker cannot close acceptance | `Report`, `RoomMessage(kind=report)`, `SendManifest` outcome, artifact refs | `chd_report`, `POST /v1/reports/verify` | Fresh `verified`, `waiting`, `failed`, or `bad_report` outcome | Foreman receives report; supervisor receives verification evidence | Wrong send/stale/duplicate report leaves send open or counted; waiting closes attempt but keeps send open and creates a wait record | VOL-A-016/017/038/049, §4.3/§5.6; VOL-C §6.5; VOL-D §3.1 |
+| H8 foreman → supervisor | Verified child results, run status, artifact refs, exception evidence | All foreman work units reach reportable outcome | Foreman composes one final report, marks blocked/deferred when appropriate, requests rework when criteria fail | Parent `Report`, `AggregationRecord`, ticket links, room thread | `chd_report`, `chd_read_worklog` | Foreman report with complete lineage and criterion evidence | Supervisor receives report; manager is notified of blocked/deferred state | Missing or bad child report keeps parent open; supervisor returns named rework; independent sibling tickets remain dispatchable | VOL-A-016/017/034/048/051/052, §4.7/§5.5; VOL-C §5.6 |
+| H9 supervisor → manager | Foreman report, rule-check result, unresolved exceptions | Supervisor's prescribed check completes | Supervisor verifies, accepts, rejects for rework, or escalates; no policy invention | Verification `Report`, ticket transition event, incident/escalation message | `chd_read_room`, `chd_ticket_transition`, `chd_report` | Supervisor verdict and upward report | Manager receives verdict; supervisor retains evidence | Failed rule check transitions ticket to `rework`; ambiguity becomes `blocked`/`escalated`; no silent acceptance | VOL-A-006/007/036/051, §5.4; VOL-E VOLE-005/007 |
+| H10 manager → director | Verified manager report(s), child ticket states, dependency/artifact evidence | Manager completes its slice or reports blocked | Manager rolls up; director alone accepts/rejects/reassigns/cancels; composition waits for unsatisfied dependencies | Parent `Report`, `AggregationRecord`, parent `TicketRecord` revision/event, criteria evidence | `chd_report`, `chd_ticket_query`, `chd_ticket_transition` | Parent ready for acceptance, or structured blocked/rework report | Director receives roll-up; manager receives decision/rework | Cancelled/failed/expired dependency blocks; director records replacement/re-scope or cancels dependent; active siblings continue | VOL-A-028/036/039/049/050/051/052, §4.3/§4.5/§5.3; VOL-B §5.6 |
+| H11 director → VP / delivery recipient | Accepted criteria evidence, composed artifact, delivery grant and recipient link | Director acceptance review and separate delivery assignment complete | Director accepts/rejects; authorized delivery actor sends report; VP/recipient reads only after durable commit | Objective/Ticket transition event, final `Report`, artifact refs, delivery/send manifest, audit | `chd_ticket_transition`, `chd_report`, configured delivery tool/API | Objective `accepted`, final report and artifact reference | VP and named delivery recipient; audit/operator receives evidence | Rejection returns named work to H2/H3 as `rework`; delivery failure is retried by idempotent send without changing content acceptance | VOL-A-034/035/036/038/051, §4.7/§5.1; VOL-D §3.5 |
+
+```mermaid
+flowchart TD
+    VP[VP: objective] --&gt; D1[Director: criteria + decomposition]
+    D1 --&gt; T1[Tickets + assignments: 1 owner each]
+    T1 --&gt; M1[Manager: task split, supervisor assignment]
+    M1 --&gt; S1[Supervisor: rules, checks, foreman assignment]
+    S1 --&gt;|"enqueue-only or run-now"| A1[Admission: one ledger]
+    A1 --&gt; F1[Foreman: plan, dispatch workers]
+    F1 --&gt; W1[Workers: execute units]
+    W1 --&gt; R1[Worker results + artifacts]
+    R1 --&gt; F2[Foreman report]
+    F2 --&gt; S2[Supervisor verification against rules]
+    S2 --&gt; M2[Manager review + roll-up report]
+    M2 --&gt; D2[Director acceptance review]
+    D2 --&gt;|rework| M1
+    D2 --&gt; DEL[Composition + delegated delivery]
+    DEL --&gt; ACC[Accepted + evidence]
+```
+
+Reading rule: every arrow is a durable record write, and every box has an
+accountable owner. The flow is domain-neutral: the same path carries a software
+change, a bill reconciliation, a research brief or an incident repair (WF-01..WF-10).
+
+**VOL-A-051 (master flow completeness, R31-017).** The package SHALL expose this
+master flow plus the five role-pair contracts below. Each contract SHALL name:
+inputs, triggers, allowed actions, stored records, tool/API calls, outputs, report
+recipients and failure/rework paths. An implementer SHALL be able to trace a
+coding **and** a non-coding scenario across every role and locate each persisted
+record and recipient.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#5-2-vp-director -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-5-2-VP-DIRECTOR-S038" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.2 VP ↔ Director
+
+Each role-pair contract below repeats the eight required fields. `W1` is the
+new-objective event; the stored records cite `contracts/DATA-MODEL.md §1.9`
+where a Ticket is created or updated.
+
+| Input | Trigger | Allowed actions | Stored records | Tool/API call | Output | Report recipient | Failure/rework path |
+|---|---|---|---|---|---|---|---|
+| Objective text, criteria, constraints, grant ceiling | VP directive accepted (`W1`) | VP opens/revises/cancels; director acknowledges and derives criteria; no lower role changes VP intent | `ObjectiveRecord`, `TicketRecord` (DATA-MODEL §1.9), opening `RoomMessage`, criteria revision, audit | `chd_post` / `POST /v1/signals`; `chd_ticket_create` | Objective `created → decomposing`; stable objective/ticket ids | VP gets acknowledgement/status; director gets work | Invalid/conflicting directive is rejected and audited; direction change creates revision and named rework; timeout never approves | VOL-A-025/033/051, §1.4/§4.1; W1 |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#5-3-director-manager -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-5-3-DIRECTOR-MANAGER-S039" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.3 Director ↔ Manager
+
+| Input | Trigger | Allowed actions | Stored records | Tool/API call | Output | Report recipient | Failure/rework path |
+|---|---|---|---|---|---|---|---|
+| Decomposition slice, criteria, dependencies, ticket family | Assignment dispatch (`W3`) or rework/reassignment | Director assigns, extends criteria, grants within pool, reassigns, cancels; manager accepts or reports blocked | `AssignmentRecord`, `TicketRecord` + transition event (DATA-MODEL §1.9), `DelegationRecord`/`GrantRecord`, task-room message | `chd_ticket_create/update`, `chd_assign`, `chd_post` | Manager-owned ticket and dependency-aware dispatch | Manager receives work; director receives manager report | Blocked → grant/reassign/escalate/human wait; cancelled prerequisite blocks dependent; out-of-scope manager act is void + incident | VOL-A-026/028/030/031/049/050/051, §4.2–§4.5; W3 |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#5-4-manager-supervisor -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-5-4-MANAGER-SUPERVISOR-S040" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.4 Manager ↔ Supervisor
+
+| Input | Trigger | Allowed actions | Stored records | Tool/API call | Output | Report recipient | Failure/rework path |
+|---|---|---|---|---|---|---|---|
+| Manager slice, written rules, task criteria, ticket/thread refs | Manager task split; reply/rework (`W3/W4`) | Manager assigns; supervisor executes rules, reports ambiguity, or returns rework; supervisor may not invent policy | Child `TicketRecord` (DATA-MODEL §1.9), `AssignmentRecord`, `RoomMessage` thread, `SessionBond` | `chd_assign`, `chd_post`, `chd_read_room`, `chd_ticket_transition` | Bounded supervisor task with acceptance conditions | Supervisor receives work; manager receives status/block/rework | Ambiguous condition escalates with evidence; failed check returns to same ticket/thread; unauthorized transition refused | VOL-A-006/007/015/051/052, §5.3–§5.4; VOL-C §4.2; W3/W4 |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#5-5-supervisor-foreman -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-5-5-SUPERVISOR-FOREMAN-S041" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.5 Supervisor ↔ Foreman
+
+| Input | Trigger | Allowed actions | Stored records | Tool/API call | Output | Report recipient | Failure/rework path |
+|---|---|---|---|---|---|---|---|
+| Bounded task, criteria, workspace, deadline, admission mode | Supervisor assignment (`W3`) and queued wake (`W2`) | Supervisor selects `enqueue_only`/`run_now`; foreman plans, dispatches, verifies and reports; neither mutates permissions | `TicketRecord` (DATA-MODEL §1.9), `AssignmentRecord`, `SendManifest`, `SessionBond`, audit | `chd_assign` / `POST /v1/assignments`; `chd_worker_dispatch` | Foreman assignment queued/admitted with one send/attempt | Foreman receives work; manager gets status | Full capacity queues durably; duplicate returns existing send; denial audited; rework preserves lineage | VOL-A-041/044/045/051/052, §3.4–§3.5; VOL-C §6.7/§7; W2/W3 |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#5-6-foreman-worker -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-5-6-FOREMAN-WORKER-S042" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.6 Foreman ↔ Worker
+
+| Input | Trigger | Allowed actions | Stored records | Tool/API call | Output | Report recipient | Failure/rework path |
+|---|---|---|---|---|---|---|---|
+| One work unit, instructions ref, criteria, workspace, non-default profile | Managed dispatch (`W3`) or resume/retry (`W7`) | Foreman dispatches/reallocates/queries/cancels; worker executes unit and posts one report; no worker authority changes | `WorkerRun`, child `TicketRecord` (DATA-MODEL §1.9), worker `RoomMessage(report)`, artifacts | `chd_worker_dispatch`, `chd_run_status/cancel`, `chd_report` | Verified result/artifacts or explicit blocked/failed result | Foreman receives result; supervisor receives roll-up | Timeout/cancel requires proven stop; retry uses new attempt; wrong/stale report rejected and retained | VOL-A-003/016/017/045/051/052, §3.5/§5.6; VOL-C §7; W3/W7 |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#5-7-ticket-links-carried-by-every-flow -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-5-7-TICKET-LINKS-CARRIED-BY-EV-S043" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.7 Ticket links carried by every flow
+
+**VOL-A-052.** Every assignment SHALL link to a ticket (or create one). The ticket
+carries parent/child and dependency links, accountable owner, criteria, workflow
+state, authorization facts, and refs to room/thread/send/report/artifact. A partial
+blocked branch SHALL be recoverable from the ticket + room records without asking
+an agent what it intended: the ticket shows the state, the room shows the evidence,
+the send shows the obligation.
+
+**VOL-A-053.** A ticket transition writer is exactly one of: the owning agent via
+an authorized tool, the controller on an objective-level rule (e.g. acceptance), or
+the service on a mechanical event (e.g. bond loss). Free-text board edits are not a
+transition writer; an imported board row cannot change a ticket's state without a
+recorded transition.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#6-traced-example-skeleton-acceptance-demonstration-scaffold -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-6-TRACED-EXAMPLE-SKELETON-ACCE-S044" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 6. TRACED EXAMPLE SKELETON (acceptance-demonstration scaffold)
+
+This skeleton is the structure the acceptance demonstration (handoff: "Trace a
+VP objective through multiple managers, conditional supervisor actions,
+foreman/worker execution, report composition and authorized user delivery")
+must instantiate. Every authority branch is named; each [A-n] marker cites the
+requirement that governs it.
+
+**Objective.** VP (owner's Hermes surface, using its director-calling tool)
+sends: "Prepare the fleet release-readiness pack: infra status, release
+audit, and one HTML summary." [A: VP create-objectives grant, CT-10; room
+`obj-relpack` opened, `created` → `decomposing`]
+
+1. **Director decomposition** [VOL-A-026]: director owns decomposition; it
+   derives/extends acceptance criteria where the VP gave none [VOL-A-027,
+   D-010]. Assignments: `mgr-infra` (infra status), `mgr-fleet-ops` (release
+   audit), sequential dependency: composition depends on both [VOL-A-028].
+   Conditions passed down unchanged [D-012]. Decision owner: **director**.
+2. **Manager task split** [VOL-A-004]: each manager commits task decisions
+   within its delegated scope; `mgr-infra` opens task room `task-relpack-infra`,
+   assigns `sup-crier`. Decision owner: **manager** (within scope).
+3. **Supervisor conditional actions** [VOL-A-006/007]: `sup-crier` runs its
+   written rules — gather lane health, run bounded probes, compare thresholds —
+   and coordinates the foreman. It hits an ambiguous threshold → escalates to
+   manager with evidence, decides nothing sideways. Decision owner:
+   **supervisor executes rules only**.
+4. **Foreman execution** [VOL-A-014..020, D-004]: foreman receives the
+   assignment message, describes/adjusts the work, dispatches workers through
+   the managed controller contract (board rows, worktrees), reallocates one
+   stalled worker, and posts one final report with artifact refs (commit,
+   board row, CI run). Decision owner: **foreman** for execution mechanics.
+5. **Blocked branch** [VOL-A-039]: `mgr-fleet-ops`' audit assignment blocks —
+   a needed check requires a capability the manager lacks. Manager reports
+   blocked upward with evidence (keeps ownership). Director:
+   - if VP authorized a grant pool covering the capability → **director grants
+     it on demand** [VOL-A-009/010, D-009] — including the demonstration case
+     where the director may grant a tool it cannot itself use [VOL-A-008];
+   - else → director escalates to VP [VOL-A-039.3c] or reassigns to a manager
+     holding the capability [VOL-A-031]. Evidence trail preserved.
+6. **Human-wait branch** [VOL-A-037, D-012]: one audit criterion requires
+   owner sign-off → supervisor reports waiting-for-human; manager propagates;
+   director sets `awaiting-human`; prior authorization lets unaffected work
+   continue; the explicit approval gate itself holds — a timeout grants
+   nothing.
+7. **Report composition** [VOL-A-034, D-011]: both managers report completion
+   (verified fresh reports, CT-06/RL-20 — a stale report for the wrong request
+   closes nothing, F-013 evidence). Director assigns the composing manager;
+   HTML artifact with lineage refs is produced; stage `composing`.
+8. **Separately delegated delivery** [VOL-A-035, D-011]: director delegates
+   delivery through the communications manager to a supervisor holding the
+   configured send capability (use permission on the channel). Director needs
+   no communication tool of its own (F-008 boundary). Stage `delivering`.
+9. **Acceptance** [VOL-A-036/037, D-010]: director runs acceptance review
+   against VP-supplied + derived + standing-rule criteria with per-criterion
+   evidence; manager-reported completion ≠ acceptance; configured human
+   approval (D-008) closes `accepted`. Objective completion ≠ any single wake
+   completion [VOL-A-038].
+10. **Demonstration must also show** (handoff list): stored messages/thread
+    ownership (R-025), session continuation NEW/REUSE (CT-04), caps/queue
+    behavior (`queued`, VOL-A-029), duplicate/crash recovery (VOL-B/D,
+    F-007/F-014), a fresh-timestamp report for the wrong request rejected
+    (VOL-D, F-013/RL-20), VP-config precedence over a conflicting director
+    delegation [VOL-A-010, D-016], and the grantor-authorized-for-what-it-
+    cannot-use case [VOL-A-008].
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#7-requirements-index -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-7-REQUIREMENTS-INDEX-S045" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 7. REQUIREMENTS INDEX
+
+| id | Finding(s) | Decisions relied on | One-line statement |
+|---|---|---|---|
+| VOL-A-001 | F-003 | D-001, D-003, D-015 | Six roles exactly; every message names an agent of one role; no sub-director tier |
+| VOL-A-002 | F-003 | D-003 | Decision authority per matrix; director owns finals; supervisors rule-bound; ambiguity escalates |
+| VOL-A-003 | F-003 | D-004 | Foreman execution expertise is an authority: describe/adjust/manage/reallocate; not prescribed by CHD |
+| VOL-A-004 | F-003 | D-003, D-008 | Manager delegated decision scope is explicit config; default deny |
+| VOL-A-005 | F-003 | D-003 | Out-of-scope manager commitments are void + incident path |
+| VOL-A-006 | F-003 | D-003 | Supervisor behavior = condition → bounded action → report; prohibited actions listed |
+| VOL-A-007 | F-003 | D-003 | Unresolvable supervisor conditions escalate with evidence, never improvise |
+| VOL-A-008 | F-003, F-012 | D-009 | Three independent permission classes; grant-without-use is legal |
+| VOL-A-009 | F-003, F-012 | D-009 | Grants name explicit allowed pools, grantee tiers, scopes; empty pool = none |
+| VOL-A-010 | F-003 | D-016 | VP-configured = already granted; director grants on demand + provenance; VP wins conflicts |
+| VOL-A-011 | F-003 | D-005, D-009 | Subordinate-creation settings; lower tiers not created by agents in this rev |
+| VOL-A-012 | F-003 | D-003, D-009 | Escalation = durable incident record; canonical ladder §7.3 DESIGN.md |
+| VOL-A-013 | F-003 | D-016 | Revocation mirrors grant origin; VP override wins; effective-policy readback |
+| VOL-A-014 | F-002 | — | Two-plane foreman model; CHD never re-specifies the foreman loop |
+| VOL-A-015 | F-002 | D-001, D-012 | Assignment = task-room message with conditions passed down unchanged; NEW/REUSE delivery |
+| VOL-A-016 | F-002 | D-004 | Foreman posts progress + exactly one final report per owed send |
+| VOL-A-017 | F-002 | — | Results reach hierarchy only as room reports; CT-06/CT-11 apply; artifacts are refs |
+| VOL-A-018 | F-002 | RL-1/R-003/R-018 | Superseded: dual admission is authoritative in VOL-A-044; scheduler-only admission is retained for lineage only |
+| VOL-A-019 | F-002 | D-004 | Superseded: managed controller dispatch is authoritative in VOL-A-045; CLI launch is non-conforming |
+| VOL-A-020 | F-002 | R-021 | No schedule control via worker launching; foreman self-pause is work-plane, surfaces as report reasons |
+| VOL-A-021 | F-002 | — | OPEN: worker-run caps and `create_worker` policy — §8 OW-3 |
+| VOL-A-022 | F-002 | R-021, CT-08 | No hierarchy agent mutates scheduler lanes; harness is the only schedule instrument |
+| VOL-A-023 | F-002 | RL-15 (scoped) | DuckBrain invariant = CHD control state only; boards/worktrees/CI/worker sessions/memory/skills explicitly outside |
+| VOL-A-024 | F-002 | F-006 | Hierarchy authority data lives in CHD control state, never in work-plane files or Hermes memory |
+| VOL-A-025 | F-004 | — | Single objective state + transition evidence; contradictory states are defects |
+| VOL-A-026 | F-004 | D-001, D-003, F-009 | Director decomposes; one accountable owner per deliverable; ownership transfers only via director |
+| VOL-A-027 | F-004 | D-010, D-012 | Director defines/extends criteria; conditions flow down unchanged unless authorized change recorded |
+| VOL-A-028 | F-004 | — | Dependencies gate dispatch; readiness checked at composition |
+| VOL-A-029 | F-004 | RL-15 | queued is normal and counted; queueing never triggers the failure ladder |
+| VOL-A-030 | F-004 | D-009, D-012 | blocked always carries evidence; owner keeps ownership until director acts |
+| VOL-A-031 | F-004 | D-009 | Blocked work: reassignment or authorized grant; ownership+evidence preserved |
+| VOL-A-032 | F-004 | — | Cancellation closes downstream work with reason; evidence persists |
+| VOL-A-033 | F-004 | D-016, D-012 | VP direction change = recorded revision; re-decomposition; authorized change propagation |
+| VOL-A-034 | F-004 | D-011 | Cross-manager sequence then separate composing assignment with artifact lineage |
+| VOL-A-035 | F-004 | D-011 | Delivery is separate and delegable; use vs delegation authority distinct; nothing authorized by this spec |
+| VOL-A-036 | F-004 | D-010, D-013, F-013 | Manager completion ≠ acceptance; director review with provenance-carrying criteria + standing rules |
+| VOL-A-037 | F-004 | D-008, D-010, D-012 | Human approval gates hold; waits propagate; timeouts grant nothing |
+| VOL-A-038 | F-004 | CT-06, RL-20 | Wake completion ≠ objective completion; acceptance needs evidence at every level |
+| VOL-A-039 | F-004 | D-009, D-012 | Canonical blocked→escalated→grant/reassign/human-wait→resumed path; ownership+evidence preserved; no duplicates |
+| VOL-A-040 | F-004 | D-012, D-016 | Requirement changes enter through exactly three provenance-carrying doors; managers/supervisors originate none |
+| VOL-A-041 | R31-008 | D-022, D-024 | Matrix separates agent creation / worker launch / request-wake / direct scheduling; foreman is a principal |
+| VOL-A-042 | R31-026 | D-032 | Meta-grant: bounded recipients/rights, no self-expansion, lineage readable, VP root |
+| VOL-A-043 | R31-027 | D-033, D-038 | Session-boundary revocation: existing sessions keep their snapshot; future sessions resolve current |
+| VOL-A-044 | R31-019 | D-022, D-029 | Dual admission: timed + requested, one ledger, one dedupe, one reservation |
+| VOL-A-045 | R31-021 | D-024 | Managed worker dispatch replaces CLI launch; run ids observable |
+| VOL-A-046 | R31-018 | D-021 | Authoritative tickets in the control plane; local boards are views |
+| VOL-A-047 | R31-010 | — | Canonical 14-state objective machine with guard/owner/recovery per transition |
+| VOL-A-048 | R31-010 | — | Aggregate objective state vs per-assignment state; active siblings legal |
+| VOL-A-049 | R31-009 | — | Dependency satisfaction requires accepted + artifact; cancellation does not release |
+| VOL-A-050 | R31-009 | — | Cancellation propagation to dependents; replacement re-points the edge |
+| VOL-A-051 | R31-017 | D-020 | Master flow + five role-pair contracts with all eight aspects |
+| VOL-A-052 | R31-017 | D-021 | Every assignment links to a ticket; partial branches recoverable |
+| VOL-A-053 | R31-017 | D-021 | Exactly three ticket transition writers; imports cannot change state |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#8-open-design-work-not-resolved-here-owner-other-volumes-must-decide -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-8-OPEN-DESIGN-WORK-NOT-RESOLVE-S046" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 8. OPEN DESIGN WORK (not resolved here; owner/other volumes must decide)
+
+- **OW-1 (D-005 scope note; VOL-A-011).** Lower-tier creation policy: may any
+  configuration ever permit director/manager-side creation of foremen or
+  workers? Review explicitly leaves this unspecified.
+- **OW-2 (D-005; VOL-A-011).** Default value of the director-created-managers
+  setting (on vs off). Review: "manager-creation setting default … remain
+  unspecified."
+- **OW-3 (F-002 disposition "target policy awaits user decision"; VOL-A-021).
+  Whether foreman worker-launch counts/budgets must be reported upward per
+  assignment and whether they feed typed caps, or stay invisible to CHD.
+- **OW-4 (D-012; VOL-A-037).** Waiting-for-human intervals/timers and exact
+  status contracts — deferred to VOL-D (F-013) with the review note that
+  "intervals and exact status contracts remain to specify."
+- **OW-5 (D-010; VOL-A-036/037).** Final human sign-off conditions, conflicting
+  standing rules, and application of newly changed rules to in-flight work —
+  review: "remain unresolved."
+- **OW-6 (F-005 → VOL-C/VOL-B).** Complete grant scopes, composition
+  order/conflict policy beyond the VP-precedence rule pinned in VOL-A-010, and
+  ephemeral-agent defaults — not settled here.
+- **OW-7 (Q-007, F-010 → VOL-B).** Which events (new work / replies /
+  follow-ups) choose NEW versus REUSE is an open integration clarification.
+  Per Q-007 it does not block capture of work-log intent; this volume's
+  requirements reference the two Hermes-backed delivery modes (CT-04) without
+  depending on the mapping.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-A-story-roles-lifecycle.md#9-traceability-table-finding-requirement-section -->
+  <section id="CHD-HANDBOOK-CHD32-BU-514A4E-9-TRACEABILITY-TABLE-FINDING-R-S047" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 9. TRACEABILITY TABLE — finding → requirement → section
+
+| Finding | Requirements | Sections |
+|---|---|---|
+| F-002 (foremen/workers beneath supervisor; admission, worker-launch, schedule, storage boundaries) | VOL-A-014..VOL-A-017, VOL-A-020..VOL-A-024 (VOL-A-018 and VOL-A-019 retained as superseded lineage → VOL-A-044/045) | §3.1–3.8, §6 |
+| F-003 (role/responsibility/authority matrix; delegated decision scope; conditional supervisor actions; escalation and revocation; decision owner at every branch) | VOL-A-001..VOL-A-013, VOL-A-041..VOL-A-043 | §2.1–2.7, §6, §7 |
+| F-004 (complete objective lifecycle) | VOL-A-025..VOL-A-040, VOL-A-047..VOL-A-050 | §4.1–4.10, §6, §7 |
+| **R31-008** (matrix conflicts, foreman principal) | VOL-A-041 | §2.2 |
+| **R31-009** (dependency terminality) | VOL-A-049, VOL-A-050 | §4.3 |
+| **R31-010** (state-map completeness) | VOL-A-047, VOL-A-048 | §4.1 |
+| **R31-017** (master flow + tickets) | VOL-A-051, VOL-A-052, VOL-A-053 | §5, §6 |
+| **R31-018** (control-plane tickets) | VOL-A-046 | §3.7 |
+| **R31-019** (dual admission) | VOL-A-044 | §3.4 |
+| **R31-020** (mandatory profiles) | §1.1, §2.1 prose + VOL-D §1.6/§2 | §1.1, §2.1 |
+| **R31-021** (managed dispatch) | VOL-A-045 | §3.5 |
+| **R31-024** (plain prose) | this volume's prose; terminology §1.3 | §1.3, §5 |
+| **R31-026** (meta-grant) | VOL-A-042 | §2.5 |
+| **R31-027** (session-boundary revocation) | VOL-A-043 | §2.7 |
+| Canonical review-log items (Q-003/Q-004/Q-006/Q-007/Q-008, `hermes_gateway_check`, `correct_duckbrain`) | Consumed in VOL-A-010, VOL-A-015, VOL-A-027, VOL-A-030, VOL-A-031, VOL-A-036, VOL-A-039; open items OW-1, OW-7 | §1.4, §2.1, §3.8, §8 |
+
+Requirement count: **53** (`VOL-A-001..VOL-A-053`, contiguous and unique;
+`VOL-A-018` and `VOL-A-019` remain in the range as superseded lineage markers with
+explicit successor ids). Rev-2.0 additions: 041–053.
+  </section>
+</spec>

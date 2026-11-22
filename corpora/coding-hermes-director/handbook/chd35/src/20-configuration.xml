@@ -1,0 +1,356 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd35/src/20-configuration.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD35-SRC-20-CO-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd35/src/20-configuration.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-20-CO-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# 20-configuration.md — SECTION 3 SOURCE: CONFIGURATION, IDENTITY AND SKILL COMPOSITION
+
+This section is the CHD-3.5 configuration projection. **The adopted v4 contract in
+`contracts/config.schema.json` and `build-spec/integrated/config-format.md` owns
+field names, types, limits, defaults, absence semantics, precedence, activation
+and errors.** The generated field inventory is subordinate evidence. Historical
+v2/v3 spellings are migration input only and never deployment input. If an older
+projection differs, this v4 contract governs; the discrepancy is recorded rather
+than guessed away.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/20-configuration.md#c-1-desired-and-effective-configuration -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-20-CO-C-1-DESIRED-AND-EFFECTIVE-CONF-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## C.1 Desired and effective configuration
+
+A deployment has one VP/operator-owned **desired** configuration, but four
+readable scopes:
+
+- **Project:** instruction roots, a project config reference and the optional
+  project-memory route. Multiple absolute instruction/workspace roots are
+  supported; project prose cannot grant a capability.
+- **Agent:** role, skills, tools, grants, approvals, runtime, rooms, limits and
+  composition selection.
+- **Host/gateway:** gateway identity, transport, workdir, credential *reference*
+  and profiles enrolled on that host. A host binds an agent to a gateway; it does
+  not become the agent's identity.
+- **Profile:** the named Hermes profile, credential reference, session/memory
+  scope and managed asset inventory. It is stateful and attributable, not a host
+  sandbox.
+
+The four version domains are independent and are not interchangeable. The
+configuration document is **schema v4**; controller records (registry,
+provisioning, manifests and audit records) are **record schema v3**; the
+content-addressed asset bundle manifest is **bundle v1**; and the transport
+operation envelope is **`chd.operation.v1`**. The archive manifest is **archive
+manifest v1** and its native Hermes payload version is a probed value. The
+canonical compatibility and migration table is
+`tables/section-4-version-matrix.csv`; a record never reuses a config or
+transport version number.
+
+`GET /v1/effective-config/{agent-id}` returns the desired and profile-reported
+effective revisions, digests, every resolved field, `drifted`, provenance and a
+source reference. It must read the profile's current report, not a cached desired
+copy. Session-scoped policy readback names its frozen revision and must match its
+snapshot byte-for-byte (VOL-D VOLD-006).
+
+A missing optional field is not an implied value. Each field is
+`REQUIRED-EXPLICIT`, `EXPLICIT-DEFAULT` (only where VOL-D names a source value),
+or carried v2 `REQUIRED`. The registry records the class's omission meaning as
+`default_or_unresolved`; `UNRESOLVED` means the loader refuses absence. Schema
+defaults are documentation/readback defaults, never a license to invent one.
+Credentials are references such as `/chd/credentials/agent-a`, never tokens or
+secret values.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/20-configuration.md#c-2-runtime-settings-and-native-fallback -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-20-CO-C-2-RUNTIME-SETTINGS-AND-NATIV-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## C.2 Runtime settings and native fallback
+
+`runtime.provider`, `runtime.model` and `runtime.context_window` are explicit per
+agent/worker. `max_turns` and `token_budget` are pass-through values when supplied.
+CHD sends these values verbatim to Hermes; `context_window` is a ceiling. CHD
+does not compact history or reconstruct context. Hermes owns native fallback
+behavior. CHD records a reported fallback in the send manifest/readback but does
+not define a fallback provider/model, retry policy, health table or rerouting
+algorithm. A provider failure never authorizes CHD to reroute.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/20-configuration.md#c-3-identity-profile-isolation-and-effective-readback-r32-004 -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-20-CO-C-3-IDENTITY-PROFILE-ISOLATION-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## C.3 Identity, profile isolation, and effective readback (R32-004)
+
+Every director, manager, supervisor, foreman and worker has a distinct
+`(principal_id, profile_id)` binding. The binding is explicit in the desired
+configuration and in every effective readback; it is never derived from a role,
+room sender, host name, diagram, or skill. `profile_id` is a lower-case stable
+identifier and MUST NOT be `default`; `principal_id`, `agent_id`, `host_id`,
+`room_id`, `thread_root`, `work_uid`, `bond_id`, `parent_bond_id`, and
+`session_id` each have their own typed field and constrained identifier grammar.
+The validator rejects omission (`profile_missing`), `default`
+(`profile_not_distinct`) and reuse (`profile_shared`) before a run record is
+created. A host may enroll several profiles, but it does not become the
+principal and does not merge their session, credential, learned, or archive
+state.
+
+The profile contract is `schemas/profile-identity.schema.json`. It requires the
+profile's principal, role, host/gateway binding, credential reference, separate
+session-state root, learned-state reference, and protected learned-state policy.
+`learned_state_ref` is a reference only: CHD may identify and protect it, but
+Hermes owns learning, recall, history, compaction, and memory semantics. A
+configuration sync may replace managed assets and settings only; it MUST NOT
+copy, delete, overwrite, or reinterpret learned state, session history, or
+archives. The grantor-without-use case remains valid: a profile can have
+`grant_use` without `use`; no profile identity or role name fills the missing
+class.
+
+`GET /v1/effective-config/{agent-id}` returns the schema in
+`schemas/effective-profile-readback.schema.json`: desired and effective
+revisions/digests, the fully resolved identity/profile/host/room bindings,
+policy owner, provenance for every field, protected-state references, drift,
+and the readback source. The response MUST be generated from the profile's
+current report, not a desired-config cache. Equal-revision differing bytes are
+an integrity error. A diagram, sender, parent bond, or transport peer is never
+a policy-owner source; `policy_owner` is an explicit constrained principal
+reference and omission is invalid.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/20-configuration.md#c-3-1-configuration-and-effective-readback-field-contract -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-20-CO-C-3-1-CONFIGURATION-AND-EFFECT-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### C.3.1 Configuration and effective-readback field contract
+
+| Field | Type / constraint | Meaning and authority |
+|---|---|---|
+| `principal_id` | string, `^pr-[a-z0-9-]+$` | Authenticated role identity; controller binds it to the request. |
+| `profile_id` | string, `^pf-[a-z0-9-]+$`, not `default` | Named Hermes profile; unique per principal/instance. |
+| `host_id` | string, `^host-[a-z0-9-]+$` | Enrolled host reference; never an authority or principal alias. |
+| `role` | enum `director\\|manager\\|supervisor\\|foreman\\|worker` | Configured role; role text cannot grant capability. |
+| `credential_ref` | non-empty reference, `^/chd/credentials/[A-Za-z0-9._/-]+$` | Secret locator only; secret bytes are forbidden. |
+| `session_state_ref` | non-empty reference, `^/chd/session-state/[A-Za-z0-9._/-]+$` | Profile-owned native session state. |
+| `learned_state_ref` | non-empty reference, `^/chd/learned-state/[A-Za-z0-9._/-]+$` | Protected Hermes-owned learning/recall state. |
+| `room_id` | string, `^(obj\\|task\\|space)-[a-z0-9-]+$` | Explicit room binding; membership is not authority. |
+| `thread_root` | positive integer | Explicit message root for a branch. |
+| `work_uid` | string, `^work-[A-Za-z0-9][A-Za-z0-9._-]*$` | Logical work identity; never inferred from latest session. |
+| `policy_owner` | string, `^pr-[a-z0-9-]+$` | Explicit VP/operator policy principal; never inferred from diagrams or senders. |
+| `effective_revision` | positive integer | Gateway/profile-reported revision read back after convergence. |
+| `effective_digest` | string, `^sha256:[0-9a-f]{64}$` | Digest of the effective document, not desired bytes. |
+
+The controller fails closed on unknown fields, null-as-absent substitutions,
+missing required bindings, cross-profile collisions, digest mismatch, or a
+readback whose `principal_id`, `profile_id`, `host_id`, or `policy_owner` does
+not match the desired binding. It never silently substitutes the default
+profile or current sender.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/20-configuration.md#c-3-2-same-profile-native-fork-versus-cross-profile-assignment -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-20-CO-C-3-2-SAME-PROFILE-NATIVE-FORK-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### C.3.2 Same-profile native fork versus cross-profile assignment
+
+A same-profile fork is a native Hermes fork only when the parent and child have
+the same explicit `instance`, `profile_id`, and host capability binding. It
+retains D-038 semantics: the child records `parent_bond_id`,
+`parent_session_id`, `fork_point_seq`, and explicit `fork_mode`; the default is
+`preserve_parent_snapshot`, with `current_policy` as the explicit alternative.
+The child is delivered as `NEW`; later branch replies use `REUSE`.
+
+A cross-profile or cross-host handoff is **not** a native fork and is not
+represented as `provisioning: fork`. It is a new assignment requiring an
+explicit `context_transfer_request` and an adapter capability probe for the
+selected source/target pair. The request names source and target principal,
+profile, host, room, thread root, work UID, parent bond/session, policy owner,
+selected archive/checkpoint references, and an import mode. The adapter may
+return an imported reference or a typed error, but it cannot copy sender
+authority, credentials, policy snapshots, or learned state. No native
+cross-profile fork is claimed unless the probe explicitly returns
+`cross_profile_native_fork: true`; absent, stale, or negative probe means
+`cross_profile_native_fork_unsupported` and the controller creates no child
+session.
+
+The transfer target receives only the explicitly authorized context import. It
+must resolve its own current policy and create its own `SessionPolicySnapshot`;
+source authority and source `policy_owner` are not inherited. The transfer
+request/result/error records are defined in
+`schemas/context-transfer-{request,result,error}.schema.json` and are all
+read back before success. `policy_owner` is carried as an explicit reference
+for audit and authorization; it is never guessed from a figure, room sender,
+or parent bond.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/20-configuration.md#c-4-one-composition-authority-and-two-conflict-planes -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-20-CO-C-4-ONE-COMPOSITION-AUTHORITY-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## C.4 One composition authority and two conflict planes
+
+There is one composition authority, VOL-D VOLD-017–VOLD-019:
+
+1. **Project/workspace instructions** are read by Hermes from the selected scope.
+2. **Base role template** is selected by `composition.base_role`.
+3. **Named specialization** is selected by `composition.specialization.name`.
+
+CHD selects the asset list and authorized boundaries; Hermes composes behavior. A
+specialization can override only named `authorized_overrides` values (`behavior`
+and/or `permissions`), and a permissions delta must remain inside the
+VP-configured pool.
+
+The conflict planes are not interchangeable. Permission conflict is a hard
+validation/grant-time failure. An instruction contradiction fails as
+`specialization_conflict` unless behavior override is explicitly authorized;
+when authorized, the named specialization wins over the base role only within
+that authorization. Neither plane can outrank VP configuration. Skill text,
+prompt text, skill membership or a task assignment is instruction/context, not
+an actual grant. Use, grant-use, confer-delegation and create remain independent;
+“I may send” in a skill does not create a grant.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/20-configuration.md#c-5-precedence-and-the-vp-denial-worked-example -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-20-CO-C-5-PRECEDENCE-AND-THE-VP-DENI-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## C.5 Precedence and the VP denial worked example
+
+For effective permission resolution, the fixed order is **VP configuration →
+director on-demand delegation → named specialization override → base role**.
+This is the single precedence authority in VOL-D; other sections reference it.
+Project instructions are the first composition layer but cannot grant authority.
+VP-configured permissions are already grants and need no director grant (D-016).
+A lower layer cannot turn a VP denial into an allow.
+
+Worked readback for `room:task-crier`:
+
+```yaml
+# VP desired config, revision 41
+vp:
+  grants:
+    room_read:
+      agents: [sup-crier]
+      rooms: []                    # VP denies this room scope
+# Director request, recorded but not effective
+chd/grants/grant-204:
+  origin: director
+  granted_by: mgr-infra
+  capability: room_read
+  scope: room:task-crier
+  status: recorded_conflict
+```
+
+```yaml
+agent: sup-crier
+field: permissions.use.room_read[room:task-crier]
+value: denied
+origin: vp_configured
+source_ref: /chd/config/desired/rev/41/vp/grants/room_read
+lower_precedence: director:grant-204
+resolution: vp_wins
+audit: grant_conflict
+```
+
+The director record remains provenance-bearing audit history; it is not silently
+rewritten and does not become an effective grant. The denial is checked again at
+grant time and in effective readback.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/20-configuration.md#c-6-validation-update-activation-and-readback -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-20-CO-C-6-VALIDATION-UPDATE-ACTIVATI-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## C.6 Validation, update, activation and readback
+
+The loader runs **schema → referential integrity → policy → warnings** and fails
+closed on any error. Unknown fields are errors at every object level;
+`additionalProperties: false` is intentional. Referential checks bind gateway,
+room, registry, worker-target and profile references. Policy checks enforce profile
+uniqueness, permission-key exclusivity, grant bounds, specialization
+authorization and complete explicit temporary-worker fields. Warnings never convert an error to a
+load.
+
+VP/operator changes bindings, caps, triggers, room membership, approval policy,
+specialization assets and desired config through the validated path. Directors
+may issue only on-demand grants inside the VP-approved pool. Agents cannot edit
+their binding, skills, grants or membership. Activation follows VOL-D VOLD-008:
+caps/membership at the next orchestrator check; triggers at scheduler
+registration; runtime, tools, skills and approval policy at the next new or
+reused session turn; in-flight sends retain their dispatch-time digest. Readback
+shows the new revision or no change, never partial convergence as success.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/20-configuration.md#c-7-managed-template-sync-and-learned-state -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-20-CO-C-7-MANAGED-TEMPLATE-SYNC-AND-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## C.7 Managed-template sync and learned state
+
+`chd_profile_sync` is a procedure, not a promise:
+
+1. Read desired config and the profile's effective report. Verify profile identity,
+   revisions, digests and asset manifest before writing.
+2. Compute a field/asset diff. Managed state is configuration, tools, skills,
+   prompts and small content-addressed assets. Learned memory, session history
+   and archived work are **not** in the replacement set.
+3. Update settings and upload changed assets in the VOL-D order. Retain the prior
+   effective revision and replacement manifest for rollback.
+4. Read back inventory (name, version, sha256), runtime and settings; run a smoke
+   turn under the same named profile. Presence alone is not verification.
+5. Publish effective revision/digest, drift state, lineage and readback origin.
+   Only then is the profile dispatchable.
+
+If upload, digest, readiness or smoke-turn verification fails, retain the prior
+effective revision, emit `converge_failed` with the failed step, and do not claim
+partial readiness. Retry from the recorded diff; rollback restores the prior
+desired digest and repeats readback. Sync never deletes or replaces learned state.
+Cleanup waits for terminal work and archive checkpoint verification, then records
+old/new profile and archive references.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/20-configuration.md#c-8-temporary-agents -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-20-CO-C-8-TEMPORARY-AGENTS-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## C.8 Temporary agents
+
+Temporary workers are a supported explicit-input path. The request must provide
+`temporary: true`, a unique `worker_id`, `work_uid`, non-default `profile`,
+`gateway`, `credential_ref`, `model`, `context_window`, `max_turns`,
+`token_budget`, `lifetime`, `workspace`, `asset_bundle_ref`, `archive_policy`,
+and `capacity_class`. The controller rejects any missing field as
+`temporary_field_missing{path}`; it never invents the unsettled provider,
+context, lifetime, workspace or capacity defaults. Proposed defaults remain an
+owner-scoped record (`OPEN-VOLD-1`) and do not disable explicit workers.
+
+The lifecycle is complete and mandatory: reserve capacity and write the
+provisioning record; install/probe the credential; create and read back the
+unique profile; stage assets/settings and read them back; execute the named
+work unit through controller-brokered dispatch; ingest one report; commit an
+archive checkpoint; then retire, revoke and read back the retired registry.
+A temporary worker is dispatchable only after all provisioning/readiness gates
+pass. A lost create response is reconciled by `GET` using the same request
+identity before retry; a lost run/report is reconciled by the run manifest and
+report readback. A failure before retirement leaves `temporary_retire_pending`
+and holds capacity until terminal execution and archive evidence are proven.
+
+The explicit path is not equivalent to implicit defaults: the unsupported input
+is only an omitted required field, not the temporary-worker feature itself.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/20-configuration.md#c-9-fixtures-and-checks -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-20-CO-C-9-FIXTURES-AND-CHECKS-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## C.9 Fixtures and checks
+
+The complete examples are in `examples/config/`. Run:
+
+```text
+python3 handbook/chd32/scripts/validate_config.py --cross-check
+python3 handbook/chd32/scripts/validate_config.py handbook/chd32/examples/config/valid-full.yaml
+```
+
+The first command must report zero missing registry rows. The full example must
+validate. Invalid fixtures fail with their named machine errors:
+`unknown_field`, `profile_missing`, `permission_key_conflict`, and
+`temporary_field_missing`. A temporary worker with all explicit fields is valid;
+only omitted required fields are rejected. `contracts/config.schema.json` is the bundled v4 structural contract. Unknown
+fields fail at every closed object level. `schema_version` MUST be integer `4`;
+2, 3, absent and future versions fail before any write, provisioning or trigger
+registration. A v2/v3 document is not silently upgraded: migration emits an
+operator-reviewed old/new diff, maps legacy locations explicitly, rejects both
+old and new spellings appearing together, and validates a complete v4 document
+before effects. `runtime.provider`, `runtime.model`, `runtime.context_window`,
+`runtime.max_turns` and `runtime.token_budget` are the exact v4 names; the old
+`context_limit` and flat agent runtime keys are not accepted aliases.
+
+The v4 precedence is exact: VP configuration, then valid director delegation,
+then valid manager delegation, with explicit deny winning over lower-layer allow;
+project instructions cannot grant authority. Fork maps are VP-authored choices,
+not an ordered strictness lattice: project choices must agree, then project
+precedes agent, then global. The default is
+`preserve_parent_snapshot`; `current_policy` is an explicit authorized
+alternative. Restore is different: `session.restore_policy` is
+`current_policy` on every restore. Archived policy remains history only; source
+and effective revisions are stored separately, and a missing archived source
+revision is `null`/unknown, never fabricated. Existing live sessions retain
+their bound snapshot and never auto-resync.
+
+Temporary workers are supported only with complete explicit inputs. Missing
+fields fail as `temporary_field_missing{path}`; no model, provider, lifetime,
+privilege, workspace, retention or capacity default is invented. A fully
+explicit worker is not rejected merely because unresolved implicit defaults
+remain OPEN.
+
+**References:** VOL-D §1 (VOLD-001–VOLD-021, VOLD-064–VOLD-074), VOL-C §12,
+D-015, D-016, R31-020, R31-025, F-005 and F-012.
+  </section>
+</spec>

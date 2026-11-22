@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd35/manuscript/14-01.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD35-MA-9FB2C8-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/14-01.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9FB2C8-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+&lt;!-- CHD3.5A-03-BLOCK I; SPEC V3.5; section 14; source src/90-recovery.md --&gt;
+
+&gt; **REVISION NOTICE — CHD-3.5 supersedes CHD-3.4.** This revised section integrates the audit disposition and selected contracts. All body blocks below carry change bars.
+
+&lt;div class="chg" markdown="1"&gt;
+
+# §N — Failure handling, startup, backup, upgrade and recovery
+
+**Status:** normative handbook section for CHD-3.5.
+
+**CHD-3.5 revision notice (D-039/readiness/capacity):** This chapter supersedes
+CHD-3.3 recovery statements that treat scheduler registration as a universal startup
+block, a report as stop proof, or derived manifest state as the capacity owner.
+Read-only, immediate, and scheduled readiness are distinct. Capacity belongs to the
+correlated attempt/run reservation. Native archive import/export and storage fencing
+remain explicit unresolved release gates; no native API or transport is guessed.
+
+
+**Status:** normative handbook section. Recovery is a state-reconstruction and reconciliation procedure, not a retry shortcut. It reads canonical durable records, names the observed boundary, performs only an allowed idempotent action, and preserves an unknown outcome rather than guessing.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/14-01.md#n-1-recovery-law -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9FB2C8-N-1-RECOVERY-LAW-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## N.1 Recovery law
+
+&lt;figure class="section14-figure"&gt;
+&lt;img class="mdfig" alt="FIGURE 14.1-1" src="../figures/fig-14.1-1.svg"&gt;
+&lt;figcaption&gt;FIGURE 14.1-1 — DEPENDENCY OUTAGE AND RECOVERY FLOW. Snapshot: 2026-11-15.&lt;/figcaption&gt;
+&lt;p&gt;The flow keeps producers, the controller gate, and downstream consumers distinct. A failed or uncertain read enters the held-obligation path; only correlated terminal proof reaches RELEASE. The drawn branches are operational paths, not a summary list: read-only status may continue, queued work backs off, bridge failures dead-letter, and healthy durability resumes oldest-first.&lt;/p&gt;
+&lt;/figure&gt;
+
+1. The request, DuckBrain, and gateway/host producers emit evidence to the controller gate; the controller reads authoritative state and correlates the request identity, attempt, run, and execution generation.
+2. When the read is unavailable or uncertain, the controller records `paused:unreachable` or `paused:uncertain`, retains capacity, retries by the same key where allowed, and does not convert process absence or a report into stop proof.
+3. When durable health and correlated terminal proof are read back, the controller may resume queued work or release the reservation; the status and dead-letter consumers remain separate from that release decision.
+
+The controller starts in `recovering`, not `ready`. It acquires the single-writer lease through compare-and-set, verifies `fsync` durability, runs readiness, reconstructs derived worklists from canonical `/chd/*` records, and only then accepts new work. A board file, success log, process exit, elapsed lease, scheduler response or gateway TCP result is not by itself proof of a durable or terminal outcome.
+
+Every recovery action has four required parts: **durable state actually retained; detection read; action taken; post-restart evidence**. These are recorded in `crash-windows.csv` and an audit record. The register covers W1 through W9 and the additional ticket, dataset, archive, lease and policy mutation windows. If the read cannot distinguish “did not execute” from “executed but response was lost”, the result is `unknown`; recovery holds capacity and pages rather than blindly repeating.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/14-01.md#n-2-startup-sequence-and-readiness-gates -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9FB2C8-N-2-STARTUP-SEQUENCE-AND-READI-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## N.2 Startup sequence and readiness gates
+
+1. **Writer exclusion:** call the linearizable `LeaseAuthority.AcquireOrRenew(chd/controller, owner_id, fresh boot_id, ttl)`. The authority, not `/chd/system/writer` and not a timestamp, conditionally installs a strictly increasing `fence_epoch`. Two starters can receive at most one success; the loser returns `503 writer_lease_held` and writes no business state. If authority or the fenced-write adapter is unavailable/uncertain, return `503 writer_lease_held_or_unknown` / `fencing_unavailable` and remain read-only.
+2. **Configuration:** validate the versioned config and effective profile/runtime mappings. Invalid config fails closed; no lane or gateway is registered.
+3. **DuckBrain:** probe health and write a sentinel in `chd`; require achieved `X-Durability: fsync`. A buffered/degraded acknowledgement is a failed gate.
+4. **Mirrors and authority:** read registry, bonds, limits, policy snapshots and config mirrors; equal-revision differing bytes become `500 integrity_equal_rev_conflict` and an incident, never an arbitrary winner.
+5. **Capability readiness:** publish `read_only_ready` after authenticated authoritative reads, config/policy/registry integrity, and durable readback pass. Publish `immediate_ready` only after controller-local admission (when configured), authoritative attempt/run reservation, storage-boundary fencing and snapshot capability, profile/credential/runtime, and gateway checks pass. Publish `scheduled_ready` only after stable scheduler lanes register and read back. A scheduler outage makes scheduled readiness false and leaves triggers unarmed; it does not block read-only or an otherwise-ready controller-local immediate path. Scheduler-owner admission mode remains blocked without scheduler approval.
+6. **Gateway/host/bridge checks:** probe each configured transport and capability endpoint. No silent failover from the configured transport. Crier/bridge degradation is isolated and dead-lettered; local work remains local.
+7. **Zero-scheduled-trigger assertion:** with no queued work and no scheduled trigger fire, no gateway call caused by scheduler readiness/callback occurs. This does not forbid a separately authorized immediate request; that path is tested with its own controller reservation and gateway-dispatch evidence.
+8. **Recovery scan:** run room-head, pending-send, lease-expiry, dataset-staging, bond/session, ticket/event and archive-gap scans. Persist repairs and audit evidence.
+9. **Ready:** publish the capability vector only after its applicable gates and readbacks pass. A failed dependency may serve health/status but cannot dispatch or manufacture a verdict.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/14-01.md#n-3-normal-retry-and-restart-are-separate-paths -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9FB2C8-N-3-NORMAL-RETRY-AND-RESTART-A-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## N.3 Normal, retry and restart are separate paths
+
+**Normal:** request → durable message/assignment → `SendManifest composed` → shared reservation → gateway POST → run/report → verify → terminal manifest.
+
+**Retry:** the caller reuses the same request/dedupe identity. The controller reads the ledger; exact canonical request bytes, target, profile, credential scope, attempt and gateway key replay. A changed payload, target, profile or credential scope conflicts. A create/fork response loss is reconciled by the durable allocation id and target session id before any first turn. An unchanged target may replay the same gateway key. A new target/attempt is created only after reconciliation or explicit stop authority.
+
+**Restart:** the controller does not infer a missing response from the absence of a record. It reads heads, manifests, attempts, runs, leases, reports, bonds, tickets, datasets and audits; it then re-drives a durable pre-effect state or reconciles an external-effect state. Restart recovery is drawn separately in `fig-recovery.svg` and `fig-recovery.mmd`.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/14-01.md#n-4-reconciliation-and-capacity-safety -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9FB2C8-N-4-RECONCILIATION-AND-CAPACIT-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## N.4 Reconciliation and capacity safety
+
+For every `dispatched` attempt, the send orchestrator reads in order:
+
+1. `GET /v1/runs/{run_id}` or gateway session history;
+2. `POST /v1/runs/{run_id}/resolve-unknown` with the stored `admission_id` and `execution_generation`;
+3. `GET /api/sessions/{session_id}/messages` for a correlated report turn.
+
+The observed class is one of:
+
+TABLE 14.1-1 — N.4 Reconciliation and capacity safety
+
+| Class | Evidence | Action | Capacity |
+|---|---|---|---|
+| `proven-running` | run status running or fresh execution heartbeat | renew/hold lease; continue polling | held |
+| `proven-stopped` | authoritative attempt/run terminal status or a trusted runtime stop attestation from the authoritative producer, correlated to send, attempt, run and execution generation | write terminal manifest revision | release the attempt/run reservation only after the stop proof and release write are durably read back |
+| `unreachable` | bounded status/resolve/history reads all unavailable | `paused:unreachable`, backoff, page | held |
+| `uncertain` | identities cannot be reconciled or resolve returns unknown | `paused:uncertain`, operator decision at bound | held |
+
+`lease_expires_at` is only a detection deadline. Expiry writes `capacity_lease_expired`, never terminality and never a release. Even after `capacity.unresolved_hold_s` (when configured; it is not inferred here), release requires verified correlated provider/runtime terminal proof committed with readback and audit; an operator attestation alone is insufficient; expiry alone is never enough. A report, waiting state, logical-send closure, timeout, cancellation intent, process absence, or uncorrelated terminal-looking message is not stop proof. The authoritative capacity unit is the correlated attempt/run reservation and its execution generation; manifest, report, board, or role counters are projections. The system prefers refusing new work to exceeding `max_inflight` or `max_sessions`.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/14-01.md#n-5-durable-consistency-and-multi-write-recovery -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9FB2C8-N-5-DURABLE-CONSISTENCY-AND-MU-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## N.5 Durable consistency and multi-write recovery
+
+DuckBrain has no multi-key transaction. The controller uses the §G journal protocol: request claim → complete intent → ordered prepared constituents → exact readbacks → last-written commit marker → response record → external wake. Only a valid marker makes the listed records visible; a response or wake never makes an uncommitted record visible. Every append carries `(owner_id, boot_id, fence_epoch, tx_id, write_id)` and is rejected by the fenced adapter if the lease tuple is stale. The fault-injection register `crash-windows.csv` covers request claim, head, message, manifest, grant, audit, ticket event, dataset row, publication marker, and all external boundaries.
+
+After any lost response, recovery reads claim, intent, step receipts, constituents, marker and response by `tx_id`. Equal bytes replay the same step; changed bytes refuse. An intent with all steps durable retries only the same marker under the current fence. An incomplete intent resumes only before any external effect; otherwise it remains unknown and holds capacity. A marker without response is committed and repaired with the original response; a marker/constituent mismatch is corruption. Recovery never deletes a head, rewinds a revision, fills a sequence gap, chooses between equal-revision different bytes, or treats lease expiry as proof of stop. It writes a new monotone revision only when canonical evidence proves the safe next state.
+
+Ticket events, audit rows, dataset rows, publication markers, and archive indexes are not described as atomically written by the substrate: their visibility is gated by the outer marker. A partial dataset stays staging/failed and is not queryable. An equal-revision content conflict stops the affected scope, records `integrity_equal_rev_conflict`, and pages. A durable primary without its response is replayed by its request id; a response without a valid marker is ignored.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/14-01.md#n-6-sessions-revocation-loss-and-restore -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9FB2C8-N-6-SESSIONS-REVOCATION-LOSS-A-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## N.6 Sessions, revocation, loss and restore
+
+A revoked policy affects future authorization and explicit resync; an existing session continues under its immutable `SessionPolicySnapshot` until its authorized boundary. A fork chooses `preserve_parent_snapshot` or `current_policy` and records that choice. A replacement after loss, and an archive restore, are future sessions: they receive a new Hermes id and new bond generation. Under D-039, every restore resolves current permissions; archived policy is history only. The restore records source/effective policy revisions and identity mapping. A source policy or checkpoint revision is nullable when the archive genuinely does not contain it, with a verified reason; no revision is inferred from a timestamp, checkpoint sequence, or current policy. Missing historical snapshot coverage is recorded as `snapshot_missing`; no live session id is reused.
+
+A REUSE `404 not_found` retires the bond, posts a status notice, creates a fresh bond and delivers NEW only after the old attempt is reconciled. The deleted native id is never recreated or reused; the new bond has a new allocation, attempt and gateway key. Delayed messages remain attached to the retired generation and are never retargeted. Offboarding stops new dispatch, drains or cancels open sends, archives sessions, revokes credentials/grants, retains records, and marks the registry retired. This is the offboarding effect; it never erases an in-flight attempt or releases its slot without stop confirmation. Cancellation follows the same stop-confirmation rule and retains produced artifacts.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/14-01.md#n-7-dependency-outages -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9FB2C8-N-7-DEPENDENCY-OUTAGES-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## N.7 Dependency outages
+
+&lt;figure class="section14-figure"&gt;
+&lt;img class="mdfig" alt="FIGURE 14.1-2" src="../figures/fig-14.1-1.svg"&gt;
+&lt;figcaption&gt;FIGURE 14.1-2 — DEPENDENCY OUTAGE RECOVERY BRANCHES. Snapshot: 2026-11-15.&lt;/figcaption&gt;
+&lt;p&gt;The same flow is read here as a branch map for each named dependency. Controller and DuckBrain failure hold the write path; scheduler failure disables only scheduled capability; gateway failure holds the correlated reservation; bridge failure dead-letters delivery; archive failure preserves the open gap. The consumers are not interchangeable, and none of these branches releases capacity without authoritative stop proof.&lt;/p&gt;
+&lt;/figure&gt;
+
+1. **Controller unavailable:** callers receive `503`; no claim of accepted work is made without fsync/readback. On return, startup recovery scans canonical records before accepting.
+2. **DuckBrain unavailable/degraded:** no control-store writes or immediate dispatch; queued sends back off. A healthy durability/readiness check resumes work oldest-first.
+3. **Scheduler unavailable:** scheduled readiness is false and triggers remain unarmed. In controller-local admission mode, authenticated read-only service and separately authorized immediate dispatch may continue when their storage, fence, reservation, profile and gateway gates pass. Manifests can remain queued; bump/callback retry uses the same key. No second scheduler counter is created. Scheduler-owner admission mode remains blocked until its approval path is read back.
+4. **Gateway/host unavailable:** mark sends `paused:unreachable`, suspend deadline arithmetic and ladder burn, hold slots, and resume after the named transport check passes.
+5. **Crier bridge unavailable:** local control state continues; outbound delivery retries by `delivery_id`, then dead-letters with an incident. Inbound is ACKed only after durable room append; malformed payloads are dead-lettered, not partially posted.
+6. **Archive/object store unavailable:** do not advertise a checkpoint; preserve an open archive gap and retry the archive writer.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/14-01.md#n-8-backup-upgrade-and-restore -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9FB2C8-N-8-BACKUP-UPGRADE-AND-RESTORE-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## N.8 Backup, upgrade and restore
+
+Controller backup and session export are separate products. A session export is a checkpointed native `hermes.session.export` payload in `chd-archive`; it does not back up rooms, tickets/workflows, manifests/attempts, reservations, grants, configuration, assets or controller archive indexes. The complete controller-loss contract, including the backup manifest schema and isolated restore drill, is `runbooks/controller-backup-restore.md` and `schemas/controller-backup-manifest.schema.json`.
+
+Backup is a consistency operation, not a copy command. Quiesce new mutations or take the controller's supported consistent snapshot; capture the `chd` namespace, archive namespace indexes and immutable references, config digest, schema/version, writer lease evidence, remote-run observations, retention policy and snapshot manifest. Verify hashes and read back a sample of heads, manifests, audits, policy snapshots and archive manifests. A backup that omits the canonical namespace or cannot be restored is not a backup claim. Local `fsync` is not node-loss safety: the verified target must be independently readable outside the source failure domain. If a source revision is genuinely unavailable, record it as `null` with a reason; never infer it from a filename, timestamp, checkpoint sequence or current revision.
+
+Upgrade order is: backup and verify → drain/cancel according to policy → stop trigger registration → acquire exclusive writer lease → validate migration compatibility → migrate by highest effective revision to a new revision (never rewrite history) → run readiness and capability probes → recover queued/unknown runs → re-register scheduler lanes → restore traffic. Scheduler outage blocks re-registration and scheduled traffic, not read-only service or a passing controller-local immediate path. Rollback uses the prior config/binary against the same compatible records; a newer schema is refused rather than partially interpreted. Every open attempt/run remains tied to its authoritative reservation until terminal proof; a report or cancellation response is not enough.
+
+Archive restore is import into a NEW local Hermes session: obtain explicit archive grant; discover SessionArchive; select latest committed ExportManifest; verify digest; check `hermes.session.export` name/version through the selected native adapter; import into a fresh session id; **always resolve current permissions before activation under D-039**, retain archived policy only as history, record `restore_decision: current_policy` and source/effective policy revisions, and record a reason when the source revision is absent; create a new bond and record checkpoint; report coverage, completeness and open gaps. If the native adapter/API/version probe is unresolved, stop with `native_adapter_unresolved`; do not invent a payload format, copy a live database, or activate archived authority. Blind live-database copying is forbidden.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/14-01.md#n-9-recovery-evidence-and-wf-07 -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9FB2C8-N-9-RECOVERY-EVIDENCE-AND-WF-0-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## N.9 Recovery evidence and WF-07
+
+Recovery evidence is a durable audit row containing `incident_id`, target identity, observed state/revision, exact reads, action, actor/authority, resulting revision, capacity decision and test id. WF-07 maps as follows:
+
+TABLE 14.1-2 — N.9 Recovery evidence and WF-07
+
+| Probe | Named action | Expected evidence | Test |
+|---|---|---|---|
+| gateway disconnect after admission | `paused:unreachable` + bounded reconciliation; no ladder burn | manifest revision, transport probe, held reservation, later healthy readback | `WF-07-GATEWAY-DISCONNECT` |
+| controller restart during send | acquire writer lease, scan manifest/run, query status/resolve/history, re-drive only proven-safe step | boot id, recovery audit, unchanged send/attempt, one run | `WF-07-CONTROLLER-RESTART` |
+| expired lease with live run | `paused:uncertain`; keep slot; probe then explicit decision | lease-expired event, running status/heartbeat, no release, later terminal readback | `WF-07-LIVE-RUN-LEASE` |
+
+The table is the operator's evidence path: the producer supplies the observation, the controller records the named action, and the consumer verifies the readback before any capacity decision. A missing readback leaves the reservation held and the case open.
+
+![FIGURE 14.3-1](../figures/fig-14.3-1.svg)
+
+FIGURE 14.3-1 — ALLOCATION AND RECOVERY BEFORE / AFTER. Snapshot: 2026-11-15.
+
+The flow makes the WF-07 rule visible: normal allocation moves solidly from producer through controller to consumer; an unknown response enters the held same-identity path; a rejected report goes to rework; only correlated terminal proof closes the reservation.
+
+1. The producer supplies the request and identity.
+2. The controller owns the reservation, reconciliation, and release decision.
+3. The consumer records durable effect and evidence; it cannot release capacity without controller proof.
+
+No recovery report may say “restarted successfully” without the post-restart readbacks. No unknown execution is blindly repeated.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/14-01.md#n-10-cross-section-recovery-matrix-and-authority-links -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9FB2C8-N-10-CROSS-SECTION-RECOVERY-MA-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## N.10 Cross-section recovery matrix and authority links
+
+The complete boundary-by-boundary matrix is `tables/recovery-matrix.csv`. It is the reconciliation index for this section, not a second state machine: canonical transitions remain owned by Sections 5, 6, 7, 9, 10, 11 and 12 and their cited schemas/records. Every row names the authoritative read, durable state, retry or reconcile action, capacity owner, evidence, and terminal operator outcome. A summary, dashboard, board mirror, or process status is a projection and cannot override that source.
+
+The matrix applies these non-negotiable joins: request/session/attempt identity and terminal-attempt rules come from `contracts/request-attempt-lifecycle.md` and Section 5; transition and migration lineage comes from Section 6 and `contracts/section6-migration-example.json`; visibility, fencing, scans, tombstones and commit markers come from Section 7 and `tables/commit-protocol.csv`; grant and policy authority comes from Section 9; admission and stop-confirmation capacity comes from Section 10; report, wait, late-report and acceptance rules come from Section 11; archive coverage, restore identity and current-policy resolution come from Section 12. When two projections disagree, recovery reads the cited authority and records the disagreement; it does not choose by recency, elapsed time, or convenience.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/14-01.md#n-10-1-startup-gate-and-authority-uncertainty -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9FB2C8-N-10-1-STARTUP-GATE-AND-AUTHOR-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### N.10.1 Startup gate and authority uncertainty
+
+`recovering` is a durable posture, not an operator message. The controller publishes a capability vector, not one universal `ready`: read-only requires authoritative reads and durable readback; immediate additionally requires the configured admission owner, attempt/run reservation, storage-boundary fence/snapshot, and runtime/gateway checks; scheduled additionally requires scheduler registration/readback. Scheduler uncertainty makes scheduled capability false but does not globally block read-only or controller-local immediate service. An unavailable or uncertain storage/fence authority leaves writes and immediate dispatch blocked; it never releases reservations, fabricates a terminal result, or treats a mirror as authoritative. The exact gate order and failure codes remain in `tables/readiness-gates.csv` and Section 13.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/14-01.md#n-10-2-migration-rollback-retention-and-archive-boundaries -->
+  <section id="CHD-HANDBOOK-CHD35-MA-9FB2C8-N-10-2-MIGRATION-ROLLBACK-RETE-S012" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### N.10.2 Migration, rollback, retention and archive boundaries
+
+`examples/migration-rollback-lineage.json` is the worked compatibility example. Migration validates all source revisions before the first target write, emits the migration event before target-version transitions, writes only monotone revisions, and reads back every event prefix before acknowledgement. A partial target is staged and `migration_incomplete`; the source revision remains authoritative. A newer unsupported schema fails closed as `schema_version_unsupported`. Rollback resolves a recorded compatible revision and writes a new effective revision; it never deletes history, rewinds a sequence, or reopens a terminal record. If the prior revision cannot be resolved, rollback refuses to start and preserves the current effective revision.
+
+Archive gaps remain explicit gap records with coverage bounds and a last-good checkpoint. An incomplete export is not a backup claim. Restore imports into a new session and bond, preserves source archive and policy history, resolves current policy as required by D-039, and retains unresolved execution/capacity holds. Retention creates a tombstone and preserves audit, lineage, standing rules, criteria, and any open/uncertain record; cleanup is not erasure of historical authority.
+
+**CHD-3.5 contract:** `tables/commit-protocol.csv`, `tables/recovery-matrix.csv`, `examples/migration-rollback-lineage.json`, and `runbooks/controller-backup-restore.md` define recoverable multi-record commits, cross-section reconciliation, migration lineage, and controller disaster recovery. Their native storage/fencing and backup/restore capabilities remain subject to the explicit release gates above.
+
+
+**Full-size figure detail:** FIGURE 14.2-1 in §27; the detail sheets carry the drawing, explanation, steps and failure branches. FIGURE 14.3-1 above carries the allocation/recovery detail used by WF-07.
+
+
+&lt;/div&gt;
+  </section>
+</spec>
