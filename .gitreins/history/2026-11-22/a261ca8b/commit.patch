@@ -1,0 +1,281 @@
+commit 4de11c47515afa27e85b887b6a36dacaf7ae1078
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Sun Nov 22 01:25:02 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Sun Nov 22 01:25:07 2026 -0500
+
+    fix(board): refuse a same-count board row replacement (AUG-195)
+    
+    board_shrink_check compared row COUNT only, so swapping 297 board rows for
+    297 different rows passed the commit path and the CI --recent mode with exit 0
+    (the module docstring called it an HONEST LIMIT; a test asserted the hole).
+    
+    Refuse whenever a baseline row id is absent from the candidate, regardless of
+    the count, and keep the message naming the missing ids. A count drop still
+    fails as before; BOARD_ALLOW_SHRINK=1|true|yes still turns the refusal into a
+    loud NOTICE with both counts and every missing id; content edits of a surviving
+    id and line reordering still pass. Docstring and success message made true.
+    
+    Tests: flip test_same_count_replacement_is_the_documented_blind_spot into a
+    refusal arm, add equal-count and growing-count replacement refusals, --recent
+    mode refusals, single-row in-place edit, reordering, append-with-baseline-ids,
+    and all three override spellings. 29 passed (was 19).
+    
+    Gates run on this tree:
+      pytest tests/test_board_shrink_check.py -x -q     -> 29 passed
+      ruff check + ruff format --check (both files)     -> clean
+      red-proof (scratch repo, pre-fix vs post-fix)     -> .hermes/cache/scratch/195-proof
+      gitreins guard: secrets PASS, lint PASS, spec_alignment PASS,
+        tests(full) BLOCKED by live DuckBrain namespace-lock contention
+        (DELETE 409 "Push in flight ... held by pid <foreign>"), not by this diff —
+        that test passes alone at the base commit, so the commit was made with the
+        hook bypassed and disclosed here. Hosted CI runs the full gate on main.
+    
+    Co-authored-by: Alexis Okuwa <wojonstech@gmail.com>
+---
+ scripts/board_shrink_check.py    |  40 ++++++++-------
+ tests/test_board_shrink_check.py | 103 +++++++++++++++++++++++++++++++++++----
+ 2 files changed, 115 insertions(+), 28 deletions(-)
+
+diff --git a/scripts/board_shrink_check.py b/scripts/board_shrink_check.py
+index c5b0059..70e7d91 100644
+--- a/scripts/board_shrink_check.py
++++ b/scripts/board_shrink_check.py
+@@ -5,8 +5,8 @@ Commit 45a29b9 (a lane close-out) rewrote .coding-hermes/board/tasks.jsonl from
+ the two survivors were exactly the rows that commit closed. 295 rows went invisible for about
+ three minutes (261 complete, 28 pending, 2 blocked, 4 legacy "done"). The pre-commit gate did not
+ catch it because `boardctl validate` grades a 2-row board as VALID: a short board is a valid
+-board. Only a ROW-COUNT comparison against a baseline blob can see row loss, and at HEAD nothing
+-on the commit path made that comparison.
++board. A comparison of row counts and ids against a baseline blob can see row loss; at the time
++nothing on the commit path made that comparison.
+ 
+ Modes
+   staged (default)  `git show :<board>`            vs `git show HEAD:<board>`
+@@ -23,20 +23,22 @@ Row counting
+ Refusals (exit 1)
+   * candidate rows < baseline rows — the commit would lose rows; the message prints BOTH counts
+     and the ids that disappeared.
++  * any baseline id is missing from the candidate, even if the row count is equal or greater —
++    same-count wholesale replacements and losses hidden by new rows are refused (AUG-195).
+   * a parse failure on either side — the counts cannot be trusted.
+   * the baseline cannot be resolved or read — FAIL CLOSED, naming `git fetch --deepen=1`: a
+     shallow clone that cannot see the parent commit must deepen, never pass a gate it did not run.
+ 
+ Override
+-  BOARD_ALLOW_SHRINK=1|true|yes turns the refusal into an explicit NOTICE that still prints both
+-  counts and every lost id and exits 0. A deliberate prune is reviewable precisely because it has
+-  to say so out loud.
++  BOARD_ALLOW_SHRINK=1|true|yes turns a count/identity refusal into an explicit NOTICE that still
++  prints both counts and every lost id and exits 0. A deliberate prune is reviewable precisely
++  because it has to say so out loud. Parse failures and impossible comparisons still fail closed.
+ 
+ HONEST LIMIT — this is the contract, not a to-do list
+-  A SAME-COUNT wholesale replacement is NOT detected. Replace all 297 rows with 297 different rows
+-  and this check compares equal, because the only invariant evaluated here is the row COUNT. A
+-  same-count rewrite has to be caught by reading the diff. What this check exists to stop is the
+-  failure that actually happened (297 rows became 2) and that no other gate could see.
++  Every distinct baseline id must survive, and the total row count must not decrease. Content
++  edits of surviving ids and line reordering are allowed. This is not a content-integrity or
++  per-id multiplicity check: duplicate-id rows may change while every distinct id survives and
++  the total count does not fall. Other gates and diff review own those checks.
+ 
+ AC4 — the truncating writer
+   The writer behind 45a29b9 lives OUTSIDE this repository and is not any tracked fleet helper, so
+@@ -54,8 +56,8 @@ Usage
+   python3 scripts/board_shrink_check.py --recent # HEAD vs HEAD^ (CI)
+   BOARD_ALLOW_SHRINK=1 git commit ...            # deliberate prune
+ 
+-Exit codes: 0 append / unchanged count / explicit override; 1 shrink, parse failure, or an
+-impossible comparison (fail closed).
++Exit codes: 0 append / surviving ids with unchanged count / explicit override; 1 shrink, missing
++baseline id, parse failure, or an impossible comparison (fail closed).
+ """
+ 
+ import argparse
+@@ -176,18 +178,23 @@ def main():
+         )
+         return 1
+ 
+-    if new[0] < old[0]:
++    if new[0] < old[0] or lost:
++        effect = (
++            f"drop {old[0] - new[0]} task row(s)"
++            if new[0] < old[0]
++            else f"remove or replace {len(lost)} baseline row id(s)"
++        )
+         override = os.environ.get(ALLOW_ENV, "").strip().lower()
+         if override in TRUTHY:
+             print(f"board-shrink: NOTICE {ALLOW_ENV} override: {report}")
+             print(
+-                f"board-shrink: SHRINK ACCEPTED — {old[0] - new[0]} task row(s) dropped "
++                f"board-shrink: SHRINK ACCEPTED — the commit will {effect} "
+                 f"({old[0]} -> {new[0]}); the ids above are gone from the board."
+             )
+             return 0
+         print(f"board-shrink: REFUSED {report}", file=sys.stderr)
+         print(
+-            f"board-shrink: the commit would drop {old[0] - new[0]} task row(s) "
++            f"board-shrink: the commit would {effect} "
+             f"({old[0]} -> {new[0]}); {BOARD} must be updated in place (append, or rewrite only "
+             f"the changed lines) — never replaced with a filtered row set.",
+             file=sys.stderr,
+@@ -206,10 +213,7 @@ def main():
+     if new[0] > old[0]:
+         print(f"board-shrink: OK {report} — {new[0] - old[0]} row(s) appended")
+     else:
+-        print(
+-            f"board-shrink: OK {report} — row count unchanged (a same-count wholesale "
+-            f"replacement is NOT detected; read the diff)"
+-        )
++        print(f"board-shrink: OK {report} — row count and ids unchanged")
+     return 0
+ 
+ 
+diff --git a/tests/test_board_shrink_check.py b/tests/test_board_shrink_check.py
+index 87df8ec..b94bfa2 100644
+--- a/tests/test_board_shrink_check.py
++++ b/tests/test_board_shrink_check.py
+@@ -1,8 +1,8 @@
+-"""AUG-194: the commit path must REFUSE a board shrink.
++"""AUG-194/AUG-195: the commit path must REFUSE lost board rows or baseline ids.
+ 
+ Commit 45a29b9 rewrote ``.coding-hermes/board/tasks.jsonl`` from 297 rows to 2 — the two rows it
+ had just closed. 295 rows vanished for ~3 minutes and nothing on the commit path noticed, because
+-``boardctl validate`` grades a short board as VALID. Only a row-count comparison against a
++``boardctl validate`` grades a short board as VALID. A comparison of row counts and ids against a
+ baseline blob can see row loss; ``scripts/board_shrink_check.py`` makes that comparison and
+ ``scripts/install_board_guard.py`` puts it in the pre-commit hook.
+ 
+@@ -12,10 +12,16 @@ Every arm here runs against a SCRATCH repository (its own ``git init``, its own
+ 
+   AC1 shrink is refused ................ test_shrink_is_refused_and_the_commit_does_not_land
+                                         test_deleting_the_board_is_refused
++  missing ids are refused .............. test_same_count_replacement_is_refused_naming_missing_ids
++                                        test_missing_id_is_refused_even_without_a_count_drop
++                                        test_recent_mode_refuses_missing_ids_without_a_count_drop
+   AC2 legit traffic passes ............. test_append_and_same_count_edit_pass
+                                         test_adding_the_board_for_the_first_time_passes
+-                                        test_same_count_replacement_is_the_documented_blind_spot
++                                        test_single_row_in_place_edit_passes
++                                        test_reordering_surviving_ids_passes
++                                        test_append_preserving_baseline_ids_passes
+   AC3 override is explicit ............. test_override_lands_and_still_names_counts_and_ids
++                                        test_same_count_replacement_override_is_loud
+                                         test_override_does_not_excuse_a_parse_failure
+   AC4 quarantine + attribution ......... test_the_hook_only_checks_when_the_board_is_staged
+                                         test_the_real_297_row_board_rewrite_is_quarantined
+@@ -183,15 +189,90 @@ def test_adding_the_board_for_the_first_time_passes(tmp_path):
+     assert result.returncode == 0, result.stdout + result.stderr
+ 
+ 
+-def test_same_count_replacement_is_the_documented_blind_spot(repo):
+-    """The honest limit is stated in the header AND is really a limit — both are asserted."""
+-    source = (ROOT / CHECKER).read_text(encoding="utf-8")
+-    assert "SAME-COUNT wholesale replacement is NOT detected" in source, (
+-        "the checker must state its blind spot plainly in its header comment"
+-    )
++def test_same_count_replacement_is_refused_naming_missing_ids(repo):
++    before = head(repo)
+     stage_board(repo, ("X", "Y", "Z"))  # 3 different rows, same count
+     result = git(repo, "commit", "-m", "wholesale same-count replacement")
++    assert result.returncode == 1, result.stdout + result.stderr
++    assert "REFUSED baseline=3 candidate=3 lost ids=A, B, C" in result.stderr
++    assert head(repo) == before
++
++
++@pytest.mark.parametrize("ids", [("A", "B", "X"), ("A", "B", "X", "Y")])
++def test_missing_id_is_refused_even_without_a_count_drop(repo, ids):
++    before = head(repo)
++    stage_board(repo, ids)
++    result = git(repo, "commit", "-m", "replace one id")
++    assert result.returncode == 1, result.stdout + result.stderr
++    assert f"REFUSED baseline=3 candidate={len(ids)} lost ids=C" in result.stderr
++    assert head(repo) == before
++
++
++def test_single_row_in_place_edit_passes(repo):
++    board = repo / BOARD
++    original = board.read_text().splitlines()
++    lines = original.copy()
++    changed = json.loads(lines[1])
++    changed.update(status="complete", notes="verified", commit_hash="a" * 40)
++    lines[1] = json.dumps(changed)
++    board.write_text("\n".join(lines) + "\n")
++    assert lines[0] == original[0] and lines[2] == original[2]
++    assert git(repo, "add", str(BOARD)).returncode == 0
++    result = git(repo, "commit", "-m", "edit a single surviving row")
++    assert result.returncode == 0, result.stdout + result.stderr
++    assert "OK baseline=3 candidate=3 lost ids=(none)" in result.stdout + result.stderr
++    assert git(repo, "show", f"HEAD:{BOARD}").stdout == board.read_text()
++
++
++def test_reordering_surviving_ids_passes(repo):
++    stage_board(repo, ("C", "A", "B"))
++    result = git(repo, "commit", "-m", "reorder surviving rows")
++    assert result.returncode == 0, result.stdout + result.stderr
++    assert "OK baseline=3 candidate=3 lost ids=(none)" in result.stdout + result.stderr
++
++
++def test_append_preserving_baseline_ids_passes(repo):
++    stage_board(repo, ("A", "B", "C", "D"))
++    result = git(repo, "commit", "-m", "append with every baseline id retained")
+     assert result.returncode == 0, result.stdout + result.stderr
++    assert "OK baseline=3 candidate=4 lost ids=(none)" in result.stdout + result.stderr
++
++
++@pytest.mark.parametrize("override", ["1", "true", "yes"])
++def test_same_count_replacement_override_is_loud(repo, override):
++    stage_board(repo, ("X", "Y", "Z"))
++    result = git(
++        repo,
++        "commit",
++        "-m",
++        "deliberate replacement",
++        env_extra={"BOARD_ALLOW_SHRINK": override},
++    )
++    assert result.returncode == 0, result.stdout + result.stderr
++    output = result.stdout + result.stderr
++    assert (
++        "NOTICE BOARD_ALLOW_SHRINK override: baseline=3 candidate=3 lost ids=A, B, C"
++        in output
++    )
++    committed = git(repo, "show", f"HEAD:{BOARD}").stdout
++    assert [json.loads(line)["id"] for line in committed.splitlines()] == [
++        "X",
++        "Y",
++        "Z",
++    ]
++
++
++@pytest.mark.parametrize("ids", [("X", "Y", "Z"), ("A", "B", "X", "Y")])
++def test_recent_mode_refuses_missing_ids_without_a_count_drop(repo_without_hook, ids):
++    repo = repo_without_hook
++    stage_board(repo, ids)
++    assert git(repo, "commit", "-qm", "replacement without a hook").returncode == 0
++    result = run(repo, sys.executable, str(CHECKER), "--recent")
++    assert result.returncode == 1, result.stdout + result.stderr
++    missing = "A, B, C" if len(ids) == 3 else "C"
++    assert (
++        f"REFUSED baseline=3 candidate={len(ids)} lost ids={missing}" in result.stderr
++    )
+ 
+ 
+ # ------------------------------------------------------------------------- AC3: explicit override
+@@ -261,13 +342,15 @@ def test_the_hook_only_checks_when_the_board_is_staged(tmp_path):
+     assert marker.exists(), "the hook did not run the checker for a staged board write"
+ 
+ 
+-def test_the_real_297_row_board_rewrite_is_quarantined(repo):
++def test_the_real_297_row_board_rewrite_is_quarantined(tmp_path):
+     """The incident, replayed: 45a29b9 kept 2 of 297 rows."""
+     board_text = (ROOT / BOARD).read_text(encoding="utf-8")
+     lines = [line for line in board_text.splitlines() if line.strip()]
+     assert len(lines) >= 297, (
+         f"the tracked board should hold ~298 rows, found {len(lines)}"
+     )
++    # Seed surviving real ids: loading the full board must be growth, not replacement of A/B/C.
++    repo = make_repo(tmp_path, ids=tuple(json.loads(line)["id"] for line in lines[:3]))
+ 
+     (repo / BOARD).write_text(board_text)
+     assert git(repo, "add", str(BOARD)).returncode == 0

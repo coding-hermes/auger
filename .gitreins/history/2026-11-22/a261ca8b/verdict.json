@@ -1,0 +1,287 @@
+{
+  "task_id": "AUG-195",
+  "task_title": "board_shrink_check compares row COUNT only: same-count wholesale replacement passes undetected",
+  "task_criteria": [
+    "AC1: checker compares row identity so a same-count wholesale replacement on a scratch clone is refused exit 1 naming changed ids. AC2: legit in-place single-row edits still pass exit 0. AC3: existing AUG-194 tests stay green; new tests cover the same-count-replacement refusal."
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "4de11c47515afa27e85b887b6a36dacaf7ae1078",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "d294c0b71c0b3fe4440a6f9fa37d3a4583fb1a1f1893f3bfb47956a0b32dae21",
+  "working_tree_dirty_path_count": 682,
+  "items": [
+    {
+      "criterion": "AC1: checker compares row identity so a same-count wholesale replacement on a scratch clone is refused exit 1 naming changed ids. AC2: legit in-place single-row edits still pass exit 0. AC3: existing AUG-194 tests stay green; new tests cover the same-count-replacement refusal.",
+      "status": "PASS",
+      "detail": "AC1: scripts/board_shrink_check.py:175 computes lost = sorted(old[1]-new[1]) from baseline vs candidate id sets; line 186 'if new[0] < old[0] or lost:' refuses on missing identity regardless of count; lines 187-200 print 'REFUSED' naming the lost ids. Manual scratch-repo run this session (git init, 3 rows A/B/C, staged X/Y/Z): 'board-shrink: REFUSED baseline=3 candidate=3 lost ids=A, B, C' exit=1; same refusal exit=1 via '--recent' (CI mode) after the replacement landed. The commit message of 4de11c4 confirms the pre-fix code was count-only ('if new[0] < old[0]' alone) with a test asserting the hole. AC2: manual scratch run, in-place edit of one row -> 'board-shrink: OK baseline=3 candidate=3 lost ids=(none)' exit=0; BOARD_ALLOW_SHRINK=1 replacement -> 'NOTICE BOARD_ALLOW_SHRINK override ... SHRINK ACCEPTED' exit=0. AC3: fresh run 'python3 -m pytest tests/test_board_shrink_check.py -q' exit_code=0, '29 passed in 4.47s' \u2014 the 19 pre-existing AUG-194 arms (shrink, delete, override, hook-skip, 297-row replay, recent mode, shallow fail-closed, CI wiring) all green plus new arms test_same_count_replacement_is_refused_naming_missing_ids (tests/test_board_shrink_check.py:194), test_missing_id_is_refused_even_without_a_count_drop (:208), test_recent_mode_refuses_missing_ids_without_a_count_drop (:283). tests/test_ci_boardctl_install.py also green (9 passed). Full gate battery (bash tests/gate.sh, .gitreins/config.yaml:15) is environment-blocked here (tier-1 tests stage exit 2: 'ERROR: DuckBrain URL missing'), not red because of this diff; ruff check + ruff format --check on both changed files pass."
+    },
+    {
+      "criterion": "Derived 0 \u2014 reachability: the fixed checker is wired into both enforcement points (this repo's real pre-commit hook and CI), not just tested",
+      "status": "PASS",
+      "detail": ".git/hooks/pre-commit (this repo, read this session) contains the managed block: 'git diff --cached --name-only -- .coding-hermes/board/tasks.jsonl' then 'python3 \"scripts/board_shrink_check.py\" || exit 1'; .github/workflows/ci.yml:71 runs 'python3 scripts/board_shrink_check.py --recent' (post-commit mode for CI) and ci.yml:149 runs 'python3 -m pytest -q tests/test_board_shrink_check.py'; tests/gate.sh:244 pytest arm names tests/test_board_shrink_check.py, asserted by test_the_gate_pytest_arm_names_this_file (tests/test_board_shrink_check.py:420-434). The refusal is reachable from the actual commit path.",
+      "derived": true
+    },
+    {
+      "criterion": "Derived 1 \u2014 back-compat: traffic AUG-194 allowed still passes (append, reordering, first-board-add, explicit override), and the real board keeps landing",
+      "status": "PASS",
+      "detail": "tests/test_board_shrink_check.py: test_append_preserving_baseline_ids_passes (:270, 'OK baseline=3 candidate=4'), test_reordering_surviving_ids_passes (:248), test_adding_the_board_for_the_first_time_passes (:186), all three override spellings in test_same_count_replacement_override_is_loud (:222) \u2014 all in the 29-passed run. End-to-end: real board commit 282a0c9 (in-place row edit + 3 appends to the live board) landed immediately before the fix commit through the same hook.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "no_concerns_found",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": false,
+      "any_failed": true,
+      "summary": "  \u2717 tests: scanners: nice=nice -n 10\n  \u2713 lint: scanners: nice=nice -n 10\n  \u2717 secrets: secrets: scanners=gitleaks+builtin cross-check",
+      "steps": [
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": false,
+          "output": "scanners: nice=nice -n 10\ngate pytest interpreter: /home/kara/auger/.venv/bin/python\nERROR: DuckBrain URL missing \u2014 set DUCKBRAIN_URL before running the live gate (or use AUGER_CI=1 on hosted CI).\n",
+          "error": "",
+          "data": {
+            "exit_code": 2
+          }
+        },
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": false,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nsecrets: gitleaks bound=timeout 600s (0=off)\nscanners: nice=nice -n 10\n1:26AM INF scanned ~10998550 bytes (11 MB) in 2.5s\n1:26AM WRN leaks found: 2\nsecrets: gitleaks: findings found (exit 1)\nsecrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: builtin cross-check: Scanned 479 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 1,
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 AC1: checker compares row identity so a same-count wholesale replacement on a scratch clone is refused exit 1 naming changed ids. AC2: legit in-place single-row edits still pass exit 0. AC3: existing AUG-194 tests stay green; new tests cover the same-count-replacement refusal.: AC1: scripts/board_shrink_check.py:175 computes lost = sorted(old[1]-new[1]) from baseline vs candidate id sets; line 186 'if new[0] < old[0] or lost:' refuses on missing identity regardless of count; lines 187-200 print 'REFUSED' naming the lost ids. Manual scratch-repo run this session (git init, 3 rows A/B/C, staged X/Y/Z): 'board-shrink: REFUSED baseline=3 candidate=3 lost ids=A, B, C' exit=1; same refusal exit=1 via '--recent' (CI mode) after the replacement landed. The commit message of 4de11c4 confirms the pre-fix code was count-only ('if new[0] < old[0]' alone) with a test asserting the hole. AC2: manual scratch run, in-place edit of one row -> 'board-shrink: OK baseline=3 candidate=3 lost ids=(none)' exit=0; BOARD_ALLOW_SHRINK=1 replacement -> 'NOTICE BOARD_ALLOW_SHRINK override ... SHRINK ACCEPTED' exit=0. AC3: fresh run 'python3 -m pytest tests/test_board_shrink_check.py -q' exit_code=0, '29 passed in 4.47s' \u2014 the 19 pre-existing AUG-194 arms (shrink, delete, override, hook-skip, 297-row replay, recent mode, shallow fail-closed, CI wiring) all green plus new arms test_same_count_replacement_is_refused_naming_missing_ids (tests/test_board_shrink_check.py:194), test_missing_id_is_refused_even_without_a_count_drop (:208), test_recent_mode_refuses_missing_ids_without_a_count_drop (:283). tests/test_ci_boardctl_install.py also green (9 passed). Full gate battery (bash tests/gate.sh, .gitreins/config.yaml:15) is environment-blocked here (tier-1 tests stage exit 2: 'ERROR: DuckBrain URL missing'), not red because of this diff; ruff check + ruff format --check on both changed files pass.\n  \u2713 Derived 0 \u2014 reachability: the fixed checker is wired into both enforcement points (this repo's real pre-commit hook and CI), not just tested: .git/hooks/pre-commit (this repo, read this session) contains the managed block: 'git diff --cached --name-only -- .coding-hermes/board/tasks.jsonl' then 'python3 \"scripts/board_shrink_check.py\" || exit 1'; .github/workflows/ci.yml:71 runs 'python3 scripts/board_shrink_check.py --recent' (post-commit mode for CI) and ci.yml:149 runs 'python3 -m pytest -q tests/test_board_shrink_check.py'; tests/gate.sh:244 pytest arm names tests/test_board_shrink_check.py, asserted by test_the_gate_pytest_arm_names_this_file (tests/test_board_shrink_check.py:420-434). The refusal is reachable from the actual commit path.\n  \u2713 Derived 1 \u2014 back-compat: traffic AUG-194 allowed still passes (append, reordering, first-board-add, explicit override), and the real board keeps landing: tests/test_board_shrink_check.py: test_append_preserving_baseline_ids_passes (:270, 'OK baseline=3 candidate=4'), test_reordering_surviving_ids_passes (:248), test_adding_the_board_for_the_first_time_passes (:186), all three override spellings in test_same_count_replacement_override_is_loud (:222) \u2014 all in the 29-passed run. End-to-end: real board commit 282a0c9 (in-place row edit + 3 appends to the live board) landed immediately before the fix commit through the same hook.\nCommit 4de11c4 changes the checker to refuse any missing baseline id regardless of count (exit 1 naming lost ids), keeps legit edits/reorders/appends and the loud override at exit 0 (manually proven on a scratch clone in both staged and --recent modes), and its 29-test suite passes fresh with the fix wired into the real pre-commit hook and ci.yml. [uncovered failure paths: failure mode 0 (A wholesale replacement whose rows all carry ids that still survive as a SET escapes the identity check (e.g. every baseline id duplicated, per-id multiplicity unchecked) \u2014 explicitly documented as out of scope): detected_by is empty \u2014 uncovered failure path]",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 AC1: checker compares row identity so a same-count wholesale replacement on a scratch clone is refused exit 1 naming changed ids. AC2: legit in-place single-row edits still pass exit 0. AC3: existing AUG-194 tests stay green; new tests cover the same-count-replacement refusal.: AC1: scripts/board_shrink_check.py:175 computes lost = sorted(old[1]-new[1]) from baseline vs candidate id sets; line 186 'if new[0] < old[0] or lost:' refuses on missing identity regardless of count; lines 187-200 print 'REFUSED' naming the lost ids. Manual scratch-repo run this session (git init, 3 rows A/B/C, staged X/Y/Z): 'board-shrink: REFUSED baseline=3 candidate=3 lost ids=A, B, C' exit=1; same refusal exit=1 via '--recent' (CI mode) after the replacement landed. The commit message of 4de11c4 confirms the pre-fix code was count-only ('if new[0] < old[0]' alone) with a test asserting the hole. AC2: manual scratch run, in-place edit of one row -> 'board-shrink: OK baseline=3 candidate=3 lost ids=(none)' exit=0; BOARD_ALLOW_SHRINK=1 replacement -> 'NOTICE BOARD_ALLOW_SHRINK override ... SHRINK ACCEPTED' exit=0. AC3: fresh run 'python3 -m pytest tests/test_board_shrink_check.py -q' exit_code=0, '29 passed in 4.47s' \u2014 the 19 pre-existing AUG-194 arms (shrink, delete, override, hook-skip, 297-row replay, recent mode, shallow fail-closed, CI wiring) all green plus new arms test_same_count_replacement_is_refused_naming_missing_ids (tests/test_board_shrink_check.py:194), test_missing_id_is_refused_even_without_a_count_drop (:208), test_recent_mode_refuses_missing_ids_without_a_count_drop (:283). tests/test_ci_boardctl_install.py also green (9 passed). Full gate battery (bash tests/gate.sh, .gitreins/config.yaml:15) is environment-blocked here (tier-1 tests stage exit 2: 'ERROR: DuckBrain URL missing'), not red because of this diff; ruff check + ruff format --check on both changed files pass.\n  \u2713 Derived 0 \u2014 reachability: the fixed checker is wired into both enforcement points (this repo's real pre-commit hook and CI), not just tested: .git/hooks/pre-commit (this repo, read this session) contains the managed block: 'git diff --cached --name-only -- .coding-hermes/board/tasks.jsonl' then 'python3 \"scripts/board_shrink_check.py\" || exit 1'; .github/workflows/ci.yml:71 runs 'python3 scripts/board_shrink_check.py --recent' (post-commit mode for CI) and ci.yml:149 runs 'python3 -m pytest -q tests/test_board_shrink_check.py'; tests/gate.sh:244 pytest arm names tests/test_board_shrink_check.py, asserted by test_the_gate_pytest_arm_names_this_file (tests/test_board_shrink_check.py:420-434). The refusal is reachable from the actual commit path.\n  \u2713 Derived 1 \u2014 back-compat: traffic AUG-194 allowed still passes (append, reordering, first-board-add, explicit override), and the real board keeps landing: tests/test_board_shrink_check.py: test_append_preserving_baseline_ids_passes (:270, 'OK baseline=3 candidate=4'), test_reordering_surviving_ids_passes (:248), test_adding_the_board_for_the_first_time_passes (:186), all three override spellings in test_same_count_replacement_override_is_loud (:222) \u2014 all in the 29-passed run. End-to-end: real board commit 282a0c9 (in-place row edit + 3 appends to the live board) landed immediately before the fix commit through the same hook.\nCommit 4de11c4 changes the checker to refuse any missing baseline id regardless of count (exit 1 naming lost ids), keeps legit edits/reorders/appends and the loud override at exit 0 (manually proven on a scratch clone in both staged and --recent modes), and its 29-test suite passes fresh with the fix wired into the real pre-commit hook and ci.yml. [uncovered failure paths: failure mode 0 (A wholesale replacement whose rows all carry ids that still survive as a SET escapes the identity check (e.g. every baseline id duplicated, per-id multiplicity unchecked) \u2014 explicitly documented as out of scope): detected_by is empty \u2014 uncovered failure path]",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "AC1: checker compares row identity so a same-count wholesale replacement on a scratch clone is refused exit 1 naming changed ids. AC2: legit in-place single-row edits still pass exit 0. AC3: existing AUG-194 tests stay green; new tests cover the same-count-replacement refusal.",
+                "status": "PASS",
+                "detail": "AC1: scripts/board_shrink_check.py:175 computes lost = sorted(old[1]-new[1]) from baseline vs candidate id sets; line 186 'if new[0] < old[0] or lost:' refuses on missing identity regardless of count; lines 187-200 print 'REFUSED' naming the lost ids. Manual scratch-repo run this session (git init, 3 rows A/B/C, staged X/Y/Z): 'board-shrink: REFUSED baseline=3 candidate=3 lost ids=A, B, C' exit=1; same refusal exit=1 via '--recent' (CI mode) after the replacement landed. The commit message of 4de11c4 confirms the pre-fix code was count-only ('if new[0] < old[0]' alone) with a test asserting the hole. AC2: manual scratch run, in-place edit of one row -> 'board-shrink: OK baseline=3 candidate=3 lost ids=(none)' exit=0; BOARD_ALLOW_SHRINK=1 replacement -> 'NOTICE BOARD_ALLOW_SHRINK override ... SHRINK ACCEPTED' exit=0. AC3: fresh run 'python3 -m pytest tests/test_board_shrink_check.py -q' exit_code=0, '29 passed in 4.47s' \u2014 the 19 pre-existing AUG-194 arms (shrink, delete, override, hook-skip, 297-row replay, recent mode, shallow fail-closed, CI wiring) all green plus new arms test_same_count_replacement_is_refused_naming_missing_ids (tests/test_board_shrink_check.py:194), test_missing_id_is_refused_even_without_a_count_drop (:208), test_recent_mode_refuses_missing_ids_without_a_count_drop (:283). tests/test_ci_boardctl_install.py also green (9 passed). Full gate battery (bash tests/gate.sh, .gitreins/config.yaml:15) is environment-blocked here (tier-1 tests stage exit 2: 'ERROR: DuckBrain URL missing'), not red because of this diff; ruff check + ruff format --check on both changed files pass."
+              },
+              {
+                "criterion": "Derived 0 \u2014 reachability: the fixed checker is wired into both enforcement points (this repo's real pre-commit hook and CI), not just tested",
+                "status": "PASS",
+                "detail": ".git/hooks/pre-commit (this repo, read this session) contains the managed block: 'git diff --cached --name-only -- .coding-hermes/board/tasks.jsonl' then 'python3 \"scripts/board_shrink_check.py\" || exit 1'; .github/workflows/ci.yml:71 runs 'python3 scripts/board_shrink_check.py --recent' (post-commit mode for CI) and ci.yml:149 runs 'python3 -m pytest -q tests/test_board_shrink_check.py'; tests/gate.sh:244 pytest arm names tests/test_board_shrink_check.py, asserted by test_the_gate_pytest_arm_names_this_file (tests/test_board_shrink_check.py:420-434). The refusal is reachable from the actual commit path.",
+                "derived": true
+              },
+              {
+                "criterion": "Derived 1 \u2014 back-compat: traffic AUG-194 allowed still passes (append, reordering, first-board-add, explicit override), and the real board keeps landing",
+                "status": "PASS",
+                "detail": "tests/test_board_shrink_check.py: test_append_preserving_baseline_ids_passes (:270, 'OK baseline=3 candidate=4'), test_reordering_surviving_ids_passes (:248), test_adding_the_board_for_the_first_time_passes (:186), all three override spellings in test_same_count_replacement_override_is_loud (:222) \u2014 all in the 29-passed run. End-to-end: real board commit 282a0c9 (in-place row edit + 3 appends to the live board) landed immediately before the fix commit through the same hook.",
+                "derived": true
+              }
+            ],
+            "summary": "Commit 4de11c4 changes the checker to refuse any missing baseline id regardless of count (exit 1 naming lost ids), keeps legit edits/reorders/appends and the loud override at exit 0 (manually proven on a scratch clone in both staged and --recent modes), and its 29-test suite passes fresh with the fix wired into the real pre-commit hook and ci.yml. [uncovered failure paths: failure mode 0 (A wholesale replacement whose rows all carry ids that still survive as a SET escapes the identity check (e.g. every baseline id duplicated, per-id multiplicity unchecked) \u2014 explicitly documented as out of scope): detected_by is empty \u2014 uncovered failure path]",
+            "provenance": {
+              "model": "glm-5.3-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "glm-5.3-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-195\"}",
+          "exit_code": 0,
+          "output_sha": "0faa0f01569e7a1fff72fee54d798bc39bbd7884dfc4453cc96914059c061fdc"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"regex\": \"board_shrink_check\"}",
+          "exit_code": 0,
+          "output_sha": "dfc45ca030d43b31ffb6a6c08e373463bb1a90690bb4772456143f8dc3fa2bba"
+        },
+        {
+          "tool": "run_command",
+          "command": "git log --oneline -5 && git status --short | head -20",
+          "exit_code": 0,
+          "output_sha": "f9109c410a1f43b13311ac038e9afd1e6023d4407f13b8e13fc45b1d35528315"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"scripts/board_shrink_check.py\"}",
+          "exit_code": 0,
+          "output_sha": "4ff4124d454ff9ea9fcc00ddc549a8a40edfd069d01bc4d39cdf193a3eb6c888"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"tests/test_board_shrink_check.py\"}",
+          "exit_code": 0,
+          "output_sha": "d9c5c79a6e60eceaf2f55d3be3125818180dad9884e9332662519e17fb138644"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"offset\": 400, \"path\": \"tests/test_board_shrink_check.py\"}",
+          "exit_code": 0,
+          "output_sha": "92422361083d9cdc84ff6eabb123f4eab65b55033e9d62ec5afb78d06ecf0ed0"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && python3 -m pytest tests/test_board_shrink_check.py -q 2>&1 | tail -15",
+          "exit_code": 0,
+          "output_sha": "4981b93d64869e01ccb3f76977222ae4deac9f07a12be0aefebc16c2556c79fb"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"scripts/install_board_guard.py\"}",
+          "exit_code": 0,
+          "output_sha": "408a44b21b2db59e3ea61f95af8a8896155b040ccd55b111114d2c846e06f043"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show 4de11c4 --stat && echo ---- && git show 4de11c4 -- scripts/board_shrink_check.py | head -80",
+          "exit_code": 0,
+          "output_sha": "446a93e79108fbac3028e30576985e8cd4604bb5bdc94114d9156eb53a171404"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show 4de11c4 -- scripts/board_shrink_check.py | sed -n '80,200p'",
+          "exit_code": 0,
+          "output_sha": "7ae37275ae87e40106fdd88701bf84e103d06c8f5fc12351cc3da2c79f76663a"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show 4de11c4 -- tests/test_board_shrink_check.py | grep -E '^[-+]' | grep -vE '^[-+][-+]' | head -120",
+          "exit_code": 0,
+          "output_sha": "4edb4dcba4ab97eda1632131b7b68c081556b9c823f9e0fcd66a5b43b01559e6"
+        },
+        {
+          "tool": "run_command",
+          "command": "set -e\nS=$(mktemp -d)\ncd \"$S\"\ngit init -q scratch && cd scratch\ngit config user.email t@t.invalid && git config user.name T\nmkdir -p scripts .coding-hermes/board\ncp /home/kara/auger/scripts/board_shrink_check.py scripts/\nprintf 'A\\n' > README.md\nfor id in A B C; do printf '{\"id\": \"%s\"}\\n' \"$id\" >> .coding-hermes/board/tasks.jsonl; done\ngit add . && git commit -qm initial\necho \"=== AC1: same-count wholesale replacement (staged mode) ===\"\nprintf '{\"id\": \"X\"}\\n{\"id\": \"Y\"}\\n{\"id\": \"Z\"}\\n' > .coding-hermes/board/tasks.jsonl\ngit add .coding-hermes/board/tasks.jsonl\npython3 scripts/board_shrink_check.py; echo \"exit=$?\"\necho \"=== AC2: legit in-place single-row edit ===\"\nprintf '{\"id\": \"A\"}\\n{\"id\": \"B\", \"status\": \"complete\"}\\n{\"id\": \"C\"}\\n' > .coding-hermes/board/tasks.jsonl\ngit add .coding-hermes/board/tasks.jsonl\npython3 scripts/board_shrink_check.py; echo \"exit=$?\"\necho \"=== AC1 --recent mode (CI): replacement already landed ===\"\ngit commit -qm replacement\npython3 scripts/board_shrink_check.py --recent; echo \"exit=$?\"\necho \"=== override still lands loudly ===\"\nprintf '{\"id\": \"Q\"}\\n{\"id\": \"R\"}\\n{\"id\": \"S\"}\\n' > .coding-hermes/board/tasks.jsonl\ngit add .coding-hermes/board/tasks.jsonl\nBOARD_ALLOW_SHRINK=1 python3 scripts/board_shrink_check.py; echo \"exit=$?\"\ncd / && rm -rf \"$S\"",
+          "exit_code": 1,
+          "output_sha": "4e47039b473e93c867f78c63b7d8c37b3e962bbdcab04ffb9eb16f668c67504d"
+        },
+        {
+          "tool": "run_command",
+          "command": "S=$(mktemp -d); cd \"$S\"; git init -q scratch && cd scratch\ngit config user.email t@t.invalid && git config user.name T\nmkdir -p scripts .coding-hermes/board\ncp /home/kara/auger/scripts/board_shrink_check.py scripts/\nprintf 'A\\n' > README.md\nfor id in A B C; do printf '{\"id\": \"%s\"}\\n' \"$id\" >> .coding-hermes/board/tasks.jsonl; done\ngit add . && git commit -qm initial\necho \"=== AC2: legit in-place single-row edit ===\"\nprintf '{\"id\": \"A\"}\\n{\"id\": \"B\", \"status\": \"complete\"}\\n{\"id\": \"C\"}\\n' > .coding-hermes/board/tasks.jsonl\ngit add .coding-hermes/board/tasks.jsonl\npython3 scripts/board_shrink_check.py; echo \"exit=$?\"\necho \"=== AC1 --recent mode (CI): replacement already landed ===\"\nprintf '{\"id\": \"X\"}\\n{\"id\": \"Y\"}\\n{\"id\": \"Z\"}\\n' > .coding-hermes/board/tasks.jsonl\ngit commit -aqm replacement\npython3 scripts/board_shrink_check.py --recent; echo \"exit=$?\"\necho \"=== override still lands loudly ===\"\nprintf '{\"id\": \"Q\"}\\n{\"id\": \"R\"}\\n{\"id\": \"S\"}\\n' > .coding-hermes/board/tasks.jsonl\ngit add .coding-hermes/board/tasks.jsonl\nBOARD_ALLOW_SHRINK=1 python3 scripts/board_shrink_check.py; echo \"exit=$?\"\ncd /; rm -rf \"$S\"",
+          "exit_code": 0,
+          "output_sha": "e69dfeb4ec07aa331e87e83487194e0907b4c07e8fe267b276560b51e6827d1f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger\necho \"=== this repo's pre-commit hook ===\"\ngit rev-parse --git-path hooks\ncat \"$(git rev-parse --git-path hooks)/pre-commit\" 2>/dev/null | head -20\necho \"=== ci.yml shrink step ===\"\ngrep -n -B2 -A4 'board_shrink_check' .github/workflows/ci.yml\necho \"=== ruff on changed files ===\"\nruff check scripts/board_shrink_check.py tests/test_board_shrink_check.py && ruff format --check scripts/board_shrink_check.py tests/test_board_shrink_check.py",
+          "exit_code": 0,
+          "output_sha": "444a4d89e3e54ea8a05de13752c9d7edbed4a70b81fdabbe8a68c2a61a367fbd"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n -A3 'test_command' .gitreins/config.yaml | head -10 && echo ---- && git show 4de11c4:tests/test_board_shrink_check.py > /dev/null && echo \"commit carries the test file\" && python3 -c \"\nimport ast,sys\nsrc=open('scripts/board_shrink_check.py').read()\nast.parse(src); print('checker parses OK')\"",
+          "exit_code": 0,
+          "output_sha": "2f140e04470284efd3ebae6dea1b18235228c7c900e67d88398d05f18cd97f79"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Derived 0 \\u2014 Reachability: the fixed checker is actually wired into both enforcement points \\u2014 this repo's real pre-commit hook (.git/hooks/pre-commit managed block runs scripts/board_shrink_check.py when the board is staged) and CI (.github/workflows/ci.yml runs scripts/board_shrink_check.py --recent at line 71 and tests/test_board_shrink_check.py at line 149); tests/gate.sh's pytest arm names tests/test_board_shrink_check.py. Otherwise the new identity check protects nothing.\", \"key\": \"derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "11558b4e19f86aac7200266b42117abcc1801b23cebd945aec01a80ed0ca673a"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -rln 'board_shrink\\|install_board_guard\\|SAME-COUNT' tests/ scripts/ | grep -v test_board_shrink_check.py ; echo \"---\"; python3 -m pytest tests/test_ci_boardctl_install.py -q 2>&1 | tail -3",
+          "exit_code": 0,
+          "output_sha": "95a1a2535b672e57bdb99d2edb3d4bc34eb5dc9ad3cf619bae5ac3c23d18513a"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git diff HEAD~1 HEAD --stat && echo ---- && git show 282a0c9 --stat | tail -5",
+          "exit_code": 0,
+          "output_sha": "19b7909a44cc51c24fd5c40cfd3c7defc8af467e0fcbe5688344d923fb5e32ea"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Derived 1 \\u2014 Back-compat of non-shrink traffic: the identity check must not begin refusing traffic AUG-194 allowed \\u2014 append, reordering, first-board-add, and override paths keep exit 0. Evidence: manual runs (append implied by test_append_preserving_baseline_ids_passes; reordering OK; override NOTICE exit 0) and tests/test_board_shrink_check.py:222-275.\", \"key\": \"derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "eda4de7b0874bc223be15262cc497a53698317ac80ea201baf844a9922e7f11b"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"verified_0 (the single given criterion, AC1+AC2+AC3): PASS.\\nAC1 \\u2014 scripts/board_shrink_check.py:175 computes lost = sorted(old[1]-new[1]) from id sets; :186 `if new[0] < old[0] or lost:` refuses on identity regardless of count; refusal message names lost ids. Manual scratch-repo run (this session): `board-shrink: REFUSED baseline=3 candidate=3 lost ids=A, B, C` exit=1 (staged mode) AND exit=1 via `--recent` after the replacement landed. Commit-message text confirms pre-fix behavior was count-only.\\nAC2 \\u2014 manual scratch-repo run: in-place edit of one row -> `board-shrink: OK baseline=3 candidate=3 lost ids=(none)` exit=0; BOARD_ALLOW_SHRINK=1 override of a replacement -> NOTICE exit=0. tests/test_board_shrink_check.py test_single_row_in_place_edit_passes / test_reordering_surviving_ids_passes / test_append_preserving_baseline_ids_passes.\\nAC3 \\u2014 fresh run this session: `python3 -m pytest tests/test_board_shrink_check.py -q` exit 0, `29 passed in 4.47s` (all 19 pre-existing AUG-194 arms green + new same-count-refusal arms). Also tests/test_ci_boardctl_install.py 9 passed. Full gate battery (bash tests/gate.sh per .gitreins/config.yaml:15) needs live DUCKBRAIN_URL \\u2014 environment-blocked in this session (tier-1 tests stage exit 2), not red because of this diff.\\nderived_0 (reachability): PASS \\u2014 real .git/hooks/pre-commit managed block runs python3 scripts/board_shrink_check.py when the board is staged; .github/workflows/ci.yml:71 runs `python3 scripts/board_shrink_check.py --recent`; ci.yml:149 runs the test file; tests/gate.sh pytest arm names tests/test_board_shrink_check.py (asserted by test_the_gate_pytest_arm_names_this_file).\\nderived_1 (back-compat): PASS \\u2014 append/reorder/override keep exit 0; real board commit 282a0c9 (in-place row edit + 3 appends on the real board) landed through the hook.\\nLint: `ruff check` + `ruff format --check` on both changed files -> clean. Fix commit 4de11c4 touches only scripts/board_shrink_check.py + tests/test_board_shrink_check.py.\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "cc208040b6706530ae4bdbd1a9cd95f989a8ffbe82d9904efe765fd0a303a2ce"
+        }
+      ]
+    }
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "The diff is pure bookkeeping (appended event line, board task AUG-197, and gitreins task AUG-195) with no code changes; the appended records are internally consistent with the JSONL/YAML shapes, key sets, id/timestamp ordering, and status conventions of the surrounding entries.",
+    "review_state": {
+      "emitted": [],
+      "carried": []
+    }
+  },
+  "summary": "Stage tier1: FAIL\n    \u2717 tests: scanners: nice=nice -n 10\n  \u2713 lint: scanners: nice=nice -n 10\n  \u2717 secrets: secrets: scanners=gitleaks+builtin cross-check\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 AC1: checker compares row identity so a same-count wholesale replacement on a scratch clone is refused exit 1 naming changed ids. AC2: legit in-place single-row edits still pass exit 0. AC3: existing AUG-194 tests stay green; new tests cover the same-count-replacement refusal.: AC1: scripts/board_shrink_check.py:175 computes lost = sorted(old[1]-new[1]) from baseline vs candidate id sets; line 186 'if new[0] < old[0] or lost:' refuses on missing identity regardless of count; lines 187-200 print 'REFUSED' naming the lost ids. Manual scratch-repo run this session (git init, 3 rows A/B/C, staged X/Y/Z): 'board-shrink: REFUSED baseline=3 candidate=3 lost ids=A, B, C' exit=1; same refusal exit=1 via '--recent' (CI mode) after the replacement landed. The commit message of 4de11c4 confirms the pre-fix code was count-only ('if new[0] < old[0]' alone) with a test asserting the hole. AC2: manual scratch run, in-place edit of one row -> 'board-shrink: OK baseline=3 candidate=3 lost ids=(none)' exit=0; BOARD_ALLOW_SHRINK=1 replacement -> 'NOTICE BOARD_ALLOW_SHRINK override ... SHRINK ACCEPTED' exit=0. AC3: fresh run 'python3 -m pytest tests/test_board_shrink_check.py -q' exit_code=0, '29 passed in 4.47s' \u2014 the 19 pre-existing AUG-194 arms (shrink, delete, override, hook-skip, 297-row replay, recent mode, shallow fail-closed, CI wiring) all green plus new arms test_same_count_replacement_is_refused_naming_missing_ids (tests/test_board_shrink_check.py:194), test_missing_id_is_refused_even_without_a_count_drop (:208), test_recent_mode_refuses_missing_ids_without_a_count_drop (:283). tests/test_ci_boardctl_install.py also green (9 passed). Full gate battery (bash tests/gate.sh, .gitreins/config.yaml:15) is environment-blocked here (tier-1 tests stage exit 2: 'ERROR: DuckBrain URL missing'), not red because of this diff; ruff check + ruff format --check on both changed files pass.\n  \u2713 Derived 0 \u2014 reachability: the fixed checker is wired into both enforcement points (this repo's real pre-commit hook and CI), not just tested: .git/hooks/pre-commit (this repo, read this session) contains the managed block: 'git diff --cached --name-only -- .coding-hermes/board/tasks.jsonl' then 'python3 \"scripts/board_shrink_check.py\" || exit 1'; .github/workflows/ci.yml:71 runs 'python3 scripts/board_shrink_check.py --recent' (post-commit mode for CI) and ci.yml:149 runs 'python3 -m pytest -q tests/test_board_shrink_check.py'; tests/gate.sh:244 pytest arm names tests/test_board_shrink_check.py, asserted by test_the_gate_pytest_arm_names_this_file (tests/test_board_shrink_check.py:420-434). The refusal is reachable from the actual commit path.\n  \u2713 Derived 1 \u2014 back-compat: traffic AUG-194 allowed still passes (append, reordering, first-board-add, explicit override), and the real board keeps landing: tests/test_board_shrink_check.py: test_append_preserving_baseline_ids_passes (:270, 'OK baseline=3 candidate=4'), test_reordering_surviving_ids_passes (:248), test_adding_the_board_for_the_first_time_passes (:186), all three override spellings in test_same_count_replacement_override_is_loud (:222) \u2014 all in the 29-passed run. End-to-end: real board commit 282a0c9 (in-place row edit + 3 appends to the live board) landed immediately before the fix commit through the same hook.\nCommit 4de11c4 changes the checker to refuse any missing baseline id regardless of count (exit 1 naming lost ids), keeps legit edits/reorders/appends and the loud override at exit 0 (manually proven on a scratch clone in both staged and --recent modes), and its 29-test suite passes fresh with the fix wired into the real pre-commit hook and ci.yml. [uncovered failure paths: failure mode 0 (A wholesale replacement whose rows all carry ids that still survive as a SET escapes the identity check (e.g. every baseline id duplicated, per-id multiplicity unchecked) \u2014 explicitly documented as out of scope): detected_by is empty \u2014 uncovered failure path]\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-11-22T06:28:47.989210",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-22T06:28:48.026140+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 15024,
+        "truncated": false,
+        "source": "git show 4de11c47515a"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 9288,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-195"
+  }
+}
