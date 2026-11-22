@@ -26,7 +26,9 @@ a node must install), and npm registry metadata read on 2026-11-05 for the versi
 **I1 — The foreman is always Hermes.** Every lane that grades, closes a row, writes the board, or
 decides "this is done" runs on Hermes, on the node, with the coding-hermes skills loaded. No model
 choice changes this: the foreman owns the evidence chain (`boardctl`, tick accounting, artifact
-digests), and a harness that cannot write the board cannot be the foreman.
+digests), and a harness that cannot write the board cannot be the foreman. This is a policy
+requirement, not a battery measurement: conformance has no lane-role or skills-loaded probe, so I1
+is unmeasured by it.
 
 **I2 — The harness is a per-lane SETTING, not a property of the model.** Any model may run in any
 harness that can host it (§3). "An OpenAI model in Claude Code" and "a Claude model in Codex" are
@@ -58,14 +60,18 @@ harness or DuckBrain. In particular dsh cannot distinguish `model_served` from i
 OMH is an operating layer over Hermes and has no independent exporter. These statuses are
 not changed by a fixture PASS; live capture, DuckBrain transport and F3 R1/R2 remain unverified.
 
-**I4 — Nothing is supported because it is installed.** Support means five green legs in the
-conformance battery (`PASS`/`SKIP`/`FAIL` with a measured value), on a real node, for a real turn.
-`--check` alone is not support.
+**I4 — Nothing is supported because it is installed.** Support requires `check`, `apply`, `vars`,
+`smoke`, and `memory` to pass on a real node for a real turn: five per-harness support families.
+The battery has six leg families: `apply` runs only under `--install`, and `node` is dispatched
+only for `codex`. Its fixture memory rows do not establish the real-node requirement. `--check`
+alone is not support.
 
 **I5 — The node refuses what it cannot run, and says which kind of "cannot".** An unknown or
 uninstallable harness is `harness_unsupported: &lt;name&gt;; node has: &lt;set&gt;`. A harness that exists but
 cannot reach the model's provider is `harness_cannot_host: &lt;harness&gt; &lt;family&gt;` — a different
-failure, because one is fixed by installing and the other only by changing configuration.
+failure, because one is fixed by installing and the other only by changing configuration. This is a
+requirement, not a conformance-battery verdict: the battery does not drive node selection across
+both refusal kinds, so I5 remains unmeasured by it.
 
 ---
   </section>
@@ -80,7 +86,7 @@ failure, because one is fixed by installing and the other only by changing confi
 | **opencode** | `opencode-ai` (npm) / `opencode` | host runs 1.18.29 | general coding agent, OSS-model friendly | adapter in crier; installer check-only. **No v2 artefact exists** (`opencode2` is a squatted `0.0.1-security`; `opencode-ai@latest` is 1.19.5) |
 | **oh-my-pi (omp)** | `@oh-my-pi/pi-coding-agent` (npm) / `pi` adapter alias | **18.16.0**; engine **bun ≥1.4.4**; ~82 MB; repo `can1357/oh-my-pi` | pi's coding agent with session management | `scripts/harness/install-pi-agent.sh` now has a deterministic fixture-backed, user-space ladder; live upstream install and live turn remain **UNVERIFIED** |
 | **codex** | codex CLI / `codex` | **0.166.0** pin, read back as `codex-cli 0.166.0` | OpenAI's coding agent; **`exec` is the measured surface** (`codex exec --json -s &lt;mode&gt; -c model_provider="openai" -m &lt;model&gt; -- &lt;text&gt;`), app-server is `[experimental]` and unused in crier | **MEASURED install** (`scripts/harness/install-codex.sh`: musl tarball, sha256-pinned, user-space under `$HOME/.local/codex/&lt;pin&gt;`, idempotent; the same ladder installs the sha256-pinned `codex-code-mode-host` sidecar beside the binary — without it every exec tool call fails closed and a turn exits 0 having written no artifact, CF-006); adapter in crier (`internal/harness/codex/`). The conformance smoke turn **pins `-c model_provider="openai" -m &lt;model&gt;` on argv**: an ambient `~/.codex/config.toml` may name a router this repo never installed, and a turn that inherits it measures that router, not codex |
-| **claude-code** | `@anthropic-ai/claude-code` (npm) | **2.1.318 pin**, read back as `2.1.318 (Claude Code)` | Anthropic's coding agent | **MEASURED install ladder** (`scripts/harness/install-claude-code.sh`, CF-225: registry integrity + shasum pinned, user-space npm prefix under `$HOME`, idempotent second `--apply`); **absent from crier entirely** (`CRIER-HARNESS-11`), so it is not a *supported* harness — I4 needs the five legs on a node |
+| **claude-code** | `@anthropic-ai/claude-code` (npm) | **2.1.318 pin**, read back as `2.1.318 (Claude Code)` | Anthropic's coding agent | **MEASURED install ladder** (`scripts/harness/install-claude-code.sh`, CF-225: registry integrity + shasum pinned, user-space npm prefix under `$HOME`, idempotent second `--apply`); **absent from crier entirely** (`CRIER-HARNESS-11`), so it is not a *supported* harness — I4 needs five per-harness support families (`check`, `apply`, `vars`, `smoke`, `memory`) on a real node; the battery has six leg families, with `apply` only under `--install` and `node` only for `codex` |
 | **deepseek-harness (dsh)** | `@deepseek-ai/dsh` (npm) / `dsh` | **0.2.1-rc.5** pinned; `latest` on the registry is `0.2.2-rc.1`; repo `deepseek-ai/deepseek-harness` | DeepSeek's own open-source harness: "everything is a plugin" (Cordis); non-interactive surface `dsh headless "&lt;task&gt;"` (`--json` for NDJSON run events) | **MEASURED install ladder** (`scripts/harness/install-dsh.sh`, CF-226: `npm --prefix` under `$HOME/.local/harness/dsh`, registry integrity + shasum pinned, 618 packages / 858 MB, idempotent second `--apply`, version read back `0.2.1-rc.5`) **and one measured turn** (`dsh-turn.txt` carrying a fixed token, `model` read from dsh's own session record, 25 tools registered, `permission/preset=workspace-write`). No crier adapter: the decision is recorded in `specs/HARNESS.md` §"dsh — the adapter decision" |
 
 **Correction recorded, not quietly edited.** The previous revision of this file said "there is no
@@ -159,7 +165,7 @@ needs an additional input declares it in its adapter section and adds it here.
 | Variable | Meaning | Rule |
 |---|---|---|
 | `CF_MODEL` | model id requested by task-router | required |
-| `CF_PROVIDER` | provider lane (`anthropic`, `openai-codex`, `deepseek`, `pi`, `zai`, …) | required |
+| `CF_PROVIDER` | provider lane (`anthropic`, `openai-codex`, `deepseek`, `xkiro`, `pi`, `zai`, …) | required |
 | `CF_BASE_URL` | endpoint the harness must talk to (node router, gateway, or shim) | optional; default = node router |
 | `CF_API_KEY_FILE` | **path** to a mode-600 file holding the key | required for a paid provider; **a value in argv is a FAIL** (AGENTS.md r8) |
 | `CF_WORKDIR` | the clone the harness may write in | required; must be inside `$HOME` |
@@ -174,15 +180,15 @@ Two rules that are cheap now and expensive later: **no credential is ever passed
 **no harness may read a model or a key from the node's ambient environment** — the directive is the
 only source, so two lanes on one node cannot contaminate each other.
 
-**Implemented once.** `scripts/harness/harness-vars.sh` is the single implementation of this
-section: each installer accepts every name below as a flag *and* as a CF_ environment variable,
-refuses a credential value (exit 2, the value never echoed) and an ambient provider key, requires
-the workdir to exist inside `$HOME`, bounds the budget, and records every name it accepted — so no
-declared variable can be accepted and then silently ignored. `scripts/node-bus-worker.py` carries
-the same set from the dispatch's `vars` object into the harness child's environment (scrubbing every
-ambient CF_ variable first) and writes name + set/unset + length into the result envelope, which is
-what lets two runs be compared. `tests/harness-conformance.sh`'s `vars` leg and
-`tests/harness/vars-contract-test.sh` are the proofs, per installer.
+**Target contract, not universal implementation.** `scripts/harness/harness-vars.sh` supplies a
+shared validation implementation, but the existence of that helper does not establish that every
+adapter accepts flags, applies the values to a real run, or enforces all of this section. The
+conformance `vars` leg checks help, recorded names, and two refusal fixtures per selected adapter;
+its fallback to `--check` is not proof of actual runtime consumption. The separate
+`tests/harness/vars-contract-test.sh` exercises additional flag cases when advertised.
+`scripts/node-bus-worker.py` carries variables into the child environment and records a receipt;
+that receipt is not proof that the child used each value. Treat per-adapter runtime wiring and
+unmeasured flag support as unverified, not as universally implemented.
 
 ---
   </section>
@@ -211,19 +217,21 @@ Management surfaces: `install-&lt;harness&gt;.sh --check` (installed? which pin)
   <section id="CF-HARNESS-MATRIX-7-WHAT-WIRED-UP-MEANS-PER-HARN-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
 ## 7. What "wired up" means, per harness
 
-Five legs. A harness is supported when all five are `PASS` on a real node; `SKIP` is acceptable only
-when the reason is named (no credential, no artefact).
+Six leg families, two of them conditional (`apply` only under `--install`, `node` only for
+`codex`). Support requires five per-harness support families to pass on a real node, and `codex`
+additionally requires `node`; a `SKIP` names what is missing but is not a pass or support evidence.
 
-| Leg | Proves |
+| Leg | Required evidence; battery coverage |
 |---|---|
-| `check` | the adapter reports absence honestly and a version that was read back |
-| `install` | `--apply` is idempotent, user-space, pinned, and the pin is measured after install |
-| `vars` | the harness accepts the §5 set, and the **negative** cases fail: a value in argv, an ambient key |
-| `turn` | one real turn produces a known artifact (a file with a fixed token) and reports `model_served` |
-| `memory` | the run writes the §1-I3 record to DuckBrain with the right namespace and `run_id`, read back |
+| `check` | adapter absence and version readback |
+| `apply` | pinned user-space install, idempotence and post-install measurement; the battery runs one apply only with `--install`, otherwise emits SKIP |
+| `vars` | runtime consumes the §5 set and rejects forbidden credentials; the battery tests a contract fixture, not runtime use |
+| `smoke` | real turn produces a known artifact and reports `model_served`; the battery checks the file token, not model provenance |
+| `memory` | real run writes I3 to DuckBrain with namespace and `run_id`, read back; the battery tests a local fixture and skips live evidence |
+| `node` | `codex` only: node creation from the adapter's measured rows; the battery runs the offline fixture and always emits a `SKIP` for live node evidence |
 
-`tests/harness-conformance.sh` implements this table; its matrix is the release gate for the word
-"supported".
+`tests/harness-conformance.sh` emits these families, but does not establish every real-node
+requirement above. Its matrix alone is therefore not a release gate for "supported".
 
 ---
   </section>

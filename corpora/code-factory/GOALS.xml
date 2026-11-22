@@ -1,0 +1,214 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from code-factory/specs/GOALS.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CF-GOALS-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: code-factory/specs/GOALS.md#preamble -->
+  <section id="CF-GOALS-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+# GOALS — the standing goal, the subgoal tree, and the rule that keeps the loop running
+
+Status: **DESIGN.** This page defines the goal artefact and its rules; it ships no code. The
+first seeded `goals.jsonl` and any writer tooling are separate board work. Until that row lands,
+the factory's standing goal exists nowhere — which is the defect this page closes.
+  </section>
+  <!-- source: code-factory/specs/GOALS.md#1-the-problem -->
+  <section id="CF-GOALS-1-THE-PROBLEM-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 1. The problem
+
+The word "goal" appears in the doc set exactly twice, and both times it is not a definition:
+inside the owner quotation at `specs/FLEET-MEMORY.md:24` ("…the goal is that the main hermes can
+search for things that have hapend across the fleet"), and as the section heading "Scope and
+non-goals" at `specs/TRACE.md:103`. No page says what the factory's top-level goal IS, what
+subgoals hang beneath it, how a subgoal is closed, or why the loop keeps running.
+
+The owner asked for the artefact, verbatim (board row CF-345, 2026-11-22):
+
+&gt; *"i want the top level goal and the subgoasl that would need to be"*
+
+and for its ending:
+
+&gt; *"the last subgoal is a loop so it keeps you going for ever"*
+
+The typos are the owner's; both quotes are cited verbatim and are the requirements. Everything
+below follows from those two sentences: one standing goal, a tree of subgoals beneath it, every
+subgoal closing on evidence — except the last one, which by design never closes.
+  </section>
+  <!-- source: code-factory/specs/GOALS.md#2-the-artefact-goals-jsonl -->
+  <section id="CF-GOALS-2-THE-ARTEFACT-GOALS-JSONL-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 2. The artefact — `goals.jsonl`
+
+The goal artefact is one file: `.coding-hermes/goals/goals.jsonl`. It lives beside the board
+(`.coding-hermes/board/tasks.jsonl`, `AGENTS.md` §"The board"), is git-tracked, and is
+**append-only**: one JSON object per line, UTF-8, LF-terminated. The board is the work; this file
+is the direction the work serves. A board row that cannot name the goal record it advances is a
+row without a rudder — allowed, but suspect.
+
+Three record types, all carrying `type`, `seq`, `at` (ISO-8601 UTC) and `by`:
+
+| type | fields | written when |
+|---|---|---|
+| `goal` | `id` (`GOAL-&lt;n&gt;`), `title`, `statement`, `non_negotiables` (array), `status` (`active` or `closed`) | the goal is opened; a later line with the same `id` and `status:"closed"` is the only close |
+| `subgoal` | `id` (`G&lt;n&gt;`), `goal` (parent goal id), `parent` (subgoal id or `null`), `title`, `kind` (`terminal` or `loop`), `status` (`open`, `closed` or `superseded`); a close adds `closed_at`, `evidence`, `run_id`; a supersession adds `superseded_by` | the tree grows; a later line with the same `id` updates the mutable fields |
+| `decision` | `id` (`D&lt;n&gt;`), `goal`, `text`, `chosen`, `alternative` | a direction is settled (the goal-and-subgoal-tracking rule: every decision carries what it beat) |
+
+`seq` is a file-unique, monotonically increasing append ordinal — it, not file order alone, is
+what the queries in §6 sort by. A minimal file:
+
+```json
+{"type":"goal","seq":1,"at":"2026-11-22T17:00:00Z","by":"owner","id":"GOAL-1","title":"ship the factory","statement":"turn the template into a self-running fleet","non_negotiables":["no root","every check names the measured value"],"status":"active"}
+{"type":"subgoal","seq":2,"at":"2026-11-22T17:00:00Z","by":"owner","id":"G1","goal":"GOAL-1","parent":null,"title":"provision a node","kind":"terminal","status":"open"}
+{"type":"subgoal","seq":3,"at":"2026-11-22T17:00:00Z","by":"owner","id":"G2","goal":"GOAL-1","parent":"G1","title":"keep producing work for ever","kind":"loop","status":"open"}
+{"type":"decision","seq":4,"at":"2026-11-22T17:00:00Z","by":"owner","id":"D1","goal":"GOAL-1","text":"loop cadence","chosen":"scheduled tick","alternative":"session-only autopilot"}
+```
+  </section>
+  <!-- source: code-factory/specs/GOALS.md#3-the-subgoal-tree -->
+  <section id="CF-GOALS-3-THE-SUBGOAL-TREE-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 3. The subgoal tree
+
+A goal's subgoals form a tree: `parent: null` roots it, any `subgoal` id parents the lines that
+name it, and sibling order is `seq` order — the tree reads top to bottom in append order. The
+subgoal ids are file-unique across all goals (`G1..` is not reused for a second goal).
+
+**Laws (normative):**
+
+- **GL-1 Append only.** A correction is a new line with a higher `seq`; no line is rewritten,
+  reordered or deleted. This is the board's own rule (`AGENTS.md`: "Append only") applied to
+  direction instead of work.
+- **GL-2 Ids are file-unique.** A re-stated id may change only the mutable fields (`status`,
+  `waits_on`, `closed_at`, `evidence`, `run_id`, `superseded_by`); a different `goal` or `parent`
+  under the same id is a defect — supersede it with a new id instead.
+- **GL-3 Every goal ends in the loop.** A goal's tree carries at least one `terminal` subgoal,
+  and its LAST subgoal (highest `seq`) is exactly one `kind:"loop"` subgoal, which has no
+  children. This is the owner's sentence made structural: the loop is what comes after all the
+  finite work.
+- **GL-4 Evidence is a locator.** A `closed` subgoal line names a commit sha, a board row id
+  (`CF-nnn`), an audit or report path, or a `run_id`. Prose is not evidence (the traceability
+  rule, `specs/TRACE.md` §2 rule 4, applied to goals).
+- **GL-5 A goal cannot close under an open subgoal.** A `goal` line with `status:"closed"` MUST
+  NOT be appended while the closure gate (§5) exits non-zero. This is the artefact's one hard
+  invariant.
+- **GL-6 The loop has no closure condition.** No tool, lane, cron or judge may close or
+  auto-close the loop subgoal, and it carries no deadline or iteration cap. Only an owner
+  decision (`decision` record) supersedes it.
+  </section>
+  <!-- source: code-factory/specs/GOALS.md#4-closing-a-subgoal -->
+  <section id="CF-GOALS-4-CLOSING-A-SUBGOAL-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 4. Closing a subgoal
+
+A `terminal` subgoal closes by appending its own id again with `status:"closed"`, `closed_at`,
+and the evidence locator of GL-4 — normally the board row that shipped it (a subgoal becomes
+rows; that is how goal-and-subgoal-tracking phrases it), or the commit digest of a spec landing.
+A subgoal that is abandoned rather than done is `status:"superseded"` with `superseded_by`
+naming the decision id (or the replacing subgoal id) — a supersession is recorded history, not
+an erasure.
+  </section>
+  <!-- source: code-factory/specs/GOALS.md#5-the-closure-invariant-the-gate -->
+  <section id="CF-GOALS-5-THE-CLOSURE-INVARIANT-THE-GA-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 5. The closure invariant — the gate
+
+The current state of a subgoal is the line with its id and the highest `seq`. The gate below is
+what GL-5 means operationally; run it before flipping a goal to `closed`, for that goal's id
+(GOAL-1 from the §2 example):
+
+```bash
+jq -se 'map(select(.type=="subgoal" and .goal=="GOAL-1")) | group_by(.id) | map(max_by(.seq)) | all(.status != "open")' .coding-hermes/goals/goals.jsonl
+```
+
+Exit `0` — every subgoal of the goal is `closed` or `superseded`; the goal line may flip to
+`status:"closed"`. Exit `1` — at least one subgoal is `open`; the flip is refused. These are the
+measured behaviours of this exact program (2026-11-22, against the §2 shape with one subgoal
+closed and the loop open: `false`, exit 1; after the loop's supersession line: `true`, exit 0).
+`jq -e` derives the exit code from the truthiness of the last output, so an empty tree (a goal
+with no subgoals at all) vacuously passes the gate and is caught by GL-3 instead — the shape
+check in §6 must also pass.
+  </section>
+  <!-- source: code-factory/specs/GOALS.md#6-the-termination-rule -->
+  <section id="CF-GOALS-6-THE-TERMINATION-RULE-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 6. The termination rule
+
+**Terminal subgoals terminate; the loop does not.** A terminal subgoal's only exit is its
+closure record (§4). The loop subgoal implements the owner's second sentence: on its cadence it
+produces the next unit of work regardless of board state, has no success condition, no timeout
+and no iteration cap. Its non-termination is **by design, not a defect** — quoting the owner
+again: *"the last subgoal is a loop so it keeps you going for ever"*. It MUST NOT be "fixed" by
+adding an auto-close, a deadline or a max-iterations clause; a change that makes the loop
+terminate is a change to the owner's requirement and needs an owner decision first.
+
+Stated plainly, the consequence of GL-5 plus GL-6: a goal whose tree ends in a loop subgoal
+NEVER reaches `status:"closed"`. The factory keeps going for ever. That is the intended
+behaviour, not a bug to chase. Stopping the system is an owner act: a `decision` record, then a
+supersession line for the loop subgoal (`status:"superseded"`, `superseded_by` the decision id),
+after which the §5 gate can pass and the goal may close. A loop that is not firing is a stall,
+not a termination — repair it (§7), never redefine it.
+
+The shape checks, for the same example file:
+
+```bash
+# the last subgoal of the tree is the loop (GL-3) — must print "loop"
+jq -sc 'map(select(.type=="subgoal")) | sort_by(.seq) | last | .kind' .coding-hermes/goals/goals.jsonl
+```
+  </section>
+  <!-- source: code-factory/specs/GOALS.md#7-the-skills-that-implement-the-loop -->
+  <section id="CF-GOALS-7-THE-SKILLS-THAT-IMPLEMENT-TH-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 7. The skills that implement the loop
+
+The goal loop is not hypothetical machinery; five skills on this host implement it, and they are
+the named implementors of this artefact:
+
+| skill | path | role in the loop |
+|---|---|---|
+| `autopilot-goal-execution` | `$HOME/.hermes/skills/autonomous-ai-agents/autopilot-goal-execution` | drives one goal to done inside a session: every turn advances a subgoal or reports a verified stop condition |
+| `self-driving-work-loops` | `$HOME/.hermes/skills/autonomous-ai-agents/self-driving-work-loops` | the machinery that keeps producing work between sessions; it implements the loop subgoal's cadence, and its own trigger text quotes the owner's "keeps going forever" sentence |
+| `hermes-persistent-goals` | `$HOME/.hermes/skills/devops/hermes-persistent-goals` | arms and diagnoses `/goal` and `/subgoal`; reads the session GoalState out of `state.db` |
+| `hermes-goal-loop-ops` | `$HOME/.hermes/skills/devops/hermes-goal-loop-ops` | repairs a stalled or wrongly armed session goal loop — the stall path of §6 |
+| `goal-and-subgoal-tracking` | `$HOME/.hermes/skills/devops/goal-and-subgoal-tracking` | turns an owner direction into the artefact's content: one living goal with `G1..Gn` subgoals and `D1..Dn` decisions |
+  </section>
+  <!-- source: code-factory/specs/GOALS.md#8-querying -->
+  <section id="CF-GOALS-8-QUERYING-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 8. Querying
+
+The artefact is queryable with plain `jq` — no tooling ships with this page. From the repo root,
+against `.coding-hermes/goals/goals.jsonl`:
+
+```bash
+# the goals, in their current state
+jq -sc 'map(select(.type=="goal")) | group_by(.id) | map(max_by(.seq))' .coding-hermes/goals/goals.jsonl
+
+# every subgoal's current state, tree order
+jq -sc 'map(select(.type=="subgoal")) | group_by(.id) | map(max_by(.seq)) | sort_by(.seq)' .coding-hermes/goals/goals.jsonl
+
+# the open subgoals
+jq -sc 'map(select(.type=="subgoal")) | group_by(.id) | map(max_by(.seq)) | map(select(.status=="open"))' .coding-hermes/goals/goals.jsonl
+
+# the §5 closure gate for GOAL-1
+jq -se 'map(select(.type=="subgoal" and .goal=="GOAL-1")) | group_by(.id) | map(max_by(.seq)) | all(.status != "open")' .coding-hermes/goals/goals.jsonl
+```
+
+`group_by(.id)` collapses each id's history lines; `max_by(.seq)` picks the current one; the
+close and supersede fields sit on that line. Any lane or the control host can enumerate the goal
+and its subgoal states with these four programs, and GL-5 is checkable by anyone.
+  </section>
+  <!-- source: code-factory/specs/GOALS.md#9-scope-and-non-goals -->
+  <section id="CF-GOALS-9-SCOPE-AND-NON-GOALS-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## 9. Scope and non-goals
+
+The **session-level** goal loop has its own runtime state: `state.db`, table `state_meta`, key
+`goal:&lt;session_id&gt;`, a JSON GoalState (`goal`, `status`, `turns_used`/`max_turns`, `subgoals`,
+`contract`, `gates`, `last_verdict`, …) — the shape documented by hermes-persistent-goals and
+hermes-goal-loop-ops, which correctly state that this state is "NOT a config file and NOT a
+goals table". That is true of the session loop's runtime and does not compete with this page:
+the session GoalState is **derived** from `goals.jsonl` when a session is armed with `/goal`,
+and this file is the authority the derived state serves. A session GoalState that contradicts
+`goals.jsonl` is a bug in the arming step, not a second definition of the goal.
+
+goal-and-subgoal-tracking keeps its living goal document out of the product repo "until the
+owner decides where the work ships". For the factory the ship target is decided — it is
+`specs/GOALS.md` for the rules and `.coding-hermes/goals/goals.jsonl` for the records; that
+skill's document sections (status line, NON-NEGOTIABLES, `G1..Gn`, `D1..Dn`) map onto the record
+fields of §2.
+
+Out of scope: the first seeded tree and any writer helper (board work); arming crons and
+cadences (self-driving-work-loops' own territory); the scheduler's admission model
+(`docs/SCHEDULER-ADMISSION.md`); and the board itself — goals are direction, rows are work, and
+`goals.jsonl` never becomes a second work queue.
+  </section>
+</spec>
