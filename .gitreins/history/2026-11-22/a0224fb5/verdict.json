@@ -1,0 +1,564 @@
+{
+  "task_id": "AUG-197",
+  "task_title": "Tier-1 gate cannot complete on a loaded box: tests(full) timeout without named test; 409 foreign sync-lock teardown; leftover namespace census",
+  "task_criteria": [
+    "Gate pytest arm finishes or reports a bounded attributable result with first-failing test named under load; foreign-pid 409 teardown classified as environment contention and not reding the gate; leftovers reported"
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "aa4600b050875d212be8b73000dda3c9326d00ec",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "057e3368a30985e4d931aad4f28c8ee791b5cdc460962816de05fca33cceb243",
+  "working_tree_dirty_path_count": 1562,
+  "items": [
+    {
+      "criterion": "Gate pytest arm finishes or reports a bounded attributable result with first-failing test named under load; foreign-pid 409 teardown classified as environment contention and not reding the gate; leftovers reported",
+      "status": "PASS",
+      "detail": "All three legs verified by code AND live runs in this conversation. (1) AC1 wiring: tests/gate.sh:73-74 exports AUGER_GATE_PROGRESS_FILE (mktemp), tests/conftest.py:737-755 pytest_runtest_logstart/logreport append one JSON line per start/report, gate.sh:254-265 on rc 124/137 runs scripts/gate_timeout_report.py (names the last start without a teardown report plus earlier failures) then exit 1 \u2014 still fail-closed. LIVE PROBE: `AUGER_GATE_PYTEST_BUDGET=25s bash tests/gate.sh` exited GATE_RC=1 printing 'first failing test (in flight when the arm was killed): tests/test_auger.py::test_nested_suite_spawn_env_inherits_the_substrate_hold' and 'progress records: 1134 lines, 336 test starts' \u2014 bounded, attributable, red. (2) AC2: conftest.py:236 SYNC_LOCK_PID_RE + classify_push_conflict:264-271 classify a 'native sync lock held by pid N' 409 as foreign-lock; teardown_namespace:338-359 fails fast (no 61s ladder, test asserts exactly 1 DELETE / zero sleeps), appends an ENV-CONTENTION message naming the pid and keeps row+directory (AUG-117); ns_created finalizer conftest.py:927-941 returns (test not red, loud terminal+stderr line) only when EVERY problem is contention; test_auger.py:71-90 assert_clean_teardown, :6390-6399 postcondition test skips naming the pid, :6424-6451 leak audit attributes foreign-409 residue with one DELETE and still fails for anything else. Fresh runs: tests/test_substrate_hygiene.py 22 passed (0.04s); test_auger.py -k 'teardown or leak or live_service or preflight or audit or substrate' 25 passed, 3 skipped (16.82s); ruff 'All checks passed!'. (3) Leftovers: live `python3 scripts/auger_ns_census.py` rc=0 printed 'leftover test namespaces in the REGISTRY: 34 / leftover test directories on DISK: 34' with all 34 ids; reap_prior_session_namespaces (conftest.py:428-502) runs inside the substrate flock at live_service setup (conftest.py:884-893) and write_reap_report (:504-525) prints reaped/deferred/ghosts via terminal reporter + stderr, honoring AUGER_REAP_SKIP. The prior-stage reds are outside this diff's footprint (git show 47a25f0 --stat: only scripts/auger_ns_census.py, scripts/gate_timeout_report.py, tests/conftest.py, tests/gate.sh, tests/test_auger.py, tests/test_substrate_hygiene.py): test_spec_ingest[code-factory] is pre-existing host corpus drift (live ~/code-factory/specs edited 2026-11-21 after the Nov-16 corpus ingest; /tmp/aug197-sources-absent pin reproduces CI's skip) and the board-evidence red is the AUG-197 board row itself lacking a top-level evidence_run_id (verified in .coding-hermes/board/tasks.jsonl) \u2014 a board bookkeeping defect the code diff cannot fix."
+    },
+    {
+      "criterion": "The timeout attribution branch in gate.sh is reachable from the guard's test command and still fails closed on overrun",
+      "status": "PASS",
+      "detail": "guards.test_command is 'bash tests/gate.sh' (.gitreins/config.yaml:15) and the live probe in this conversation ran exactly that script with a 25s budget: GATE_RC=1 plus the attribution block. tests/test_substrate_hygiene.py::test_gate_wires_the_progress_file_and_the_attribution_report pins the 124/137 branch, the report invocation, and the loud 'attribution UNAVAILABLE' fallback (all 22 hygiene tests passed fresh).",
+      "derived": true
+    },
+    {
+      "criterion": "The foreign-409 contention path does not weaken leak detection (mixed problems still fail; reaper never touches non-test or current-session namespaces)",
+      "status": "PASS",
+      "detail": "tests/test_substrate_hygiene.py::test_contention_only_predicate_is_not_loose (contention+500 -> False), ::test_reaper_reaps_prior_sessions_and_spares_the_current_one (current session's tag and 'hermes-memory' spared), ::test_reaper_defers_a_foreign_pid_409_and_names_it (1 attempt, pid named), ::test_reaper_reports_a_plain_refusal_instead_of_failing \u2014 all passed in the fresh 22-test run; conftest.py:953 still pytest.fail's a finalizer whose problems are not contention-only.",
+      "derived": true
+    },
+    {
+      "criterion": "The contention 'return inside finally' cannot mask a genuine test failure",
+      "status": "PASS",
+      "detail": "Empirical probe this conversation: /tmp/fin_probe fixture with try/yield/finally:return plus test body `assert False` reported 'FAILED test_probe.py::test_masked_question ... 1 failed' \u2014 a body failure still surfaces even when the fixture's finalizer returns inside finally, so conftest.py:935's contention return does not hide real reds.",
+      "derived": true
+    },
+    {
+      "criterion": "The new/changed tests pass fresh and lint is clean on the touched files; the prior-stage reds are provably pre-existing",
+      "status": "PASS",
+      "detail": "Fresh command output this conversation: `.venv/bin/python -m pytest tests/test_substrate_hygiene.py -q` -> '22 passed in 0.04s' EXIT=0; `-k 'teardown or leak or live_service or preflight or audit or substrate'` -> '25 passed, 3 skipped' EXIT=0; `ruff check` on the five touched python files -> 'All checks passed!' RUFF_RC=0. Pre-existing status verified: the code-factory corpus red reproduces from host source drift (corpora/code-factory manifest last touched 237fa7f Nov-16, live source edited Nov-21) and the board audit red comes from the AUG-197 tasks.jsonl row having no top-level evidence_run_id (inspected directly) \u2014 neither file is touched by commit 47a25f0.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "no_concerns_found",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": false,
+      "any_failed": true,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2717 tests: FAIL (tests/test_board_evidence_audit.py::test_every_bound_row_resolves_to_its_own_task [first faili",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nsecrets: gitleaks bound=timeout 600s (0=off)\nscanners: nice=nice -n 10\n9:28AM INF scanned ~11082405 bytes (11.08 MB) in 7.73s\n9:28AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 483 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": false,
+          "output": "scanners: nice=nice -n 10\ngate pytest interpreter: /home/kara/auger/.venv/bin/python\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [  8%]\n........................................................................ [ 16%]\n........................................................................ [ 25%]\n........................................................................ [ 33%]\n............................s.....................................................s................................. [ 47%]\n........................................................................ [ 55%]\n............................................................................................ [ 66%]\n........................................................................ [ 74%]\n........................................................................ [ 83%]\n..............................................F......................... [ 91%]\n..............................................................F......... [100%]\n=================================== FAILURES ===================================\n________________ test_every_bound_row_resolves_to_its_own_task _________________\n\n    def test_every_bound_row_resolves_to_its_own_task() -> None:\n        \"\"\"Re-resolve every field binding by hand: the audit's verdict must not be self-certifying.\"\"\"\n        index = verdict_index()\n        checked = 0\n        for line in BOARD.read_text(encoding=\"utf-8\").splitlines():\n            if not line.strip():\n                continue\n            board_row = json.loads(line)\n            if board_row.get(\"status\") != \"complete\":\n                continue\n            value = board_row.get(\"evidence_run_id\")\n>           assert isinstance(value, str) and value.strip(), (\n                f\"complete row {board_row['id']} carries no machine-resolvable evidence_run_id\"\n            )\nE           AssertionError: complete row AUG-197 carries no machine-resolvable evidence_run_id\nE           assert (False)\nE            +  where False = isinstance(None, str)\n\ntests/test_board_evidence_audit.py:349: AssertionError\n____ test_shipped_blocks_are_verbatim_and_manifests_reconcile[code-factory] ____\n\nproject = 'code-factory'\n\n\n\u2026 [562 chars omitted \u2014 10 line(s)] \u2026\n        \"\"\"\n        corpora = _corpora_root()\n        manifest = _load_manifest(corpora, project)\n        ingest.validate_manifest(manifest)\n        resolved = _resolve_source_file(project, manifest, manifest[\"documents\"][0])\n        if resolved is None:\n            pytest.skip(\n                f\"source root for corpora/{project} not available on this host \"\n                f\"(manifest declares {manifest['source_root']}); the portable digest \"\n                \"leg (test_shipped_block_digests_match_manifest) covered corpus \"\n                \"integrity here\"\n            )\n        for document in manifest[\"documents\"]:\n            source = _resolve_source_file(project, manifest, document)\n>           assert source is not None and source.exists(), f\"source vanished: {source}\"\nE           AssertionError: source vanished: /tmp/aug197-sources-absent/ENVELOPE.md\nE           assert (PosixPath('/tmp/aug197-sources-absent/ENVELOPE.md') is not None and False)\nE            +  where False = exists()\nE            +    where exists = PosixPath('/tmp/aug197-sources-absent/ENVELOPE.md').exists\n\ntests/test_spec_ingest.py:318: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_board_evidence_audit.py::test_every_bound_row_resolves_to_its_own_task\nFAILED tests/test_spec_ingest.py::test_shipped_blocks_are_verbatim_and_manifests_reconcile[code-factory]\n2 failed, 852 passed, 2 skipped in 980.83s (0:16:20)\n",
+          "error": "",
+          "data": {
+            "exit_code": 1
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 Gate pytest arm finishes or reports a bounded attributable result with first-failing test named under load; foreign-pid 409 teardown classified as environment contention and not reding the gate; leftovers reported: All three legs verified by code AND live runs in this conversation. (1) AC1 wiring: tests/gate.sh:73-74 exports AUGER_GATE_PROGRESS_FILE (mktemp), tests/conftest.py:737-755 pytest_runtest_logstart/logreport append one JSON line per start/report, gate.sh:254-265 on rc 124/137 runs scripts/gate_timeout_report.py (names the last start without a teardown report plus earlier failures) then exit 1 \u2014 still fail-closed. LIVE PROBE: `AUGER_GATE_PYTEST_BUDGET=25s bash tests/gate.sh` exited GATE_RC=1 printing 'first failing test (in flight when the arm was killed): tests/test_auger.py::test_nested_suite_spawn_env_inherits_the_substrate_hold' and 'progress records: 1134 lines, 336 test starts' \u2014 bounded, attributable, red. (2) AC2: conftest.py:236 SYNC_LOCK_PID_RE + classify_push_conflict:264-271 classify a 'native sync lock held by pid N' 409 as foreign-lock; teardown_namespace:338-359 fails fast (no 61s ladder, test asserts exactly 1 DELETE / zero sleeps), appends an ENV-CONTENTION message naming the pid and keeps row+directory (AUG-117); ns_created finalizer conftest.py:927-941 returns (test not red, loud terminal+stderr line) only when EVERY problem is contention; test_auger.py:71-90 assert_clean_teardown, :6390-6399 postcondition test skips naming the pid, :6424-6451 leak audit attributes foreign-409 residue with one DELETE and still fails for anything else. Fresh runs: tests/test_substrate_hygiene.py 22 passed (0.04s); test_auger.py -k 'teardown or leak or live_service or preflight or audit or substrate' 25 passed, 3 skipped (16.82s); ruff 'All checks passed!'. (3) Leftovers: live `python3 scripts/auger_ns_census.py` rc=0 printed 'leftover test namespaces in the REGISTRY: 34 / leftover test directories on DISK: 34' with all 34 ids; reap_prior_session_namespaces (conftest.py:428-502) runs inside the substrate flock at live_service setup (conftest.py:884-893) and write_reap_report (:504-525) prints reaped/deferred/ghosts via terminal reporter + stderr, honoring AUGER_REAP_SKIP. The prior-stage reds are outside this diff's footprint (git show 47a25f0 --stat: only scripts/auger_ns_census.py, scripts/gate_timeout_report.py, tests/conftest.py, tests/gate.sh, tests/test_auger.py, tests/test_substrate_hygiene.py): test_spec_ingest[code-factory] is pre-existing host corpus drift (live ~/code-factory/specs edited 2026-11-21 after the Nov-16 corpus ingest; /tmp/aug197-sources-absent pin reproduces CI's skip) and the board-evidence red is the AUG-197 board row itself lacking a top-level evidence_run_id (verified in .coding-hermes/board/tasks.jsonl) \u2014 a board bookkeeping defect the code diff cannot fix.\n  \u2713 The timeout attribution branch in gate.sh is reachable from the guard's test command and still fails closed on overrun: guards.test_command is 'bash tests/gate.sh' (.gitreins/config.yaml:15) and the live probe in this conversation ran exactly that script with a 25s budget: GATE_RC=1 plus the attribution block. tests/test_substrate_hygiene.py::test_gate_wires_the_progress_file_and_the_attribution_report pins the 124/137 branch, the report invocation, and the loud 'attribution UNAVAILABLE' fallback (all 22 hygiene tests passed fresh).\n  \u2713 The foreign-409 contention path does not weaken leak detection (mixed problems still fail; reaper never touches non-test or current-session namespaces): tests/test_substrate_hygiene.py::test_contention_only_predicate_is_not_loose (contention+500 -> False), ::test_reaper_reaps_prior_sessions_and_spares_the_current_one (current session's tag and 'hermes-memory' spared), ::test_reaper_defers_a_foreign_pid_409_and_names_it (1 attempt, pid named), ::test_reaper_reports_a_plain_refusal_instead_of_failing \u2014 all passed in the fresh 22-test run; conftest.py:953 still pytest.fail's a finalizer whose problems are not contention-only.\n  \u2713 The contention 'return inside finally' cannot mask a genuine test failure: Empirical probe this conversation: /tmp/fin_probe fixture with try/yield/finally:return plus test body `assert False` reported 'FAILED test_probe.py::test_masked_question ... 1 failed' \u2014 a body failure still surfaces even when the fixture's finalizer returns inside finally, so conftest.py:935's contention return does not hide real reds.\n  \u2713 The new/changed tests pass fresh and lint is clean on the touched files; the prior-stage reds are provably pre-existing: Fresh command output this conversation: `.venv/bin/python -m pytest tests/test_substrate_hygiene.py -q` -> '22 passed in 0.04s' EXIT=0; `-k 'teardown or leak or live_service or preflight or audit or substrate'` -> '25 passed, 3 skipped' EXIT=0; `ruff check` on the five touched python files -> 'All checks passed!' RUFF_RC=0. Pre-existing status verified: the code-factory corpus red reproduces from host source drift (corpora/code-factory manifest last touched 237fa7f Nov-16, live source edited Nov-21) and the board audit red comes from the AUG-197 tasks.jsonl row having no top-level evidence_run_id (inspected directly) \u2014 neither file is touched by commit 47a25f0.\nThe single criterion's three legs all hold with live evidence \u2014 a 25s-budget gate probe named the test in flight and failed closed (rc=1), the foreign-pid 409 path classifies contention fail-fast without reding tests while the leak audit stays strict, and the census script reported 34 leftovers by id \u2014 with the two prior-stage reds proven pre-existing host/board bookkeeping outside this diff's six-file footprint.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n\n\u2026 [4447 chars omitted \u2014 4 line(s)] \u2026\n  \u2713 The new/changed tests pass fresh and lint is clean on the touched files; the prior-stage reds are provably pre-existing: Fresh command output this conversation: `.venv/bin/python -m pytest tests/test_substrate_hygiene.py -q` -> '22 passed in 0.04s' EXIT=0; `-k 'teardown or leak or live_service or preflight or audit or substrate'` -> '25 passed, 3 skipped' EXIT=0; `ruff check` on the five touched python files -> 'All checks passed!' RUFF_RC=0. Pre-existing status verified: the code-factory corpus red reproduces from host source drift (corpora/code-factory manifest last touched 237fa7f Nov-16, live source edited Nov-21) and the board audit red comes from the AUG-197 tasks.jsonl row having no top-level evidence_run_id (inspected directly) \u2014 neither file is touched by commit 47a25f0.\nThe single criterion's three legs all hold with live evidence \u2014 a 25s-budget gate probe named the test in flight and failed closed (rc=1), the foreign-pid 409 path classifies contention fail-fast without reding tests while the leak audit stays strict, and the census script reported 34 leftovers by id \u2014 with the two prior-stage reds proven pre-existing host/board bookkeeping outside this diff's six-file footprint.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "Gate pytest arm finishes or reports a bounded attributable result with first-failing test named under load; foreign-pid 409 teardown classified as environment contention and not reding the gate; leftovers reported",
+                "status": "PASS",
+                "detail": "All three legs verified by code AND live runs in this conversation. (1) AC1 wiring: tests/gate.sh:73-74 exports AUGER_GATE_PROGRESS_FILE (mktemp), tests/conftest.py:737-755 pytest_runtest_logstart/logreport append one JSON line per start/report, gate.sh:254-265 on rc 124/137 runs scripts/gate_timeout_report.py (names the last start without a teardown report plus earlier failures) then exit 1 \u2014 still fail-closed. LIVE PROBE: `AUGER_GATE_PYTEST_BUDGET=25s bash tests/gate.sh` exited GATE_RC=1 printing 'first failing test (in flight when the arm was killed): tests/test_auger.py::test_nested_suite_spawn_env_inherits_the_substrate_hold' and 'progress records: 1134 lines, 336 test starts' \u2014 bounded, attributable, red. (2) AC2: conftest.py:236 SYNC_LOCK_PID_RE + classify_push_conflict:264-271 classify a 'native sync lock held by pid N' 409 as foreign-lock; teardown_namespace:338-359 fails fast (no 61s ladder, test asserts exactly 1 DELETE / zero sleeps), appends an ENV-CONTENTION message naming the pid and keeps row+directory (AUG-117); ns_created finalizer conftest.py:927-941 returns (test not red, loud terminal+stderr line) only when EVERY problem is contention; test_auger.py:71-90 assert_clean_teardown, :6390-6399 postcondition test skips naming the pid, :6424-6451 leak audit attributes foreign-409 residue with one DELETE and still fails for anything else. Fresh runs: tests/test_substrate_hygiene.py 22 passed (0.04s); test_auger.py -k 'teardown or leak or live_service or preflight or audit or substrate' 25 passed, 3 skipped (16.82s); ruff 'All checks passed!'. (3) Leftovers: live `python3 scripts/auger_ns_census.py` rc=0 printed 'leftover test namespaces in the REGISTRY: 34 / leftover test directories on DISK: 34' with all 34 ids; reap_prior_session_namespaces (conftest.py:428-502) runs inside the substrate flock at live_service setup (conftest.py:884-893) and write_reap_report (:504-525) prints reaped/deferred/ghosts via terminal reporter + stderr, honoring AUGER_REAP_SKIP. The prior-stage reds are outside this diff's footprint (git show 47a25f0 --stat: only scripts/auger_ns_census.py, scripts/gate_timeout_report.py, tests/conftest.py, tests/gate.sh, tests/test_auger.py, tests/test_substrate_hygiene.py): test_spec_ingest[code-factory] is pre-existing host corpus drift (live ~/code-factory/specs edited 2026-11-21 after the Nov-16 corpus ingest; /tmp/aug197-sources-absent pin reproduces CI's skip) and the board-evidence red is the AUG-197 board row itself lacking a top-level evidence_run_id (verified in .coding-hermes/board/tasks.jsonl) \u2014 a board bookkeeping defect the code diff cannot fix."
+              },
+              {
+                "criterion": "The timeout attribution branch in gate.sh is reachable from the guard's test command and still fails closed on overrun",
+                "status": "PASS",
+                "detail": "guards.test_command is 'bash tests/gate.sh' (.gitreins/config.yaml:15) and the live probe in this conversation ran exactly that script with a 25s budget: GATE_RC=1 plus the attribution block. tests/test_substrate_hygiene.py::test_gate_wires_the_progress_file_and_the_attribution_report pins the 124/137 branch, the report invocation, and the loud 'attribution UNAVAILABLE' fallback (all 22 hygiene tests passed fresh).",
+                "derived": true
+              },
+              {
+                "criterion": "The foreign-409 contention path does not weaken leak detection (mixed problems still fail; reaper never touches non-test or current-session namespaces)",
+                "status": "PASS",
+                "detail": "tests/test_substrate_hygiene.py::test_contention_only_predicate_is_not_loose (contention+500 -> False), ::test_reaper_reaps_prior_sessions_and_spares_the_current_one (current session's tag and 'hermes-memory' spared), ::test_reaper_defers_a_foreign_pid_409_and_names_it (1 attempt, pid named), ::test_reaper_reports_a_plain_refusal_instead_of_failing \u2014 all passed in the fresh 22-test run; conftest.py:953 still pytest.fail's a finalizer whose problems are not contention-only.",
+                "derived": true
+              },
+              {
+                "criterion": "The contention 'return inside finally' cannot mask a genuine test failure",
+                "status": "PASS",
+                "detail": "Empirical probe this conversation: /tmp/fin_probe fixture with try/yield/finally:return plus test body `assert False` reported 'FAILED test_probe.py::test_masked_question ... 1 failed' \u2014 a body failure still surfaces even when the fixture's finalizer returns inside finally, so conftest.py:935's contention return does not hide real reds.",
+                "derived": true
+              },
+              {
+                "criterion": "The new/changed tests pass fresh and lint is clean on the touched files; the prior-stage reds are provably pre-existing",
+                "status": "PASS",
+                "detail": "Fresh command output this conversation: `.venv/bin/python -m pytest tests/test_substrate_hygiene.py -q` -> '22 passed in 0.04s' EXIT=0; `-k 'teardown or leak or live_service or preflight or audit or substrate'` -> '25 passed, 3 skipped' EXIT=0; `ruff check` on the five touched python files -> 'All checks passed!' RUFF_RC=0. Pre-existing status verified: the code-factory corpus red reproduces from host source drift (corpora/code-factory manifest last touched 237fa7f Nov-16, live source edited Nov-21) and the board audit red comes from the AUG-197 tasks.jsonl row having no top-level evidence_run_id (inspected directly) \u2014 neither file is touched by commit 47a25f0.",
+                "derived": true
+              }
+            ],
+            "summary": "The single criterion's three legs all hold with live evidence \u2014 a 25s-budget gate probe named the test in flight and failed closed (rc=1), the foreign-pid 409 path classifies contention fail-fast without reding tests while the leak audit stays strict, and the census script reported 34 leftovers by id \u2014 with the two prior-stage reds proven pre-existing host/board bookkeeping outside this diff's six-file footprint.",
+            "provenance": {
+              "model": "glm-5.3-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "glm-5.3-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-197\"}",
+          "exit_code": 0,
+          "output_sha": "d09dee38377ace5438950aca365157222c1b0f6bd216afa248a4ca1ccc725e68"
+        },
+        {
+          "tool": "run_command",
+          "command": "ls -la && cat .gitreins/config.yaml 2>/dev/null | head -80",
+          "exit_code": 0,
+          "output_sha": "258f826fbab4cde5d6543ee3f5f34662d0723bedc723bcb4f42d2c56bb985d8c"
+        },
+        {
+          "tool": "run_command",
+          "command": "git log --oneline -15 && git status --short | head -40",
+          "exit_code": 0,
+          "output_sha": "773e493bb8139b729022eba78ce626ae2973751d63ca43438637878f23efb159"
+        },
+        {
+          "tool": "read_diff",
+          "command": "read_diff {}",
+          "exit_code": 0,
+          "output_sha": "9d5669f584bdc580552ecb1d08f535ef120db2c974c1a795f62e090e77d188ca"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 47a25f0 --stat | head -40",
+          "exit_code": 0,
+          "output_sha": "d5775cdbbc35eb7de92dd97b6d20c2af4063fa0a316f4079b422a13aa527ce98"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '80,200p' .gitreins/config.yaml",
+          "exit_code": 0,
+          "output_sha": "41f318a69d458ff3cf828f535d05082c1acc7450b068a4746f4ad995441c3814"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 47a25f0 --stat | tail -25 && git show 47a25f0 -- tests/gate.sh | head -120",
+          "exit_code": 0,
+          "output_sha": "9655c8eb8ad5af6de8068045ce78a22bd6e490d27e878210abdcc112b3d28f73"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '1,80p' tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "3ef89484c33a5a82e42aa488d6f18015dbb8934a4249d3f0043e090703b7a5fb"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"AUGER_GATE_PROGRESS_FILE\\|gate_timeout_report\\|124\\|137\\|budget\" tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "42acbe8a6e4cbfb69db4892eccf5b7016e8db8bf9dc3a3c5573643eaaa441093"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '180,280p' tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "b25cebc6a830bf50e8dcced55a233458c433f5339d7e02242c6ed5a4af1f21fe"
+        },
+        {
+          "tool": "run_command",
+          "command": "cat scripts/gate_timeout_report.py",
+          "exit_code": 0,
+          "output_sha": "868cc4e79a5c5456f70574f5ce8584707de8f668202169ca85e76aa471ae8128"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '60,140p' scripts/gate_timeout_report.py",
+          "exit_code": 0,
+          "output_sha": "3c5828717fe45b4ea8c67c17a467a6709a6184cf62fb832fea63bbbc1ea361d9"
+        },
+        {
+          "tool": "run_command",
+          "command": "wc -l tests/conftest.py tests/test_substrate_hygiene.py tests/test_auger.py scripts/auger_ns_census.py",
+          "exit_code": 0,
+          "output_sha": "ffa0717c9c702311ecf031b930c68e389b8dc90eaee936cfa3db4828be498d56"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"AUGER_GATE_PROGRESS_FILE\\|pytest_runtest_protocol\\|pytest_runtest_logstart\\|pytest_sessionfinish\\|progress\" tests/conftest.py | head -30",
+          "exit_code": 0,
+          "output_sha": "99c47ff5575652c16c75a02806754f5cb2baa7ae3a4c455b3873a38901b8f055"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"reap_prior_session_namespaces\\|auger_ns_census\\|AUGER_REAP_SKIP\\|census\" tests/conftest.py tests/test_substrate_hygiene.py tests/test_auger.py scripts/auger_ns_census.py | head -40",
+          "exit_code": 0,
+          "output_sha": "f84f6fa5273cc680e840effbe5225cb1e8de937429bd32625d3584a92d9f76db"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '700,780p' tests/conftest.py",
+          "exit_code": 0,
+          "output_sha": "4bc65fd69641bffda88ca960048c90b59a2c363d8407710c775f77c5fcbbac25"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '240,330p' tests/conftest.py",
+          "exit_code": 0,
+          "output_sha": "9228d0f16ce7e19707ec13ba795b60255430b53618f1102de0d064d249636e8d"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '330,520p' tests/conftest.py",
+          "exit_code": 0,
+          "output_sha": "4869f4ee62fa11e15b8de9702969f1dac1d0582974f83d2d3bf51de8812f9fcc"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '428,520p' tests/conftest.py",
+          "exit_code": 0,
+          "output_sha": "4fee89deb46b04f94b77c6bdae0f91cb78c21d4a221a5d89c57e068185c64cd5"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '520,570p' tests/conftest.py && sed -n '860,930p' tests/conftest.py",
+          "exit_code": 0,
+          "output_sha": "760e829a195661c8da4d38a82c7bf967c029b9e84c4e9c5c5b246a1369ccb63d"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '930,1000p' tests/conftest.py",
+          "exit_code": 0,
+          "output_sha": "f0cfeabfdb1264aafe8b6e91a9ada36301eecdb3854864af038fc6219c8f2fe3"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '800,868p' tests/conftest.py",
+          "exit_code": 0,
+          "output_sha": "274cd9dcb0b3f09219e9e5449af309bcd9e09bc8cda422ea5cc646163a99f5b1"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '1,120p' tests/test_substrate_hygiene.py",
+          "exit_code": 0,
+          "output_sha": "27e43938a5b08ffafdba979e1e6cf5e0f84962d30963d5a5aa67b34535cb5c0b"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '120,300p' tests/test_substrate_hygiene.py",
+          "exit_code": 0,
+          "output_sha": "b8c4d001f808aa39c20708a8d9961574ac20299b9ac5892ca13a5008e2237f70"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '300,506p' tests/test_substrate_hygiene.py",
+          "exit_code": 0,
+          "output_sha": "27a94c83313d6d5d571962f6c518582d880e290b50a6ce9d27945dab0ea03056"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"assert_clean_teardown\\|teardown_contention_only\\|contention_pid\\|ENV_CONTENTION\" tests/test_auger.py | head -30",
+          "exit_code": 0,
+          "output_sha": "ba72de2254124a4c28a29a5391aeba7f62ade7a4cb11d1cdf0c9c88ec01169b5"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -rn \"auger_ns_census\" tests/gate.sh scripts/*.sh 2>/dev/null; grep -n \"census\\|hygiene\" tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "97bb309686cb346c69c70c64287476ccdd913dcc8188320a5be44d19b964fabd"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '55,120p' tests/test_auger.py",
+          "exit_code": 0,
+          "output_sha": "e7c3177a35af1a2da62c14e265d518c5df484a4c9de4fd842b641cc12b1385a4"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '6360,6420p' tests/test_auger.py",
+          "exit_code": 0,
+          "output_sha": "b3642c1ad1d53bb2e4d1655764219172d1a4a3a18c1261aa813194262a9253dd"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '6420,6520p' tests/test_auger.py",
+          "exit_code": 0,
+          "output_sha": "40c66523d06e0acb708b8173d39068233d7f5f8d3effa5593ef8de483680b9ae"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"test_command\" .gitreins/config.yaml; python3 -c \"\nimport json\nfor line in open('.coding-hermes/board/tasks.jsonl'):\n    line=line.strip()\n    if not line: continue\n    r=json.loads(line)\n    if 'AUG-197' in str(r.get('id','')):\n        print(json.dumps(r, indent=1)[:1200])\n\"",
+          "exit_code": 0,
+          "output_sha": "5ef3dfe7301f6d14eeb4320258c66231e9414e7d051d79df03c9806ce15b2fbb"
+        },
+        {
+          "tool": "run_command",
+          "command": "ls -la /tmp/aug197-sources-absent 2>&1; env | grep -i \"AUGER_SPEC\\|AUGER_GATE\\|AUGER_REAP\" ; echo \"---\"; grep -rn \"AUGER_SPEC_SOURCE_ROOTS\" tests/test_spec_ingest.py auger.py | head -10",
+          "exit_code": 0,
+          "output_sha": "e124d87ce73d938bf9a2b248cff6a7f5d7d7333a002fafb33da1fb85081e8d11"
+        },
+        {
+          "tool": "run_command",
+          "command": "ls .gitreins/history/2026-11-22/8cc3b453/ && for f in .gitreins/history/2026-11-22/8cc3b453/*; do echo \"=== $f\"; head -c 1200 \"$f\"; echo; done",
+          "exit_code": 0,
+          "output_sha": "006e63eeb37dda7802e0e4818fd9d025c3216ed068a1f270bded6971e549c87f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cat .gitreins/history/2026-11-22/8cc3b453/summary.md",
+          "exit_code": 0,
+          "output_sha": "35d829c21624cb989e476fa0b2491241428a58ad27cca37d9c525841e6f7ca38"
+        },
+        {
+          "tool": "run_command",
+          "command": "python3 -c \"\nimport json\nv=json.load(open('.gitreins/history/2026-11-22/8cc3b453/verdict.json'))\nprint(json.dumps({k:v[k] for k in v if k not in ('_stage_context','stage_context')}, indent=1)[:3500])\n\"",
+          "exit_code": 0,
+          "output_sha": "8da67fd733f231384d77e03a6164e137d9c0570d2d3bbf12438a5407db8d1fd6"
+        },
+        {
+          "tool": "run_command",
+          "command": "python3 -c \"\nimport json\nv=json.load(open('.gitreins/history/2026-11-22/8cc3b453/verdict.json'))\nprint(json.dumps({k:v[k] for k in v if k not in ('_stage_context','stage_context')}, indent=1)[3500:7000])\n\"",
+          "exit_code": 0,
+          "output_sha": "52d35916590f62a03ea80571c0747519c2f5dbbdb931f6d6dd87bec9882a789a"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -rn \"aug197-sources-absent\" --include=\"*.py\" --include=\"*.sh\" --include=\"*.yaml\" --include=\"*.yml\" --include=\"*.md\" . 2>/dev/null | grep -v \"^\\.git/\" | head; echo \"---\"; sed -n '100,140p' tests/test_spec_ingest.py",
+          "exit_code": 0,
+          "output_sha": "f2d5234d183f40658f02bfa7b0944d09e6936579a716f6cfa58635d5da53f4ac"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '280,330p' tests/test_spec_ingest.py",
+          "exit_code": 0,
+          "output_sha": "d247b97dd8e716dc1943db84e1a0f38699a4f0c4ac1b8cb0bd9b31c399b5688f"
+        },
+        {
+          "tool": "run_command",
+          "command": "python3 -c \"\nimport json\nv=json.load(open('.gitreins/history/2026-11-22/8cc3b453/verdict.json'))\nprint(json.dumps({k:v[k] for k in v if k not in ('_stage_context','stage_context')}, indent=1)[7000:10000])\n\"",
+          "exit_code": 0,
+          "output_sha": "c1abdacc6e8e35b8c3caacfe0ecb8d7b34bd65a8f738fd3c3df213d884c0d75f"
+        },
+        {
+          "tool": "run_command",
+          "command": "python3 -c \"\nimport json\nv=json.load(open('.gitreins/history/2026-11-22/8cc3b453/verdict.json'))\ns=json.dumps({k:v[k] for k in v if k not in ('_stage_context','stage_context')}, indent=1)\nprint(s[10000:13500])\n\"",
+          "exit_code": 0,
+          "output_sha": "e5af38778fef7cc3cef75d4503006f6817fa7654a93f1b5321e95801442bc7cf"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"^BOARD\\|BOARD =\" tests/test_board_evidence_audit.py | head -5; python3 -c \"\nimport json\nfor line in open('.coding-hermes/board/tasks.jsonl'):\n    line=line.strip()\n    if not line: continue\n    r=json.loads(line)\n    if r.get('id')=='AUG-197':\n        print('top-level keys:', sorted(r.keys()))\n        print('evidence_run_id top-level:', repr(r.get('evidence_run_id')))\n        print('status:', r.get('status'))\n\"",
+          "exit_code": 0,
+          "output_sha": "3670a25be767cc08c9490d15a54b04094feeaa631e67a8030a438eabcb0e0810"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '320,360p' tests/test_board_evidence_audit.py",
+          "exit_code": 0,
+          "output_sha": "e4cd9f0b6bfa3b44f0e45b0b27bb1d99948c3e1e7bad1e5aa0024c905c0c6962"
+        },
+        {
+          "tool": "run_command",
+          "command": "cat pytest.ini; echo ---; grep -n \"testpaths\\|\\[pytest\\]\\|\\[tool.pytest\" pytest.ini pyproject.toml 2>/dev/null | head",
+          "exit_code": 0,
+          "output_sha": "5cc5f876172404913ae3f2e76221600ade1f260a219463dd937e629d5f4d8695"
+        },
+        {
+          "tool": "run_command",
+          "command": "command -v DUCKBRAIN_URL; echo \"DUCKBRAIN_URL=${DUCKBRAIN_URL:-unset}\"; curl -s -m 5 \"${DUCKBRAIN_URL:-http://127.0.0.1:3000}/api/namespaces\" -H \"Authorization: Bearer ${DUCKBRAIN_TOKEN:-}\" | head -c 300",
+          "exit_code": 0,
+          "output_sha": "5d93467c233ad845780da9e8f09cb1f13f674d968058028e5fdad0b462f73338"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"SYNC_LOCK_PID_RE\\|TEST_NS_GLOBAL_PREFIX\\s*=\\|TEST_NS_PREFIX\\s*=\\|AUGER_BLOCKED_BY_PREFIX\\s*=\" tests/conftest.py | head",
+          "exit_code": 0,
+          "output_sha": "74764259ec88292e7eea4f414160cd3a075806fe7652ae3e977eccf758fbe7f5"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 47a25f0 -- tests/conftest.py | grep -n \"^+\" | grep -i \"def pytest_\\|import\\b\" | head -20",
+          "exit_code": 0,
+          "output_sha": "390abfb1418900aa66e496e9ea5f2d82924c4403f9139b9ac7f1e42afcd588ff"
+        },
+        {
+          "tool": "run_command",
+          "command": "head -60 tests/conftest.py",
+          "exit_code": 0,
+          "output_sha": "5001d36d698564b7818eb307eba0e87d07a16c90d307894108fcaee7ca466a2f"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"derived_0: The timeout attribution branch in gate.sh is reachable from guards.test_command (bash tests/gate.sh) and still fails closed on overrun (exit 1) even when attribution is unavailable.\\nderived_1: The foreign-409 contention path does not weaken leak detection: mixed problems still fail; the reaper never touches non-test or current-session namespaces.\\nderived_2: The ns_created contention 'return inside finally' cannot mask a genuine test failure of the test body.\\nderived_3: The new/changed tests actually pass fresh (pytest + ruff on the touched files) and the pre-existing host-corpus red (test_spec_ingest[code-factory] + AUG-197 board binding) is outside this diff's footprint.\\n\", \"key\": \"derived_criteria\"}",
+          "exit_code": 0,
+          "output_sha": "50e2cb920e9ab74563dff7a778c4f6bb44841b0dae76aa973d64dca4f69b7ef9"
+        },
+        {
+          "tool": "run_command",
+          "command": "timeout 300 .venv/bin/python -m pytest tests/test_substrate_hygiene.py -p no:cacheprovider -q 2>&1 | tail -5; echo \"EXIT=$?\"",
+          "exit_code": 0,
+          "output_sha": "98f90f27f9f9f4e28077a147a1a192210ed6db2f429853b563b91a4f21c075f5"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp && cp /home/kara/auger/tests/gate.sh /tmp/gate_probe.sh && sed -i 's|HERE=\"$(cd \"$(dirname \"${BASH_SOURCE\\[0\\]}\")/..\" \\&\\& pwd)\"|HERE=\"/home/kara/auger\"|' /tmp/gate_probe.sh && AUGER_GATE_PYTEST_BUDGET=25s bash /tmp/gate_probe.sh > /tmp/gate_probe.out 2>&1; echo \"GATE_RC=$?\"; tail -30 /tmp/gate_probe.out",
+          "exit_code": 0,
+          "output_sha": "32cb700db6bef71c1340cdf4e1269be801f0be07746de13030282b2bac3935ae"
+        },
+        {
+          "tool": "run_command",
+          "command": ".venv/bin/python scripts/auger_ns_census.py; echo \"CENSUS_RC=$?\"",
+          "exit_code": 0,
+          "output_sha": "c686cf150e80577b81adcae55ca744e5d87a8e636b57a0ad27f0ad19d133a100"
+        },
+        {
+          "tool": "run_command",
+          "command": "timeout 600 .venv/bin/python -m pytest tests/test_auger.py -k \"teardown or leak or live_service or preflight or audit or substrate\" -p no:cacheprovider -q 2>&1 | tail -6; echo \"EXIT=$?\"",
+          "exit_code": 0,
+          "output_sha": "319cfc8b03f6075bfc474a5b07ab646f1e6d3ceb47d9baa4fd3be22071c230e3"
+        },
+        {
+          "tool": "run_command",
+          "command": "ruff check tests/conftest.py tests/test_substrate_hygiene.py scripts/gate_timeout_report.py scripts/auger_ns_census.py tests/test_auger.py; echo \"RUFF_RC=$?\"",
+          "exit_code": 0,
+          "output_sha": "16dca68fa8ad60bf80c2ea1cc9c507618b3595cbfa0a5ae3cc4a8a03abfacb30"
+        },
+        {
+          "tool": "run_command",
+          "command": "mkdir -p /tmp/fin_probe && cat > /tmp/fin_probe/conftest.py <<'EOF'\nimport pytest\n@pytest.fixture\ndef finx():\n    try:\n        yield 1\n    finally:\n        return\nEOF\ncat > /tmp/fin_probe/test_probe.py <<'EOF'\ndef test_masked_question(finx):\n    assert False, \"body failure must still surface\"\nEOF\ncd /tmp/fin_probe && /home/kara/auger/.venv/bin/python -m pytest -p no:cacheprovider -q test_probe.py 2>&1 | tail -4; echo \"PROBE_RC=$?\"",
+          "exit_code": 0,
+          "output_sha": "6b2d3f0488bb63c27448c18c1b630dd9d2cacbd7faecac1f617a17c934c230c7"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 47a25f0 -- tests/test_auger.py | head -140",
+          "exit_code": 0,
+          "output_sha": "760adf83776886a7cfa3f404cce9f51615a5f5a3797ff8bc3da15b0c3ec74838"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 47a25f0 -- tests/test_auger.py | sed -n '140,230p'",
+          "exit_code": 0,
+          "output_sha": "5bf5128d16a67896e4d0010f580904a904c9503d1919b992fdc20817b0ef2fc8"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 47a25f0 -- tests/gate.sh | sed -n '55,130p'",
+          "exit_code": 0,
+          "output_sha": "9759edd34773dc30d8defd965b0f17e15ce2349dcff3191610ec7022b5844940"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -rn \"AUGER_GATE_PROGRESS_FILE\" tests/conftest.py .gitignore 2>/dev/null; ls /tmp/auger-gate-pytest-progress.* 2>/dev/null | head -3; echo \"---\"; grep -c \"\" /tmp/gate_probe.out",
+          "exit_code": 0,
+          "output_sha": "12de806dba96136c6b57cfa50489474fdf74304f8f3c1f551271e994164b0f99"
+        },
+        {
+          "tool": "run_command",
+          "command": "git log --oneline origin/main -3 2>/dev/null; git rev-parse HEAD origin/main 2>/dev/null | head -2",
+          "exit_code": 0,
+          "output_sha": "366b3e132cab09486fa8aa808124f83722ad8f6241784a6ea9484a7fa84fc019"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '1,40p' .gitreins/config.yaml | grep -n \"timeout\\|test_command\" ; echo ---; grep -rn \"leftovers\\|leftover\" scripts/auger_ns_census.py | head -8",
+          "exit_code": 0,
+          "output_sha": "72d28bbd87e7be1cd9a3f3313e7112e281433355a35bec425967ad140d5f1a3b"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '36,58p' .gitreins/config.yaml",
+          "exit_code": 0,
+          "output_sha": "65a2116ee384d75519d1a714756d82a375e706164dd60e730d7073faf71ecaa3"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"verified_0 (given criterion): PASS \\u2014 three legs.\\n(1) Timeout attribution: tests/gate.sh:73-74 exports AUGER_GATE_PROGRESS_FILE; gate.sh:254-265 on rc 124/137 runs scripts/gate_timeout_report.py then exit 1 (fail-closed); tests/conftest.py:737-755 pytest_runtest_logstart/logreport append JSONL. LIVE PROBE (this conversation): AUGER_GATE_PYTEST_BUDGET=25s bash gate.sh -> GATE_RC=1 with \\\"first failing test (in flight when the arm was killed): tests/test_auger.py::test_nested_suite_spawn_env_inherits_the_substrate_hold\\\", \\\"progress records: 1134 lines, 336 test starts\\\".\\n(2) Foreign-409: conftest.py:236,264-271 classify_push_conflict keys on \\\"held by pid N\\\"; teardown_namespace conftest.py:338-359 fails fast, ENV-CONTENTION prefix naming pid, row+dir kept; ns_created finalizer conftest.py:927-941 returns on contention-only; test_auger.py:71-90/6390-6399/6424-6451 attribute/skip. Tests: 22 passed (hygiene file), 25 passed 3 skipped (test_auger teardown/leak/preflight/audit/substrate), ruff clean.\\n(3) Leftovers: LIVE RUN .venv/bin/python scripts/auger_ns_census.py -> rc=0, \\\"leftover test namespaces in the REGISTRY: 34\\\" with 34 ids; reaper census conftest.py:504-525; reaper at live_service setup conftest.py:884-893.\\nknown pre-existing reds (not this diff): test_spec_ingest[code-factory] host corpus drift (~/code-factory/specs edited Nov 21 after Nov-16 corpus ingest) and board AUG-197 row missing top-level evidence_run_id \\u2014 neither touched by 47a25f0 (6 files: 2 scripts, conftest, gate.sh, test_auger.py, test_substrate_hygiene.py).\\nverified_derived_0: PASS \\u2014 guards.test_command is 'bash tests/gate.sh' (.gitreins/config.yaml:15); my 25s probe OF THAT SCRIPT produced the attribution block and GATE_RC=1; hygiene test_gate_wires_the_progress_file_and_the_attribution_report pins the branch.\\nverified_derived_1: PASS \\u2014 test_contention_only_predicate_is_not_loose (mixed -> False), test_reaper_reaps_prior_sessions_and_spares_the_current_one (current tag + 'hermes-memory' spared), pytest.fail still fires for non-contention residue conftest.py:953.\\nverified_derived_2: PASS \\u2014 empirical /tmp/fin_probe: fixture try/yield/finally:return + `assert False` body still reports \\\"FAILED test_probe.py::test_masked_question ... 1 failed\\\"; body failures surface.\\nverified_derived_3: PASS \\u2014 fresh runs: 22 passed 0.04s (hygiene), 25 passed 3 skipped 16.82s (test_auger selection), ruff 'All checks passed!'; pre-existing reds provably outside footprint (git show 47a25f0 --stat).\\n\", \"key\": \"verified_all\"}",
+          "exit_code": 0,
+          "output_sha": "0e763ec8c73a56e82626da3dd3e50262b38d55414bc148213ab4c68a5390d5a9"
+        }
+      ]
+    }
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "",
+    "error": "unparseable reviewer reply: no parseable JSON object in reply: '{\"findings\":[{\"severity\":\"low\",\"file\":\".coding-hermes/board/tasks.jsonl\",\"line\":303,\"detection\":\"new record\\'s nested JSON objects use a different serialization style (no space after \\':\\') than every si'",
+    "review_state": {
+      "emitted": [],
+      "carried": []
+    }
+  },
+  "summary": "Stage tier1: FAIL\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2717 tests: FAIL (tests/test_board_evidence_audit.py::test_every_bound_row_resolves_to_its_own_task [first faili\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 Gate pytest arm finishes or reports a bounded attributable result with first-failing test named under load; foreign-pid 409 teardown classified as environment contention and not reding the gate; leftovers reported: All three legs verified by code AND live runs in this conversation. (1) AC1 wiring: tests/gate.sh:73-74 exports AUGER_GATE_PROGRESS_FILE (mktemp), tests/conftest.py:737-755 pytest_runtest_logstart/logreport append one JSON line per start/report, gate.sh:254-265 on rc 124/137 runs scripts/gate_timeout_report.py (names the last start without a teardown report plus earlier failures) then exit 1 \u2014 still fail-closed. LIVE PROBE: `AUGER_GATE_PYTEST_BUDGET=25s bash tests/gate.sh` exited GATE_RC=1 printing 'first failing test (in flight when the arm was killed): tests/test_auger.py::test_nested_suite_spawn_env_inherits_the_substrate_hold' and 'progress records: 1134 lines, 336 test starts' \u2014 bounded, attributable, red. (2) AC2: conftest.py:236 SYNC_LOCK_PID_RE + classify_push_conflict:264-271 classify a 'native sync lock held by pid N' 409 as foreign-lock; teardown_namespace:338-359 fails fast (no 61s ladder, test asserts exactly 1 DELETE / zero sleeps), appends an ENV-CONTENTION message naming the pid and keeps row+directory (AUG-117); ns_created finalizer conftest.py:927-941 returns (test not red, loud terminal+stderr line) only when EVERY problem is contention; test_auger.py:71-90 assert_clean_teardown, :6390-6399 postcondition test skips naming the pid, :6424-6451 leak audit attributes foreign-409 residue with one DELETE and still fails for anything else. Fresh runs: tests/test_substrate_hygiene.py 22 passed (0.04s); test_auger.py -k 'teardown or leak or live_service or preflight or audit or substrate' 25 passed, 3 skipped (16.82s); ruff 'All checks passed!'. (3) Leftovers: live `python3 scripts/auger_ns_census.py` rc=0 printed 'leftover test namespaces in the REGISTRY: 34 / leftover test directories on DISK: 34' with all 34 ids; reap_prior_session_namespaces (conftest.py:428-502) runs inside the substrate flock at live_service setup (conftest.py:884-893) and write_reap_report (:504-525) prints reaped/deferred/ghosts via terminal reporter + stderr, honoring AUGER_REAP_SKIP. The prior-stage reds are outside this diff's footprint (git show 47a25f0 --stat: only scripts/auger_ns_census.py, scripts/gate_timeout_report.py, tests/conftest.py, tests/gate.sh, tests/test_auger.py, tests/test_substrate_hygiene.py): test_spec_ingest[code-factory] is pre-existing host corpus drift (live ~/code-factory/specs edited 2026-11-21 after the Nov-16 corpus ingest; /tmp/aug197-sources-absent pin reproduces CI's skip) and the board-evidence red is the AUG-197 board row itself lacking a top-level evidence_run_id (verified in .coding-hermes/board/tasks.jsonl) \u2014 a board bookkeeping defect the code diff cannot fix.\n  \u2713 The timeout attribution branch in gate.sh is reachable from the guard's test command and still fails closed on overrun: guards.test_command is 'bash tests/gate.sh' (.gitreins/config.yaml:15) and the live probe in this conversation ran exactly that script with a 25s budget: GATE_RC=1 plus the attribution block. tests/test_substrate_hygiene.py::test_gate_wires_the_progress_file_and_the_attribution_report pins the 124/137 branch, the report invocation, and the loud 'attribution UNAVAILABLE' fallback (all 22 hygiene tests passed fresh).\n  \u2713 The foreign-409 contention path does not weaken leak detection (mixed problems still fail; reaper never touches non-test or current-session namespaces): tests/test_substrate_hygiene.py::test_contention_only_predicate_is_not_loose (contention+500 -> False), ::test_reaper_reaps_prior_sessions_and_spares_the_current_one (current session's tag and 'hermes-memory' spared), ::test_reaper_defers_a_foreign_pid_409_and_names_it (1 attempt, pid named), ::test_reaper_reports_a_plain_refusal_instead_of_failing \u2014 all passed in the fresh 22-test run; conftest.py:953 still pytest.fail's a finalizer whose problems are not contention-only.\n  \u2713 The contention 'return inside finally' cannot mask a genuine test failure: Empirical probe this conversation: /tmp/fin_probe fixture with try/yield/finally:return plus test body `assert False` reported 'FAILED test_probe.py::test_masked_question ... 1 failed' \u2014 a body failure still surfaces even when the fixture's finalizer returns inside finally, so conftest.py:935's contention return does not hide real reds.\n  \u2713 The new/changed tests pass fresh and lint is clean on the touched files; the prior-stage reds are provably pre-existing: Fresh command output this conversation: `.venv/bin/python -m pytest tests/test_substrate_hygiene.py -q` -> '22 passed in 0.04s' EXIT=0; `-k 'teardown or leak or live_service or preflight or audit or substrate'` -> '25 passed, 3 skipped' EXIT=0; `ruff check` on the five touched python files -> 'All checks passed!' RUFF_RC=0. Pre-existing status verified: the code-factory corpus red reproduces from host source drift (corpora/code-factory manifest last touched 237fa7f Nov-16, live source edited Nov-21) and the board audit red comes from the AUG-197 tasks.jsonl row having no top-level evidence_run_id (inspected directly) \u2014 neither file is touched by commit 47a25f0.\nThe single criterion's three legs all hold with live evidence \u2014 a 25s-budget gate probe named the test in flight and failed closed (rc=1), the foreign-pid 409 path classifies contention fail-fast without reding tests while the leak audit stays strict, and the census script reported 34 leftovers by id \u2014 with the two prior-stage reds proven pre-existing host/board bookkeeping outside this diff's six-file footprint.\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-11-22T14:52:56.918653",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-22T14:52:56.953535+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 1095,
+        "truncated": false,
+        "source": "git show aa4600b05087"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 19695,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-197"
+  }
+}
