@@ -127,7 +127,7 @@ warnings; B5b alone would pass the defect the row was raised on.
 |---|---|---|
 | **hermes** | Python `&gt;=3.11,&lt;3.14`; `python3 -m venv` + `pip install hermes-agent==0.19.0`; `hermes serve --host 0.0.0.0 --port P --skip-build` | **MEASURED working**: 32 s install, `/api/status` 200 over tailnet, 133 JSON-RPC methods, `session.create` + `prompt.submit`. Needs a provider key in `~/.hermes/.env`. |
 | **opencode** | standalone binary; `opencode` CLI or server mode | not measured as an INSTALL (no pin, no ladder — `--apply` refuses by name). A real smoke turn WAS measured on the control host by the conformance battery (binary 1.18.29 at `~/.opencode/bin/opencode`, `smoke.txt` carrying the battery's token — `docs/HARNESS-CONFORMANCE.md`, 2026-11-06 run). No v2 artefact exists (matrix §9). |
-| **claude-code** | `npm i -g @anthropic-ai/claude-code` (needs node ≥22) | **MEASURED install ladder** (CF-225, 2026-11-04, `scripts/harness/install-claude-code.sh`): `npm --prefix $HOME/.local/harness/npm` of `@anthropic-ai/claude-code@2.1.318` with the registry's integrity + shasum verified before download, version read back `2.1.318 (Claude Code)`, second `--apply` a no-op. The measured non-interactive surface is `--turn` (`--print --output-format json --bare`); with no credential it prints `CLAUDE-CODE: SKIP (…)` and exits 3. Still not a *supported* harness: crier has no claude adapter (CRIER-HARNESS-11) and matrix I4 needs the five legs on a real node. |
+| **claude-code** | `npm i -g @anthropic-ai/claude-code` (needs node ≥22) | **MEASURED install ladder** (CF-225, 2026-11-04, `scripts/harness/install-claude-code.sh`): `npm --prefix $HOME/.local/harness/npm` of `@anthropic-ai/claude-code@2.1.318` with the registry's integrity + shasum verified before download, version read back `2.1.318 (Claude Code)`, second `--apply` a no-op. The measured non-interactive surface is `--turn` (`--print --output-format json --bare`); with no credential it prints `CLAUDE-CODE: SKIP (…)` and exits 3. Still not a *supported* harness: crier has no claude adapter (CRIER-HARNESS-11) and matrix I4 needs five per-harness support families on a real node. The battery has six leg families: `apply` runs only under `--install`, and `node` is dispatched only for `codex`. |
 | **codex** | release tarball `codex-x86_64-unknown-linux-musl.tar.gz` from `rust-v0.166.0`, sha256-pinned, installed under `$HOME/.local/codex/&lt;pin&gt;`; **exec** mode (`codex exec --json -s &lt;mode&gt; -m &lt;model&gt; -- &lt;text&gt;`, `exec resume &lt;id&gt;`) | **MEASURED** (CF-227, 2026-11-04, `scripts/harness/install-codex.sh`): 7 s install, version read back `codex-cli 0.166.0`, idempotent second `--apply`, and one real turn wrote a fixed token with `model_served` read from codex's own rollout record. **CF-006 (re-measured 2026-11-08): the ladder also installs the exec file-write sidecar `codex-code-mode-host`** — a SEPARATE release asset, sha256-pinned, placed beside the binary because codex spawns it from its own directory. Without it every tool call fails closed (`ERROR … failed to spawn code-mode host … No such file or directory`) and the turn exits 0 having written no artifact; with it the turn writes the token and the battery's `codex:smoke` leg PASSes. The **app-server** sidecar is `[experimental]` and **nothing in crier uses it** — `codex.go` names "two verified surfaces: exec create / exec resume", and `grep -rn app-server` over crier is empty; `--app-server` probes it anyway (an `initialize` over stdio answers with a `userAgent`). |
 | **aider** | `scripts/harness/install-aider.sh`; binary `aider`. The documented method is `pip install aider-chat` into a venv — **documented, not measured** | not measured (no pin, no artefact digest, no measured non-interactive surface); the adapter ships a real `--check`/`--contract`, prints the documented method as a `..` note and refuses `--apply` by name, so a harness this spec names can no longer be silent in the battery (CF-006) |
 | **goose** | `scripts/harness/install-goose.sh`; binary `goose`. The documented method is a standalone release binary — **documented, not measured** | not measured (no release tag, no artefact digest, no measured non-interactive surface); the adapter ships a real `--check`/`--contract` and refuses `--apply` by name (CF-006) |
@@ -177,7 +177,8 @@ support:
 
 An `UNVERIFIED` or `FAIL` above is a measurement, not a defect: only codex, claude-code, dsh and
 hermes have ladders this repo can reproduce, and the conformance matrix refuses to promote any of
-them to "supported" without the five legs on a real node.
+them to "supported" without `check`, `apply`, `vars`, `smoke`, and `memory` on a real node;
+the battery's fixture results alone are not that real-node evidence.
   </section>
   <!-- source: code-factory/specs/HARNESS.md#dsh-the-installer-the-layers-and-the-adapter-decision -->
   <section id="CF-HARNESS-DSH-THE-INSTALLER-THE-LAYERS-A-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
@@ -242,13 +243,18 @@ which this repo has measured), and the matrix's `memory` leg stays unwritten for
   <section id="CF-HARNESS-CONFORMANCE-IS-MEASURED-NOT-CL-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
 ## Conformance is measured, not claimed
 
-`tests/harness-conformance.sh` runs three legs per harness — the adapter's own `--check`, a real
-smoke turn that must leave a file containing a token the battery chose (bytes re-read on the
-control host), and, only with `--install`, the adapter's `--apply` in a throwaway `$HOME` followed
-by a post-apply `--check`. It prints `PASS`/`FAIL`/`SKIP` with the measured value and regenerates
-`docs/HARNESS-CONFORMANCE.md` with `--write-doc`. The pi-agent fixture test is separate from this
-live battery: its fixture proves wiring, while upstream install, real-node execution, and memory remain
-UNVERIFIED residuals.
+`tests/harness-conformance.sh` emits six leg families, two of them conditional: `check` (adapter
+`--check`, `tests/harness-conformance.sh:522`), `apply` (adapter `--apply` in a throwaway `$HOME`
+followed by post-apply checking, `tests/harness-conformance.sh:738`), `vars` (contract fixture,
+`tests/harness-conformance.sh:428`), `smoke` (token-bearing file read back,
+`tests/harness-conformance.sh:597`), `memory` (hermetic I3 writer/readback and sub-rows,
+`tests/harness-conformance.sh:386`), and `node` (the offline node-creation fixture, plus a
+`live-node` row that stays `SKIP`, `tests/harness-conformance.sh:709`). The count is never quoted
+without its two gates: `apply` runs only with `--install` (otherwise it emits `SKIP`), and `node`
+is dispatched only for `codex`. These battery rows are distinct from evidence on a real node: in
+particular `memory` emits a live-support `SKIP`. The battery prints `PASS`/`FAIL`/`SKIP` with measured values and regenerates
+`docs/HARNESS-CONFORMANCE.md` with `--write-doc`. The pi-agent fixture test is separate: upstream
+install, real-node execution, and memory remain UNVERIFIED residuals.
 
 The smoke leg resolves the binary from the adapter's own measurement (the `PASS binary` row that
 `--check` printed), and falls back to `PATH` only when the adapter names no path, or names one that
