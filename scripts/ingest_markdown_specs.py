@@ -37,6 +37,16 @@ Conversion rules (AUG-176 AC1/AC2/AC5):
 The emitted documents are ordinary authored specs: `<spec xmlns="urn:auger:spec:1" ...>` with
 `kind="section"` blocks, validating under `auger spec validate <root>` AND `auger spec check
 <root>`.
+
+AUG-204 adds the FULL-TREE pipeline for coding-hermes-director: every one of the 648 canonical
+.md paths is classified by directory scope in `coverage-manifest.json` — build-spec /
+contracts / review / sections / DESIGN.md render first-class; `handbook/` is content-hash
+deduped against the first-class pool (a duplicate carries provenance pointers to the render
+that already holds its content and never gets a render of its own; unique normative content
+renders ONCE); `audit/*.md` becomes a provenance/attachment record with no render. The
+AUG-176 distilled set keeps its stem-slug ids and flat corpus placement byte-stable
+(`stem_slug_globs`); every other render mirrors its source path under the corpus root with a
+parent-path-aware slug. Same inputs -> byte-identical output, still.
 """
 
 from __future__ import annotations
@@ -66,39 +76,31 @@ EXCLUSIONS: dict[str, list[dict]] = {
     ],
     "coding-hermes-director": [
         {
-            "path": "audit/",
-            "reason": "process artifact (audit transcripts), not spec content — owner row names "
-            "audit/ as excluded",
-        },
-        {
             "path": "tickets/",
-            "reason": "process artifact (ticket tracker), not spec content — owner row names "
-            "tickets/ as excluded",
+            "reason": "process artifact (ticket tracker), not spec content — holds no "
+            "markdown; AUG-204 accounts every canonical .md path and tickets/ holds none",
         },
         {
-            "path": "handbook/",
-            "reason": "compiled PDF volumes (owner-facing digest). The handbook is the "
-            "COMPLETENESS ORACLE for this conversion (foreman_note), not a conversion source: "
-            "its curated section list is cross-checked against the corpus in "
-            "evidence/AUG-176/04-handbook-parity.txt",
+            "path": "non-markdown files (openapi.yaml, config templates, JSON schemas, "
+            "fixtures, PDFs, __pycache__, validate_config.py, review evidence .txt / "
+            "review-log.json / packaging non-md files)",
+            "reason": "machine-readable or binary files — not prose; the canonical set "
+            "this corpus accounts is the 648 canonical .md paths (AUG-204)",
         },
         {
-            "path": "review/ (except PLAN.md, PLAN-3.3.md)",
-            "reason": "process artifacts: per-review evidence .txt files, review-log.json, "
-            "packaging dirs (chdNN-package/) and handoff notes — not spec content. The two "
-            "review PLAN documents ARE spec content and are converted",
+            "path": "audit/*.md (47 files)",
+            "reason": "NOT excluded from accounting (AUG-204 sub-scope rule 3): each "
+            "audit transcript is carried as a provenance/attachment record in "
+            "coverage-manifest.json — no first-class XML render is authored for audit "
+            "files",
         },
         {
-            "path": "contracts/ (non-markdown)",
-            "reason": "machine-readable contract files (openapi.yaml, config templates, JSON "
-            "schemas, fixtures, __pycache__, validate_config.py) — the markdown contracts are "
-            "converted; binary/schema files are not prose",
-        },
-        {
-            "path": "build-spec/autogen/, acceptance/, integrated/, integration-evidence/, "
-            "non-markdown files",
-            "reason": "generated/derived build artifacts (JSON state machines, inventories, "
-            "evidence bundles) — the 14 authored markdown volumes and indexes are converted",
+            "path": "handbook/*.md (490 files)",
+            "reason": "NOT excluded from accounting (AUG-204 sub-scope rule 2): the "
+            "content-hash dedupe classifies every handbook file in coverage-manifest.json "
+            "— duplicates (of a canonical first-class render or of another handbook "
+            "render) carry provenance pointers and never their own render; unique "
+            "normative content renders ONCE",
         },
     ],
 }
@@ -136,8 +138,34 @@ PROJECTS: dict[str, dict] = {
             "review/PLAN.md",
             "review/PLAN-3.3.md",
         ],
-        "source_label": "coding-hermes-director spec tree (structured set; audit/tickets/"
-        "handbook/review-evidence excluded with reasons)",
+        "source_label": "coding-hermes-director spec tree (AUG-204 full-tree scope: every "
+        "canonical .md path accounted — first-class renders, handbook dedupe, audit "
+        "provenance records)",
+        "full_tree": {
+            "first_class_globs": [
+                "DESIGN.md",
+                "build-spec/**/*.md",
+                "contracts/**/*.md",
+                "review/**/*.md",
+                "sections/*.md",
+            ],
+            # The AUG-176 distilled set: stem-slug ids + flat corpus placement, pinned
+            # byte-stable so the AUG-176 block ids (recall battery targets) never move.
+            "stem_slug_globs": [
+                "DESIGN.md",
+                "contracts/*.md",
+                "sections/*.md",
+                "build-spec/*.md",
+                "review/PLAN.md",
+                "review/PLAN-3.3.md",
+            ],
+            "dedupe_dir": "handbook",
+            "audit_dir": "audit",
+            "coverage_manifest": "coverage-manifest.json",
+            "audit_note": "audit transcript (process artifact, not spec content) — carried "
+            "as a provenance/attachment record per AUG-204 sub-scope rule 3; no first-class "
+            "XML render is authored for audit files",
+        },
     },
 }
 
@@ -302,11 +330,386 @@ def validate_manifest(manifest: dict) -> None:
         )
 
 
-def convert_project(project: str, out_root: Path) -> dict:
-    """Convert every source file of `project` into one XML document per source file."""
+def file_content_digest(path: Path) -> str:
+    """Whole-file content hash (the AUG-204 dedupe unit): `normalized_digest` of the text."""
+    return normalized_digest(path.read_text(encoding="utf-8", errors="replace"))
+
+
+def convert_source_document(
+    project: str, path: Path, file_slug: str, out_path: Path, document_label: str
+) -> dict:
+    """Convert ONE markdown source into one XML document; return its manifest record.
+
+    Shared by the AUG-176 glob pipeline and the AUG-204 full-tree pipeline. `file_slug`
+    is decided by the CALLING pipeline (stem slug for the pinned AUG-176 flat set;
+    parent-path-aware slug for full-tree files that share stems across directories).
+    """
     config = PROJECTS[project]
     prefix = config["prefix"]
     scope = config["scope"]
+    rel = rel_source(project, path)
+    text = path.read_text(encoding="utf-8", errors="replace")
+    sections = parse_sections(text)
+    blocks: list[dict] = []
+    skipped: list[dict] = []
+    parts: list[str] = []
+    for section in sections:
+        bid = block_id(
+            prefix,
+            file_slug,
+            (slug(section["title"])[:30] or "SECTION").rstrip("-"),
+            section["ordinal"],
+        )
+        source = f"{rel}#{section['anchor']}".replace("--", "__")
+        parts.append(f"  <!-- source: {source} -->")
+        body = saxutils.escape(section["body"])
+        # The align scanner resolves `ch:trace` markers in diff text against THIS repo;
+        # a converted source quoting its own marker must not trip it. The XML numeric
+        # character reference parses back to the identical text (an xml-structure change,
+        # not a prose change — the loader unescapes it).
+        body = body.replace("ch:trace", "ch&#58;trace")
+        parts.append(
+            f'  <section id="{bid}" kind="section" status="active" version="1.0.0" '
+            f'applies-to="{scope}">'
+        )
+        parts.append(body)
+        parts.append("  </section>")
+        blocks.append(
+            {
+                "id": bid,
+                "title": section["title"],
+                "anchor": section["anchor"],
+                "source": f"{rel}#{section['anchor']}",
+                # Digest of the SOURCE span this block was emitted from, whitespace-
+                # normalized exactly as the verbatim test normalizes both sides. It is
+                # computed from the source text, never from the emitted XML (AUG-179).
+                "text_sha256": normalized_digest(section["body"]),
+            }
+        )
+    document_id = block_id(prefix, file_slug, "DOC", 0).rsplit("-", 1)[0] + "-CORPUS"
+    doc = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        f"<!-- Converted from {rel} by scripts/ingest_markdown_specs.py (AUG-176).",
+        "     Verbatim prose; provenance in the per-block source comments. -->",
+        f'<spec xmlns="urn:auger:spec:1" id="{document_id}" version="1.0.0" '
+        'schema-version="1.0">',
+        *parts,
+        "</spec>",
+    ]
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(doc) + "\n", encoding="utf-8")
+    return {
+        "source": rel,
+        "source_abs": str(path),
+        "document": document_label,
+        "document_id": document_id,
+        "section_count": len(sections),
+        "block_count": len(blocks),
+        "blocks": blocks,
+        "skipped": skipped,
+    }
+
+
+def full_tree_paths(project: str) -> dict:
+    """Classify every canonical .md of the source tree (AUG-204 sub-scope rules 1-3).
+
+    first-class: build-spec, contracts, review, sections, DESIGN.md — rendered as
+    first-class XML documents. `handbook/`: content-hash deduped against the
+    first-class pool. `audit/`: provenance records, no render. The classification must
+    cover EVERY .md under the source root — an orphan path refuses the run, so a new
+    source directory can never silently fall outside the accounting.
+    """
+    config = PROJECTS[project]
+    ft = config["full_tree"]
+    root = Path(config["source_root"])
+
+    def glob_set(patterns: list[str]) -> list[Path]:
+        found: list[Path] = []
+        for pattern in patterns:
+            found.extend(root.glob(pattern))
+        return sorted({p for p in found if p.is_file() and p.suffix == ".md"})
+
+    first_class = glob_set(ft["first_class_globs"])
+    pinned = glob_set(ft["stem_slug_globs"])
+    handbook = sorted(p for p in (root / ft["dedupe_dir"]).rglob("*.md") if p.is_file())
+    audit = sorted(p for p in (root / ft["audit_dir"]).rglob("*.md") if p.is_file())
+    all_md = {p for p in root.rglob("*.md") if p.is_file()}
+    covered = set(first_class) | set(handbook) | set(audit)
+    orphans = sorted(all_md - covered)
+    if orphans:
+        raise SystemExit(
+            f"full-tree classification incomplete: {len(orphans)} canonical .md "
+            f"path(s) outside every scope (first-class/handbook/audit), e.g. "
+            f"{orphans[0].relative_to(root).as_posix()} — extend the {project} "
+            "full_tree scopes before regenerating (AUG-204: zero unaccounted paths)"
+        )
+    stray = sorted(set(pinned) - set(first_class))
+    if stray:
+        raise SystemExit(
+            f"stem_slug_globs outside first_class_globs: "
+            f"{stray[0].relative_to(root).as_posix()}"
+        )
+    return {
+        "first_class": first_class,
+        "pinned": pinned,
+        "handbook": handbook,
+        "audit": audit,
+    }
+
+
+def dedupe_handbook(first_class: list[Path], handbook: list[Path]) -> dict:
+    """Content-hash dedupe of the handbook against the first-class pool (AUG-204 AC2).
+
+    The hash is `file_content_digest` — sha256 of the whitespace-normalized whole-file
+    text, the same normalization unit the block verbatim contract uses. A handbook file
+    matching a canonical first-class source is `duplicate-of-canonical`; among the
+    rest, the FIRST path in sorted order carrying a content hash is the
+    `handbook-unique` render, and every later equal-hash path is
+    `duplicate-of-handbook` pointing at that render.
+    """
+    canonical_by_hash: dict[str, Path] = {}
+    for path in first_class:
+        canonical_by_hash.setdefault(file_content_digest(path), path)
+    plan: dict[Path, dict] = {}
+    first_by_hash: dict[str, Path] = {}
+    for path in handbook:  # sorted order: the first occurrence owns the render
+        digest = file_content_digest(path)
+        canonical = canonical_by_hash.get(digest)
+        if canonical is not None:
+            plan[path] = {
+                "class": "duplicate-of-canonical",
+                "canonical_source": canonical,
+                "sha256": digest,
+            }
+            continue
+        owner = first_by_hash.get(digest)
+        if owner is not None:
+            plan[path] = {
+                "class": "duplicate-of-handbook",
+                "canonical_source": owner,
+                "sha256": digest,
+            }
+        else:
+            first_by_hash[digest] = path
+            plan[path] = {"class": "handbook-unique", "sha256": digest}
+    return plan
+
+
+def render_placement(paths: list[Path], source_root: Path, pinned: set[Path]) -> dict:
+    """Corpus-relative render path + file slug per source file (AUG-204).
+
+    Pinned files (the AUG-176 distilled set) keep their stem-slug ids and flat corpus
+    placement byte-stable; every other file mirrors its source path under the corpus
+    root and takes a parent-path-aware slug, with an md5-digest ladder for paths that
+    would truncate to the same 24-char slug. Deterministic for a given file set.
+    """
+    placement: dict = {}
+    used_slugs: set[str] = set()
+    used_rels: set[str] = set()
+    ordered = sorted(pinned) + sorted(p for p in paths if p not in pinned)
+    for path in ordered:
+        rel = path.relative_to(source_root)
+        if path in pinned or rel.parent == Path("."):
+            candidate = slug(rel.stem)[:24] or "DOC"
+            if candidate in used_slugs:
+                raise SystemExit(f"flat stem slug collision: {rel.as_posix()}")
+            out_rel = f"{rel.stem}.xml"
+        else:
+            candidate = slug(f"{rel.parent.as_posix()}-{rel.stem}")[:24] or "DOC"
+            if candidate in used_slugs:
+                digest = hashlib.md5(rel.as_posix().encode("utf-8")).hexdigest()
+                candidate = f"{candidate[:17].rstrip('-')}-{digest[:6].upper()}"
+            out_rel = rel.with_suffix(".xml").as_posix()
+        if candidate in used_slugs or out_rel in used_rels:
+            raise SystemExit(
+                f"render placement collision for {rel.as_posix()}: "
+                f"slug={candidate} out={out_rel}"
+            )
+        used_slugs.add(candidate)
+        used_rels.add(out_rel)
+        placement[path] = (out_rel, candidate)
+    return placement
+
+
+def convert_project_full_tree(project: str, out_root: Path) -> dict:
+    """AUG-204: convert the FULL canonical tree by directory scope.
+
+    Spec-bearing directories render first-class; handbook files are content-hash
+    deduped against the first-class pool (duplicates point at the render holding their
+    content; unique normative content renders once); audit files become
+    provenance/attachment records. Every canonical .md path is accounted in
+    `<out_root>/coverage-manifest.json`; `manifest.json` keeps its AUG-176 shape and
+    now covers every rendered document. Ids/placement are deterministic: same inputs
+    -> byte-identical output.
+    """
+    config = PROJECTS[project]
+    ft = config["full_tree"]
+    root = Path(config["source_root"])
+    out_root.mkdir(parents=True, exist_ok=True)
+    classified = full_tree_paths(project)
+    plan = dedupe_handbook(classified["first_class"], classified["handbook"])
+    unique_handbook = sorted(
+        p for p, info in plan.items() if info["class"] == "handbook-unique"
+    )
+    render_paths = sorted(classified["first_class"]) + unique_handbook
+    placement = render_placement(render_paths, root, set(classified["pinned"]))
+
+    manifest: dict = {
+        "project": project,
+        "source_root": config["source_root"],
+        "source_label": config["source_label"],
+        "id_scheme": "<PREFIX>-<FILE-SLUG>-<HEADING-SLUG>-S<ordinal> (see "
+        "scripts/ingest_markdown_specs.py module docstring)",
+        "digest_scheme": "text_sha256 = sha256 of the block's whitespace-normalized "
+        "source-span text (see scripts/ingest_markdown_specs.py module docstring)",
+        "documents": [],
+        "excluded": EXCLUSIONS.get(project, []),
+        "totals": {"files": 0, "sections": 0, "blocks": 0, "skipped": 0},
+    }
+    documents = []
+    document_ids: dict = {}
+    block_ids: dict = {}
+    for path in render_paths:
+        out_rel, file_slug = placement[path]
+        record = convert_source_document(
+            project, path, file_slug, out_root / out_rel, out_rel
+        )
+        documents.append(record)
+        document_id = record["document_id"]
+        if document_id in document_ids:
+            raise SystemExit(f"duplicate document id: {document_id}")
+        document_ids[document_id] = record["source"]
+        for block in record["blocks"]:
+            if block["id"] in block_ids:
+                raise SystemExit(
+                    f"duplicate block id {block['id']}: {record['source']} vs "
+                    f"{block_ids[block['id']]}"
+                )
+            block_ids[block["id"]] = record["source"]
+    documents.sort(key=lambda d: d["source"])
+    manifest["documents"] = documents
+    manifest["totals"] = {
+        "files": len(documents),
+        "sections": sum(d["section_count"] for d in documents),
+        "blocks": sum(d["block_count"] for d in documents),
+        "skipped": 0,
+    }
+
+    blocks_by_path = {Path(d["source_abs"]): d["block_count"] for d in documents}
+    entries: list[dict] = []
+    for path in classified["first_class"]:
+        out_rel, _file_slug = placement[path]
+        entries.append(
+            {
+                "path": path.relative_to(root).as_posix(),
+                "class": "first-class",
+                "render": out_rel,
+                "sha256": file_content_digest(path),
+                "bytes": path.stat().st_size,
+                "blocks": blocks_by_path[path],
+            }
+        )
+    for path in classified["handbook"]:
+        rel = path.relative_to(root).as_posix()
+        info = plan[path]
+        entry: dict = {
+            "path": rel,
+            "class": info["class"],
+            "sha256": info["sha256"],
+            "bytes": path.stat().st_size,
+        }
+        if info["class"] == "handbook-unique":
+            entry["render"] = placement[path][0]
+            entry["blocks"] = blocks_by_path[path]
+        else:
+            owner = info["canonical_source"]
+            entry["canonical_source"] = owner.relative_to(root).as_posix()
+            entry["canonical_render"] = placement[owner][0]
+        entries.append(entry)
+    for path in classified["audit"]:
+        entries.append(
+            {
+                "path": path.relative_to(root).as_posix(),
+                "class": "audit-provenance",
+                "record": {
+                    "sha256": file_content_digest(path),
+                    "bytes": path.stat().st_size,
+                    "note": ft["audit_note"],
+                },
+            }
+        )
+    entries.sort(key=lambda e: e["path"])
+    per_class = {
+        name: 0
+        for name in (
+            "first-class",
+            "handbook-unique",
+            "duplicate-of-canonical",
+            "duplicate-of-handbook",
+            "audit-provenance",
+        )
+    }
+    for entry in entries:
+        per_class[entry["class"]] += 1
+    coverage = {
+        "project": project,
+        "source_root": config["source_root"],
+        "generated_by": "scripts/ingest_markdown_specs.py (AUG-204 full-tree scope)",
+        "canonical_md_total": len(entries),
+        "class_vocabulary": {
+            "first-class": "spec-bearing source (build-spec, contracts, review, "
+            "sections, DESIGN.md) — rendered as its own XML document",
+            "handbook-unique": "handbook file whose normalized content matches no "
+            "canonical render — unique normative content, rendered ONCE",
+            "duplicate-of-canonical": "handbook file whose normalized content equals a "
+            "canonical first-class source — provenance pointers, NO render of its own",
+            "duplicate-of-handbook": "handbook file whose normalized content equals "
+            "another handbook file's render — pointer to that render, NO own render",
+            "audit-provenance": "audit transcript — provenance/attachment record, "
+            "no render",
+        },
+        "dedupe": {
+            "method": "sha256 of the whitespace-normalized full text "
+            "(' '.join(text.split())) of each canonical .md, compared against the "
+            "first-class pool, then within handbook (first sorted path owns the "
+            "render)",
+            "canonical_pool": len(classified["first_class"]),
+        },
+        "entries": entries,
+        "totals": {**per_class, "total": len(entries)},
+    }
+    if len(entries) != len(set(e["path"] for e in entries)):
+        raise SystemExit("duplicate paths in the coverage manifest")
+    (out_root / ft["coverage_manifest"]).write_text(
+        json.dumps(coverage, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    # Regeneration hygiene (recursive form of the AUG-176 rule): an XML document that
+    # no longer maps to a rendered source must not linger anywhere under the corpus
+    # root — the loader indexes every *.xml under the root, so a stale document
+    # silently re-enters the corpus the classification just dropped.
+    expected = {d["document"] for d in documents} | {
+        "manifest.json",
+        ft["coverage_manifest"],
+    }
+    for stale in out_root.rglob("*.xml"):
+        if stale.relative_to(out_root).as_posix() not in expected:
+            stale.unlink()
+    validate_manifest(manifest)
+    (out_root / "manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return manifest
+
+
+def convert_project(project: str, out_root: Path) -> dict:
+    """Convert every source file of `project` into one XML document per source file.
+
+    A project configured with `full_tree` (AUG-204) goes through the full-tree
+    pipeline; every other project keeps the AUG-176 glob pipeline unchanged.
+    """
+    config = PROJECTS[project]
+    if config.get("full_tree"):
+        return convert_project_full_tree(project, out_root)
     out_root.mkdir(parents=True, exist_ok=True)
     manifest: dict = {
         "project": project,
@@ -321,75 +724,16 @@ def convert_project(project: str, out_root: Path) -> dict:
         "totals": {"files": 0, "sections": 0, "blocks": 0, "skipped": 0},
     }
     for path in source_files(project):
-        rel = rel_source(project, path)
-        text = path.read_text(encoding="utf-8", errors="replace")
-        sections = parse_sections(text)
         file_slug = slug(Path(path).stem)[:24] or "DOC"
-        blocks: list[dict] = []
-        skipped: list[dict] = []
-        parts: list[str] = []
-        for section in sections:
-            bid = block_id(
-                prefix,
-                file_slug,
-                (slug(section["title"])[:30] or "SECTION").rstrip("-"),
-                section["ordinal"],
-            )
-            source = f"{rel}#{section['anchor']}".replace("--", "__")
-            parts.append(f"  <!-- source: {source} -->")
-            body = saxutils.escape(section["body"])
-            # The align scanner resolves `ch:trace` markers in diff text against THIS repo;
-            # a converted source quoting its own marker must not trip it. The XML numeric
-            # character reference parses back to the identical text (an xml-structure change,
-            # not a prose change — the loader unescapes it).
-            body = body.replace("ch:trace", "ch&#58;trace")
-            parts.append(
-                f'  <section id="{bid}" kind="section" status="active" version="1.0.0" '
-                f'applies-to="{scope}">'
-            )
-            parts.append(body)
-            parts.append("  </section>")
-            blocks.append(
-                {
-                    "id": bid,
-                    "title": section["title"],
-                    "anchor": section["anchor"],
-                    "source": f"{rel}#{section['anchor']}",
-                    # Digest of the SOURCE span this block was emitted from, whitespace-
-                    # normalized exactly as the verbatim test normalizes both sides. It is
-                    # computed from the source text, never from the emitted XML (AUG-179).
-                    "text_sha256": normalized_digest(section["body"]),
-                }
-            )
-        document_id = (
-            block_id(prefix, file_slug, "DOC", 0).rsplit("-", 1)[0] + "-CORPUS"
-        )
-        doc = [
-            '<?xml version="1.0" encoding="UTF-8"?>',
-            f"<!-- Converted from {rel} by scripts/ingest_markdown_specs.py (AUG-176).",
-            "     Verbatim prose; provenance in the per-block source comments. -->",
-            f'<spec xmlns="urn:auger:spec:1" id="{document_id}" version="1.0.0" '
-            'schema-version="1.0">',
-            *parts,
-            "</spec>",
-        ]
         out_path = out_root / (Path(path).stem + ".xml")
-        out_path.write_text("\n".join(doc) + "\n", encoding="utf-8")
-        manifest["documents"].append(
-            {
-                "source": rel,
-                "source_abs": str(path),
-                "document": out_path.name,
-                "section_count": len(sections),
-                "block_count": len(blocks),
-                "blocks": blocks,
-                "skipped": skipped,
-            }
+        record = convert_source_document(
+            project, path, file_slug, out_path, out_path.name
         )
+        manifest["documents"].append(record)
         manifest["totals"]["files"] += 1
-        manifest["totals"]["sections"] += len(sections)
-        manifest["totals"]["blocks"] += len(blocks)
-        manifest["totals"]["skipped"] += len(skipped)
+        manifest["totals"]["sections"] += record["section_count"]
+        manifest["totals"]["blocks"] += record["block_count"]
+        manifest["totals"]["skipped"] += len(record["skipped"])
     # Regeneration hygiene: an XML document that no longer maps to a source (an excluded
     # file's output from an earlier run, say) must not linger in the corpus root — the
     # loader indexes every *.xml under the root, so a stale document silently re-enters
