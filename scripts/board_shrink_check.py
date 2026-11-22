@@ -5,8 +5,8 @@ Commit 45a29b9 (a lane close-out) rewrote .coding-hermes/board/tasks.jsonl from 
 the two survivors were exactly the rows that commit closed. 295 rows went invisible for about
 three minutes (261 complete, 28 pending, 2 blocked, 4 legacy "done"). The pre-commit gate did not
 catch it because `boardctl validate` grades a 2-row board as VALID: a short board is a valid
-board. Only a ROW-COUNT comparison against a baseline blob can see row loss, and at HEAD nothing
-on the commit path made that comparison.
+board. A comparison of row counts and ids against a baseline blob can see row loss; at the time
+nothing on the commit path made that comparison.
 
 Modes
   staged (default)  `git show :<board>`            vs `git show HEAD:<board>`
@@ -23,20 +23,22 @@ Row counting
 Refusals (exit 1)
   * candidate rows < baseline rows — the commit would lose rows; the message prints BOTH counts
     and the ids that disappeared.
+  * any baseline id is missing from the candidate, even if the row count is equal or greater —
+    same-count wholesale replacements and losses hidden by new rows are refused (AUG-195).
   * a parse failure on either side — the counts cannot be trusted.
   * the baseline cannot be resolved or read — FAIL CLOSED, naming `git fetch --deepen=1`: a
     shallow clone that cannot see the parent commit must deepen, never pass a gate it did not run.
 
 Override
-  BOARD_ALLOW_SHRINK=1|true|yes turns the refusal into an explicit NOTICE that still prints both
-  counts and every lost id and exits 0. A deliberate prune is reviewable precisely because it has
-  to say so out loud.
+  BOARD_ALLOW_SHRINK=1|true|yes turns a count/identity refusal into an explicit NOTICE that still
+  prints both counts and every lost id and exits 0. A deliberate prune is reviewable precisely
+  because it has to say so out loud. Parse failures and impossible comparisons still fail closed.
 
 HONEST LIMIT — this is the contract, not a to-do list
-  A SAME-COUNT wholesale replacement is NOT detected. Replace all 297 rows with 297 different rows
-  and this check compares equal, because the only invariant evaluated here is the row COUNT. A
-  same-count rewrite has to be caught by reading the diff. What this check exists to stop is the
-  failure that actually happened (297 rows became 2) and that no other gate could see.
+  Every distinct baseline id must survive, and the total row count must not decrease. Content
+  edits of surviving ids and line reordering are allowed. This is not a content-integrity or
+  per-id multiplicity check: duplicate-id rows may change while every distinct id survives and
+  the total count does not fall. Other gates and diff review own those checks.
 
 AC4 — the truncating writer
   The writer behind 45a29b9 lives OUTSIDE this repository and is not any tracked fleet helper, so
@@ -54,8 +56,8 @@ Usage
   python3 scripts/board_shrink_check.py --recent # HEAD vs HEAD^ (CI)
   BOARD_ALLOW_SHRINK=1 git commit ...            # deliberate prune
 
-Exit codes: 0 append / unchanged count / explicit override; 1 shrink, parse failure, or an
-impossible comparison (fail closed).
+Exit codes: 0 append / surviving ids with unchanged count / explicit override; 1 shrink, missing
+baseline id, parse failure, or an impossible comparison (fail closed).
 """
 
 import argparse
@@ -176,18 +178,23 @@ def main():
         )
         return 1
 
-    if new[0] < old[0]:
+    if new[0] < old[0] or lost:
+        effect = (
+            f"drop {old[0] - new[0]} task row(s)"
+            if new[0] < old[0]
+            else f"remove or replace {len(lost)} baseline row id(s)"
+        )
         override = os.environ.get(ALLOW_ENV, "").strip().lower()
         if override in TRUTHY:
             print(f"board-shrink: NOTICE {ALLOW_ENV} override: {report}")
             print(
-                f"board-shrink: SHRINK ACCEPTED — {old[0] - new[0]} task row(s) dropped "
+                f"board-shrink: SHRINK ACCEPTED — the commit will {effect} "
                 f"({old[0]} -> {new[0]}); the ids above are gone from the board."
             )
             return 0
         print(f"board-shrink: REFUSED {report}", file=sys.stderr)
         print(
-            f"board-shrink: the commit would drop {old[0] - new[0]} task row(s) "
+            f"board-shrink: the commit would {effect} "
             f"({old[0]} -> {new[0]}); {BOARD} must be updated in place (append, or rewrite only "
             f"the changed lines) — never replaced with a filtered row set.",
             file=sys.stderr,
@@ -206,10 +213,7 @@ def main():
     if new[0] > old[0]:
         print(f"board-shrink: OK {report} — {new[0] - old[0]} row(s) appended")
     else:
-        print(
-            f"board-shrink: OK {report} — row count unchanged (a same-count wholesale "
-            f"replacement is NOT detected; read the diff)"
-        )
+        print(f"board-shrink: OK {report} — row count and ids unchanged")
     return 0
 
 
