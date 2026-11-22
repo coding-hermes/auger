@@ -64,6 +64,15 @@ if [ -z "$GATE_PYTHON" ]; then
 fi
 echo "gate pytest interpreter: ${GATE_PYTHON:-unavailable}"
 
+# AUG-197 (AC1): attribute a killed pytest arm. The gate exports the progress file the
+# suite's conftest appends every test's start/report JSON line to (writing is a no-op
+# when the variable is unset, so a plain `pytest` run pays nothing); on a budget
+# overrun the gate reads it back and names the test IN FLIGHT at the kill, in place
+# of the unattributed `first_failing_test: none detected` shape measured on this
+# host. CI runners get the same attribution for free.
+export AUGER_GATE_PROGRESS_FILE
+AUGER_GATE_PROGRESS_FILE="$(mktemp "${TMPDIR:-/tmp}/auger-gate-pytest-progress.XXXXXX")" || AUGER_GATE_PROGRESS_FILE=""
+
 require_live_prerequisites(){
   [ "$GATE_MODE" = "live" ] || return 0
   if [ -z "${DUCKBRAIN_URL:-}" ]; then
@@ -242,10 +251,20 @@ run_pytest_arm(){
   # not-a-repository, corpus-missing, git-unavailable) answer rc 2 on empty stdout.
   # The run is read-only over specs/ and leaves no temp litter. Hermetic (~3s).
   setsid timeout --kill-after="$kill_after" "$budget" "$GATE_PYTHON" -m pytest tests/test_auger.py tests/test_openapi_parity.py tests/test_api_service.py tests/test_upgrade_path.py tests/test_xml_specs.py tests/test_verification_graph.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_spec_obligation_gate.py tests/test_spec_decision_ref.py tests/test_spec_rollback.py tests/test_spec_render.py tests/test_spec_assembly_report.py tests/test_trace_artifact.py tests/test_smoke_teardown.py tests/test_xsd_conformance.py tests/test_spec_repository_root.py tests/test_spec_alignment_check.py tests/test_spec_semantic_findings.py tests/test_spec_corpus_view.py tests/test_xml_task_contract.py tests/test_spec_context.py tests/test_plan_approval.py tests/test_task_context.py tests/test_task_packet.py tests/test_brief_spec_context.py tests/test_prd_proofs.py tests/test_usage_skill.py tests/test_packaging.py tests/test_packaging_wheel.py tests/test_teardown_resilience.py tests/test_board_evidence_audit.py tests/test_verdict_hygiene.py tests/test_executable_path_robustness.py tests/test_spec_as_of.py tests/test_ci_boardctl_install.py tests/test_board_shrink_check.py tests/test_spec_ingest.py "$@" || rc=$? # python3 -m pytest: source-inventory marker
-  if [ "$rc" -eq 124 ]; then
+  if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
     echo "GATE TIMEOUT: the pytest arm exceeded ${budget} and was killed as a process group (setsid+timeout, AUG-081) — investigate hung tests; failing the gate" >&2
+    # AUG-197 (AC1): a bounded, ATTRIBUTED result. Name the test in flight at the
+    # kill (and any failed-test evidence the same arm recorded) — never the bare
+    # unattributed kill. Fails closed regardless of what the report says.
+    if [ -n "$AUGER_GATE_PROGRESS_FILE" ] && [ -s "$AUGER_GATE_PROGRESS_FILE" ]; then
+      "$GATE_PYTHON" "$HERE/scripts/gate_timeout_report.py" \
+        --progress "$AUGER_GATE_PROGRESS_FILE" --budget "$budget" >&2 || true
+    else
+      echo "AUG-197: attribution UNAVAILABLE — no per-test progress was recorded (did the suite even reach conftest?); first failing test: none attributable" >&2
+    fi
     exit 1
   fi
+  [ -n "$AUGER_GATE_PROGRESS_FILE" ] && rm -f "$AUGER_GATE_PROGRESS_FILE"
   return "$rc"
 }
 

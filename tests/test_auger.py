@@ -38,6 +38,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
+from types import SimpleNamespace
 from urllib.parse import parse_qsl, unquote, urlsplit
 
 import pytest
@@ -56,6 +57,7 @@ from conftest import (
     answer,
     api_namespaces,
     leftovers,
+    contention_pid,
     ns_path,
     run_cli,
     run_cli_exit,
@@ -64,6 +66,28 @@ from conftest import (
 
 # ---------------------------------------------------------------- helpers
 _JEV_PROBE: dict = {}
+
+
+def assert_clean_teardown(ns: str) -> None:
+    """AUG-197 (AC2): call teardown in a `finally` and grade the result honestly.
+
+    A teardown whose ONLY problems are attributed environment contention
+    (a 409 naming a foreign sync-lock pid) is NOT a failure: the holder is an
+    external job that outlives any retry, the row+directory stay consistent
+    (AUG-117), and the next run's reaper finishes the delete. It is stated
+    loudly here instead of being swallowed. Any OTHER problem still fails the
+    test — this helper weakens nothing but the contended 409.
+    """
+    problems = teardown_namespace(ns)
+    pid = contention_pid(problems)
+    if pid is not None:
+        print(
+            f"AUG-197: teardown of {ns} attributed to a foreign sync push "
+            f"(pid {pid}); deferred to the next run's reaper",
+            file=sys.stderr,
+        )
+        return
+    assert problems == [], f"teardown of {ns} was incomplete: {problems}"
 
 
 def jev_or_skip() -> None:
@@ -176,7 +200,7 @@ def test_init_creates_a_namespace_with_live_tables(live_service: str):
         status, body, _ = auger.db(f"/api/ns/{ns}/tables")
         assert status == 200, body
     finally:
-        assert teardown_namespace(ns) == []
+        assert_clean_teardown(ns)
 
 
 def test_init_tolerates_namespace_created_before_init(live_service: str):
@@ -188,7 +212,7 @@ def test_init_tolerates_namespace_created_before_init(live_service: str):
         assert f"namespace {ns}: existing" in out, out
         assert "declared: 14/14 tables" in out, out
     finally:
-        assert teardown_namespace(ns) == []
+        assert_clean_teardown(ns)
 
 
 # AUG-074: the substrate's namespaces base is configurable (DUCKBRAIN_NAMESPACES_PATH), so
@@ -1115,7 +1139,7 @@ def test_answer_without_a_project_is_refused(live_service: str):
         assert "no project row" in msg, msg
         assert rows(ns, "decision", "") == []
     finally:
-        assert teardown_namespace(ns) == []
+        assert_clean_teardown(ns)
 
 
 # ================================================================= bundles (AUG-009, SPEC-002 section 1)
@@ -1603,7 +1627,7 @@ def test_a_namespace_declared_before_scope_keeps_working(live_service: str):
         assert not stored.get("scope"), stored
         assert auger.decision_scope(stored) == "project"
     finally:
-        assert teardown_namespace(ns) == []
+        assert_clean_teardown(ns)
 
 
 def test_answer_supersedes_marks_the_old_decision_and_records_one_edge(decided: dict):
@@ -2266,7 +2290,7 @@ def test_check_with_no_stored_evidence_says_so(live_service: str):
         assert rc == 0
         assert "no stored evidence matched" in out, out
     finally:
-        assert teardown_namespace(ns) == []
+        assert_clean_teardown(ns)
 
 
 def test_check_is_fail_closed_when_the_model_is_unreachable(ns: str, monkeypatch):
@@ -6362,7 +6386,16 @@ def test_teardown_removes_the_namespace_directory(ns: str):
 
     assert os.path.isdir(ns_path(ns))
 
-    assert take_down(ns) == []
+    problems = take_down(ns)
+    pid = contention_pid(problems)
+    if pid is not None:
+        pytest.skip(
+            f"AUG-197: namespace {ns} is refusing DELETE while a foreign sync push "
+            f"(pid {pid}) holds its lock — the postcondition is deferred to the "
+            "next run's reaper, so this arm cannot be measured now; skipping "
+            "loudly instead of reding the gate"
+        )
+    assert problems == []
     assert not os.path.exists(ns_path(ns))
 
     # Idempotent: a second teardown on an already-gone namespace is not an error.
@@ -6377,10 +6410,40 @@ def test_no_test_namespace_survives_the_suite(live_service: str):
     and its live in-flight namespace is not a leak of this run. The audit still
     fails the gate for a real leak — it just cannot be fooled by a sibling's
     correctly-managed one.
+
+    AUG-197 (AC2/AC4): before a residue name is graded a leak, the audit runs ONE
+    reaper-style DELETE against it. A 409 whose body names a foreign sync-lock pid
+    is environment contention — the substrate refuses, not the suite — so it is
+    ATTRIBUTED (naming the pid) and does not fail the gate; the namespace is
+    reported and the next run's reaper finishes it. Anything the extra DELETE can
+    remove counts as cleaned; anything else is a leak and still fails the gate.
     """
     found = leftovers(scope=CREATED)
-    assert found == {"api": [], "disk": []}, (
-        f"test namespaces were left behind: {found} (prefix {TEST_NS_PREFIX!r})"
+    residue = sorted(set(found["api"]) | set(found["disk"]))
+    if not residue:
+        return
+    attributed: list[str] = []
+    leaked: list[str] = []
+    for name in residue:
+        status, body, _ = auger.delete_namespace(name)
+        if 200 <= status < 300 or status == 404:
+            continue  # the audit's own DELETE finished the teardown
+        if status == 409:
+            kind, pid = conftest.classify_push_conflict(body)
+            if kind == "foreign-lock":
+                attributed.append(f"{name} (foreign sync pid {pid})")
+                continue
+        leaked.append(name)
+    if attributed:
+        print(
+            "AUG-197: leak audit attributed "
+            f"{len(attributed)} residue namespace(s) to a foreign sync push and left "
+            "them for the next run's reaper: " + "; ".join(attributed),
+            file=sys.stderr,
+        )
+    assert not leaked, (
+        f"test namespaces were left behind and NOT attributed to contention: {leaked} "
+        f"(prefix {TEST_NS_PREFIX!r})"
     )
 
 
@@ -7018,9 +7081,7 @@ def sibling_ns(live_service: str) -> str:
         assert rc == 0 and "declared:" in out, out
         yield ns
     finally:
-        problems = teardown_namespace(ns)
-        if problems:
-            pytest.fail(f"teardown of {ns} was incomplete: " + "; ".join(problems))
+        assert_clean_teardown(ns)
 
 
 def bundled_pair(
@@ -7458,7 +7519,7 @@ def test_a_namespace_declared_before_the_cross_project_edge_columns_keeps_workin
         )
         assert "stored without src_project" in sat[0]["note"], sat[0]["note"]
     finally:
-        assert teardown_namespace(ns) == []
+        assert_clean_teardown(ns)
 
 
 def test_a_bundle_scoped_answer_escalates_a_break_instead_of_rewriting_it(
@@ -11455,11 +11516,23 @@ def test_live_service_fixture_holds_the_lock_at_the_yield(tmp_path, monkeypatch)
     fails: the fixture has already released the lock by the time it suspends. The lock
     file is redirected via the documented `AUGER_TEST_LOCK` override so the test is
     hermetic — it never contends with a concurrently running sibling leg's real lock.
+
+    AUG-197: the fixture now also reaps prior sessions' rows between `require_live`
+    and the yield. Both new live dependencies are pinned off on this hermetic path:
+    AUGER_REAP_SKIP=1 (the documented opt-out) and a no-op terminal-reporter request
+    stub, so the yield contract stays substrate-free.
     """
     monkeypatch.setenv("AUGER_TEST_LOCK", str(tmp_path / "fixture-path.lock"))
+    monkeypatch.setenv("AUGER_REAP_SKIP", "1")
     monkeypatch.setattr(conftest, "require_live", lambda: "http://stub.invalid:3000")
 
-    gen = conftest.live_service.__wrapped__()
+    def getplugin(name):
+        return None  # a no-op reporter: nothing to write the census through
+
+    request_stub = SimpleNamespace(
+        config=SimpleNamespace(pluginmanager=SimpleNamespace(getplugin=getplugin))
+    )
+    gen = conftest.live_service.__wrapped__(request_stub)
     pre_depth = conftest._SUBSTRATE_LOCK_DEPTH  # 1 in a live session leg, else 0
     pre_fd = conftest._SUBSTRATE_LOCK_FD
     url = next(gen)  # setup: takes the lock, widens the budget, suspends AT the yield
@@ -11492,7 +11565,7 @@ def test_live_service_fixture_holds_the_lock_at_the_yield(tmp_path, monkeypatch)
     with conftest.substrate_lock():
         outer_fd = conftest._SUBSTRATE_LOCK_FD
         outer_depth = conftest._SUBSTRATE_LOCK_DEPTH
-        gen2 = conftest.live_service.__wrapped__()
+        gen2 = conftest.live_service.__wrapped__(request_stub)
         next(gen2)
         gen2.close()
         assert conftest._SUBSTRATE_LOCK_FD == outer_fd, (

@@ -21,6 +21,17 @@ Three rules shape this file, all of them cost-places in the shell suite it repla
     15,932 rows ghosts. Whatever a path could not fix is RETURNED to the caller and raised
     by the fixture, never swallowed: a namespace that could not be removed is an error,
     not a footnote.
+  * A 409 "Push in flight" has TWO meanings, and AUG-197 makes the body's own
+    discriminator decisive (prior art: off-by-one classes 2944/2827). When the
+    parenthetical names a FOREIGN holder pid ("native sync lock held by pid N"),
+    the holder is an external job (a native sync push, deadline 3600s) that will
+    outlive any short retry: teardown fails FAST with an attributed
+    environment-contention result (prefix `ENV-CONTENTION`) instead of burning
+    the 61s ladder, keeps the row+directory consistent (AUG-117), does NOT fail
+    the test, and leaves the namespace to the NEXT RUN's reaper
+    (`reap_prior_session_namespaces`, runs inside the substrate lock at fixture
+    setup). Without a named holder pid the 409 is the ordinary post-write push
+    window and keeps the short ladder.
   * THE LIVE DEPENDENCY IS EXPLICIT. Every test that needs DuckBrain depends on the
     `live_service` fixture, which probes the API and either skips naming `DUCKBRAIN_URL`
     and the remedy, or (under `AUGER_REQUIRE_LIVE=1`) fails hard. There is no path where
@@ -32,6 +43,7 @@ from __future__ import annotations
 import contextlib
 import fcntl
 import io
+import json
 import os
 import re
 import shutil
@@ -64,7 +76,8 @@ TEST_NS_TAG = uuid.uuid4().hex[:8]
 #: REVIEW-AUGER-005: the tag makes one session's names disjoint from every other
 #: session's (concurrent gate legs, a sibling worktree's suite, a gitreins judge
 #: re-run). A namespace is identified by the FULL prefix, never by the literal name.
-TEST_NS_PREFIX = f"auger-pytest-{TEST_NS_TAG}-"
+TEST_NS_GLOBAL_PREFIX = "auger-pytest-"
+TEST_NS_PREFIX = f"{TEST_NS_GLOBAL_PREFIX}{TEST_NS_TAG}-"
 
 #: Every namespace this session created. The leak audit reads it.
 CREATED: list[str] = []
@@ -209,6 +222,75 @@ def leftovers(scope: list[str] | None = None) -> dict[str, list[str]]:
 #: of the old per-namespace 600s stall. Persistent residue remains a loud failure.
 TEARDOWN_CONFLICT_BACKOFFS = (1, 2, 4, 8, 16, 30)
 
+#: AUG-197: the 409 body answers which kind of conflict it is (AC2, prior art
+#: off-by-one classes 2944/2827 — both verified live 2026-10-18/10-23):
+#:
+#:   ``Push in flight for '<ns>'. Retry after it completes.``            -> transient
+#:   ``Push in flight for '<ns>' (native sync lock held by pid <N> (since ...
+#:      )). Retry after it completes.``                                  -> foreign lock
+#:
+#: A FOREIGN holder is an external job (a native sync push, deadline 3600s) that will
+#: outlive any short retry — retrying only burns the ladder. So the body's pid token
+#: is the discriminator: transient keeps the ladder, foreign lock fails fast with an
+#: ATTRIBUTED result naming the pid, never a retry-until-burn.
+SYNC_LOCK_PID_RE = re.compile(r"held by pid\s+(\d+)", re.IGNORECASE)
+
+#: Prefix of the attributed environment-contention result a teardown appends when a
+#: foreign lock refused the DELETE. The fixture finalizer tests for THIS prefix: a
+#: contention-only teardown is not a test failure (it must not red the suite) — it
+#: leaves the row+directory consistent and the NEXT RUN's reaper finishes the job.
+ENV_CONTENTION_PREFIX = "ENV-CONTENTION:"
+
+#: Namespace rows this session left under a refused DELETE are reaped here on the
+#: next run — see `reap_prior_session_namespaces`. Set AUGER_REAP_SKIP=1 to keep the
+#: reaper off for a run that must not touch anything but its own rows.
+REAP_SKIP_ENV = "AUGER_REAP_SKIP"
+
+
+def classify_push_conflict(body: object) -> tuple[str, int | None]:
+    """Classify a 409 body: ("foreign-lock", pid) | ("transient", None) | ("other", None).
+
+    The body already carries the discriminator, so the classifier only reads text:
+    a "held by pid <N>" parenthetical names an external lock holder (fail fast,
+    attribute the pid); the bare "Push in flight" sentence is the ordinary seconds
+    window a short ladder covers. Anything else on a 409 is left "other" and keeps
+    the existing ladder/reporting behavior unchanged.
+    """
+    text = str(body)
+    match = SYNC_LOCK_PID_RE.search(text)
+    if match:
+        return "foreign-lock", int(match.group(1))
+    if re.search(r"push in flight", text, re.IGNORECASE):
+        return "transient", None
+    return "other", None
+
+
+def teardown_contention_only(problems: list[str]) -> bool:
+    """True when EVERY problem is an attributed environment-contention result.
+
+    Contention is the substrate's answer, not this suite's bug: it must not fail
+    the test (AC2), so the finalizer reports it loudly and lets it pass, leaving
+    the namespace consistent for the next run's reaper.
+    """
+    return bool(problems) and all(p.startswith(ENV_CONTENTION_PREFIX) for p in problems)
+
+
+def contention_pid(problems: list[str]) -> int | None:
+    """The foreign holder pid of a contention-only teardown result, else None.
+
+    Callers that cannot treat a contended teardown as success (a test asserting a
+    teardown postcondition, a fixture whose residue must stay reachable) use this
+    to SKIP loudly, naming the pid — the attributed outcome AC2 asks for.
+    """
+    if not teardown_contention_only(problems):
+        return None
+    for problem in problems:
+        match = SYNC_LOCK_PID_RE.search(problem)
+        if match:
+            return int(match.group(1))
+    return None
+
+
 #: Waits between attempts to remove the DIRECTORY of a namespace whose DELETE already settled
 #: (AUG-131). A concurrent DuckBrain indexer can recreate `<ns>/.embeddings/...` after the
 #: delete, and the API's own rmtree then answers ENOTEMPTY. The window is sub-second, so the
@@ -244,17 +326,23 @@ def teardown_namespace(ns: str) -> list[str]:
         )
     problems: list[str] = []
 
-    # 409 = DuckBrain's sync lock is held by another writer. The old teardown retried
-    # that answer for up to 600s PER namespace, which made one concurrent gate spend
-    # most of its ~19.5 minute wall time in teardown backoff. The session-wide flock
-    # below prevents sibling pytest legs from causing that contention; a short bounded
-    # retry still permits DuckBrain's own just-started native push to finish. A conflict
-    # that survives all six waits is not reinterpreted as success: teardown still LISTs
-    # the registry so the caller gets honest residue evidence. Worst-case conflict wait:
-    # 61s, not 600s.
+    # 409 = DuckBrain's sync lock is held by another writer. AUG-197 (AC2): the body
+    # says WHICH writer. A "held by pid <N>" parenthetical is a FOREIGN process (a
+    # native sync push, deadline 3600s) that will outlive any short retry, so the
+    # ladder is NOT run at all — the DELETE is reported as an attributed
+    # environment-contention result naming the pid instead (a retry-until-burn is
+    # exactly the 992s wall-growth shape prior art 2944 measured). Without a pid
+    # token the 409 is the ordinary post-write push window and keeps the ladder.
+    # The session-wide flock below prevents sibling pytest legs from causing that
+    # contention. A conflict that survives all six waits is still not reinterpreted
+    # as success: teardown still LISTs the registry so the caller gets honest
+    # residue evidence. Worst-case conflict wait: 61s, not 600s.
     status, body = auger.delete_namespace(ns)
+    foreign_pid: int | None = None
+    if status == 409:
+        _kind, foreign_pid = classify_push_conflict(body)
     for backoff in TEARDOWN_CONFLICT_BACKOFFS:
-        if status != 409:
+        if status != 409 or foreign_pid is not None:
             break
         time.sleep(backoff)
         status, body = auger.delete_namespace(ns)
@@ -263,9 +351,23 @@ def teardown_namespace(ns: str) -> list[str]:
     # means the registry row SURVIVED, and the directory must survive with it.
     deleted = 200 <= status < 300 or status == 404
     if not deleted:
-        problems.append(
-            f"DELETE /api/namespaces/{ns} returned {status}: {str(body)[:200]}"
-        )
+        if status == 409 and foreign_pid is not None:
+            problems.append(
+                f"{ENV_CONTENTION_PREFIX} DELETE /api/namespaces/{ns} returned 409; "
+                f"foreign sync lock held by pid {foreign_pid} (an external job that "
+                "outlives any retry) — not retried, namespace left row+directory "
+                "consistent (AUG-117) for the next run's reaper"
+            )
+            print(
+                f"auger: teardown of {ns} deferred to a foreign sync push "
+                f"(pid {foreign_pid}); reported as environment contention, "
+                "reaped on a later run",
+                file=sys.stderr,
+            )
+        else:
+            problems.append(
+                f"DELETE /api/namespaces/{ns} returned {status}: {str(body)[:200]}"
+            )
 
     path = ns_path(ns)
     if deleted:
@@ -293,23 +395,140 @@ def teardown_namespace(ns: str) -> list[str]:
     else:
         # Registry mapping survived -> directory kept: a half-torn namespace whose row and
         # directory still AGREE is repairable (a later DELETE, or an operator's cleanup,
-        # finishes it). Stated on stderr because a silent skip would read as success.
-        print(
-            f"auger: teardown of {ns} INCOMPLETE — DELETE returned {status}; "
-            f"directory KEPT at {path} so the registry mapping and the directory stay consistent",
-            file=sys.stderr,
-        )
+        # finishes it). Stated on stderr because a silent skip would read as success. Under
+        # a contended 409 the attributed block above already said all of this loudly.
+        if not problems or not problems[-1].startswith(ENV_CONTENTION_PREFIX):
+            print(
+                f"auger: teardown of {ns} INCOMPLETE — DELETE returned {status}; "
+                f"directory KEPT at {path} so the registry mapping and the directory "
+                "stay consistent",
+                file=sys.stderr,
+            )
         if not os.path.exists(path):
             problems.append(
                 f"directory is already gone while the registry row survived: {path}"
             )
 
+    # The registry listing check is the sweep's last word for a normal teardown. A
+    # contended namespace is EXPECTED to stay listed until the reaper runs (the row
+    # and the directory agree; running this check there would append a second,
+    # unattributed problem for the same substrate event), so it is skipped only in
+    # that case.
+    if status == 409 and foreign_pid is not None:
+        return problems
     try:
         if ns in api_namespaces():
             problems.append(f"namespace {ns} is still listed by /api/namespaces")
     except SystemExit as exc:
         problems.append(f"could not confirm removal over the API: {exc}")
     return problems
+
+
+# ---------------------------------------------------------------- the reaper (AUG-197)
+def reap_prior_session_namespaces(
+    ns_list: list[str] | None = None,
+    delete=None,
+) -> dict[str, list[str]]:
+    """Delete `auger-pytest-*` registry rows left by PRIOR sessions (AC2/AC4).
+
+    Called from the `live_service` fixture BEFORE the first live test, inside the
+    cross-process substrate lock, so the sweep cannot race a sibling leg (a live
+    leg of this suite on this host does not exist while we hold the flock — the
+    lock file is shared). The current session's own prefix is always spared; so
+    is anything outside the test prefix, unconditionally.
+
+    A namespace whose DELETE answers 409 with a foreign lock-holder pid is NOT
+    retried and NOT forced: it is reported attributed (naming the pid) and is
+    left for a later run — the same fail-fast rule teardown follows.
+
+    Returns {"reaped": [names], "contended": ["name (reason)", ...]} so the
+    caller prints an honest census instead of a silent mutation. Injectable
+    parameters exist for the hermetic tests; production callers pass nothing.
+    """
+    global_names = ns_list if ns_list is not None else api_namespaces()
+    candidates = sorted(
+        n
+        for n in global_names
+        if isinstance(n, str)
+        and n.startswith(TEST_NS_GLOBAL_PREFIX)
+        and not n.startswith(TEST_NS_PREFIX)
+    )
+    delete_one = delete if delete is not None else auger.delete_namespace
+    reaped: list[str] = []
+    contended: list[str] = []
+    for ns in candidates:
+        status, body = delete_one(ns)
+        if 200 <= status < 300 or status == 404:
+            reaped.append(ns)
+            # The DELETE is authoritative for the directory too (AUG-117); only a
+            # leftover tree the server did not get needs a local removal, and its
+            # refusal just leaves a ghost the census will report again — never an
+            # error that would poison the live session.
+            try:
+                shutil.rmtree(ns_path(ns), ignore_errors=True)  # type: ignore[arg-type]
+            except OSError:
+                pass
+            continue
+        if status == 409:
+            kind, pid = classify_push_conflict(body)
+            if kind == "foreign-lock":
+                contended.append(f"{ns} (foreign sync lock held by pid {pid})")
+                continue
+            contended.append(f"{ns} (409 transient push in flight; not forced)")
+            continue
+        contended.append(f"{ns} (DELETE returned {status}: {str(body)[:120]})")
+    return {"reaped": reaped, "contended": contended}
+
+
+def reap_prior_session_namespace_directories() -> list[str]:
+    """Remove ghost directories under the substrate tree: a test-prefixed tree with
+    no registry row (the AUG-117 ghost shape, 15,268 of them measured 2026-10-27).
+    Report-only names; removal is ignore_errors and best-effort, exactly like the
+    smoke harness's hygiene sweep. Never touches the current session's prefix."""
+    root = Path(auger.namespaces_base())
+    if not root.is_dir():
+        return []
+    removed: list[str] = []
+    for entry in sorted(root.iterdir()):
+        if not entry.name.startswith(TEST_NS_GLOBAL_PREFIX) or entry.name.startswith(
+            TEST_NS_PREFIX
+        ):
+            continue
+        shutil.rmtree(entry, ignore_errors=True)
+        if not entry.exists():
+            removed.append(entry.name)
+    return removed
+
+
+def write_reap_report(reap: dict[str, list[str]], reporter=None) -> None:
+    """Print the reaper census so a mutation of shared substrate state is loud.
+
+    `reporter` is the session's terminal pytest reporter (the fixture resolves it
+    via `request.config.pluginmanager.getplugin`): it writes straight to the
+    terminal, so even a `-q` run sees the census — a silent delete is exactly the
+    failure shape AUG-197 exists to end. The same lines are also printed to
+    stderr, so any captured log carries them too.
+    """
+    lines: list[str] = []
+    if reap.get("reaped"):
+        lines.append(
+            f"auger: reaped {len(reap['reaped'])} prior-session test namespace(s): "
+            + ", ".join(reap["reaped"])
+        )
+    if reap.get("contended"):
+        lines.append(
+            f"auger: reaper deferred {len(reap['contended'])} prior-session test "
+            "namespace(s): " + "; ".join(reap["contended"])
+        )
+    if reap.get("ghosts_reaped"):
+        lines.append(
+            f"auger: reaped {len(reap['ghosts_reaped'])} ghost test-directory trees "
+            "(no registry row): " + ", ".join(reap["ghosts_reaped"])
+        )
+    for line in lines:
+        print(line, file=sys.stderr)
+        if reporter is not None and hasattr(reporter, "write_line"):
+            reporter.write_line(line)
 
 
 # ------------------------------------------------- the substrate lock (QA-AUGER-6)
@@ -366,7 +585,12 @@ SUBSTRATE_LOCK_INHERITED_ENV = "AUGER_TEST_LOCK_INHERITED"
 # A full-fleet native sync holds every namespace's native lock for much longer than the
 # ordinary post-write window. Detect it before any live fixture takes the flock, so a live
 # arm never spends 61 seconds per namespace discovering the same known blocker.
-FULL_FLEET_SYNC_MARKER = "duckbrain.js s3 sync all push"
+#: AUG-197: matched as a REGEX because the runner was renamed to node --import tsx
+#: bin/duckbrain.ts (measured 2026-11-22: a LIVE `bin/duckbrain.ts s3 sync all push`
+#: held every namespace lock while the old literal "duckbrain.js ..." marker matched
+#: nothing, so the preflight flew and every live leg hit the 409s it exists to
+#: prevent). Both spellings must keep matching.
+FULL_FLEET_SYNC_MARKER = r"duckbrain\.(?:js|ts) s3 sync all push"
 AUGER_BLOCKED_BY_PREFIX = "AUGER_BLOCKED_BY:"
 SUBSTRATE_PREFLIGHT_BLOCKED: str | None = None
 
@@ -386,7 +610,7 @@ def _process_command_lines() -> list[tuple[int, str]]:
             command = (
                 (entry / "cmdline")
                 .read_bytes()
-                .replace(b"\\x00", b" ")
+                .replace(b"\x00", b" ")
                 .decode(errors="replace")
             )
         except OSError:
@@ -402,10 +626,11 @@ def _full_fleet_sync_holders(
     commands = (
         _process_command_lines() if process_commands is None else process_commands
     )
+    marker = re.compile(FULL_FLEET_SYNC_MARKER)
     return [
         (pid, command)
         for pid, command in commands
-        if FULL_FLEET_SYNC_MARKER in command and pid != os.getpid()
+        if marker.search(command) and pid != os.getpid()
     ]
 
 
@@ -485,6 +710,47 @@ def substrate_preflight(
     if holder is not None:
         return f"{AUGER_BLOCKED_BY_PREFIX} foreign AUGER_TEST_LOCK holder pid {holder}"
     return None
+
+
+# ------------------------------------------- gate progress attribution (AUG-197 AC1)
+#: The gate's pytest arm is bounded by a process timeout; when that fires there is no
+#: pytest summary to read the hung test from (the timeout used to grade
+#: `first_failing_test: none detected`). When tests/gate.sh exports
+#: AUGER_GATE_PROGRESS_FILE, every test's start and every test report is APPENDED to
+#: that file as one JSON line, so the gate can name the test in flight at the moment
+#: of the kill (`scripts/gate_timeout_report.py` reads it). Writing is OFF unless the
+#: variable is set, so an ordinary suite run pays nothing.
+GATE_PROGRESS_ENV = "AUGER_GATE_PROGRESS_FILE"
+
+
+def _gate_progress_write(record: dict) -> None:
+    path = os.environ.get(GATE_PROGRESS_ENV, "").strip()
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({**record, "t": round(time.time(), 3)}) + "\n")
+    except OSError:
+        return  # a progress record must never break, slow, or retry a test
+
+
+def pytest_runtest_logstart(nodeid, location):
+    """Record that `nodeid` is STARTING (the in-flight test the gate attributes a
+    kill to — the last `start` line without a matching teardown report)."""
+    _gate_progress_write({"event": "start", "nodeid": nodeid})
+
+
+def pytest_runtest_logreport(report):
+    """Record each phase report so the gate can separate "hung here" from
+    "failed earlier" in the attribution report."""
+    _gate_progress_write(
+        {
+            "event": "report",
+            "when": getattr(report, "when", "?"),
+            "outcome": getattr(report, "outcome", "?"),
+            "nodeid": report.nodeid,
+        }
+    )
 
 
 def pytest_sessionstart(session):
@@ -582,7 +848,7 @@ def _test_transport_budget():
 
 # ---------------------------------------------------------------- fixtures
 @pytest.fixture(scope="session")
-def live_service() -> str:
+def live_service(request: pytest.FixtureRequest) -> str:
     """The live DuckBrain URL. Skips (loudly) or fails; never passes silently.
 
     Both the probe and the WHOLE session live on the substrate run inside the substrate
@@ -595,22 +861,58 @@ def live_service() -> str:
     one fd. The hold is deliberately coarse — one session-long critical section per leg
     rather than per-test — and it applies only to tests that depend on `live_service`;
     offline tests are unaffected.
+
+    AUG-197 (AC2/AC4): while the lock is held, BEFORE the first live test, the fixture
+    REAPS prior sessions' `auger-pytest-*` registry rows (and ghost directories the
+    rows once pointed at) — the namespaces a foreign sync lock deferred in an earlier
+    run are the ones finally deleted here, and the census (reaped vs deferred) is
+    printed through the terminal reporter so the mutation is never silent. The
+    inherited-lock mode (a nested child of this session) does not reap: the parent's
+    session already ran the sweep. AUGER_REAP_SKIP=1 keeps a run from touching
+    anything but its own rows.
     """
     with substrate_lock(), _test_transport_budget():
         if SUBSTRATE_PREFLIGHT_BLOCKED is not None:
             reason = f"{SUBSTRATE_PREFLIGHT_BLOCKED}; live arm skipped"
             pytest.skip(reason)
         url = require_live()
+        reap_disabled = os.environ.get(REAP_SKIP_ENV, "").strip() == "1"
+        if not _substrate_lock_is_inherited() and not reap_disabled:
+            reporter = request.config.pluginmanager.getplugin("terminalreporter")
+            reap: dict[str, list[str]] = {}
+            try:
+                reap = reap_prior_session_namespaces()
+            except (Exception, SystemExit) as exc:  # noqa: BLE001
+                write_reap_report(
+                    {
+                        "contended": [f"<session census read failed: {exc}>"],
+                        "reaped": [],
+                    },
+                    reporter,
+                )
+            else:
+                try:
+                    ghosts = reap_prior_session_namespace_directories()
+                except (Exception, SystemExit):  # noqa: BLE001
+                    ghosts = []
+                if ghosts:
+                    reap["ghosts_reaped"] = ghosts
+                write_reap_report(reap, reporter)
         yield url
 
 
 @pytest.fixture
-def ns_created(live_service: str) -> str:
+def ns_created(live_service: str, request: pytest.FixtureRequest) -> str:
     """A fresh ephemeral namespace, removed in a finalizer even when the test fails.
 
     Depends on `live_service`, so the cross-process substrate lock is held for the whole
     namespace lifecycle (create, test body, teardown) and the timeout headroom applies to
     every call the fixture and the test make against the live substrate.
+
+    AUG-197 (AC2): a teardown that ends ONLY in attributed environment contention
+    (a 409 whose body names a foreign lock-holder pid) does NOT fail the test — the
+    finalizer states it loudly (terminal + stderr) and leaves the namespace
+    row+directory consistent for the next run's reaper.
     """
     ns = TEST_NS_PREFIX + uuid.uuid4().hex[:12]
     status, body, _ = auger.db("/api/namespaces", "POST", {"name": ns})
@@ -621,6 +923,17 @@ def ns_created(live_service: str) -> str:
         yield ns
     finally:
         problems = teardown_namespace(ns)
+        if problems and teardown_contention_only(problems):
+            reporter = request.config.pluginmanager.getplugin("terminalreporter")
+            for problem in problems:
+                message = (
+                    f"auger: teardown of {ns} attributed to environment contention "
+                    f"— NOT a test failure (AUG-197): {problem}"
+                )
+                print(message, file=sys.stderr)
+                if reporter is not None and hasattr(reporter, "write_line"):
+                    reporter.write_line(message)
+            return
         if problems:
             if any("429" in p for p in problems):
                 # The limiter beat even the transport's own budget on this one namespace.
