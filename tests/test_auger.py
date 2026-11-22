@@ -6425,7 +6425,7 @@ def test_no_test_namespace_survives_the_suite(live_service: str):
     attributed: list[str] = []
     leaked: list[str] = []
     for name in residue:
-        status, body, _ = auger.delete_namespace(name)
+        status, body = auger.delete_namespace(name)
         if 200 <= status < 300 or status == 404:
             continue  # the audit's own DELETE finished the teardown
         if status == 409:

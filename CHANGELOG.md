@@ -18,6 +18,19 @@ Tagged v0.3.0 on 2026-10-22.
 
 ## Unreleased
 
+- AUG-204 full-tree corpus coverage: `scripts/ingest_markdown_specs.py` ingests the FULL
+  coding-hermes-director tree by directory scope — all 648 canonical `.md` paths accounted in
+  `corpora/coding-hermes-director/coverage-manifest.json` (111 first-class renders, 411
+  handbook-unique renders, 15 duplicate-of-canonical + 64 duplicate-of-handbook provenance
+  pointers, 47 audit provenance records); the AUG-176 distilled 22 stay byte-stable with their
+  block ids. `scripts/auger-chd-battery.sh` wraps the AUG-176 recall battery over the full
+  corpus (register+run, PASS = every query measured at >= the 7/12 distilled baseline);
+  `tests/test_chd_full_corpus.py` pins coverage/dedupe/determinism/battery-contract in the
+  gate pytest arm.
+- code-factory corpus regenerated after upstream source drift (CF-131/CF-313/CF-521 + new
+  GOALS.md / NODE-PHYSICAL.md, 2026-11-21/22): 80 -> 93 blocks, every AUG-176 battery target
+  id preserved (drift caught by `test_shipped_blocks_are_verbatim_and_manifests_reconcile`,
+  fixed by the sanctioned regen).
 - markdown spec sets convert into `auger spec` XML corpora with no loss:
   `scripts/ingest_markdown_specs.py` emits one `<section>` block per H2/H3 heading plus the
   preamble, verbatim prose with per-block provenance, and a `manifest.json` carrying the
