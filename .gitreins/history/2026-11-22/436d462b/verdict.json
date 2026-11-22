@@ -1,0 +1,348 @@
+{
+  "task_id": "AUG-196",
+  "task_title": "Pre-push enforcement of the board shrink guard",
+  "task_criteria": [
+    "A second enforcement point beyond the pre-commit hook refuses to push a board shrink (scratch-clone proven: --no-verify shrink commit then push refusal naming counts+lost ids; BOARD_ALLOW_SHRINK=1 override still works and stays loud)"
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "d5950ae55175e1dd66fc4b236c8fe9737418e5e5",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "4da48c010fbbb12ff65a84a015ddaa0a6ddf704db71ce74509cd85d779bf4090",
+  "working_tree_dirty_path_count": 1562,
+  "items": [
+    {
+      "criterion": "A second enforcement point beyond the pre-commit hook refuses to push a board shrink (scratch-clone proven: --no-verify shrink commit then push refusal naming counts+lost ids; BOARD_ALLOW_SHRINK=1 override still works and stays loud)",
+      "status": "PASS",
+      "detail": "Proven end-to-end with my own scratch-clone run (/tmp/aug196proof: repo \u2192 bare origin.git \u2192 clone, both hooks installed via scripts/install_board_guard.py). (1) The --no-verify shrink commit landed (commit exit 0), bypassing the pre-commit guard \u2014 exactly the incident shape of 45a29b9. (2) Plain `git push origin HEAD` then exited 1 with stderr 'board-shrink: REFUSED baseline=3 candidate=1 lost ids=B, C' plus 'lost ids (2): B, C' \u2014 refusal names both counts and lost ids; `git ls-remote` confirmed the remote sha stayed 5f93c98 while clone HEAD was fcaf337, so the shrink never published. (3) BOARD_ALLOW_SHRINK=1 push exited 0, loud on stdout: 'NOTICE BOARD_ALLOW_SHRINK override: baseline=3 candidate=1 lost ids=B, C' and 'SHRINK ACCEPTED \u2014 the push will drop 2 task row(s) (3 -> 1)'; remote advanced 5f93c98..fcaf337. The pre-push block (scripts/install_board_guard.py:53-59 PUSH_BLOCK_TEMPLATE) calls scripts/board_shrink_check.py --pre-push, whose run_pre_push (board_shrink_check.py) grades remote:<board> as baseline vs local:<board> as candidate through the shared verdict() contract. Second enforcement point independently confirmed by the real-git test test_a_no_verify_shrink_commit_is_refused_at_the_push_path (tests/test_board_shrink_check.py:601), inside the fresh run '45 passed in 7.89s' (exit 0)."
+    },
+    {
+      "criterion": "Derived: the enforcement point is reachable from a real push and benign traffic is unaffected (append push passes; board-untouched push passes silently; installed hook wired in this repo)",
+      "status": "PASS",
+      "detail": "Same scratch clone: append push exited 0 with 'board-shrink: OK baseline=1 candidate=4 lost ids=(none) \u2014 3 row(s) appended'; a dev.txt-only push exited 0 with no checker output (identical-board skip). In THIS repo the generated block is live at .git/hooks/pre-push ('python3 \"scripts/board_shrink_check.py\" --pre-push || exit 1'), and feeding HEAD's own ref pair to `python3 scripts/board_shrink_check.py --pre-push` exits 0 \u2014 ordinary same-board pushes are not blocked.",
+      "derived": true
+    },
+    {
+      "criterion": "Derived: the override never excuses a parse failure (fail-closed preserved at the push path)",
+      "status": "PASS",
+      "detail": "Scratch clone STEP 6: committed a torn row ('{not json') with --no-verify, then `BOARD_ALLOW_SHRINK=1 git push origin HEAD` exited 1 with 'board-shrink: parse failures baseline=0 candidate=1; fix invalid rows' \u2014 override did not excuse it. Matches board_shrink_check.py verdict() (parse-failure branch returns 1 before the override check) and the test test_the_override_does_not_excuse_a_parse_failure_at_the_push_path in the 45-passed fresh run.",
+      "derived": true
+    },
+    {
+      "criterion": "Derived: the changed surface's tests pass fresh (cache-defeating, real command output) and lint/format is clean on the changed files",
+      "status": "PASS",
+      "detail": "Fresh run this conversation: `cd /home/kara/auger && /home/kara/auger/.venv/bin/python -m pytest tests/test_board_shrink_check.py -q` \u2192 exit_code 0, '45 passed in 7.89s'. guards.test_command in .gitreins/config.yaml is `bash tests/gate.sh`, which needs a live DuckBrain and is env-blocked on this host (prior stage: 'ERROR: DuckBrain URL missing \u2014 set DUCKBRAIN_URL'), so the focused real-behaviour suite for this change is the run battery here; the full file (ci.yml:149) is also named in tests/gate.sh:244 and run by CI. Lint: `/home/kara/.local/bin/ruff check --no-cache` on the three changed files \u2192 'All checks passed!'; `ruff format --check` \u2192 '3 files already formatted'.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "no_concerns_found",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": false,
+      "any_failed": true,
+      "summary": "  \u2717 tests: scanners: nice=nice -n 10\n  \u2713 lint: scanners: nice=nice -n 10\n  \u2717 secrets: secrets: scanners=gitleaks+builtin cross-check",
+      "steps": [
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": false,
+          "output": "scanners: nice=nice -n 10\ngate pytest interpreter: /home/kara/auger/.venv/bin/python\nERROR: DuckBrain URL missing \u2014 set DUCKBRAIN_URL before running the live gate (or use AUGER_CI=1 on hosted CI).\n",
+          "error": "",
+          "data": {
+            "exit_code": 2
+          }
+        },
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": false,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nsecrets: gitleaks bound=timeout 600s (0=off)\nscanners: nice=nice -n 10\n5:16AM INF scanned ~11028002 bytes (11.03 MB) in 3.35s\n5:16AM WRN leaks found: 2\nsecrets: gitleaks: findings found (exit 1)\nsecrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: builtin cross-check: Scanned 480 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 1,
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 A second enforcement point beyond the pre-commit hook refuses to push a board shrink (scratch-clone proven: --no-verify shrink commit then push refusal naming counts+lost ids; BOARD_ALLOW_SHRINK=1 override still works and stays loud): Proven end-to-end with my own scratch-clone run (/tmp/aug196proof: repo \u2192 bare origin.git \u2192 clone, both hooks installed via scripts/install_board_guard.py). (1) The --no-verify shrink commit landed (commit exit 0), bypassing the pre-commit guard \u2014 exactly the incident shape of 45a29b9. (2) Plain `git push origin HEAD` then exited 1 with stderr 'board-shrink: REFUSED baseline=3 candidate=1 lost ids=B, C' plus 'lost ids (2): B, C' \u2014 refusal names both counts and lost ids; `git ls-remote` confirmed the remote sha stayed 5f93c98 while clone HEAD was fcaf337, so the shrink never published. (3) BOARD_ALLOW_SHRINK=1 push exited 0, loud on stdout: 'NOTICE BOARD_ALLOW_SHRINK override: baseline=3 candidate=1 lost ids=B, C' and 'SHRINK ACCEPTED \u2014 the push will drop 2 task row(s) (3 -> 1)'; remote advanced 5f93c98..fcaf337. The pre-push block (scripts/install_board_guard.py:53-59 PUSH_BLOCK_TEMPLATE) calls scripts/board_shrink_check.py --pre-push, whose run_pre_push (board_shrink_check.py) grades remote:<board> as baseline vs local:<board> as candidate through the shared verdict() contract. Second enforcement point independently confirmed by the real-git test test_a_no_verify_shrink_commit_is_refused_at_the_push_path (tests/test_board_shrink_check.py:601), inside the fresh run '45 passed in 7.89s' (exit 0).\n  \u2713 Derived: the enforcement point is reachable from a real push and benign traffic is unaffected (append push passes; board-untouched push passes silently; installed hook wired in this repo): Same scratch clone: append push exited 0 with 'board-shrink: OK baseline=1 candidate=4 lost ids=(none) \u2014 3 row(s) appended'; a dev.txt-only push exited 0 with no checker output (identical-board skip). In THIS repo the generated block is live at .git/hooks/pre-push ('python3 \"scripts/board_shrink_check.py\" --pre-push || exit 1'), and feeding HEAD's own ref pair to `python3 scripts/board_shrink_check.py --pre-push` exits 0 \u2014 ordinary same-board pushes are not blocked.\n  \u2713 Derived: the override never excuses a parse failure (fail-closed preserved at the push path): Scratch clone STEP 6: committed a torn row ('{not json') with --no-verify, then `BOARD_ALLOW_SHRINK=1 git push origin HEAD` exited 1 with 'board-shrink: parse failures baseline=0 candidate=1; fix invalid rows' \u2014 override did not excuse it. Matches board_shrink_check.py verdict() (parse-failure branch returns 1 before the override check) and the test test_the_override_does_not_excuse_a_parse_failure_at_the_push_path in the 45-passed fresh run.\n  \u2713 Derived: the changed surface's tests pass fresh (cache-defeating, real command output) and lint/format is clean on the changed files: Fresh run this conversation: `cd /home/kara/auger && /home/kara/auger/.venv/bin/python -m pytest tests/test_board_shrink_check.py -q` \u2192 exit_code 0, '45 passed in 7.89s'. guards.test_command in .gitreins/config.yaml is `bash tests/gate.sh`, which needs a live DuckBrain and is env-blocked on this host (prior stage: 'ERROR: DuckBrain URL missing \u2014 set DUCKBRAIN_URL'), so the focused real-behaviour suite for this change is the run battery here; the full file (ci.yml:149) is also named in tests/gate.sh:244 and run by CI. Lint: `/home/kara/.local/bin/ruff check --no-cache` on the three changed files \u2192 'All checks passed!'; `ruff format --check` \u2192 '3 files already formatted'.\nThe push-path second enforcement point is real and proven by direct scratch-clone git execution \u2014 a --no-verify shrink commit is refused at push naming counts and lost ids, the BOARD_ALLOW_SHRINK=1 override lands loudly, benign pushes pass, the focused suite runs 45 green and ruff is clean; the only residual gaps (hook must be installed per-machine, hooksPath bypass) are disclosed and backstopped by CI.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 A second enforcement point beyond the pre-commit hook refuses to push a board shrink (scratch-clone proven: --no-verify shrink commit then push refusal naming counts+lost ids; BOARD_ALLOW_SHRINK=1 override still works and stays loud): Proven end-to-end with my own scratch-clone run (/tmp/aug196proof: repo \u2192 bare origin.git \u2192 clone, both hooks installed via scripts/install_board_guard.py). (1) The --no-verify shrink commit landed (commit exit 0), bypassing the pre-commit guard \u2014 exactly the incident shape of 45a29b9. (2) Plain `git push origin HEAD` then exited 1 with stderr 'board-shrink: REFUSED baseline=3 candidate=1 lost ids=B, C' plus 'lost ids (2): B, C' \u2014 refusal names both counts and lost ids; `git ls-remote` confirmed the remote sha stayed 5f93c98 while clone HEAD was fcaf337, so the shrink never published. (3) BOARD_ALLOW_SHRINK=1 push exited 0, loud on stdout: 'NOTICE BOARD_ALLOW_SHRINK override: baseline=3 candidate=1 lost ids=B, C' and 'SHRINK ACCEPTED \u2014 the push will drop 2 task row(s) (3 -> 1)'; remote advanced 5f93c98..fcaf337. The pre-push block (scripts/install_board_guard.py:53-59 PUSH_BLOCK_TEMPLATE) calls scripts/board_shrink_check.py --pre-push, whose run_pre_push (board_shrink_check.py) grades remote:<board> as baseline vs local:<board> as candidate through the shared verdict() contract. Second enforcement point independently confirmed by the real-git test test_a_no_verify_shrink_commit_is_refused_at_the_push_path (tests/test_board_shrink_check.py:601), inside the fresh run '45 passed in 7.89s' (exit 0).\n  \u2713 Derived: the enforcement point is reachable from a real push and benign traffic is unaffected (append push passes; board-untouched push passes silently; installed hook wired in this repo): Same scratch clone: append push exited 0 with 'board-shrink: OK baseline=1 candidate=4 lost ids=(none) \u2014 3 row(s) appended'; a dev.txt-only push exited 0 with no checker output (identical-board skip). In THIS repo the generated block is live at .git/hooks/pre-push ('python3 \"scripts/board_shrink_check.py\" --pre-push || exit 1'), and feeding HEAD's own ref pair to `python3 scripts/board_shrink_check.py --pre-push` exits 0 \u2014 ordinary same-board pushes are not blocked.\n  \u2713 Derived: the override never excuses a parse failure (fail-closed preserved at the push path): Scratch clone STEP 6: committed a torn row ('{not json') with --no-verify, then `BOARD_ALLOW_SHRINK=1 git push origin HEAD` exited 1 with 'board-shrink: parse failures baseline=0 candidate=1; fix invalid rows' \u2014 override did not excuse it. Matches board_shrink_check.py verdict() (parse-failure branch returns 1 before the override check) and the test test_the_override_does_not_excuse_a_parse_failure_at_the_push_path in the 45-passed fresh run.\n  \u2713 Derived: the changed surface's tests pass fresh (cache-defeating, real command output) and lint/format is clean on the changed files: Fresh run this conversation: `cd /home/kara/auger && /home/kara/auger/.venv/bin/python -m pytest tests/test_board_shrink_check.py -q` \u2192 exit_code 0, '45 passed in 7.89s'. guards.test_command in .gitreins/config.yaml is `bash tests/gate.sh`, which needs a live DuckBrain and is env-blocked on this host (prior stage: 'ERROR: DuckBrain URL missing \u2014 set DUCKBRAIN_URL'), so the focused real-behaviour suite for this change is the run battery here; the full file (ci.yml:149) is also named in tests/gate.sh:244 and run by CI. Lint: `/home/kara/.local/bin/ruff check --no-cache` on the three changed files \u2192 'All checks passed!'; `ruff format --check` \u2192 '3 files already formatted'.\nThe push-path second enforcement point is real and proven by direct scratch-clone git execution \u2014 a --no-verify shrink commit is refused at push naming counts and lost ids, the BOARD_ALLOW_SHRINK=1 override lands loudly, benign pushes pass, the focused suite runs 45 green and ruff is clean; the only residual gaps (hook must be installed per-machine, hooksPath bypass) are disclosed and backstopped by CI.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "A second enforcement point beyond the pre-commit hook refuses to push a board shrink (scratch-clone proven: --no-verify shrink commit then push refusal naming counts+lost ids; BOARD_ALLOW_SHRINK=1 override still works and stays loud)",
+                "status": "PASS",
+                "detail": "Proven end-to-end with my own scratch-clone run (/tmp/aug196proof: repo \u2192 bare origin.git \u2192 clone, both hooks installed via scripts/install_board_guard.py). (1) The --no-verify shrink commit landed (commit exit 0), bypassing the pre-commit guard \u2014 exactly the incident shape of 45a29b9. (2) Plain `git push origin HEAD` then exited 1 with stderr 'board-shrink: REFUSED baseline=3 candidate=1 lost ids=B, C' plus 'lost ids (2): B, C' \u2014 refusal names both counts and lost ids; `git ls-remote` confirmed the remote sha stayed 5f93c98 while clone HEAD was fcaf337, so the shrink never published. (3) BOARD_ALLOW_SHRINK=1 push exited 0, loud on stdout: 'NOTICE BOARD_ALLOW_SHRINK override: baseline=3 candidate=1 lost ids=B, C' and 'SHRINK ACCEPTED \u2014 the push will drop 2 task row(s) (3 -> 1)'; remote advanced 5f93c98..fcaf337. The pre-push block (scripts/install_board_guard.py:53-59 PUSH_BLOCK_TEMPLATE) calls scripts/board_shrink_check.py --pre-push, whose run_pre_push (board_shrink_check.py) grades remote:<board> as baseline vs local:<board> as candidate through the shared verdict() contract. Second enforcement point independently confirmed by the real-git test test_a_no_verify_shrink_commit_is_refused_at_the_push_path (tests/test_board_shrink_check.py:601), inside the fresh run '45 passed in 7.89s' (exit 0)."
+              },
+              {
+                "criterion": "Derived: the enforcement point is reachable from a real push and benign traffic is unaffected (append push passes; board-untouched push passes silently; installed hook wired in this repo)",
+                "status": "PASS",
+                "detail": "Same scratch clone: append push exited 0 with 'board-shrink: OK baseline=1 candidate=4 lost ids=(none) \u2014 3 row(s) appended'; a dev.txt-only push exited 0 with no checker output (identical-board skip). In THIS repo the generated block is live at .git/hooks/pre-push ('python3 \"scripts/board_shrink_check.py\" --pre-push || exit 1'), and feeding HEAD's own ref pair to `python3 scripts/board_shrink_check.py --pre-push` exits 0 \u2014 ordinary same-board pushes are not blocked.",
+                "derived": true
+              },
+              {
+                "criterion": "Derived: the override never excuses a parse failure (fail-closed preserved at the push path)",
+                "status": "PASS",
+                "detail": "Scratch clone STEP 6: committed a torn row ('{not json') with --no-verify, then `BOARD_ALLOW_SHRINK=1 git push origin HEAD` exited 1 with 'board-shrink: parse failures baseline=0 candidate=1; fix invalid rows' \u2014 override did not excuse it. Matches board_shrink_check.py verdict() (parse-failure branch returns 1 before the override check) and the test test_the_override_does_not_excuse_a_parse_failure_at_the_push_path in the 45-passed fresh run.",
+                "derived": true
+              },
+              {
+                "criterion": "Derived: the changed surface's tests pass fresh (cache-defeating, real command output) and lint/format is clean on the changed files",
+                "status": "PASS",
+                "detail": "Fresh run this conversation: `cd /home/kara/auger && /home/kara/auger/.venv/bin/python -m pytest tests/test_board_shrink_check.py -q` \u2192 exit_code 0, '45 passed in 7.89s'. guards.test_command in .gitreins/config.yaml is `bash tests/gate.sh`, which needs a live DuckBrain and is env-blocked on this host (prior stage: 'ERROR: DuckBrain URL missing \u2014 set DUCKBRAIN_URL'), so the focused real-behaviour suite for this change is the run battery here; the full file (ci.yml:149) is also named in tests/gate.sh:244 and run by CI. Lint: `/home/kara/.local/bin/ruff check --no-cache` on the three changed files \u2192 'All checks passed!'; `ruff format --check` \u2192 '3 files already formatted'.",
+                "derived": true
+              }
+            ],
+            "summary": "The push-path second enforcement point is real and proven by direct scratch-clone git execution \u2014 a --no-verify shrink commit is refused at push naming counts and lost ids, the BOARD_ALLOW_SHRINK=1 override lands loudly, benign pushes pass, the focused suite runs 45 green and ruff is clean; the only residual gaps (hook must be installed per-machine, hooksPath bypass) are disclosed and backstopped by CI.",
+            "provenance": {
+              "model": "glm-5.3-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "glm-5.3-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-196\"}",
+          "exit_code": 0,
+          "output_sha": "53a4ef35971a63e4141b15794e6938793812611c1879414fe5c1bb91f684f475"
+        },
+        {
+          "tool": "run_command",
+          "command": "pwd && ls -la",
+          "exit_code": 0,
+          "output_sha": "c52d440b4635e2951598a4ffe35f8352c1c3106cff11931ad1cd0862de1f9e54"
+        },
+        {
+          "tool": "run_command",
+          "command": "git -C /home/kara/auger log --oneline -15 && git -C /home/kara/auger status --short | head -30",
+          "exit_code": 0,
+          "output_sha": "fd3dbcb94b9079c5fe77405b2c40039b91e89558ca2e96d6339c86d56fe41a04"
+        },
+        {
+          "tool": "read_diff",
+          "command": "read_diff {}",
+          "exit_code": 0,
+          "output_sha": "3b4140a6b15466b2e4fe54e430cf6ef568381a9777a5c307bb40667de89d1d6a"
+        },
+        {
+          "tool": "run_command",
+          "command": "git -C /home/kara/auger show 5bdf227 --stat && echo ---- && git -C /home/kara/auger show d5950ae --stat",
+          "exit_code": 0,
+          "output_sha": "b4f85cb036aeafc31cbaf54a4907453b02935900e404c07dab235ddd7b4ca0a7"
+        },
+        {
+          "tool": "run_command",
+          "command": "ls -la /home/kara/auger/.git/hooks/ /home/kara/auger/scripts/ 2>/dev/null",
+          "exit_code": 0,
+          "output_sha": "cba44b426300e3bd18c4e64351eeaeff52eaa26a2e32d8a9cd826fcafe3a4f63"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"scripts/install_board_guard.py\"}",
+          "exit_code": 0,
+          "output_sha": "557b6f285f24c3d3ffbe6a11c5d27750a0ce2e4cd25c4213da78e75382268025"
+        },
+        {
+          "tool": "run_command",
+          "command": "cat /home/kara/auger/.git/hooks/pre-push; echo ====PRECOMMIT====; cat /home/kara/auger/.git/hooks/pre-commit",
+          "exit_code": 0,
+          "output_sha": "f0424b8adc632ff65bce6933e98d494aff6621a0332c82e51cca269777522781"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"scripts/board_shrink_check.py\"}",
+          "exit_code": 0,
+          "output_sha": "e3863f5239c9efdf6ec2c3d3eb46d5cd162ae558e6be54a9424b63e14ebee513"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"offset\": 400, \"path\": \"scripts/board_shrink_check.py\"}",
+          "exit_code": 1,
+          "output_sha": "5f482ef7b39804dc3066f2f825a8907bfb5ca65d58118796ef0c7a6c94226d25"
+        },
+        {
+          "tool": "run_command",
+          "command": "wc -l /home/kara/auger/tests/test_board_shrink_check.py && grep -n \"pre-push\\|pre_push\\|def test\\|class \" /home/kara/auger/tests/test_board_shrink_check.py | head -80",
+          "exit_code": 0,
+          "output_sha": "502f95e6b32107ed9cc58f950bbeab538698d66491a8b1ed379975d9de485ff6"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 150, \"offset\": 550, \"path\": \"tests/test_board_shrink_check.py\"}",
+          "exit_code": 0,
+          "output_sha": "407f6f942fd087aa2f9f7c023f5cad476b823e9edd8f712ede0f4a1d4a926482"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 160, \"offset\": 700, \"path\": \"tests/test_board_shrink_check.py\"}",
+          "exit_code": 0,
+          "output_sha": "054387c7a76bbaca8edd00158a2c6689ca97b768fc3269813df003bf70225498"
+        },
+        {
+          "tool": "run_command",
+          "command": "cat /home/kara/auger/.gitreins/config.yaml",
+          "exit_code": 0,
+          "output_sha": "53432f3296b4cf57434692745f3cd19661af1d0cff25597d29c24d284b67bcf0"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && /home/kara/auger/.venv/bin/python -m pytest tests/test_board_shrink_check.py -q 2>&1 | tail -15",
+          "exit_code": 0,
+          "output_sha": "4c11ef063ede6d795a0269f74f94e5ad884513dedfee4c8d2c492fc39c08006f"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"- Test command from .gitreins/config.yaml guards.test_command = `bash tests/gate.sh` (needs live DuckBrain URL; env-blocked on this host per prior stage output: \\\"ERROR: DuckBrain URL missing \\u2014 set DUCKBRAIN_URL before running the live gate\\\"). Focused suite tests/test_board_shrink_check.py ran fresh: 45 passed in 7.89s (includes all pre-push arms driving real `git push` against a scratch bare remote).\\n- Commit 5bdf227 = implementation (scripts/board_shrink_check.py, scripts/install_board_guard.py, tests/test_board_shrink_check.py). Merged to HEAD d5950ae.\\n- .git/hooks/pre-push exists with the real managed block (PUSH_BEGIN/PUSH_END markers, calls checker --pre-push).\\n\", \"key\": \"evidence_log\"}",
+          "exit_code": 0,
+          "output_sha": "ac340e3f71668c8fc5cbcaa22404353b37d7c297fdb139352997440900333a8d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp && rm -rf aug196proof && mkdir aug196proof && cd aug196proof && export PATH=/home/kara/auger:$PATH && \\\ngit init -q repo && cd repo && \\\nprintf 'A\\n' > dev.txt && git add . && git -c user.email=t@t -c user.name=t commit -qm init && \\\nmkdir -p .coding-hermes/board && \\\npython3 -c \"\nimport json\nrows=[{'id':x} for x in ['A','B','C']]\nopen('.coding-hermes/board/tasks.jsonl','w').write('\\n'.join(json.dumps(r) for r in rows)+'\\n')\" && \\\ngit add .coding-hermes/board/tasks.jsonl && git -c user.email=t@t -c user.name=t commit -qm board3 && \\\ngit -c user.email=t@t -c user.name=t clone -q --bare . /tmp/aug196proof/origin.git && \\\ngit -c user.email=t@t -c user.name=t clone -q /tmp/aug196proof/origin.git /tmp/aug196proof/clone && \\\ncd /tmp/aug196proof/clone && \\\npython3 /home/kara/auger/scripts/install_board_guard.py --repo . && \\\npython3 /home/kara/auger/scripts/install_board_guard.py --repo . --hook pre-push && \\\necho '=== hooks installed ===' && ls .git/hooks/pre-push && \\\npython3 -c \"\nimport json\nopen('.coding-hermes/board/tasks.jsonl','w').write(json.dumps({'id':'A'})+'\\n')\" && \\\ngit add .coding-hermes/board/tasks.jsonl && \\\necho '=== plain commit (no flag) ===' && \\\ngit -c user.email=t@t -c user.name=t commit -qm shrink; echo \"commit_exit=$?\"",
+          "exit_code": 0,
+          "output_sha": "29ed92b14183f7f6cbe27f85eb6c200fc7a4d7dc95fc782dd21e56fd3ec602c4"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 155, \"path\": \"tests/test_board_shrink_check.py\"}",
+          "exit_code": 0,
+          "output_sha": "6aa5331ee52fd17b027536416cb6fb838a311522cd869ad3eeaaf84a992df119"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp && rm -rf aug196proof && mkdir aug196proof && cd aug196proof && \\\ngit init -q repo && cd repo && \\\ngit -c user.email=t@t -c user.name=t config user.email t@t && git -c user.name=t config user.name t && \\\nmkdir -p scripts .coding-hermes/board && \\\ncp /home/kara/auger/scripts/board_shrink_check.py /home/kara/auger/scripts/install_board_guard.py scripts/ && \\\nprintf 'A\\n' > dev.txt && \\\npython3 -c \"\nimport json\nrows=[{'id':x} for x in ['A','B','C']]\nopen('.coding-hermes/board/tasks.jsonl','w').write('\\n'.join(json.dumps(r) for r in rows)+'\\n')\" && \\\ngit add . && git -c user.email=t@t -c user.name=t commit -qm init && \\\ngit -c user.email=t@t -c user.name=t clone -q --bare . /tmp/aug196proof/origin.git && \\\ngit -c user.email=t@t -c user.name=t clone -q /tmp/aug196proof/origin.git /tmp/aug196proof/clone && \\\ncd /tmp/aug196proof/clone && \\\npython3 scripts/install_board_guard.py --repo . && \\\npython3 scripts/install_board_guard.py --repo . --hook pre-push && \\\necho '=== PRE-PUSH HOOK ===' && cat .git/hooks/pre-push && \\\ngit config user.email t@t && git config user.name t && \\\npython3 -c \"\nimport json\nopen('.coding-hermes/board/tasks.jsonl','w').write(json.dumps({'id':'A'})+'\\n')\" && \\\ngit add .coding-hermes/board/tasks.jsonl && \\\necho '=== STEP 1: shrink commit WITH --no-verify ===' && \\\ngit commit -qm shrink --no-verify; echo \"commit_exit=$?\" && \\\necho '=== STEP 2: plain push (hook must refuse) ===' && \\\ngit push origin HEAD; echo \"push_exit=$?\" && \\\necho '=== remote unchanged? ===' && \\\ngit ls-remote origin refs/heads/master && git rev-parse HEAD",
+          "exit_code": 0,
+          "output_sha": "25025190bf48bc618a62bbea404e92907b1c9b5a067d7eb8fea7916fb72900d4"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"- SCRATCH-CLONE PROOF (my own /tmp/aug196proof run): --no-verify shrink commit exit=0 LANDED; plain `git push origin HEAD` exit=1 with 'board-shrink: REFUSED baseline=3 candidate=1 lost ids=B, C' + 'lost ids (2): B, C'; remote ls-remote sha (5f93c981...) != clone HEAD (fcaf337...), so the shrink never published. Second enforcement point proven.\\n- Still to prove: BOARD_ALLOW_SHRINK=1 override push lands + loud; append push passes; untouched-board push silent; ruff clean.\\n\", \"key\": \"evidence_log\"}",
+          "exit_code": 0,
+          "output_sha": "7031fec1ed10f233ccd6ae22d5ea7e553ca5a5925607e8d583da0d3742492679"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug196proof/clone && \\\necho '=== STEP 3: push WITH BOARD_ALLOW_SHRINK=1 (must land, loud) ===' && \\\nBOARD_ALLOW_SHRINK=1 git push origin HEAD; echo \"push_exit=$?\" && \\\necho '=== remote now? ===' && git ls-remote origin refs/heads/master && echo \"local HEAD: $(git rev-parse HEAD)\"",
+          "exit_code": 0,
+          "output_sha": "4183950eda7f253954342aabb52360b037babb3f7732dbfa518dff7f76b55240"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug196proof/clone && git config user.email t@t && git config user.name t && \\\npython3 -c \"\nimport json\nrows=[{'id':x} for x in ['A','B','C','D']]\nopen('.coding-hermes/board/tasks.jsonl','w').write('\\n'.join(json.dumps(r) for r in rows)+'\\n')\" && \\\ngit add .coding-hermes/board/tasks.jsonl && git commit -qm 'append D' --no-verify && \\\necho '=== STEP 4: append push (must pass) ===' && git push origin HEAD; echo \"push_exit=$?\" && \\\necho 'more' >> dev.txt && git add dev.txt && git commit -qm txt --no-verify && \\\necho '=== STEP 5: board-untouched push (must pass quietly) ===' && git push origin HEAD; echo \"push_exit=$?\" && \\\necho '=== STEP 6: torn row + override (must still refuse) ===' && \\\nprintf '{not json\\n' > .coding-hermes/board/tasks.jsonl && git add .coding-hermes/board/tasks.jsonl && git commit -qm torn --no-verify && \\\nBOARD_ALLOW_SHRINK=1 git push origin HEAD; echo \"push_exit=$?\"",
+          "exit_code": 0,
+          "output_sha": "7940649437d6d914adb94b06d6dcfbd29b3e0268eaa6ad7394842a974efb7a44"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && echo \"hooksPath=$(git config core.hooksPath || echo '(unset)')\" && \\\n/home/kara/auger/.venv/bin/python -m ruff check scripts/board_shrink_check.py scripts/install_board_guard.py tests/test_board_shrink_check.py && \\\n/home/kara/auger/.venv/bin/python -m ruff format --check scripts/board_shrink_check.py scripts/install_board_guard.py tests/test_board_shrink_check.py",
+          "exit_code": 1,
+          "output_sha": "9bc7cdb3674d49e2733945ecd5e9bf5368bc0f7b4749081f53742199e270ee2d"
+        },
+        {
+          "tool": "run_command",
+          "command": "which ruff; ls /home/kara/.local/bin/ 2>/dev/null | grep -i ruff; cd /home/kara/auger && (ruff check scripts/board_shrink_check.py scripts/install_board_guard.py tests/test_board_shrink_check.py && ruff format --check scripts/board_shrink_check.py scripts/install_board_guard.py tests/test_board_shrink_check.py) 2>&1 | tail -5",
+          "exit_code": 0,
+          "output_sha": "345c5b85ab080906f9e9873d401ebc69ea942d0beb2301e18f5f0caf5c8d0b1b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && SHA=$(git rev-parse HEAD) && echo \"refs/heads/master $SHA refs/heads/master $SHA\" | python3 scripts/board_shrink_check.py --pre-push; echo \"identical-pair exit=$?\"; echo \"---- workflow mentions:\"; grep -n \"board_shrink_check\\|install_board_guard\\|pre-push\" .github/workflows/ci.yml tests/gate.sh 2>/dev/null | head -20",
+          "exit_code": 0,
+          "output_sha": "394d8a3360f9960c730b95dc1973033b148c32165d46fb9fd264bef7a2f69f8c"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"- SCRATCH-CLONE PROOF (my own /tmp/aug196proof run, real git push against a scratch bare remote):\\n  STEP2 --no-verify shrink commit exit=0 landed; plain push exit=1, stderr: 'board-shrink: REFUSED baseline=3 candidate=1 lost ids=B, C' + 'lost ids (2): B, C'; remote sha 5f93c98 stayed (shrink not published).\\n  STEP3 BOARD_ALLOW_SHRINK=1 push: exit=0, 'NOTICE BOARD_ALLOW_SHRINK override: baseline=3 candidate=1 lost ids=B, C' + 'SHRINK ACCEPTED'; remote advanced 5f93c98..fcaf337. Loud override proven.\\n  STEP4 append push exit=0 ('OK baseline=1 candidate=4'); STEP5 board-untouched push exit=0 silent; STEP6 torn row + override exit=1 (parse failures baseline=0 candidate=1 \\u2014 override never excuses parse failure).\\n- Ruff (real binary /home/kara/.local/bin/ruff): 'All checks passed!' + '3 files already formatted' on the three changed files.\\n- Reachability: .git/hooks/pre-push in THIS repo carries the generated managed block; identical-pair stdin to checker --pre-push exits 0 (normal pushes unaffected).\\n- CI wiring: .github/workflows/ci.yml:149 runs pytest tests/test_board_shrink_check.py; gate.sh line 244 includes it; ci.yml:71 runs --recent (AUG-194 arm).\\n- Environment blockers for full battery: DUCKBRAIN_URL missing (live gate env-blocked on this host); gitleaks 2 findings \\u2014 both OUTSIDE this diff (changed files only: .gitreins/tasks.yaml + scripts/ + tests/).\\n\", \"key\": \"evidence_log\"}",
+          "exit_code": 0,
+          "output_sha": "634291e1115c4dcd55a435f0bedce45b93e90022fb8ce418a7c26691e67b0678"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && /home/kara/.local/bin/ruff check --no-cache scripts/board_shrink_check.py scripts/install_board_guard.py tests/test_board_shrink_check.py 2>&1 | tail -5; echo \"---- compare worktree scripts to HEAD:\"; git diff HEAD --stat -- scripts/board_shrink_check.py scripts/install_board_guard.py tests/test_board_shrink_check.py; echo \"(no output above = worktree matches HEAD)\"; echo \"---- pre-push exit-code semantics:\"; head -20 /home/kara/auger/.git/hooks/pre-push | grep -n \"exit\"",
+          "exit_code": 0,
+          "output_sha": "8f88bb5350e64ebacd3f29940656533aa07509357af6504348b60da8cd49dc6f"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"FINAL VERDICTS:\\n- Given criterion 1: PASS \\u2014 second enforcement point proven end-to-end with my own scratch-clone git run (/tmp/aug196proof): --no-verify shrink commit landed (exit 0), plain `git push origin HEAD` exit 1 naming counts+lost ids ('REFUSED baseline=3 candidate=1 lost ids=B, C' + 'lost ids (2): B, C'), remote sha unchanged (5f93c98...). BOARD_ALLOW_SHRINK=1 push exit 0, loud ('NOTICE BOARD_ALLOW_SHRINK override: baseline=3 candidate=1 lost ids=B, C', 'SHRINK ACCEPTED'), remote advanced. Benign arms: append push OK, board-untouched push silent OK, torn row refused even with override.\\n- Derived 0 (reachability/benign traffic): PASS \\u2014 .git/hooks/pre-push carries the generated managed block; identical-pair stdin exits 0; append/untouched pushes pass in scratch clone.\\n- Derived 1 (override never excuses parse failure): PASS \\u2014 STEP6 scratch run exit 1 'parse failures baseline=0 candidate=1' under BOARD_ALLOW_SHRINK=1; also test_the_override_does_not_excuse_a_parse_failure_at_the_push_path in the 45-passed run.\\n- Derived 2 (fresh full run of the changed surface's tests): PASS \\u2014 `pytest tests/test_board_shrink_check.py` exit 0: '45 passed in 7.89s'.\\n- Derived 3 (lint/format on changed files): PASS \\u2014 ruff: 'All checks passed!' + '3 files already formatted'.\\n- Note: full gate battery env-blocked on this host (DUCKBRAIN_URL missing; gitleaks findings are outside this diff \\u2014 changed files are tasks.yaml + scripts/ + tests/ only). Criterion does not require the live gate; the enforcement point is proven by direct git execution.\\n\", \"key\": \"verdict_final\"}",
+          "exit_code": 0,
+          "output_sha": "811857393b1cc389e2be932dbf80c315e9c64f51201365a6d967aff9f3f30704"
+        }
+      ]
+    }
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "",
+    "error": "unparseable reviewer reply: no parseable JSON object in reply: ''",
+    "review_state": {
+      "emitted": [],
+      "carried": []
+    }
+  },
+  "summary": "Stage tier1: FAIL\n    \u2717 tests: scanners: nice=nice -n 10\n  \u2713 lint: scanners: nice=nice -n 10\n  \u2717 secrets: secrets: scanners=gitleaks+builtin cross-check\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 A second enforcement point beyond the pre-commit hook refuses to push a board shrink (scratch-clone proven: --no-verify shrink commit then push refusal naming counts+lost ids; BOARD_ALLOW_SHRINK=1 override still works and stays loud): Proven end-to-end with my own scratch-clone run (/tmp/aug196proof: repo \u2192 bare origin.git \u2192 clone, both hooks installed via scripts/install_board_guard.py). (1) The --no-verify shrink commit landed (commit exit 0), bypassing the pre-commit guard \u2014 exactly the incident shape of 45a29b9. (2) Plain `git push origin HEAD` then exited 1 with stderr 'board-shrink: REFUSED baseline=3 candidate=1 lost ids=B, C' plus 'lost ids (2): B, C' \u2014 refusal names both counts and lost ids; `git ls-remote` confirmed the remote sha stayed 5f93c98 while clone HEAD was fcaf337, so the shrink never published. (3) BOARD_ALLOW_SHRINK=1 push exited 0, loud on stdout: 'NOTICE BOARD_ALLOW_SHRINK override: baseline=3 candidate=1 lost ids=B, C' and 'SHRINK ACCEPTED \u2014 the push will drop 2 task row(s) (3 -> 1)'; remote advanced 5f93c98..fcaf337. The pre-push block (scripts/install_board_guard.py:53-59 PUSH_BLOCK_TEMPLATE) calls scripts/board_shrink_check.py --pre-push, whose run_pre_push (board_shrink_check.py) grades remote:<board> as baseline vs local:<board> as candidate through the shared verdict() contract. Second enforcement point independently confirmed by the real-git test test_a_no_verify_shrink_commit_is_refused_at_the_push_path (tests/test_board_shrink_check.py:601), inside the fresh run '45 passed in 7.89s' (exit 0).\n  \u2713 Derived: the enforcement point is reachable from a real push and benign traffic is unaffected (append push passes; board-untouched push passes silently; installed hook wired in this repo): Same scratch clone: append push exited 0 with 'board-shrink: OK baseline=1 candidate=4 lost ids=(none) \u2014 3 row(s) appended'; a dev.txt-only push exited 0 with no checker output (identical-board skip). In THIS repo the generated block is live at .git/hooks/pre-push ('python3 \"scripts/board_shrink_check.py\" --pre-push || exit 1'), and feeding HEAD's own ref pair to `python3 scripts/board_shrink_check.py --pre-push` exits 0 \u2014 ordinary same-board pushes are not blocked.\n  \u2713 Derived: the override never excuses a parse failure (fail-closed preserved at the push path): Scratch clone STEP 6: committed a torn row ('{not json') with --no-verify, then `BOARD_ALLOW_SHRINK=1 git push origin HEAD` exited 1 with 'board-shrink: parse failures baseline=0 candidate=1; fix invalid rows' \u2014 override did not excuse it. Matches board_shrink_check.py verdict() (parse-failure branch returns 1 before the override check) and the test test_the_override_does_not_excuse_a_parse_failure_at_the_push_path in the 45-passed fresh run.\n  \u2713 Derived: the changed surface's tests pass fresh (cache-defeating, real command output) and lint/format is clean on the changed files: Fresh run this conversation: `cd /home/kara/auger && /home/kara/auger/.venv/bin/python -m pytest tests/test_board_shrink_check.py -q` \u2192 exit_code 0, '45 passed in 7.89s'. guards.test_command in .gitreins/config.yaml is `bash tests/gate.sh`, which needs a live DuckBrain and is env-blocked on this host (prior stage: 'ERROR: DuckBrain URL missing \u2014 set DUCKBRAIN_URL'), so the focused real-behaviour suite for this change is the run battery here; the full file (ci.yml:149) is also named in tests/gate.sh:244 and run by CI. Lint: `/home/kara/.local/bin/ruff check --no-cache` on the three changed files \u2192 'All checks passed!'; `ruff format --check` \u2192 '3 files already formatted'.\nThe push-path second enforcement point is real and proven by direct scratch-clone git execution \u2014 a --no-verify shrink commit is refused at push naming counts and lost ids, the BOARD_ALLOW_SHRINK=1 override lands loudly, benign pushes pass, the focused suite runs 45 green and ruff is clean; the only residual gaps (hook must be installed per-machine, hooksPath bypass) are disclosed and backstopped by CI.\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-11-22T10:19:15.741116",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-22T10:19:15.768940+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 795,
+        "truncated": false,
+        "source": "git show d5950ae55175"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 29382,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-196"
+  }
+}

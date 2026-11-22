@@ -1,0 +1,387 @@
+{
+  "task_id": "AUG-196",
+  "task_title": "Pre-push enforcement of the board shrink guard",
+  "task_criteria": [
+    "A second enforcement point beyond the pre-commit hook refuses to push a board shrink (scratch-clone proven: --no-verify shrink commit then push refusal naming counts+lost ids; BOARD_ALLOW_SHRINK=1 override still works and stays loud)"
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "d5950ae55175e1dd66fc4b236c8fe9737418e5e5",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "1a012c4d49d5472aac4760f5560f78cee3a83fc655768af25d1502237c30a466",
+  "working_tree_dirty_path_count": 1558,
+  "items": [
+    {
+      "criterion": "A second enforcement point beyond the pre-commit hook refuses to push a board shrink (scratch-clone proven: --no-verify shrink commit then push refusal naming counts+lost ids; BOARD_ALLOW_SHRINK=1 override still works and stays loud)",
+      "status": "PASS",
+      "detail": "Mechanism: scripts/install_board_guard.py:57-62 PUSH_BLOCK_TEMPLATE emits `python3 \"scripts/board_shrink_check.py\" --pre-push || exit 1` into the pre-push hook (installed via --hook pre-push, choices at :102); scripts/board_shrink_check.py:247 run_pre_push grades every stdin ref pair (baseline = board at the remote oid, candidate = board at the local oid) through the shared verdict() contract, which at :193 prints `board-shrink: REFUSED baseline=<n> candidate=<m> lost ids=...` to stderr and exits 1. Scratch-clone proof run BY HAND this session (mktemp -d; git init + bare origin + clone; both hooks installed from the worktree's scripts): after `git commit -qm shrink --no-verify` landed, `git push origin master` exited 1 with the exact line \"board-shrink: REFUSED baseline=3 candidate=1 lost ids=B, C\" and `git ls-remote` sha 179a86e3e0bb unchanged; then BOARD_ALLOW_SHRINK=1 push exited 0 printing \"NOTICE BOARD_ALLOW_SHRINK override: baseline=3 candidate=1 lost ids=B, C\" plus \"SHRINK ACCEPTED \u2014 the push will drop 2 task row(s) (3 -> 1)\", landing d26e70d3c6d0 == local HEAD. Automated mirror run fresh: AUGER_CI=1 /home/kara/auger/.venv/bin/python -m pytest tests/test_board_shrink_check.py -x -q -> exit_code 0, \"45 passed in 9.28s\" (re-run without AUGER_CI: \"45 passed in 9.65s\"), including test_a_no_verify_shrink_commit_is_refused_at_the_push_path (tests/test_board_shrink_check.py:601, asserts exit 1 + \"REFUSED baseline=3 candidate=1 lost ids=B, C\" + remote sha unchanged) and test_a_shrink_push_with_the_override_is_loud (:690, asserts exit 0 + NOTICE line + push landed). Full gate (guards.test_command = bash tests/gate.sh) is environment-blocked on this host \u2014 \"ERROR: DuckBrain URL missing\" (exit 2) \u2014 matching the repo's own recorded precedent (.gitreins/history/2026-11-21/ecef6bee/summary.md:14); the tested file is scratch-repo-only so this does not mute the evidence. ruff check on all three changed files: \"All checks passed!\"; gitleaks full-history run this session: \"no leaks found\" (total 0), so the prior tier1 secrets findings are not from this diff."
+    },
+    {
+      "criterion": "The refusal/override contract is reachable end-to-end through a real `git push` via the installed hook (not only direct checker invocation), and default installer mode stays pre-commit-only",
+      "status": "PASS",
+      "detail": "tests/test_board_shrink_check.py make_push_pair installs BOTH hooks into the scratch clone and the push arms drive the REAL generated block through `git push` against a bare remote (:601 refusal arm asserts remote sha unchanged; test_an_append_push_passes_and_lands_the_new_row asserts origin moves; test_the_default_mode_still_installs_the_pre_commit_hook :819 asserts default mode never creates pre-push and push-mode install never rewrites the pre-commit hook \u2014 back-compat). My independent hand-run reproduced the same end-to-end behavior through the installed pre-push hook (see criterion 1 detail); all 45 tests pass and ruff is clean.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "no_concerns_found",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": false,
+      "any_failed": true,
+      "summary": "  \u2717 tests: scanners: nice=nice -n 10\n  \u2713 lint: scanners: nice=nice -n 10\n  \u2717 secrets: secrets: scanners=gitleaks+builtin cross-check",
+      "steps": [
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": false,
+          "output": "scanners: nice=nice -n 10\ngate pytest interpreter: /home/kara/auger/.venv/bin/python\nERROR: DuckBrain URL missing \u2014 set DUCKBRAIN_URL before running the live gate (or use AUGER_CI=1 on hosted CI).\n",
+          "error": "",
+          "data": {
+            "exit_code": 2
+          }
+        },
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": false,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nsecrets: gitleaks bound=timeout 600s (0=off)\nscanners: nice=nice -n 10\n5:09AM INF scanned ~11026486 bytes (11.03 MB) in 3.97s\n5:09AM WRN leaks found: 2\nsecrets: gitleaks: findings found (exit 1)\nsecrets: harness state excluded from gitleaks scope (.gitreins/**)\nsecrets: builtin cross-check: Scanned 480 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 1,
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 A second enforcement point beyond the pre-commit hook refuses to push a board shrink (scratch-clone proven: --no-verify shrink commit then push refusal naming counts+lost ids; BOARD_ALLOW_SHRINK=1 override still works and stays loud): Mechanism: scripts/install_board_guard.py:57-62 PUSH_BLOCK_TEMPLATE emits `python3 \"scripts/board_shrink_check.py\" --pre-push || exit 1` into the pre-push hook (installed via --hook pre-push, choices at :102); scripts/board_shrink_check.py:247 run_pre_push grades every stdin ref pair (baseline = board at the remote oid, candidate = board at the local oid) through the shared verdict() contract, which at :193 prints `board-shrink: REFUSED baseline=<n> candidate=<m> lost ids=...` to stderr and exits 1. Scratch-clone proof run BY HAND this session (mktemp -d; git init + bare origin + clone; both hooks installed from the worktree's scripts): after `git commit -qm shrink --no-verify` landed, `git push origin master` exited 1 with the exact line \"board-shrink: REFUSED baseline=3 candidate=1 lost ids=B, C\" and `git ls-remote` sha 179a86e3e0bb unchanged; then BOARD_ALLOW_SHRINK=1 push exited 0 printing \"NOTICE BOARD_ALLOW_SHRINK override: baseline=3 candidate=1 lost ids=B, C\" plus \"SHRINK ACCEPTED \u2014 the push will drop 2 task row(s) (3 -> 1)\", landing d26e70d3c6d0 == local HEAD. Automated mirror run fresh: AUGER_CI=1 /home/kara/auger/.venv/bin/python -m pytest tests/test_board_shrink_check.py -x -q -> exit_code 0, \"45 passed in 9.28s\" (re-run without AUGER_CI: \"45 passed in 9.65s\"), including test_a_no_verify_shrink_commit_is_refused_at_the_push_path (tests/test_board_shrink_check.py:601, asserts exit 1 + \"REFUSED baseline=3 candidate=1 lost ids=B, C\" + remote sha unchanged) and test_a_shrink_push_with_the_override_is_loud (:690, asserts exit 0 + NOTICE line + push landed). Full gate (guards.test_command = bash tests/gate.sh) is environment-blocked on this host \u2014 \"ERROR: DuckBrain URL missing\" (exit 2) \u2014 matching the repo's own recorded precedent (.gitreins/history/2026-11-21/ecef6bee/summary.md:14); the tested file is scratch-repo-only so this does not mute the evidence. ruff check on all three changed files: \"All checks passed!\"; gitleaks full-history run this session: \"no leaks found\" (total 0), so the prior tier1 secrets findings are not from this diff.\n  \u2713 The refusal/override contract is reachable end-to-end through a real `git push` via the installed hook (not only direct checker invocation), and default installer mode stays pre-commit-only: tests/test_board_shrink_check.py make_push_pair installs BOTH hooks into the scratch clone and the push arms drive the REAL generated block through `git push` against a bare remote (:601 refusal arm asserts remote sha unchanged; test_an_append_push_passes_and_lands_the_new_row asserts origin moves; test_the_default_mode_still_installs_the_pre_commit_hook :819 asserts default mode never creates pre-push and push-mode install never rewrites the pre-commit hook \u2014 back-compat). My independent hand-run reproduced the same end-to-end behavior through the installed pre-push hook (see criterion 1 detail); all 45 tests pass and ruff is clean.\nThe pre-push second enforcement point is fully implemented and proven: an independent hand-run scratch clone refused a --no-verify shrink push naming counts+lost ids (remote sha unchanged), BOARD_ALLOW_SHRINK=1 landed loudly, and all 45 scratch-repo tests pass, with ruff and gitleaks clean; the only residual gaps are live-checkout enrollment and a narrow force-push race, neither part of the criterion. [uncovered failure paths: failure mode 0 (The live checkout is not enrolled: .git/hooks contains only pre-commit (no pre-push hook), and a core.hooksPath override (the merge commit d5950ae itself discloses a hooksPath bypass) silently disables any installed hook \u2014 so a shrink pushed from this checkout would land on the remote.): detected_by is empty \u2014 uncovered failure path; failure mode 1 (Force-push race: the pre-push check grades the remote_oid git handed it at push start; with `push --force` and a concurrent append by another writer, the checker passes against the stale baseline and the landed ref drops those newer rows.): detected_by is empty \u2014 uncovered failure path]",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n\n\u2026 [3160 chars omitted \u2014 2 line(s)] \u2026\nThe pre-push second enforcement point is fully implemented and proven: an independent hand-run scratch clone refused a --no-verify shrink push naming counts+lost ids (remote sha unchanged), BOARD_ALLOW_SHRINK=1 landed loudly, and all 45 scratch-repo tests pass, with ruff and gitleaks clean; the only residual gaps are live-checkout enrollment and a narrow force-push race, neither part of the criterion. [uncovered failure paths: failure mode 0 (The live checkout is not enrolled: .git/hooks contains only pre-commit (no pre-push hook), and a core.hooksPath override (the merge commit d5950ae itself discloses a hooksPath bypass) silently disables any installed hook \u2014 so a shrink pushed from this checkout would land on the remote.): detected_by is empty \u2014 uncovered failure path; failure mode 1 (Force-push race: the pre-push check grades the remote_oid git handed it at push start; with `push --force` and a concurrent append by another writer, the checker passes against the stale baseline and the landed ref drops those newer rows.): detected_by is empty \u2014 uncovered failure path]",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "A second enforcement point beyond the pre-commit hook refuses to push a board shrink (scratch-clone proven: --no-verify shrink commit then push refusal naming counts+lost ids; BOARD_ALLOW_SHRINK=1 override still works and stays loud)",
+                "status": "PASS",
+                "detail": "Mechanism: scripts/install_board_guard.py:57-62 PUSH_BLOCK_TEMPLATE emits `python3 \"scripts/board_shrink_check.py\" --pre-push || exit 1` into the pre-push hook (installed via --hook pre-push, choices at :102); scripts/board_shrink_check.py:247 run_pre_push grades every stdin ref pair (baseline = board at the remote oid, candidate = board at the local oid) through the shared verdict() contract, which at :193 prints `board-shrink: REFUSED baseline=<n> candidate=<m> lost ids=...` to stderr and exits 1. Scratch-clone proof run BY HAND this session (mktemp -d; git init + bare origin + clone; both hooks installed from the worktree's scripts): after `git commit -qm shrink --no-verify` landed, `git push origin master` exited 1 with the exact line \"board-shrink: REFUSED baseline=3 candidate=1 lost ids=B, C\" and `git ls-remote` sha 179a86e3e0bb unchanged; then BOARD_ALLOW_SHRINK=1 push exited 0 printing \"NOTICE BOARD_ALLOW_SHRINK override: baseline=3 candidate=1 lost ids=B, C\" plus \"SHRINK ACCEPTED \u2014 the push will drop 2 task row(s) (3 -> 1)\", landing d26e70d3c6d0 == local HEAD. Automated mirror run fresh: AUGER_CI=1 /home/kara/auger/.venv/bin/python -m pytest tests/test_board_shrink_check.py -x -q -> exit_code 0, \"45 passed in 9.28s\" (re-run without AUGER_CI: \"45 passed in 9.65s\"), including test_a_no_verify_shrink_commit_is_refused_at_the_push_path (tests/test_board_shrink_check.py:601, asserts exit 1 + \"REFUSED baseline=3 candidate=1 lost ids=B, C\" + remote sha unchanged) and test_a_shrink_push_with_the_override_is_loud (:690, asserts exit 0 + NOTICE line + push landed). Full gate (guards.test_command = bash tests/gate.sh) is environment-blocked on this host \u2014 \"ERROR: DuckBrain URL missing\" (exit 2) \u2014 matching the repo's own recorded precedent (.gitreins/history/2026-11-21/ecef6bee/summary.md:14); the tested file is scratch-repo-only so this does not mute the evidence. ruff check on all three changed files: \"All checks passed!\"; gitleaks full-history run this session: \"no leaks found\" (total 0), so the prior tier1 secrets findings are not from this diff."
+              },
+              {
+                "criterion": "The refusal/override contract is reachable end-to-end through a real `git push` via the installed hook (not only direct checker invocation), and default installer mode stays pre-commit-only",
+                "status": "PASS",
+                "detail": "tests/test_board_shrink_check.py make_push_pair installs BOTH hooks into the scratch clone and the push arms drive the REAL generated block through `git push` against a bare remote (:601 refusal arm asserts remote sha unchanged; test_an_append_push_passes_and_lands_the_new_row asserts origin moves; test_the_default_mode_still_installs_the_pre_commit_hook :819 asserts default mode never creates pre-push and push-mode install never rewrites the pre-commit hook \u2014 back-compat). My independent hand-run reproduced the same end-to-end behavior through the installed pre-push hook (see criterion 1 detail); all 45 tests pass and ruff is clean.",
+                "derived": true
+              }
+            ],
+            "summary": "The pre-push second enforcement point is fully implemented and proven: an independent hand-run scratch clone refused a --no-verify shrink push naming counts+lost ids (remote sha unchanged), BOARD_ALLOW_SHRINK=1 landed loudly, and all 45 scratch-repo tests pass, with ruff and gitleaks clean; the only residual gaps are live-checkout enrollment and a narrow force-push race, neither part of the criterion. [uncovered failure paths: failure mode 0 (The live checkout is not enrolled: .git/hooks contains only pre-commit (no pre-push hook), and a core.hooksPath override (the merge commit d5950ae itself discloses a hooksPath bypass) silently disables any installed hook \u2014 so a shrink pushed from this checkout would land on the remote.): detected_by is empty \u2014 uncovered failure path; failure mode 1 (Force-push race: the pre-push check grades the remote_oid git handed it at push start; with `push --force` and a concurrent append by another writer, the checker passes against the stale baseline and the landed ref drops those newer rows.): detected_by is empty \u2014 uncovered failure path]",
+            "provenance": {
+              "model": "glm-5.3-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            }
+          }
+        }
+      ],
+      "model": "glm-5.3-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-196\"}",
+          "exit_code": 0,
+          "output_sha": "efb48e891eb21d7b4ae59209c3334c56e96277de4ac277802fdbabfd956ed8ef"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"AUG-196: Pre-push enforcement of board shrink guard. Criterion 1: a second enforcement point beyond pre-commit hook refuses to push a board shrink; scratch-clone proven (--no-verify shrink commit then push refusal naming counts+lost ids); BOARD_ALLOW_SHRINK=1 override still works and stays loud. Plan: find the pre-commit hook board-shrink guard, find any pre-push hook, run tests, try to do a scratch clone proof.\", \"key\": \"plan\"}",
+          "exit_code": 0,
+          "output_sha": "8d44d6b1bbd9dfa8f833f6e9f38837fbd2fa1deff13d33fe0f2976f4310d2324"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"regex\": \"BOARD_ALLOW_SHRINK\"}",
+          "exit_code": 0,
+          "output_sha": "513832e2ee2fe1ed96794c3e73c5a96d149c86f4700cbb0659903b7dfe9aa779"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"*\", \"regex\": \"shrink\"}",
+          "exit_code": 0,
+          "output_sha": "eb1f691d58cb1ba122b0e5d2302e60586b9c0611497cb7dbd586cabde016e4c8"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"scripts/board_shrink_check.py\"}",
+          "exit_code": 0,
+          "output_sha": "e3863f5239c9efdf6ec2c3d3eb46d5cd162ae558e6be54a9424b63e14ebee513"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"scripts/install_board_guard.py\"}",
+          "exit_code": 0,
+          "output_sha": "557b6f285f24c3d3ffbe6a11c5d27750a0ce2e4cd25c4213da78e75382268025"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 240, \"offset\": 540, \"path\": \"tests/test_board_shrink_check.py\"}",
+          "exit_code": 0,
+          "output_sha": "ff476e2dcfad364922fdfaf80a17d53ec0175c7d15b344f6a28e2a01e48570cb"
+        },
+        {
+          "tool": "run_command",
+          "command": "cat .gitreins/config.yaml; echo ---; ls -la .git/hooks/ 2>/dev/null | head -30; echo ---; cat .git/hooks/pre-push 2>/dev/null; echo \"--- pre-commit:\"; cat .git/hooks/pre-commit 2>/dev/null",
+          "exit_code": 0,
+          "output_sha": "0fca472c4bd2f50ac33a862dc02b365f5a1ad432909a9bb2cf33fcc93dd2982d"
+        },
+        {
+          "tool": "run_command",
+          "command": "ls -la .git/hooks/ | grep -v sample; echo \"=== pre-push ===\"; cat .git/hooks/pre-push 2>&1; echo \"=== exit: $? ===\"; git config core.hooksPath; echo \"=== board file head:\"; head -c 300 .coding-hermes/board/tasks.jsonl; wc -l .coding-hermes/board/tasks.jsonl",
+          "exit_code": 0,
+          "output_sha": "9d615a02174bb2ffe3a2192e930eb1e46a5360e2faa0ef09996c8c6320e07462"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 155, \"path\": \"tests/test_board_shrink_check.py\"}",
+          "exit_code": 0,
+          "output_sha": "6aa5331ee52fd17b027536416cb6fb838a311522cd869ad3eeaaf84a992df119"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"board-shrink\" .git/hooks/pre-commit | head; echo \"=== AUG-194 task def:\"; grep -n -A 8 \"id: AUG-194\" .gitreins/tasks.yaml | head -20; echo \"=== AUG-196 in tasks.yaml:\"; grep -n -B2 -A6 \"id: AUG-196\" .gitreins/tasks.yaml",
+          "exit_code": 0,
+          "output_sha": "728f4ca5bb38538f3866f055bbbcdc80dbc6bfa51b3f3bddffa85b4d4f914ef0"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger 2>/dev/null || cd .; ls /home/kara/auger/.venv/bin/ | grep -i pytest; /home/kara/auger/.venv/bin/python -m pytest --version 2>&1 | head -3",
+          "exit_code": 0,
+          "output_sha": "4bbcfdfab7e15cb35ba7b8f5c44ff7f02aed43c1e2ef873f097dd3fab7a1f0bf"
+        },
+        {
+          "tool": "run_command",
+          "command": "",
+          "exit_code": -1,
+          "output_sha": "8a6be2690afd08cbe8cbcaea8970908a997562ce3e3afab71d0fbaeeb8317556"
+        },
+        {
+          "tool": "run_command",
+          "command": "AUGER_CI=1 /home/kara/auger/.venv/bin/python -m pytest tests/test_board_shrink_check.py -x -q 2>&1 | tail -15",
+          "exit_code": 0,
+          "output_sha": "100444e22dfff3590cfc58419afd0d1d7d809b6b51ca4ac902d5e58df87cb0f7"
+        },
+        {
+          "tool": "run_command",
+          "command": "set -e\nW=$(mktemp -d)\ncd \"$W\"\ngit init -q --initial-branch=master repo && cd repo\nmkdir scripts\ncp /home/kara/auger/scripts/board_shrink_check.py /home/kara/auger/scripts/install_board_guard.py scripts/\nmkdir -p .coding-hermes/board\nprintf '{\"id\": \"A\"}\\n{\"id\": \"B\"}\\n{\"id\": \"C\"}\\n' > .coding-hermes/board/tasks.jsonl\necho scratch > README.md\ngit add . && git commit -qm initial\ngit config core.hooksPath \"$PWD/hooks\"\npython3 scripts/install_board_guard.py\npython3 scripts/install_board_guard.py --hook pre-push\necho \"--- hooks installed; committing shrink with --no-verify:\"\nprintf '{\"id\": \"A\"}\\n' > .coding-hermes/board/tasks.jsonl\ngit add .coding-hermes/board/tasks.jsonl\ngit commit -qm shrink --no-verify && echo \"commit landed (expected, --no-verify)\"\necho \"--- now push (should REFUSE):\"\nif git push -q origin master 2>push_err.txt; then echo \"PUSH PASSED \u2014 BAD\"; else echo \"push exit=$? (refused)\"; fi\ngrep -o \"board-shrink: REFUSED baseline=3 candidate=1 lost ids=B, C\" push_err.txt\ngit ls-remote origin refs/heads/master\necho \"--- override push (should land, loud):\"\nif BOARD_ALLOW_SHRINK=1 git push origin master 2>push_err2.txt 1>push_out2.txt; then echo \"override push landed\"; else echo \"OVERRIDE PUSH FAILED \u2014 BAD\"; fi\ncat push_out2.txt push_err2.txt | grep -E \"NOTICE BOARD_ALLOW_SHRINK|SHRINK ACCEPTED\"\ngit ls-remote origin refs/heads/master\ngit rev-parse HEAD\necho \"SCRATCH PROOF DONE in $W\"",
+          "exit_code": 1,
+          "output_sha": "59c50fe2cebfa26f20f99b201615565f79a42c58cb3bec32aeb7159eecf63c01"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"/mnt/ssd/tmp/tmp.u2hPi5NYY4/repo/push_err.txt\"}",
+          "exit_code": 1,
+          "output_sha": "5dd0c062f8086f8fc45bc8b7a028383d276fe4f7953d9d8b3b67de7934572a49"
+        },
+        {
+          "tool": "run_command",
+          "command": "cat /mnt/ssd/tmp/tmp.u2hPi5NYY4/repo/push_err.txt; echo \"=== git version:\"; git --version",
+          "exit_code": 0,
+          "output_sha": "6db16b110174b0352f69a75a5a7e20e2ea979f80f778dc4cf02e93558798e07c"
+        },
+        {
+          "tool": "run_command",
+          "command": "set -e\nW=$(mktemp -d)\ncd \"$W\"\ngit init -q --initial-branch=master repo && cd repo\nmkdir scripts\ncp /home/kara/auger/scripts/board_shrink_check.py /home/kara/auger/scripts/install_board_guard.py scripts/\nmkdir -p .coding-hermes/board\nprintf '{\"id\": \"A\"}\\n{\"id\": \"B\"}\\n{\"id\": \"C\"}\\n' > .coding-hermes/board/tasks.jsonl\necho scratch > README.md\ngit add . && git commit -qm initial\ngit config core.hooksPath \"$PWD/hooks\"\npython3 scripts/install_board_guard.py\npython3 scripts/install_board_guard.py --hook pre-push\ngit clone -q --bare . ../origin.git\ngit remote add origin ../origin.git\necho \"--- committing shrink with --no-verify:\"\nprintf '{\"id\": \"A\"}\\n' > .coding-hermes/board/tasks.jsonl\ngit add .coding-hermes/board/tasks.jsonl\ngit commit -qm shrink --no-verify && echo \"commit landed (expected, --no-verify)\"\necho \"--- push 1: should REFUSE naming counts+lost ids\"\nset +e\ngit push origin master >push_out.txt 2>push_err.txt\nrc=$?\nset -e\necho \"push exit=$rc\"\ngrep -o \"board-shrink: REFUSED baseline=3 candidate=1 lost ids=B, C\" push_err.txt\necho \"remote sha now: $(git ls-remote origin refs/heads/master | cut -c1-12)\"\necho \"--- push 2: BOARD_ALLOW_SHRINK=1 should land and stay loud\"\nBOARD_ALLOW_SHRINK=1 git push origin master >push_out2.txt 2>push_err2.txt\necho \"override push exit=$?\"\ngrep -E \"NOTICE BOARD_ALLOW_SHRINK override|SHRINK ACCEPTED\" push_out2.txt push_err2.txt\necho \"remote sha after override: $(git ls-remote origin refs/heads/master | cut -c1-12)\"\necho \"local HEAD:                $(git rev-parse HEAD | cut -c1-12)\"\necho \"SCRATCH PROOF DONE in $W\"",
+          "exit_code": 0,
+          "output_sha": "f27e83a3e834e801903b752235f422413538264b6e75c5f60c5b1b558f5057f6"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"!tests/*\", \"regex\": \"install_board_guard\"}",
+          "exit_code": 0,
+          "output_sha": "5dbf0bf499b37b0ebfd630219d42d43502a7663f7fe0fa47b406e49079aa0f19"
+        },
+        {
+          "tool": "run_command",
+          "command": "git ls-files .coding-hermes/board/tasks.jsonl | head -2; echo \"=== ci.yml shrink step:\"; grep -n -B3 -A8 \"board_shrink_check\" .github/workflows/ci.yml | head -40; echo \"=== git log AUG-196:\"; git log --oneline -5; echo \"=== board row AUG-196:\"; grep -o '\"id\": \"AUG-196\"[^}]*' .coding-hermes/board/tasks.jsonl | head -c 600",
+          "exit_code": 0,
+          "output_sha": "dd422e774cd91e6bd728245d5cc849459a857ba2fc659e337d8f2a340de2c76e"
+        },
+        {
+          "tool": "run_command",
+          "command": "/home/kara/auger/.venv/bin/python -m pytest tests/test_board_shrink_check.py -q 2>&1 | tail -3; echo \"=== git status:\"; git status --porcelain | head; echo \"=== conftest AUGER_CI:\"; grep -rn \"AUGER_CI\" conftest.py tests/conftest.py 2>/dev/null | head -5",
+          "exit_code": 0,
+          "output_sha": "d3ec8ea408aa5906c3c087754e07cc223f9be99216b7fec8a9e9d8b7b12ac0cd"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 115, \"offset\": 740, \"path\": \"tests/test_board_shrink_check.py\"}",
+          "exit_code": 0,
+          "output_sha": "0199c8f0c2744f9b955394a9b188adecbd5e9f4c2aa96925dd549015fd07e2fd"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -rn \"hooksPath\" scripts/board_shrink_check.py scripts/install_board_guard.py README.md docs/ 2>/dev/null | head -10; echo \"=== diff of 5bdf227 (stat):\"; git show --stat 5bdf227 | head -20; echo \"=== ruff on changed scripts:\"; ruff check scripts/board_shrink_check.py scripts/install_board_guard.py tests/test_board_shrink_check.py 2>&1 | tail -3",
+          "exit_code": 0,
+          "output_sha": "7c9f71ee5141c4d33b396114e605490de20dede6b20199e2333ebb3c93c2254d"
+        },
+        {
+          "tool": "run_command",
+          "command": "git remote -v; echo \"=== refs to installer/checker outside tests+scripts:\"; grep -rn \"install_board_guard\\|board_shrink_check\" --include=\"*.md\" --include=\"*.sh\" --include=\"*.yml\" --include=\"*.yaml\" . 2>/dev/null | grep -v \"^./.gitreins/rescued\" | grep -v \".coding-hermes/board\" | head -20",
+          "exit_code": 0,
+          "output_sha": "98cbdf2da940e9b75409f30df61012030a73714c3b95c5cc08e45627a6fce8a4"
+        },
+        {
+          "tool": "run_command",
+          "command": "which gitleaks && gitleaks detect --source . --report-path /tmp/gitleaks_aug196.json --redact -q 2>&1 | tail -2; python3 -c \"\nimport json\ntry:\n    d=json.load(open('/tmp/gitleaks_aug196.json'))\n    for f in d:\n        print(f.get('File'), f.get('StartLine'), f.get('RuleID'))\nexcept Exception as e:\n    print('report read failed:', e)\n\" 2>/dev/null; echo \"=== stat 5bdf227:\"; git show --stat 5bdf227 | tail -8",
+          "exit_code": 0,
+          "output_sha": "d4b7b0b1c7f9e795c6f3e850d3c267f22826bd156b9a5c26077854394ff95b21"
+        },
+        {
+          "tool": "run_command",
+          "command": "gitleaks detect --source . --report-path /tmp/gitleaks_aug196.json --redact --exit-code 0 2>&1 | tail -2; python3 -c \"\nimport json\nd=json.load(open('/tmp/gitleaks_aug196.json'))\nfor f in d:\n    print(f.get('File'), f.get('StartLine'), f.get('RuleID'))\nprint('total:', len(d))\n\"",
+          "exit_code": 0,
+          "output_sha": "66f3626bb21e80a7e1fac41832c52cc5f6072a3810ebe2b32e8f718f53689819"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"PUSH_BLOCK_TEMPLATE\\|--pre-push || exit 1\\|def run_pre_push\\|def verdict\\|REFUSED {report}\\|NOTICE {ALLOW_ENV}\\|choices=sorted(HOOK_CONFIG)\\|baseline = \\\"\\\" if is_null_oid\" scripts/board_shrink_check.py scripts/install_board_guard.py; grep -n \"def test_a_no_verify_shrink_commit_is_refused_at_the_push_path\\|def test_a_shrink_push_with_the_override_is_loud\\|def test_the_default_mode_still_installs_the_pre_commit_hook\" tests/test_board_shrink_check.py",
+          "exit_code": 0,
+          "output_sha": "d9c917b31981b2cea767bf5fa627497a581b151c816ff06dc7a7ac928d9143e2"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS criterion 1 (second enforcement point refuses to push a board shrink): (a) Mechanism: scripts/install_board_guard.py:57-62 PUSH_BLOCK_TEMPLATE emits `python3 \\\"<checker>\\\" --pre-push || exit 1` in .git/hooks/pre-push; scripts/board_shrink_check.py:247 run_pre_push grades every stdin ref pair (baseline = remote oid board, candidate = local oid board) through the shared verdict() contract, which at :193 prints \\\"board-shrink: REFUSED baseline=<n> candidate=<m> lost ids=...\\\" to stderr and exits 1. (b) Scratch-clone proof, run by hand this session (mktemp -d, git init + bare origin + clone, both hooks installed): `git commit -qm shrink --no-verify` landed; `git push origin master` exit=1 with exact line \\\"board-shrink: REFUSED baseline=3 candidate=1 lost ids=B, C\\\"; ls-remote sha 179a86e3e0bb unchanged after the refused push; BOARD_ALLOW_SHRINK=1 push exit=0 printing \\\"NOTICE BOARD_ALLOW_SHRINK override: baseline=3 candidate=1 lost ids=B, C\\\" + \\\"SHRINK ACCEPTED - the push will drop 2 task row(s) (3 -> 1)\\\"; remote sha d26e70d3c6d0 == local HEAD after override. (c) Automated mirror: AUGER_CI=1 pytest tests/test_board_shrink_check.py -> 45 passed in 9.28s (also 45 passed without AUGER_CI); push arms test_a_no_verify_shrink_commit_is_refused_at_the_push_path (tests/test_board_shrink_check.py:601, asserts exit 1 + REFUSED baseline=3 candidate=1 lost ids=B, C + remote sha unchanged) and test_a_shrink_push_with_the_override_is_loud (:690, asserts exit 0 + NOTICE line + push landed). (d) Back-compat: default installer mode still pre-commit-only (test_the_default_mode_still_installs_the_pre_commit_hook, :819); ruff check on all three changed files \\\"All checks passed!\\\"; gitleaks full-repo run this session \\\"no leaks found\\\" total=0.\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "9d5fa5021461bb9c0a9624b30eec6e83b245ded46824e5cb3d5501c44f848781"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Derived criterion 0: The refusal/override contract is hook-driven and reachable end-to-end through a real `git push` (not only via direct checker invocation), and default installer mode stays pre-commit-only (back-compat).\", \"key\": \"derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "5c969549c14426e924ca3411b5a2881c485c8c6f818db114e48f6645821f5eb1"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS derived 0: reachability/back-compat proven. (a) tests/test_board_shrink_check.py make_push_pair installs BOTH hooks into the scratch clone and the push arms drive the real generated block via `git push` against a bare remote (test_a_no_verify_shrink_commit_is_refused_at_the_push_path at :601 asserts exit 1 + \\\"REFUSED baseline=3 candidate=1 lost ids=B, C\\\" + remote sha unchanged) \\u2014 hook-driven, not just checker-direct. (b) My independent hand-run reproduced the same end-to-end behavior through the installed pre-push hook. (c) Back-compat: install_board_guard.py:102 `--hook` defaults to pre-commit, choices pre-commit|pre-push; test_the_default_mode_still_installs_the_pre_commit_hook (:819) asserts default mode never creates pre-push and push-mode install never rewrites the pre-commit hook. All 45 tests pass (9.28s / 9.65s runs observed); ruff clean.\", \"key\": \"verified_derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "16160bbba643169f907cf680c521eb9b4396eb95c666e9485795e4afe113f5e5"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Test/lint/secret evidence (for detail fields): guards.test_command = `bash tests/gate.sh` (.gitreins/config.yaml), which requires a live DuckBrain URL (\\\"ERROR: DuckBrain URL missing\\\") \\u2014 environment-blocked on this dev host, matching the repo's own recorded precedent (.gitreins/history/2026-11-21/ecef6bee/summary.md:14 \\\"Full bash tests/gate.sh not runnable here \\u2014 requires a live DuckBrain\\\"). Focused suite run fresh: `AUGER_CI=1 /home/kara/auger/.venv/bin/python -m pytest tests/test_board_shrink_check.py -x -q` -> exit 0, \\\"45 passed in 9.28s\\\"; rerun without AUGER_CI -> \\\"45 passed in 9.65s\\\". ruff check scripts/board_shrink_check.py scripts/install_board_guard.py tests/test_board_shrink_check.py -> \\\"All checks passed!\\\". gitleaks detect --source . -> \\\"no leaks found\\\", total 0 (prior tier1 secrets 2 findings not from this diff; scoped scan of the three changed files exit 0). The tested file is scratch-repo-only (own git init, GIT_CONFIG_GLOBAL=devnull), independent of the live gate env.\", \"key\": \"test_evidence\"}",
+          "exit_code": 0,
+          "output_sha": "986e15945edd8ea9bc24c8093f9820eea0419d2932933f27a143f12e79110168"
+        }
+      ]
+    }
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [
+      {
+        "severity": "low",
+        "file": ".coding-hermes/board/tasks.jsonl",
+        "line": 303,
+        "detection": "task row mutation without a paired task_updated event: every other row edit in this change (AUG-196 in_progress) appends a matching event to events.jsonl, but the AUG-197 edit (foreman_note set, updated_at 2026-11-22T09:43:54) appends none",
+        "detail": "events.jsonl adds only id 695 (task_id AUG-196 at 09:42:27) while tasks.jsonl also mutates AUG-197 at 09:43:54, so that change is unaudited in the event log",
+        "category": "unknown",
+        "fingerprint": "9a6b184235d9770e324a3c7d645155c0ffbec42e03d51107621a4a1ab26bc732",
+        "state": "ACTIVE",
+        "echo": "[low][unknown] .coding-hermes/board/tasks.jsonl:303 \u2014 task row mutation without a paired task_updated event: every other row edit in this change (AUG-196 in_progress) appends a matching event to events.jsonl, but the AUG-197 edit (foreman_note set, updated_at 2026-11-22T09:43:54) appends none\nevents.jsonl adds only id 695 (task_id AUG-196 at 09:42:27) while tasks.jsonl also mutates AUG-197 at 09:43:54, so that change is unaudited in the event log"
+      },
+      {
+        "severity": "observation",
+        "file": ".coding-hermes/board/tasks.jsonl",
+        "line": 300,
+        "detection": "status field transitioned to in_progress while sibling dispatch field worker_status remains \"pending\", matching the stale pattern already present on completed rows AUG-194/AUG-195",
+        "detail": "AUG-196 sets status=in_progress, worktree and branch but leaves worker_status=\"pending\", consistent with existing rows where worker_status is never advanced",
+        "category": "unknown",
+        "fingerprint": "214818a68d346da83304bbb47dec9fd7649d038158a0aacdf77cef5eed56d2e2",
+        "state": "ACTIVE",
+        "echo": "[observation][unknown] .coding-hermes/board/tasks.jsonl:300 \u2014 status field transitioned to in_progress while sibling dispatch field worker_status remains \"pending\", matching the stale pattern already present on completed rows AUG-194/AUG-195\nAUG-196 sets status=in_progress, worktree and branch but leaves worker_status=\"pending\", consistent with existing rows where worker_status is never advanced"
+      }
+    ],
+    "summary": "Bookkeeping-only diff (AUG-196 marked in_progress with matching gitreins entry, AUG-197 foreman note added); no code defects, the only substantive gap is the AUG-197 row update landing without a corresponding board event.",
+    "review_state": {
+      "emitted": [
+        {
+          "severity": "low",
+          "file": ".coding-hermes/board/tasks.jsonl",
+          "line": 303,
+          "detection": "task row mutation without a paired task_updated event: every other row edit in this change (AUG-196 in_progress) appends a matching event to events.jsonl, but the AUG-197 edit (foreman_note set, updated_at 2026-11-22T09:43:54) appends none",
+          "detail": "events.jsonl adds only id 695 (task_id AUG-196 at 09:42:27) while tasks.jsonl also mutates AUG-197 at 09:43:54, so that change is unaudited in the event log",
+          "category": "unknown",
+          "fingerprint": "9a6b184235d9770e324a3c7d645155c0ffbec42e03d51107621a4a1ab26bc732",
+          "state": "ACTIVE",
+          "echo": "[low][unknown] .coding-hermes/board/tasks.jsonl:303 \u2014 task row mutation without a paired task_updated event: every other row edit in this change (AUG-196 in_progress) appends a matching event to events.jsonl, but the AUG-197 edit (foreman_note set, updated_at 2026-11-22T09:43:54) appends none\nevents.jsonl adds only id 695 (task_id AUG-196 at 09:42:27) while tasks.jsonl also mutates AUG-197 at 09:43:54, so that change is unaudited in the event log"
+        },
+        {
+          "severity": "observation",
+          "file": ".coding-hermes/board/tasks.jsonl",
+          "line": 300,
+          "detection": "status field transitioned to in_progress while sibling dispatch field worker_status remains \"pending\", matching the stale pattern already present on completed rows AUG-194/AUG-195",
+          "detail": "AUG-196 sets status=in_progress, worktree and branch but leaves worker_status=\"pending\", consistent with existing rows where worker_status is never advanced",
+          "category": "unknown",
+          "fingerprint": "214818a68d346da83304bbb47dec9fd7649d038158a0aacdf77cef5eed56d2e2",
+          "state": "ACTIVE",
+          "echo": "[observation][unknown] .coding-hermes/board/tasks.jsonl:300 \u2014 status field transitioned to in_progress while sibling dispatch field worker_status remains \"pending\", matching the stale pattern already present on completed rows AUG-194/AUG-195\nAUG-196 sets status=in_progress, worktree and branch but leaves worker_status=\"pending\", consistent with existing rows where worker_status is never advanced"
+        }
+      ],
+      "carried": []
+    }
+  },
+  "summary": "Stage tier1: FAIL\n    \u2717 tests: scanners: nice=nice -n 10\n  \u2713 lint: scanners: nice=nice -n 10\n  \u2717 secrets: secrets: scanners=gitleaks+builtin cross-check\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 A second enforcement point beyond the pre-commit hook refuses to push a board shrink (scratch-clone proven: --no-verify shrink commit then push refusal naming counts+lost ids; BOARD_ALLOW_SHRINK=1 override still works and stays loud): Mechanism: scripts/install_board_guard.py:57-62 PUSH_BLOCK_TEMPLATE emits `python3 \"scripts/board_shrink_check.py\" --pre-push || exit 1` into the pre-push hook (installed via --hook pre-push, choices at :102); scripts/board_shrink_check.py:247 run_pre_push grades every stdin ref pair (baseline = board at the remote oid, candidate = board at the local oid) through the shared verdict() contract, which at :193 prints `board-shrink: REFUSED baseline=<n> candidate=<m> lost ids=...` to stderr and exits 1. Scratch-clone proof run BY HAND this session (mktemp -d; git init + bare origin + clone; both hooks installed from the worktree's scripts): after `git commit -qm shrink --no-verify` landed, `git push origin master` exited 1 with the exact line \"board-shrink: REFUSED baseline=3 candidate=1 lost ids=B, C\" and `git ls-remote` sha 179a86e3e0bb unchanged; then BOARD_ALLOW_SHRINK=1 push exited 0 printing \"NOTICE BOARD_ALLOW_SHRINK override: baseline=3 candidate=1 lost ids=B, C\" plus \"SHRINK ACCEPTED \u2014 the push will drop 2 task row(s) (3 -> 1)\", landing d26e70d3c6d0 == local HEAD. Automated mirror run fresh: AUGER_CI=1 /home/kara/auger/.venv/bin/python -m pytest tests/test_board_shrink_check.py -x -q -> exit_code 0, \"45 passed in 9.28s\" (re-run without AUGER_CI: \"45 passed in 9.65s\"), including test_a_no_verify_shrink_commit_is_refused_at_the_push_path (tests/test_board_shrink_check.py:601, asserts exit 1 + \"REFUSED baseline=3 candidate=1 lost ids=B, C\" + remote sha unchanged) and test_a_shrink_push_with_the_override_is_loud (:690, asserts exit 0 + NOTICE line + push landed). Full gate (guards.test_command = bash tests/gate.sh) is environment-blocked on this host \u2014 \"ERROR: DuckBrain URL missing\" (exit 2) \u2014 matching the repo's own recorded precedent (.gitreins/history/2026-11-21/ecef6bee/summary.md:14); the tested file is scratch-repo-only so this does not mute the evidence. ruff check on all three changed files: \"All checks passed!\"; gitleaks full-history run this session: \"no leaks found\" (total 0), so the prior tier1 secrets findings are not from this diff.\n  \u2713 The refusal/override contract is reachable end-to-end through a real `git push` via the installed hook (not only direct checker invocation), and default installer mode stays pre-commit-only: tests/test_board_shrink_check.py make_push_pair installs BOTH hooks into the scratch clone and the push arms drive the REAL generated block through `git push` against a bare remote (:601 refusal arm asserts remote sha unchanged; test_an_append_push_passes_and_lands_the_new_row asserts origin moves; test_the_default_mode_still_installs_the_pre_commit_hook :819 asserts default mode never creates pre-push and push-mode install never rewrites the pre-commit hook \u2014 back-compat). My independent hand-run reproduced the same end-to-end behavior through the installed pre-push hook (see criterion 1 detail); all 45 tests pass and ruff is clean.\nThe pre-push second enforcement point is fully implemented and proven: an independent hand-run scratch clone refused a --no-verify shrink push naming counts+lost ids (remote sha unchanged), BOARD_ALLOW_SHRINK=1 landed loudly, and all 45 scratch-repo tests pass, with ruff and gitleaks clean; the only residual gaps are live-checkout enrollment and a narrow force-push race, neither part of the criterion. [uncovered failure paths: failure mode 0 (The live checkout is not enrolled: .git/hooks contains only pre-commit (no pre-push hook), and a core.hooksPath override (the merge commit d5950ae itself discloses a hooksPath bypass) silently disables any installed hook \u2014 so a shrink pushed from this checkout would land on the remote.): detected_by is empty \u2014 uncovered failure path; failure mode 1 (Force-push race: the pre-push check grades the remote_oid git handed it at push start; with `push --force` and a concurrent append by another writer, the checker passes against the stale baseline and the landed ref drops those newer rows.): detected_by is empty \u2014 uncovered failure path]\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-11-22T10:15:34.260433",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-22T10:15:34.302456+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 795,
+        "truncated": false,
+        "source": "git show d5950ae55175"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 27816,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-196"
+  }
+}
