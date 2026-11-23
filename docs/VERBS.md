@@ -706,6 +706,76 @@ writes nothing back to them. Subcommands:
   auger spec context specs --code auger.py
   ```
 
+**The spec-to-build loop (AUG-119/AUG-121/AUG-124): the other eight subcommands, one digest
+chain.** The verbs above grade and select; the verbs below walk ONE task from the corpus to a
+canonical board row and its judge packet: `task-packet` → `plan-draft` → `plan-approve` →
+`plan-export` (or the single-task `task-export`) → `plan-reconcile` / `judge-packet` /
+`judge-handoff`. Every hand is bound to a digest — the sha256 of the canonical artifact it names —
+so nobody can approve, export or hand off a plan they are not looking at, and the judge packet
+carries the board's acceptance criteria VERBATIM. Every refusal in the loop is typed
+(`spec error (<code>)` on stderr, exit 2, nothing written) and names the offending ids.
+
+- `auger spec task-packet ROOT --task ID` — one authored `<task>` block's exact scope packet:
+  stable identity, lifecycle and verification method, the in-scope blocks, the acceptance
+  criteria, and the excluded blocks WITH the reason each was excluded. The packet is
+  deterministic and `digest` is the sha256 of its canonical bytes — that digest is what an
+  approval is bound to. Corpus-wide: a not-well-formed document refuses the whole run
+  (`invalid-xml`), because a packet built from half a corpus is not the approved one; an id that
+  is not a `<task>` block refuses `unknown-task`.
+- `auger spec plan-draft ROOT --plan ID` — the versioned DRAFT plan: the tasks' ids, criteria,
+  dependencies, anchors and expected evidence, plus the plan's ONE version and ONE digest
+  (sha256 of the canonical plan). Membership is authored on the task (`plan=` +
+  `plan-version=`), so a plan cannot grow by dropping a file into a directory. Read-only: it
+  touches nothing.
+- `auger spec plan-approve ROOT --plan ID (--approve | --reject) --digest SHA256 --approver NAME
+  [--ledger DIR] [--at TIMESTAMP]` — append one decision to the plan approval ledger (default:
+  `<spec root>/.auger/plan-approvals.jsonl`). The digest must be the plan's CURRENT digest
+  (`stale-plan-digest` names both values otherwise); a 64-hex-character sha256 is required
+  (`invalid-plan-digest`); an anonymous approval is refused (`missing-approver`). The ledger is
+  append-only and the LATEST record for a plan is the decision: a rejection is a new fact, never
+  an edit. `--at TIMESTAMP` records when the decision was made verbatim; without it the current
+  UTC time (ISO 8601) is recorded — the ledger never carries an empty timestamp (AUG-206). An
+  unwritable ledger refuses `approval-ledger-unwritable`, and the record is read back before it
+  is reported as recorded (a read that does not match refuses `approval-ledger-unverified`).
+- `auger spec plan-export ROOT --plan ID --board DIR [--ledger DIR] [--plan-digest SHA256]
+  [--boardctl PATH] [--out PATH]` — write every row of an APPROVED plan through `boardctl`. The
+  approval is checked BEFORE any boardctl call, so an unapproved, rejected or stale plan cannot
+  move a byte of the canonical board. Per row: `boardctl create` when the row does not exist,
+  `boardctl update` when only title/acceptance text drifted, `unchanged` when it already equals
+  the approved input; every write is read back with `boardctl show` and compared field by field,
+  and a row whose SCOPE differs is a conflict that refuses (an export never overwrites a row
+  behind its owner). Fail-stop: the first failing row ends the run status `partial` (exit 1)
+  with every landed outcome, the boardctl error, and a recovery record naming the resume path —
+  re-running the same approved plan completes it.
+- `auger spec task-export ROOT --task ID --board DIR [--plan-digest SHA256] [--boardctl PATH]` —
+  the single-task shape of `plan-export`, approval-bound the same way (with no approval, or a
+  stale one, boardctl is not invoked at all and both canonical files stay byte-identical). It
+  issues boardctl `create` and `show` only — no scheduler dispatch, no task completion; an
+  existing row of identical scope reports `unchanged`, a differing row refuses.
+- `auger spec plan-reconcile ROOT --plan ID --board DIR [--verdict-root DIR] [--out PATH]` — copy
+  board status/commit/verdict evidence back into Auger. READ-ONLY: the only external command is
+  `boardctl show`, the record says `writes: none`, and no board byte moves. A commit that does
+  not exist in `--repo-root` and a verdict naming another commit are refused rather than
+  recorded as if they bound; absent evidence carries `none:<reason>`.
+- `auger spec judge-packet ROOT --plan ID --row ID --board DIR [--trace MARKER] [--worker-summary
+  TEXT] [--out PATH]` — the packet `engine.auger_packet.TaskPacketAdapter` consumes: the board
+  id (plus an explicit id mapping), the resolved `ch:trace` ids, the in/out-of-scope references,
+  the exact test obligations, the board acceptance criteria VERBATIM, and the digests that were
+  approved. The canonical row must still carry the approved packet, and the marker must resolve
+  to this row, this task and its own obligations — anything else is refused with the offending
+  ids named, and no packet is emitted.
+- `auger spec judge-handoff ROOT --plan ID --row ID --board DIR [--dispatch-cmd COMMAND]
+  [--out PATH]` — the handoff: the packet is validated FIRST (row, trace, scope, obligations,
+  digests); an invalid binding refuses with the offending ids and starts NOTHING. A valid
+  binding calls the dispatch command EXACTLY ONCE, with the packet path appended, carrying the
+  board's acceptance criteria verbatim. Without `--dispatch-cmd` it refuses
+  `dispatch-unconfigured` instead of pretending to have started a judge — this seam hands a
+  packet to a judge and writes only the packet file; Auger never dispatches a board task from here.
+
+A runnable corpus that walks this whole chain is documented (and validated as part of this
+repository) at `docs/spec-example/` — [docs/SPEC-CORPUS.md](SPEC-CORPUS.md) § *The spec-to-build
+loop* works through it command by command.
+
 `--repo-root DIR` is the repository a corpus' `path`/`migration`/`fixture` values are relative
 to (AUG-127), and it must be a git work tree's top level. It defaults to
 `git rev-parse --show-toplevel` resolved FROM THE SPEC ROOT; with neither, the verb refuses

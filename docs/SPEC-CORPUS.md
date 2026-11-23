@@ -112,6 +112,132 @@ The exit-code contract is the seam's whole point:
 A no-context answer is a normal outcome (the shipped corpus scopes no rows yet), not an error; an
 ambiguous answer is never silent.
 
+## The spec-to-build loop, on a runnable example (AUG-206)
+
+Eight more subverbs walk ONE task from a `<task>` block to a canonical board row and its judge
+packet — `task-packet`, `plan-draft`, `plan-approve`, `plan-export` (or the single-task
+`task-export`), `plan-reconcile`, `judge-packet`, `judge-handoff` — and every hand is bound to a
+digest (`sha256` of the canonical artifact), so nobody can approve a plan they are not looking at.
+`docs/VERBS.md` § spec documents each verb's flags and refusals; this section works the chain
+command by command on a corpus that ships in this repository.
+
+**The runnable corpus: `docs/spec-example/tracker-loop.xml`.** It validates as-is in this checkout
+(the fenced block below is byte-identical to the whole file — declaration and copy-me comment
+included, verified by `scripts/check_spec_example.py`), and it is a template: copy the directory
+into your own repository and rename the ids. The verification block deliberately uses
+`method="inspection"` — a `method="test"` verification names a runner plus a git-tracked
+path/selector in the consuming repository (see § *Test obligations* in docs/XML-SPEC-SCHEMA.md),
+which a copied example would refuse until your own test exists — so the example resolves NO test
+obligation and validates anywhere.
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A RUNNABLE spec-to-build example (AUG-206): one task, one plan, one approval surface.
+
+  This corpus validates as-is in this repository (`auger.py spec validate docs/spec-example`) and
+  it is also a template: copy the directory into your own repository and rename the ids. The
+  verification blocks deliberately use method="inspection" so the example resolves NO test
+  obligation — a method="test" verification must name a runner plus a git-tracked path/selector
+  in the repository that CONSUMES the corpus (docs/XML-SPEC-SCHEMA.md § Test obligations), and a
+  copied example would refuse there. Turn the inspection into a real obligation once your own
+  test exists and is tracked.
+-->
+<spec xmlns="urn:auger:spec:1" id="EXAMPLE-TRACKER-LOOP" version="1.0.0" schema-version="1.0">
+
+  <requirement id="EXAMPLE-REQ-1" kind="requirement" status="active" version="1.0.0"
+               applies-to="auger.plan" verification="test"
+               verifies="EXAMPLE-VER-1">
+    The exported plan produces one canonical board row per task, carrying the task's acceptance
+    criteria verbatim and the plan digest the approval bound.
+  </requirement>
+
+  <verification id="EXAMPLE-VER-1" kind="verification" status="active" version="1.0.0"
+                applies-to="auger.plan" method="inspection">
+    Inspection here on purpose: a runnable example must not name a test file the consuming
+    repository does not track. Replace this block with method="test" runner="pytest"
+    path="tests/&lt;your file&gt;.py" selector="&lt;your test&gt;" once the real test exists.
+  </verification>
+
+  <requirement id="EXAMPLE-REQ-9" kind="requirement" status="active" version="1.0.0"
+               verification="inspection">
+    Batch export of several plans in one run, and the judge-handoff dispatch leg, are a later
+    wave's work — the exclusion below keeps them visible and explained.
+  </requirement>
+
+  <acceptance id="EXAMPLE-AC-1" kind="acceptance" status="active" version="1.0.0"
+              applies-to="auger.plan" verification="test"
+              verifies="EXAMPLE-REQ-1">
+    The canonical row's acceptance-criteria text equals this block's body exactly; a drifted row
+    is repaired through `boardctl update`, never left behind.
+  </acceptance>
+
+  <task id="EXAMPLE-TASK-1" kind="task" status="active" version="1.0.0"
+        applies-to="auger.plan" verification="test"
+        plan="EXAMPLE-PLAN" plan-version="1.0.0"
+        in-scope="EXAMPLE-REQ-1" acceptance="EXAMPLE-AC-1" out-of-scope="EXAMPLE-REQ-9">
+    Export this plan's one task as one canonical board row, with the acceptance criteria embedded
+    verbatim and the ch:trace marker binding row, spec blocks, test obligation and witness.
+    <exclusion ref="EXAMPLE-REQ-9" reason="owned by the later wave; not this plan's reviewed scope"/>
+  </task>
+
+</spec>
+```
+
+The `<task>` element is the one block the loop orbits, and its attributes are exactly what the
+loop reads: `plan=` + `plan-version=` author plan membership (`plan-draft` refuses a plan whose
+members disagree on the version), `in-scope=` / `acceptance=` / `out-of-scope=` are the three id
+lists that become the packet's scope, and each child `<exclusion ref= reason=>` carries the
+reason an out-of-scope block is left out — out-of-scope without a reason refuses to validate.
+A `<task>` block is always plan-bound and approval-gated; a task packet is never built from a
+board row's prose.
+
+**Driving the loop** (from the repository root; `auger.py` stands for the entry point):
+
+```bash
+python auger.py spec validate docs/spec-example
+# spec: 1 document(s), 5 block(s), 5 reference(s) ok
+
+# 1. the packet, and the digest an approval will be bound to
+python auger.py spec task-packet docs/spec-example --task EXAMPLE-TASK-1
+# {"digest": "877d69ee...", "packet": {...}} — the packet digest an approval is bound to
+
+# 2. the plan: many tasks, ONE version, ONE digest
+python auger.py spec plan-draft docs/spec-example --plan EXAMPLE-PLAN
+# {"plan": "EXAMPLE-PLAN", "version": "1.0.0", "digest": "07828ee7...", "tasks": [...]}
+
+# 3. the approval — bound to that digest, naming WHO decided; the ledger (append-only,
+#    default <spec root>/.auger/plan-approvals.jsonl) records the current UTC time unless
+#    --at TIMESTAMP says otherwise
+python auger.py spec plan-approve docs/spec-example --plan EXAMPLE-PLAN --approve \
+    --digest 07828ee7e1b1bd9b50d4645db7e0d7501012efb23859e44ca009e4131114e632 --approver you
+# {"status": "recorded", "record": {"plan": "EXAMPLE-PLAN", "decision": "approved", "at": "2026-...", ...}}
+
+# 4. the board rows — the FIRST board-writing step; the approval is checked before any
+#    boardctl call, so the digest above gates every byte
+python auger.py spec plan-export docs/spec-example --plan EXAMPLE-PLAN --board <your board dir>
+
+# 5. the judge leg — the packet GitReins' TaskPacketAdapter consumes, with the board's
+#    acceptance criteria verbatim; hand it off with judge-handoff --dispatch-cmd <command>
+python auger.py spec judge-packet docs/spec-example --plan EXAMPLE-PLAN \
+    --row EXAMPLE-TASK-1 --board <your board dir> --boardctl boardctl
+
+# 6. read the board's evidence back — read-only, writes: none
+python auger.py spec plan-reconcile docs/spec-example --plan EXAMPLE-PLAN --board <your board dir>
+```
+
+`--trace MARKER` on `judge-packet`/`judge-handoff` validates an ALTERNATIVE marker than the one
+bound into the approved row — a marker you would copy from the packet (`spec task-packet … | jq -r
+.trace`), never hand-write: the finding codes and marker rules are docs/XML-SPEC-SCHEMA.md §
+*The staged-diff checker*.
+
+Fail-closed everywhere, in the same typed shape (`spec error (<code>)`, exit 2, nothing
+written): a digest that is not the plan's current one refuses `stale-plan-digest` ("approve the
+plan you are actually looking at"); exporting without an approval refuses
+`unapproved-plan-digest`; a `--task` id that is not a `<task>` block refuses `unknown-task`
+(naming that a task packet is built from a `<task>` block, never from a board row's prose);
+`spec plan-approve` against a 000…0 digest therefore never touches the ledger.
+
 ## What the corpus deliberately does not claim
 
 * No block describes `init`, `start`, `ask`, `answer`, `check`, `status`, `toggle`, `dump` or
