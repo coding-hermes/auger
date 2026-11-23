@@ -38,6 +38,13 @@ The emitted documents are ordinary authored specs: `<spec xmlns="urn:auger:spec:
 `kind="section"` blocks, validating under `auger spec validate <root>` AND `auger spec check
 <root>`.
 
+AUG-198 adds `source_revision` to the manifest when the source root lives inside a git
+worktree: the HEAD the conversion bound. The verbatim host leg uses it to classify a
+containment failure against a live tree that has MOVED PAST that revision as upstream
+source drift (a typed skip naming both revisions — regenerate the corpus to re-bind),
+while a failure at the bound revision stays a hard assertion. The shipped corpus keeps
+its full integrity coverage through the portable digest leg either way.
+
 AUG-204 adds the FULL-TREE pipeline for coding-hermes-director: every one of the 648 canonical
 .md paths is classified by directory scope in `coverage-manifest.json` — build-spec /
 contracts / review / sections / DESIGN.md render first-class; `handbook/` is content-hash
@@ -55,6 +62,7 @@ import argparse
 import hashlib
 import json
 import re
+import subprocess
 import sys
 import xml.sax.saxutils as saxutils
 from pathlib import Path
@@ -335,6 +343,29 @@ def file_content_digest(path: Path) -> str:
     return normalized_digest(path.read_text(encoding="utf-8", errors="replace"))
 
 
+def source_revision(source_root: str | Path) -> str | None:
+    """Git HEAD of the worktree owning `source_root` (AUG-198), or None.
+
+    Recorded in the manifest as `source_revision` when determinable so the verbatim
+    host leg can bind the corpus to the exact upstream state it was converted from.
+    A source root outside git (or a host without git) simply omits the field — the
+    manifest keeps its pre-AUG-198 shape and the leg keeps its pre-AUG-198 strictness.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(source_root), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    rev = proc.stdout.strip()
+    return rev or None
+
+
 def convert_source_document(
     project: str, path: Path, file_slug: str, out_path: Path, document_label: str
 ) -> dict:
@@ -566,6 +597,9 @@ def convert_project_full_tree(project: str, out_root: Path) -> dict:
         "excluded": EXCLUSIONS.get(project, []),
         "totals": {"files": 0, "sections": 0, "blocks": 0, "skipped": 0},
     }
+    revision = source_revision(config["source_root"])
+    if revision:
+        manifest["source_revision"] = revision  # AUG-198: the upstream state bound here
     documents = []
     document_ids: dict = {}
     block_ids: dict = {}
@@ -723,6 +757,9 @@ def convert_project(project: str, out_root: Path) -> dict:
         "excluded": EXCLUSIONS.get(project, []),
         "totals": {"files": 0, "sections": 0, "blocks": 0, "skipped": 0},
     }
+    revision = source_revision(config["source_root"])
+    if revision:
+        manifest["source_revision"] = revision  # AUG-198: the upstream state bound here
     for path in source_files(project):
         file_slug = slug(Path(path).stem)[:24] or "DOC"
         out_path = out_root / (Path(path).stem + ".xml")
