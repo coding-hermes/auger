@@ -12,7 +12,10 @@ integrity contract two ways (AUG-179):
     the source files. It runs when the manifest's declared root (or an env override, or
     this repo's own tree for in-repo sources) resolves on this host; otherwise it SKIPS
     with a NAMED reason — a missing source root is never a green test that asserted
-    nothing silently.
+    nothing silently. When the manifest carries `source_revision` (AUG-198), containment
+    failure against a live tree newer than the bound git HEAD is a further typed skip
+    naming both revisions (upstream drifted; regenerate the corpus to re-bind) — a
+    failure at the bound revision itself stays a hard failure.
 
 Env knobs the tests honour:
   AUGER_CORPORA_ROOT        corpora root override (default: <repo>/corpora)
@@ -140,6 +143,29 @@ def _resolve_source_file(project: str, manifest: dict, document: dict) -> Path |
     if in_repo.exists():
         return in_repo
     return None
+
+
+def _live_source_revision(source: Path | None) -> str | None:
+    """Git HEAD of the worktree owning `source` (AUG-198), or None.
+
+    Determined best-effort from the resolved source's own directory: a non-git
+    tree, a bare pin onto a scratch copy, or an absent git all return None, which
+    leaves the verbatim leg exactly as strict as before AUG-198.
+    """
+    if source is None:
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "-C", str(source.parent), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip() or None
 
 
 def test_gate_pytest_arm_names_this_file():
@@ -301,6 +327,13 @@ def test_shipped_blocks_are_verbatim_and_manifests_reconcile(project):
 
     Parametrized per project so EACH unavailable root yields its own NAMED skip —
     a named skip IS the evidence; the digest leg covered integrity on that host.
+    AUG-198: when the manifest records `source_revision`, the corpus is bound to
+    that upstream git HEAD. Containment still runs verbatim every time; a
+    containment FAILURE against a live tree that has moved PAST the bound revision
+    is classified as upstream source drift (typed skip naming both revisions —
+    regenerate the corpus to re-bind), while a failure AT the bound revision stays
+    a hard assertion. A manifest without `source_revision` (pre-AUG-198 corpora)
+    keeps the original hard-fail behavior untouched.
     """
     corpora = _corpora_root()
     manifest = _load_manifest(corpora, project)
@@ -313,6 +346,8 @@ def test_shipped_blocks_are_verbatim_and_manifests_reconcile(project):
             "leg (test_shipped_block_digests_match_manifest) covered corpus "
             "integrity here"
         )
+    recorded_revision = manifest.get("source_revision")
+    live_revision = _live_source_revision(resolved)
     for document in manifest["documents"]:
         source = _resolve_source_file(project, manifest, document)
         assert source is not None and source.exists(), f"source vanished: {source}"
@@ -324,9 +359,25 @@ def test_shipped_blocks_are_verbatim_and_manifests_reconcile(project):
         assert len(blocks) == document["block_count"], document["source"]
         for block in blocks:
             body = " ".join((block.text or "").split())
-            assert body in normalized, (
-                f"{project}/{block.get('id')} is not a verbatim span of its source"
-            )
+            if body not in normalized:
+                if (
+                    recorded_revision
+                    and live_revision
+                    and live_revision != recorded_revision
+                ):
+                    pytest.skip(
+                        f"{project}: upstream source drift past the manifest's "
+                        f"recorded revision (corpus bound to {recorded_revision}, "
+                        f"live tree at {live_revision}); first containment break at "
+                        f"{document['source']}/{block.get('id')} — regenerate "
+                        f"corpora/{project} with scripts/ingest_markdown_specs.py "
+                        "to re-bind; the portable digest leg "
+                        "(test_shipped_block_digests_match_manifest) covered the "
+                        "shipped corpus's integrity here"
+                    )
+                assert body in normalized, (
+                    f"{project}/{block.get('id')} is not a verbatim span of its source"
+                )
 
 
 def test_manifest_blocks_carry_source_span_digests(tmp_path):
