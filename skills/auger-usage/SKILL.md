@@ -316,34 +316,210 @@ python3 auger.py -n <ns> recall "any seed phrase"   # proves embeddings
 
 ## The `spec` verb family (XML corpora) and the spec-to-build loop (verified live 2026-11-23, main @ a8bf275)
 
-`auger spec …` is a SEPARATE surface from the DuckBrain loop: it reads a
-directory of XML spec documents, touches NO substrate, writes nothing to the
-corpus. 16 subcommands; the build handoff half is documented only in
-`--help` (rows AUG-206/AUG-207) — this section is the working recipe,
-verified end to end on a scratch consumer repo.
+`spec` is a SEPARATE surface from the DuckBrain loop. The CLI is 18 top-level
+verbs: the 17 counted above (`init start bundle ask answer check status
+toggle dump export propagate feedback recall serve api verdict record`) plus
+`spec`, whose family carries 16 subcommands. `auger spec …` reads a directory
+of XML spec documents, touches NO substrate, and writes nothing to the corpus.
+The build handoff half is the flagship new surface (AUG-118 → AUG-124, rows
+AUG-206/AUG-207 documented it); this section is the working recipe, verified
+end to end on a scratch consumer repo. Full grammar and block taxonomy:
+`docs/XML-SPEC-SCHEMA.md`; the authored corpus and its read recipes:
+`docs/SPEC-CORPUS.md`.
 
-Working example (from `tests/test_task_packet.py:84-111`, the only place the
-`<task>` shape was documented at run time): author a document with
-`<requirement>`, `<verification runner="pytest" path=… selector=…>`,
-`<acceptance>`, and a `<task plan="TT-PLAN" plan-version="1.0.0"
-in-scope="…" acceptance="…" out-of-scope="…">` carrying `<exclusion ref=
-reason=>`. Every obligation path must resolve to a file TRACKED in
-`--repo-root` (fail-closed `stale-test-ref` otherwise).
+### The loop in one breath (the digest chain)
 
-```bash
-python3 auger.py spec validate <root>                 # whole-corpus verdict, XSD backstop (needs lxml, the dev extra)
-python3 auger.py spec list <root> --as-of v0.3.0      # read the corpus at a past ref (typed refusals, exit 2)
-python3 auger.py spec task-packet <root> --task ID    # packet + sha256 digest
-python3 auger.py spec plan-draft <root> --plan ID     # plan digest = what an approval binds to
-python3 auger.py spec plan-approve <root> --plan ID --approve --digest <sha> --approver NAME
-python3 auger.py spec plan-export <root> --plan ID --board <dir>   # writes board rows via boardctl, checks approval FIRST
-python3 auger.py spec judge-packet <root> --plan ID --row <row> --board <dir> --trace "ch:trace row=…"
-python3 auger.py spec plan-reconcile <root> --plan ID --board <dir>  # lifecycle census of exported rows
+Author a corpus → `task-packet` (packet + digest) → `plan-draft` (plan digest
+= what an approval binds to) → `plan-approve --digest <sha>` (append-only
+approval ledger) → `plan-export --board <dir>` (canonical board rows via
+`boardctl`, approval checked BEFORE any write) → `judge-packet` (GitReins
+packet binding board acceptance criteria verbatim) → build → `plan-reconcile`
+(copied board evidence back, read-only). Nobody can approve a plan they are
+not looking at: every digest in the chain must be CURRENT at the moment the
+next step consumes it.
+
+### All 16 subcommands (purpose — refusal behaviour)
+
+1. `validate <root>` — corpus-wide verdict: schema version, stable IDs, typed
+   edges, methods (XSD backstop when lxml is installed — a dev extra; a host
+   without it refuses `xsd-processor-missing` instead of passing).
+2. `list <root> [--id --kind --applies-to --status --version --as-of REF]` —
+   TSV block listing (id, kind, status, version, source, applies-to); no
+   selector lists the whole corpus; a selector matching nothing is exit 0 plus
+   one `spec note (no-match)` line on STDERR, not an error.
+3. `assemble <root>` (same selectors + `--format markdown|json --out DIR
+   --no-deps --measure`) — matched blocks PLUS their depends-on/verifies
+   closure, byte-reproducible; a selector-less run refuses `empty-selector`
+   exit 2 (assembly is never a silent whole-corpus dump), while a selector
+   that matches nothing emits a valid empty document.
+4. `check <root>` — validate test obligations: tracked paths, selectors,
+   migrations, fixtures (AUG-126 — the obligation validator, previously
+   unreachable from the CLI); with `--diff-stdin`/`--diff-file` it grades a
+   staged diff (cap `--max-diff-bytes`, default 8 MiB); an obligation `path=`
+   not TRACKED in `--repo-root` is fail-closed `stale-test-ref`.
+5. `bundle <root> <requirement>` — emit one requirement's verification bundle
+   as JSON; a nonexistent requirement refuses `unknown-requirement`.
+6. `render <root> --out DIR` — regenerate every Markdown/HTML view of the
+   corpus (`SPEC-CORPUS-VIEW.*`); DIR must already exist and lie OUTSIDE the
+   corpus root (`render-into-corpus` refusal; `--out` missing/unwritable
+   refuses too); two runs over one corpus are byte-identical.
+7. `align` — the staged-diff checker GitReins invokes: grade a patch against
+   the corpus and the ch:trace doctrine, ONE JSON line. Takes NO positional
+   ROOT (flag-only `--repo-root --spec-root --diff-stdin/--diff-file
+   --protocol-version`); exit 0 pass or warn, 1 fail (advisory to the
+   caller), 2 typed refusal (`unsupported-protocol-version`, a diff over the
+   cap, no diff source, an unresolvable repository root, an invalid corpus).
+8. `task-packet <root> --task ID` — ONE task's exact scope packet + sha256
+   digest; corpus-wide, so a document that is not well-formed ANYWHERE refuses
+   the whole run (a packet built from half a corpus is not the approved plan);
+   a nonexistent id refuses `unknown-task`.
+9. `task-export <root> --task ID --board DIR` — write ONE task packet to the
+   canonical board through `boardctl`, which it uses for `create`/`show` ONLY
+   (no scheduler dispatch, no completion, no board update). APPROVAL-BOUND:
+   without a valid current plan digest boardctl is never invoked and both
+   canonical files stay byte-identical (`unapproved-plan-digest` exit 2); an
+   identical existing row is reported `unchanged`; a drifted row is a
+   conflict, refused.
+10. `context <root> (--task ID | --code PATH | --symbol NAME)` — ONLY the
+    blocks governing the query: in-scope + declared closure, exclusions listed
+    WITH reasons; never a whole-document dump. Zero or two selectors and a bad
+    corpus refuse exit 2; an unscoped/ambiguous/inactive answer is a RESULT
+    (exit 0) with an empty selection, not an error.
+11. `plan-draft <root> --plan ID` — the versioned DRAFT plan for a set of
+    tasks: ids, criteria, dependencies, anchors, expected evidence, and the
+    plan digest (JSON, top-level `digest`) that an approval binds to;
+    read-only.
+12. `plan-approve <root> --plan ID (--approve | --reject) --digest SHA256
+    --approver NAME [--ledger DIR] [--at TIMESTAMP]` — append ONE decision to
+    the plan approval ledger (default `<spec root>/.auger/
+    plan-approvals.jsonl`). The digest must be the plan's CURRENT digest —
+    nobody approves a plan they are not looking at (`stale-plan-digest` exit
+    2); the ledger is append-only and the LATEST record for a plan is the
+    decision (a rejection is a new fact, never an edit). Pass `--at` or the
+    record's `at` field stays empty (AUG-206: weakens audit traceability).
+13. `plan-export <root> --plan ID --board DIR` — export every row of an
+    APPROVED plan: `boardctl create` per new row, `update` when only
+    title/acceptance text drifted, read back with `boardctl show` and compared
+    field by field. Approval is checked BEFORE any boardctl call — an
+    unapproved, rejected or stale plan cannot move a byte (`unapproved-plan-
+    digest`/stale refusal, exit 2, nothing written). A row whose SCOPE drifted
+    is a conflict, refused (an export never overwrites a row behind its
+    owner). Fail-stop: first failing row ends `partial` exit 1 with a resume
+    record — re-running the same approved plan completes it.
+14. `judge-packet <root> --plan ID --row ID --board DIR [--trace MARKER]` —
+    assemble the GitReins packet for one APPROVED board row: board id + id
+    mapping, resolved ch:trace ids, exact test obligations, board acceptance
+    criteria VERBATIM, and the approved digests. Refuses unless the ch:trace
+    marker's ids resolve to THIS row, this task and its own obligations
+    (offending ids named, no packet emitted; a marker missing its mandatory
+    `row=` field → `missing-trace-field`). Omit `--trace` to use the marker
+    `plan-export` bound into the row's `reasoning`.
+15. `plan-reconcile <root> --plan ID --board DIR` — copy board status/commit/
+    verdict evidence back into Auger, READ-ONLY (the only external command is
+    `boardctl show`; the record says `writes: none`). A commit that does not
+    exist in `--repo-root` and a verdict naming another commit are refused
+    rather than recorded as if they bound; absent evidence carries
+    `none:<reason>`.
+16. `judge-handoff <root> --plan ID --row ID --board DIR --dispatch-cmd CMD` —
+    the handoff: validate the binding FIRST (row, trace, scope, obligations,
+    digests), then call the dispatch command exactly ONCE with the packet path
+    appended. Without `--dispatch-cmd` it refuses `dispatch-unconfigured`
+    exit 2 (auger never pretends to have started a judge — no dispatch, no
+    partial handoff).
+
+Every refusal across the 16 is TYPED and fail-closed: one `spec error (<code>)`
+line on stderr, exit 2, nothing written. Time per verb: 0.12–0.23 s wall —
+none of it is slow.
+
+### Authoring the minimum corpus the loop needs
+
+Grammar: namespace `urn:auger:spec:1`, root `<spec id=… version=…
+schema-version="1.0">`; every block carries `id`, `kind` (always equals the
+element name), `status`, `version`, and usually `applies-to`. One
+requirement + one verification + one acceptance + one excluded requirement +
+one task is the working minimum:
+
+```xml
+<spec xmlns="urn:auger:spec:1" id="DEMO-SPEC" version="1.0.0" schema-version="1.0">
+  <requirement id="DEMO-REQ-1" kind="requirement" status="active" version="1.0.0"
+               applies-to="demo.export" verification="test" verifies="DEMO-VER-1">
+    The export writes one canonical row per record.
+  </requirement>
+  <verification id="DEMO-VER-1" kind="verification" status="active" version="1.0.0"
+                applies-to="demo.export" method="test" type="test" runner="pytest"
+                path="tests/test_export.py" selector="test_export_one_row_per_record"
+                assertions="one row per record" />
+  <acceptance id="DEMO-AC-1" kind="acceptance" status="active" version="1.0.0"
+              applies-to="demo.export" verification="test" verifies="DEMO-REQ-1">
+    Export produces one canonical row per record and leaves no partials.
+  </acceptance>
+  <requirement id="DEMO-REQ-9" kind="requirement" status="active" version="1.0.0"
+               verification="inspection">A later wave owns the migration.</requirement>
+  <task id="DEMO-TASK-1" kind="task" status="active" version="1.0.0"
+        applies-to="demo.export" verification="test"
+        plan="DEMO-PLAN" plan-version="1.0.0"
+        in-scope="DEMO-REQ-1" acceptance="DEMO-AC-1" out-of-scope="DEMO-REQ-9">
+    Export this task as one canonical board row.
+    <exclusion ref="DEMO-REQ-9" reason="owned by the migration wave"/>
+  </task>
+</spec>
 ```
 
-Pitfalls: the plan digest must be CURRENT at approval time (`stale-plan-digest`);
-`plan-export` never overwrites a row whose scope drifted (refuses, fail-stop
-`partial`); `judge-packet` refuses unless the `ch:trace` marker's ids resolve
-to THIS row/task/obligations; `task-export` refuses without the approved
-digest. `spec align` takes NO positional ROOT (flag-only). Time per verb:
-0.12–0.23 s wall — none of it is slow.
+Rules that bite at authoring time:
+
+- Every `<verification path=…>` must resolve to a file TRACKED in
+  `--repo-root` (commit the repo, then check `git ls-files` BEFORE validating;
+  the refusal is fail-closed `stale-test-ref`).
+- The default repo root is `git rev-parse --show-toplevel` from the spec root;
+  a corpus outside any git tree refuses `unresolvable-repo-root` with the
+  remedy in the message — pass `--repo-root` explicitly.
+- `runner=` is a registry id (`pytest`), never a shell string.
+- Plan membership is authored ON the task (`plan=` + `plan-version=`), so a
+  plan cannot grow by dropping a file into a directory.
+
+### Driving the loop end to end (copy-paste with your ids)
+
+```bash
+# 0. a board for plan-export to write into (needs the boardctl binary):
+boardctl init -C <board-dir> --project demo --namespace demo
+
+# 1. the corpus verdicts
+python3 auger.py spec validate specs                    # `1 document(s), 5 block(s), 5 reference(s) ok`
+
+# 2. what governs the task (in-scope + closure, exclusions with reasons)
+python3 auger.py spec context specs --task DEMO-TASK-1  # JSON: selected 4, dependencies 1
+
+# 3. the task packet and its digest (bind an approval to THIS)
+python3 auger.py spec task-packet specs --task DEMO-TASK-1   # JSON: {digest, packet}
+
+# 4. draft the plan and grab its digest
+DIGEST=$(python3 auger.py spec plan-draft specs --plan DEMO-PLAN | jq -r .digest)
+
+# 5. approval bound to the current digest (wrong digest rc=2 stale-plan-digest)
+python3 auger.py spec plan-approve specs --plan DEMO-PLAN --approve --digest $DIGEST --approver DemoAgent
+
+# 6. export the approved plan to the board (read back per row; scope conflicts refused)
+python3 auger.py spec plan-export specs --plan DEMO-PLAN --board <board-dir>
+
+# 7. the judge packet (uses the ch:trace marker plan-export bound into the row;
+#    writes specs/.auger/judge-packets/<plan>-<task>.json and prints {digest, packet, path})
+python3 auger.py spec judge-packet specs --plan DEMO-PLAN --row DEMO-TASK-1 --board <board-dir>
+
+# 8. after the build: board evidence back into auger (read-only)
+python3 auger.py spec plan-reconcile specs --plan DEMO-PLAN --board <board-dir>
+```
+
+Refusals you can EXPECT while learning the loop (all rc=2, nothing written):
+`invalid-plan-digest` (the --digest is not a 64-hex sha256), `stale-plan-digest`
+(well-formed but approve an OLD plan — the digest chain's core guard),
+`unapproved-plan-digest` (`task-export`/`plan-export` before approval),
+`unknown-task`, `unknown-requirement` (`bundle`), `empty-selector`
+(`assemble` with no selector), `render-into-corpus`, `as-of-unknown-ref`
+(`list --as-of` a ref that does not resolve), `dispatch-unconfigured`
+(`judge-handoff` with no judge command). A `judge-handoff --dispatch-cmd` run
+starts the judge lifecycle exactly once; auger never dispatches a BOARD task
+from that seam.
+
+Pitfall: `spec align` takes NO positional ROOT (flag-only) even though its
+`--help` prose says the `--spec-root` default is "the positional ROOT" (AUG-206).
+
