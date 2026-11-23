@@ -47,6 +47,7 @@ import json
 import shutil
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -1142,6 +1143,73 @@ def test_the_plan_trace_marker_names_every_field(tmp_path: Path) -> None:
     prd = PRD.read_text(encoding="utf-8")
     assert "spec task-packet" in prd
     assert "none:<reason>" in prd
+
+
+# ---------------------------------------------------------------- the approval timestamp (AUG-206 AC5)
+def test_plan_approve_records_a_nonempty_iso_timestamp_by_default(
+    tmp_path: Path,
+) -> None:
+    """A plan-approve without `--at` records the CURRENT UTC time, never an empty `at`.
+
+    Dogfood run 19 (docs/dogfood/2026-11-23, consumer erratum 4) measured the old default: the
+    verb passed `at=""` straight into the ledger line, so every default approval carried an
+    empty timestamp and an audit could not say WHEN a plan was approved. The ledger is
+    append-only and the record is read back for equality after the write, so the timestamp must
+    be decided BEFORE the write, exactly like the digests it is bound to.
+    """
+    root = write_plan_corpus(tmp_path)
+    ledger = tmp_path / "ledger"
+    plan = draft(root)
+    code, out, err = run_spec(
+        "plan-approve",
+        str(root),
+        "--plan",
+        PLAN,
+        "--approve",
+        "--digest",
+        plan["digest"],
+        "--approver",
+        "owner",
+        "--ledger",
+        str(ledger),
+    )
+    assert code == 0, f"spec plan-approve refused: {err}"
+    record = json.loads(out)["record"]
+    assert record["at"], "a default approval must record a non-empty `at` timestamp"
+    parsed = datetime.fromisoformat(record["at"])
+    assert parsed.tzinfo is not None, record["at"]
+    ledger_lines = [
+        json.loads(line)
+        for line in (ledger / "plan-approvals.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert len(ledger_lines) == 1, ledger_lines
+    assert ledger_lines[0] == record  # read back, not just echoed
+
+    # The explicit form is unchanged: `--at` is recorded verbatim, on its OWN ledger record.
+    code, out, err = run_spec(
+        "plan-approve",
+        str(root),
+        "--plan",
+        PLAN,
+        "--approve",
+        "--digest",
+        plan["digest"],
+        "--approver",
+        "owner",
+        "--ledger",
+        str(ledger),
+        "--at",
+        "2026-11-06T00:00:00+00:00",
+    )
+    assert code == 0, f"spec plan-approve refused: {err}"
+    explicit = [
+        json.loads(line)
+        for line in (ledger / "plan-approvals.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert explicit[-1]["at"] == "2026-11-06T00:00:00+00:00", explicit[-1]
+    assert explicit[-1]["digest"] == record["digest"]
 
 
 # ---------------------------------------------------------------- the gate arm

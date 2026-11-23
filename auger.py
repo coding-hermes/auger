@@ -11456,7 +11456,7 @@ def cmd_spec_plan_approve(a) -> int:
         digest=a.digest,
         decision=decision,
         approver=a.approver,
-        at=a.at or "",
+        at=a.at or datetime.now(timezone.utc).isoformat(),
         spec_root=a.root,
     )
     print(
@@ -13225,7 +13225,8 @@ def _add_spec_checker_flags(parser) -> None:
     parser.add_argument(
         "--spec-root",
         metavar="DIR",
-        help="spec corpus root; default: the positional ROOT, else <repo-root>/specs",
+        help="spec corpus root; default: <repo-root>/specs (on `spec check`, this flag overrides "
+        "the positional ROOT; `spec align` takes no positional ROOT)",
     )
     parser.add_argument(
         "--protocol-version",
@@ -14689,7 +14690,8 @@ def main(argv=None):
     pap.add_argument(
         "--at",
         metavar="TIMESTAMP",
-        help="when the decision was made (recorded verbatim)",
+        help="when the decision was made (recorded verbatim; default: the current UTC time in "
+        "ISO 8601 — the ledger never records an empty timestamp)",
     )
     pap.set_defaults(fn=cmd_spec)
 
