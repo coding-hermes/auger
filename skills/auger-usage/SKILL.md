@@ -313,3 +313,37 @@ python3 auger.py -n <ns> recall "any seed phrase"   # proves embeddings
 - **`recall` slows with everything the project ever embedded (22 s warm at 61
   memories vs 3.9 s small).** At drill scale the "is this already answered"
   lookup is the slowest read in the tool; budget for it or batch questions.
+
+## The `spec` verb family (XML corpora) and the spec-to-build loop (verified live 2026-11-23, main @ a8bf275)
+
+`auger spec …` is a SEPARATE surface from the DuckBrain loop: it reads a
+directory of XML spec documents, touches NO substrate, writes nothing to the
+corpus. 16 subcommands; the build handoff half is documented only in
+`--help` (rows AUG-206/AUG-207) — this section is the working recipe,
+verified end to end on a scratch consumer repo.
+
+Working example (from `tests/test_task_packet.py:84-111`, the only place the
+`<task>` shape was documented at run time): author a document with
+`<requirement>`, `<verification runner="pytest" path=… selector=…>`,
+`<acceptance>`, and a `<task plan="TT-PLAN" plan-version="1.0.0"
+in-scope="…" acceptance="…" out-of-scope="…">` carrying `<exclusion ref=
+reason=>`. Every obligation path must resolve to a file TRACKED in
+`--repo-root` (fail-closed `stale-test-ref` otherwise).
+
+```bash
+python3 auger.py spec validate <root>                 # whole-corpus verdict, XSD backstop (needs lxml, the dev extra)
+python3 auger.py spec list <root> --as-of v0.3.0      # read the corpus at a past ref (typed refusals, exit 2)
+python3 auger.py spec task-packet <root> --task ID    # packet + sha256 digest
+python3 auger.py spec plan-draft <root> --plan ID     # plan digest = what an approval binds to
+python3 auger.py spec plan-approve <root> --plan ID --approve --digest <sha> --approver NAME
+python3 auger.py spec plan-export <root> --plan ID --board <dir>   # writes board rows via boardctl, checks approval FIRST
+python3 auger.py spec judge-packet <root> --plan ID --row <row> --board <dir> --trace "ch:trace row=…"
+python3 auger.py spec plan-reconcile <root> --plan ID --board <dir>  # lifecycle census of exported rows
+```
+
+Pitfalls: the plan digest must be CURRENT at approval time (`stale-plan-digest`);
+`plan-export` never overwrites a row whose scope drifted (refuses, fail-stop
+`partial`); `judge-packet` refuses unless the `ch:trace` marker's ids resolve
+to THIS row/task/obligations; `task-export` refuses without the approved
+digest. `spec align` takes NO positional ROOT (flag-only). Time per verb:
+0.12–0.23 s wall — none of it is slow.
