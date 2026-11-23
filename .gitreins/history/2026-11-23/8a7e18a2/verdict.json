@@ -1,0 +1,704 @@
+{
+  "task_id": "AUG-206",
+  "task_title": "[P2] 8 of 16 'spec' subcommands undocumented (spec-to-build loop invisible in VERBS.md/SPEC-CORPUS.md) and no <task> example in the authored corpus",
+  "task_criteria": [
+    "1) docs/VERBS.md '## spec' section documents all 16 subcommands incl. the 8 loop verbs with their digest/refusal semantics; 2) docs/SPEC-CORPUS.md gains a 'spec-to-build loop' section with one worked example corpus containing a <task plan=...> block; 3) specs/ (authored corpus) or docs carries a runnable <task> example; 4) 'spec align --help' no longer references a positional ROOT; 5) plan-approve records a non-empty timestamp by default (or documents the empty-at behaviour and its rationale)."
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "c529571782af056a77eca83a71227122372fd71d",
+  "pass_class": "degraded",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "59cc4181d49bcc0fa2a20edf06dcbd9444659f141dca7d17b0e6a0659487bbb5",
+  "working_tree_dirty_path_count": 1569,
+  "items": [
+    {
+      "criterion": "1) docs/VERBS.md '## spec' section documents all 16 subcommands incl. the 8 loop verbs with their digest/refusal semantics",
+      "status": "PASS",
+      "detail": "docs/VERBS.md:598 '## spec'; each of the 16 subcommands has a bullet (grep '`auger spec <sub>' = 1 hit each for validate/check/bundle/align/list/assemble/render/context + the 8 loop verbs task-packet:717, plan-draft:722, plan-approve:730, plan-export:740, task-export:750, plan-reconcile:752, judge-packet:757, judge-handoff:764). Loop block ':709 The spec-to-build loop (AUG-119/AUG-121/AUG-124): the other eight subcommands, one digest chain.' states the digest chain (:713 'Every hand is bound to a digest \u2014 the sha256 of the canonical artifact') and the blanket refusal semantics (:716 'typed `spec error (<code>)` on stderr, exit 2, nothing written'); per-verb typed codes named: stale-plan-digest:733, invalid-plan-digest:734, missing-approver:734, approval-ledger-unwritable:738, approval-ledger-unverified:739, unknown-task:724, dispatch-unconfigured:772. AST census of auger.py add_parser constants returned exactly the 16 spec subcommands in doc order."
+    },
+    {
+      "criterion": "2) docs/SPEC-CORPUS.md gains a 'spec-to-build loop' section with one worked example corpus containing a <task plan=...> block",
+      "status": "PASS",
+      "detail": "docs/SPEC-CORPUS.md:115 '## The spec-to-build loop, on a runnable example (AUG-206)'; the fenced xml corpus (SPEC-CORPUS.md:175-180) contains `<task id=\"EXAMPLE-TASK-1\" ... plan=\"EXAMPLE-PLAN\" plan-version=\"1.0.0\" in-scope=\"EXAMPLE-REQ-1\" acceptance=\"EXAMPLE-AC-1\" out-of-scope=\"EXAMPLE-REQ-9\">`; fence verified byte-identical to docs/spec-example/tracker-loop.xml (python fence==file True; `python3 scripts/check_spec_example.py` \u2192 rc=0 'PASS: SPEC-CORPUS.md example fence == docs/spec-example/tracker-loop.xml (2869 bytes)'); the doc then walks the chain command-by-command with expected output (SPEC-CORPUS.md:188-225) and its fail-closed refusals (:236-239)."
+    },
+    {
+      "criterion": "3) specs/ (authored corpus) or docs carries a runnable <task> example",
+      "status": "PASS",
+      "detail": "docs/spec-example/tracker-loop.xml ships the runnable <task plan=...> example: `.venv/bin/python auger.py spec validate docs/spec-example` \u2192 'spec: 1 document(s), 5 block(s), 5 reference(s) ok' rc=0; `spec check` \u2192 status valid rc=0; `spec task-packet docs/spec-example --task EXAMPLE-TASK-1` rc=0 (digest 877d69ee\u2026); `spec plan-draft --plan EXAMPLE-PLAN` rc=0 (digest 07828ee7\u2026); `spec plan-approve` rc=0 recorded the ledger line in a /tmp scratch copy. (specs/ itself has no <task> block; docs carries it, which is what AC3 allows.)"
+    },
+    {
+      "criterion": "4) 'spec align --help' no longer references a positional ROOT",
+      "status": "PASS",
+      "detail": "`.venv/bin/python auger.py spec align --help` usage line is 'usage: auger spec align [-h] [--repo-root DIR] [--spec-root DIR] [--protocol-version PROTOCOL_VERSION] [--diff-stdin] [--diff-file PATH] [--max-diff-bytes N] [--semantic]' \u2014 no positional; the --spec-root help now reads 'default: <repo-root>/specs (on `spec check`, this flag overrides the positional ROOT; `spec align` takes no positional ROOT)'. Source: the shared flag helper diff at auger.py:13225-13228 in commit 8059814 (old string 'default: the positional ROOT, else <repo-root>/specs' removed). VERBS.md:621 align entry likewise shows no ROOT."
+    },
+    {
+      "criterion": "5) plan-approve records a non-empty timestamp by default (or documents the empty-at behaviour and its rationale)",
+      "status": "PASS",
+      "detail": "auger.py:11457 `at=a.at or datetime.now(timezone.utc).isoformat()` in cmd_spec_plan_approve (the sole caller of record_plan_approval, auger.py:10452). Live: in /tmp/aug206-check, plan-approve with `--at \"\"` stored at=2026-11-23T20:19:55.618074+00:00; without --at stored at=2026-11-23T20:19:58.551341+00:00; both ledger lines non-empty. Regression test tests/test_plan_approval.py:1149 test_plan_approve_records_a_nonempty_iso_timestamp_by_default asserts non-empty tz-aware `at` plus ledger read-back \u2014 AUGER_CI=1 .venv/bin/python -m pytest tests/test_plan_approval.py \u2192 '12 passed in 4.76s'. Documented at VERBS.md:734-735 ('without it the current UTC time (ISO 8601) is recorded \u2014 the ledger never carries an empty timestamp (AUG-206)') and in the --at help string (auger.py:14693)."
+    },
+    {
+      "criterion": "The documented loop is actually reachable and behaves as the docs say \u2014 a reader can execute the SPEC-CORPUS.md example end-to-end",
+      "status": "PASS",
+      "detail": "Executed on a copy of the shipped example (/tmp/aug206-check): task-packet \u2192 plan-draft \u2192 plan-approve rc=0 (ledger written) \u2192 plan-export invoked boardctl (`stub boardctl: -C /tmp/aug206-board show EXAMPLE-TASK-1` in the calls log; export status 'partial' rc=1 with the stub returning no row payload \u2014 proving the approval gate passed and boardctl was reached). Typed refusals match the docs verbatim: 'spec error (unknown-task): NOPE is not a task block in this corpus (a task packet is built from a <task> block, never from a board row's prose)' rc=2; 'spec error (stale-plan-digest): EXAMPLE-PLAN: approved digest 000\u20260 does not match the current plan 07828ee7\u2026 \u2014 approve the plan you are actually looking at' rc=2 \u2014 both word-for-word the documented texts (VERBS.md:733, SPEC-CORPUS.md:236).",
+      "derived": true
+    },
+    {
+      "criterion": "No regression: the code touch (auger.py +8/-3), the new example and the corpora rebind must keep the doc contract and the spec battery green",
+      "status": "PASS",
+      "detail": "AUGER_CI=1 hermetic spec battery: tests/test_plan_approval.py+test_task_packet.py+test_xml_specs.py \u2192 '80 passed in 17.12s'; test_usage_skill.py+test_spec_validators_agree.py \u2192 '31 passed in 18.11s'; test_xsd_conformance.py+test_spec_repository_root.py \u2192 '21 passed in 9.55s'; test_spec_context.py+test_task_context.py \u2192 '12 passed in 0.65s'; tests/test_spec_ingest.py (covers the follow-up corpora rebind c529571) \u2192 '19 passed in 15.62s'. `bash tests/docs_check.sh` \u2192 exit 0 'PASS: README claims match code \u2026 loop verbs ok (17 listed, 18 shipped), VERBS.md registry ok'. ruff: `git show 8059814^:auger.py` \u2192 37 findings vs current auger.py \u2192 37 findings \u2014 the commit adds zero net lint findings (the new UP017 mirrors 36 pre-existing ones). Full `bash tests/gate.sh` cannot run green in this environment (needs a live DuckBrain URL \u2014 the same env failure recorded in tier1), so the battery above is the regression evidence.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "needs_review",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": false,
+      "any_failed": true,
+      "summary": "  \u2717 tests: scanners: nice=nice -n 10\n  \u2717 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check",
+      "steps": [
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": false,
+          "output": "scanners: nice=nice -n 10\ngate pytest interpreter: /home/kara/auger/.venv/bin/python\nERROR: DuckBrain URL missing \u2014 set DUCKBRAIN_URL before running the live gate (or use AUGER_CI=1 on hosted CI).\n",
+          "error": "",
+          "data": {
+            "exit_code": 2
+          }
+        },
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": false,
+          "output": "scanners: nice=nice -n 10\nI001 [*] Import block is un-sorted or un-formatted\n  --> auger.py:44:1\n   |\n42 |   \"\"\"\n43 |\n44 | / from __future__ import annotations\n45 | |\n46 | | import argparse\n47 | | import contextlib\n48 | | import copy\n49 | | import hashlib\n50 | | import html\n51 | | import importlib\n52 | | import io\n53 | | import json\n54 | | import math\n55 | | import os\n56 | | import re\n57 | | import shlex\n58 | | import sqlite3\n59 | | import shutil\n60 | | import subprocess\n61 | | import sys\n62 | | import sysconfig\n63 | | import tarfile\n64 | | import tempfile\n65 | | import time\n66 | | import urllib.error\n67 | | import urllib.request\n68 | | import xml.etree.ElementTree as ET\n69 | | from collections import Counter, deque\n70 | | from functools import lru_cache\n71 | | from datetime import datetime, timezone\n72 | | from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n73 | | from pathlib import Path\n74 | | from urllib.parse import parse_qs, quote, unquote, urlsplit\n   | |___________________________________________________________^\n75 |\n76 |   AUGER_VERSION = \"0.3\"\n   |\nhelp: Organize imports\n   |\n57 | import shlex\n58 + import shutil\n59 | import sqlite3\n   - import shutil\n60 | import subprocess\n--------------------------------------------------------------------------------\n69 | from collections import Counter, deque\n70 + from datetime import datetime, timezone\n71 | from functools import lru_cache\n   - from datetime import datetime, timezone\n72 | from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n   |\n\nUP017 [*] Use `datetime.UTC` alias\n    --> auger.py:1204:36\n     |\n1202 |         \"source\": source,\n1203 |         \"note\": note,\n1204 |         \"created_at\": datetime.now(timezone.utc).isoformat(),\n     |                                    ^^^^^^^^^^^^\n1205 |     }\n1206 |     for key, val in ((\"src_project\", src_project), (\"dst_project\", dst_project)):\n     |\nhelp: Convert to `datetime.UTC` alias\n     |\n70   | from functools import lru_cache\n     - from datetime import datetime, timezone\n71   + from datetime import datetime, timezone, UTC\n72   | from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n--------------------------------------------------------------------------------\n1203 |         \"note\": note,\n\n\u2026 [154800 chars omitted \u2014 4133 line(s)] \u2026\n1512 |     )\n     |\n\nRUF100 [*] Unused `noqa` directive (non-enabled: `E402`)\n  --> tests/test_xml_task_contract.py:55:15\n   |\n53 |     sys.path.insert(0, str(REPO_ROOT))\n54 |\n55 | import auger  # noqa: E402  (needs REPO_ROOT on sys.path first)\n   |               ^^^^^^^^^^^^\n56 |\n57 | GATE = REPO_ROOT / \"tests\" / \"gate.sh\"\n   |\nhelp: Remove unused `noqa` directive\n   |\n54 |\n   - import auger  # noqa: E402  (needs REPO_ROOT on sys.path first)\n55 + import auger\n56 |\n   |\n\nRUF059 Unpacked variable `out` is never used\n   --> tests/test_xml_task_contract.py:660:11\n    |\n658 |     wrapper.chmod(0o755)\n659 |\n660 |     code, out, err = export(\n    |           ^^^\n661 |         root, board, \"--plan-digest\", payload[\"digest\"], \"--boardctl\", str(wrapper)\n662 |     )\n    |\nhelp: Prefix it with an underscore or any other dummy variable pattern\n    |\n659 |\n    -     code, out, err = export(\n660 +     code, _out, err = export(\n661 |         root, board, \"--plan-digest\", payload[\"digest\"], \"--boardctl\", str(wrapper)\n    |\nnote: This is an unsafe fix and may change runtime behavior\n\nRUF100 [*] Unused `noqa` directive (non-enabled: `E402`)\n  --> tests/test_xsd_conformance.py:54:15\n   |\n52 |     sys.path.insert(0, str(REPO_ROOT))\n53 |\n54 | import auger  # noqa: E402  (needs REPO_ROOT on sys.path first)\n   |               ^^^^^^^^^^^^\n55 |\n56 | FIXTURES = REPO_ROOT / \"tests\" / \"fixtures\" / \"xml\"\n   |\nhelp: Remove unused `noqa` directive\n   |\n53 |\n   - import auger  # noqa: E402  (needs REPO_ROOT on sys.path first)\n54 + import auger\n55 |\n   |\n\n",
+          "error": "",
+          "data": {
+            "exit_code": 1
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nsecrets: gitleaks bound=timeout 600s (0=off)\nscanners: nice=nice -n 10\nsecrets: gitleaks scope=repo-root /home/kara/auger\nsecrets: gitleaks parallelism=GOMAXPROCS=4\n3:18PM INF scanned ~8591830 bytes (8.59 MB) in 32s\n3:18PM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 1076 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": false,
+      "any_failed": true,
+      "summary": "COMPLETE\n  \u2713 1) docs/VERBS.md '## spec' section documents all 16 subcommands incl. the 8 loop verbs with their digest/refusal semantics: docs/VERBS.md:598 '## spec'; each of the 16 subcommands has a bullet (grep '`auger spec <sub>' = 1 hit each for validate/check/bundle/align/list/assemble/render/context + the 8 loop verbs task-packet:717, plan-draft:722, plan-approve:730, plan-export:740, task-export:750, plan-reconcile:752, judge-packet:757, judge-handoff:764). Loop block ':709 The spec-to-build loop (AUG-119/AUG-121/AUG-124): the other eight subcommands, one digest chain.' states the digest chain (:713 'Every hand is bound to a digest \u2014 the sha256 of the canonical artifact') and the blanket refusal semantics (:716 'typed `spec error (<code>)` on stderr, exit 2, nothing written'); per-verb typed codes named: stale-plan-digest:733, invalid-plan-digest:734, missing-approver:734, approval-ledger-unwritable:738, approval-ledger-unverified:739, unknown-task:724, dispatch-unconfigured:772. AST census of auger.py add_parser constants returned exactly the 16 spec subcommands in doc order.\n  \u2713 2) docs/SPEC-CORPUS.md gains a 'spec-to-build loop' section with one worked example corpus containing a <task plan=...> block: docs/SPEC-CORPUS.md:115 '## The spec-to-build loop, on a runnable example (AUG-206)'; the fenced xml corpus (SPEC-CORPUS.md:175-180) contains `<task id=\"EXAMPLE-TASK-1\" ... plan=\"EXAMPLE-PLAN\" plan-version=\"1.0.0\" in-scope=\"EXAMPLE-REQ-1\" acceptance=\"EXAMPLE-AC-1\" out-of-scope=\"EXAMPLE-REQ-9\">`; fence verified byte-identical to docs/spec-example/tracker-loop.xml (python fence==file True; `python3 scripts/check_spec_example.py` \u2192 rc=0 'PASS: SPEC-CORPUS.md example fence == docs/spec-example/tracker-loop.xml (2869 bytes)'); the doc then walks the chain command-by-command with expected output (SPEC-CORPUS.md:188-225) and its fail-closed refusals (:236-239).\n  \u2713 3) specs/ (authored corpus) or docs carries a runnable <task> example: docs/spec-example/tracker-loop.xml ships the runnable <task plan=...> example: `.venv/bin/python auger.py spec validate docs/spec-example` \u2192 'spec: 1 document(s), 5 block(s), 5 reference(s) ok' rc=0; `spec check` \u2192 status valid rc=0; `spec task-packet docs/spec-example --task EXAMPLE-TASK-1` rc=0 (digest 877d69ee\u2026); `spec plan-draft --plan EXAMPLE-PLAN` rc=0 (digest 07828ee7\u2026); `spec plan-approve` rc=0 recorded the ledger line in a /tmp scratch copy. (specs/ itself has no <task> block; docs carries it, which is what AC3 allows.)\n  \u2713 4) 'spec align --help' no longer references a positional ROOT: `.venv/bin/python auger.py spec align --help` usage line is 'usage: auger spec align [-h] [--repo-root DIR] [--spec-root DIR] [--protocol-version PROTOCOL_VERSION] [--diff-stdin] [--diff-file PATH] [--max-diff-bytes N] [--semantic]' \u2014 no positional; the --spec-root help now reads 'default: <repo-root>/specs (on `spec check`, this flag overrides the positional ROOT; `spec align` takes no positional ROOT)'. Source: the shared flag helper diff at auger.py:13225-13228 in commit 8059814 (old string 'default: the positional ROOT, else <repo-root>/specs' removed). VERBS.md:621 align entry likewise shows no ROOT.\n  \u2713 5) plan-approve records a non-empty timestamp by default (or documents the empty-at behaviour and its rationale): auger.py:11457 `at=a.at or datetime.now(timezone.utc).isoformat()` in cmd_spec_plan_approve (the sole caller of record_plan_approval, auger.py:10452). Live: in /tmp/aug206-check, plan-approve with `--at \"\"` stored at=2026-11-23T20:19:55.618074+00:00; without --at stored at=2026-11-23T20:19:58.551341+00:00; both ledger lines non-empty. Regression test tests/test_plan_approval.py:1149 test_plan_approve_records_a_nonempty_iso_timestamp_by_default asserts non-empty tz-aware `at` plus ledger read-back \u2014 AUGER_CI=1 .venv/bin/python -m pytest tests/test_plan_approval.py \u2192 '12 passed in 4.76s'. Documented at VERBS.md:734-735 ('without it the current UTC time (ISO 8601) is recorded \u2014 the ledger never carries an empty timestamp (AUG-206)') and in the --at help string (auger.py:14693).\n  \u2713 The documented loop is actually reachable and behaves as the docs say \u2014 a reader can execute the SPEC-CORPUS.md example end-to-end: Executed on a copy of the shipped example (/tmp/aug206-check): task-packet \u2192 plan-draft \u2192 plan-approve rc=0 (ledger written) \u2192 plan-export invoked boardctl (`stub boardctl: -C /tmp/aug206-board show EXAMPLE-TASK-1` in the calls log; export status 'partial' rc=1 with the stub returning no row payload \u2014 proving the approval gate passed and boardctl was reached). Typed refusals match the docs verbatim: 'spec error (unknown-task): NOPE is not a task block in this corpus (a task packet is built from a <task> block, never from a board row's prose)' rc=2; 'spec error (stale-plan-digest): EXAMPLE-PLAN: approved digest 000\u20260 does not match the current plan 07828ee7\u2026 \u2014 approve the plan you are actually looking at' rc=2 \u2014 both word-for-word the documented texts (VERBS.md:733, SPEC-CORPUS.md:236).\n  \u2713 No regression: the code touch (auger.py +8/-3), the new example and the corpora rebind must keep the doc contract and the spec battery green: AUGER_CI=1 hermetic spec battery: tests/test_plan_approval.py+test_task_packet.py+test_xml_specs.py \u2192 '80 passed in 17.12s'; test_usage_skill.py+test_spec_validators_agree.py \u2192 '31 passed in 18.11s'; test_xsd_conformance.py+test_spec_repository_root.py \u2192 '21 passed in 9.55s'; test_spec_context.py+test_task_context.py \u2192 '12 passed in 0.65s'; tests/test_spec_ingest.py (covers the follow-up corpora rebind c529571) \u2192 '19 passed in 15.62s'. `bash tests/docs_check.sh` \u2192 exit 0 'PASS: README claims match code \u2026 loop verbs ok (17 listed, 18 shipped), VERBS.md registry ok'. ruff: `git show 8059814^:auger.py` \u2192 37 findings vs current auger.py \u2192 37 findings \u2014 the commit adds zero net lint findings (the new UP017 mirrors 36 pre-existing ones). Full `bash tests/gate.sh` cannot run green in this environment (needs a live DuckBrain URL \u2014 the same env failure recorded in tier1), so the battery above is the regression evidence.\n  \u2717 Coverage FAILED \u2014 ungraded: 1) docs/VERBS.md '## spec' section documents all 16 subcommands incl. the 8 loop verbs with their digest/refusal semantics; 2) docs/SPEC-CORPUS.md gains a 'spec-to-build loop' section with one worked example corpus containing a <task plan=...> block; 3) specs/ (authored corpus) or docs carries a runnable <task> example; 4) 'spec align --help' no longer references a positional ROOT; 5) plan-approve records a non-empty timestamp by default (or documents the empty-at behaviour and its rationale).\nAUG-206 is complete: VERBS.md documents all 16 spec subcommands with the loop's digest/refusal semantics, SPEC-CORPUS.md gains the spec-to-build loop section whose fenced corpus is byte-identical (rc=0 pin script) to the runnable docs/spec-example/tracker-loop.xml that validates and drives the real loop (approvals recorded, boardctl invoked, stale/unknown refusals verbatim), align --help lost its positional ROOT, plan-approve defaults to a non-empty UTC timestamp (live-verified both paths), and the hermetic spec battery (163 tests) plus docs_check.sh are green with zero net new lint findings. [uncovered failure paths: failure mode 0 (The example-pin guard is wired into no automated arm: scripts/check_spec_example.py exists and passes when run by hand, but nothing (tests/gate.sh, tests/docs_check.sh, pyproject, pre-commit hooks \u2014 all grepped, zero references) executes it, so a future edit to docs/spec-example/tracker-loop.xml or the SPEC-CORPUS.md fence can silently break the doc's 'byte-identical' claim.): detected_by is empty \u2014 uncovered failure path]",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": false,
+          "output": "COMPLETE\n  \u2713 1) docs/VERBS.md '## spec' section documents all 16 subcommands incl. the 8 loop verbs with their digest/refusal semantics: docs/VERBS.md:598 '## spec'; each of the 16 subcommands has a bullet (grep '`auger spec <sub>' = 1 hit each for validate/check/bundle/align/list/assemble/render/context + the 8 loop verbs task-packet:717, plan-draft:722, plan-approve:730, plan-export:740, task-export:750, plan-reconcile:752, judge-packet:757, judge-handoff:764). Loop block ':709 The spec-to-build loop (AUG-119/AUG-121/AUG-124): the other eight subcommands, one digest chain.' states the digest chain (:713 'Every hand is bound to a digest \u2014 the sha256 of the canonical artifact') and the blanket refusal semantics (:716 'typed `spec error (<code>)` on stderr, exit 2, nothing written'); per-verb typed codes named: stale-plan-digest:733, invalid-plan-digest:734, missing-approver:734, approval-ledger-unwritable:738, approval-ledger-unverified:739, unknown-task:724, dispatch-unconfigured:772. AST census of auger.py add_parser constants returned exactly the 16 spec subcommands in doc order.\n  \u2713 2) docs/SPEC-CORPUS.md gains a 'spec-to-build loop' section with one worked example corpus containing a <task plan=...> block: docs/SPEC-CORPUS.md:115 '## The spec-to-build loop, on a runnable example (AUG-206)'; the fenced xml corpus (SPEC-CORPUS.md:175-180) contains `<task id=\"EXAMPLE-TASK-1\" ... plan=\"EXAMPLE-PLAN\" plan-version=\"1.0.0\" in-scope=\"EXAMPLE-REQ-1\" acceptance=\"EXAMPLE-AC-1\" out-of-scope=\"EXAMPLE-REQ-9\">`; fence verified byte-identical to docs/spec-example/tracker-loop.xml (python fence==file True; `python3 scripts/check_spec_example.py` \u2192 rc=0 'PASS: SPEC-CORPUS.md example fence == docs/spec-example/tracker-loop.xml (2869 bytes)'); the doc then walks the chain command-by-command with expected output (SPEC-CORPUS.md:188-225) and its fail-closed refusals (:236-239).\n\n\u2026 [4729 chars omitted \u2014 6 line(s)] \u2026\nAUG-206 is complete: VERBS.md documents all 16 spec subcommands with the loop's digest/refusal semantics, SPEC-CORPUS.md gains the spec-to-build loop section whose fenced corpus is byte-identical (rc=0 pin script) to the runnable docs/spec-example/tracker-loop.xml that validates and drives the real loop (approvals recorded, boardctl invoked, stale/unknown refusals verbatim), align --help lost its positional ROOT, plan-approve defaults to a non-empty UTC timestamp (live-verified both paths), and the hermetic spec battery (163 tests) plus docs_check.sh are green with zero net new lint findings. [uncovered failure paths: failure mode 0 (The example-pin guard is wired into no automated arm: scripts/check_spec_example.py exists and passes when run by hand, but nothing (tests/gate.sh, tests/docs_check.sh, pyproject, pre-commit hooks \u2014 all grepped, zero references) executes it, so a future edit to docs/spec-example/tracker-loop.xml or the SPEC-CORPUS.md fence can silently break the doc's 'byte-identical' claim.): detected_by is empty \u2014 uncovered failure path]",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "1) docs/VERBS.md '## spec' section documents all 16 subcommands incl. the 8 loop verbs with their digest/refusal semantics",
+                "status": "PASS",
+                "detail": "docs/VERBS.md:598 '## spec'; each of the 16 subcommands has a bullet (grep '`auger spec <sub>' = 1 hit each for validate/check/bundle/align/list/assemble/render/context + the 8 loop verbs task-packet:717, plan-draft:722, plan-approve:730, plan-export:740, task-export:750, plan-reconcile:752, judge-packet:757, judge-handoff:764). Loop block ':709 The spec-to-build loop (AUG-119/AUG-121/AUG-124): the other eight subcommands, one digest chain.' states the digest chain (:713 'Every hand is bound to a digest \u2014 the sha256 of the canonical artifact') and the blanket refusal semantics (:716 'typed `spec error (<code>)` on stderr, exit 2, nothing written'); per-verb typed codes named: stale-plan-digest:733, invalid-plan-digest:734, missing-approver:734, approval-ledger-unwritable:738, approval-ledger-unverified:739, unknown-task:724, dispatch-unconfigured:772. AST census of auger.py add_parser constants returned exactly the 16 spec subcommands in doc order."
+              },
+              {
+                "criterion": "2) docs/SPEC-CORPUS.md gains a 'spec-to-build loop' section with one worked example corpus containing a <task plan=...> block",
+                "status": "PASS",
+                "detail": "docs/SPEC-CORPUS.md:115 '## The spec-to-build loop, on a runnable example (AUG-206)'; the fenced xml corpus (SPEC-CORPUS.md:175-180) contains `<task id=\"EXAMPLE-TASK-1\" ... plan=\"EXAMPLE-PLAN\" plan-version=\"1.0.0\" in-scope=\"EXAMPLE-REQ-1\" acceptance=\"EXAMPLE-AC-1\" out-of-scope=\"EXAMPLE-REQ-9\">`; fence verified byte-identical to docs/spec-example/tracker-loop.xml (python fence==file True; `python3 scripts/check_spec_example.py` \u2192 rc=0 'PASS: SPEC-CORPUS.md example fence == docs/spec-example/tracker-loop.xml (2869 bytes)'); the doc then walks the chain command-by-command with expected output (SPEC-CORPUS.md:188-225) and its fail-closed refusals (:236-239)."
+              },
+              {
+                "criterion": "3) specs/ (authored corpus) or docs carries a runnable <task> example",
+                "status": "PASS",
+                "detail": "docs/spec-example/tracker-loop.xml ships the runnable <task plan=...> example: `.venv/bin/python auger.py spec validate docs/spec-example` \u2192 'spec: 1 document(s), 5 block(s), 5 reference(s) ok' rc=0; `spec check` \u2192 status valid rc=0; `spec task-packet docs/spec-example --task EXAMPLE-TASK-1` rc=0 (digest 877d69ee\u2026); `spec plan-draft --plan EXAMPLE-PLAN` rc=0 (digest 07828ee7\u2026); `spec plan-approve` rc=0 recorded the ledger line in a /tmp scratch copy. (specs/ itself has no <task> block; docs carries it, which is what AC3 allows.)"
+              },
+              {
+                "criterion": "4) 'spec align --help' no longer references a positional ROOT",
+                "status": "PASS",
+                "detail": "`.venv/bin/python auger.py spec align --help` usage line is 'usage: auger spec align [-h] [--repo-root DIR] [--spec-root DIR] [--protocol-version PROTOCOL_VERSION] [--diff-stdin] [--diff-file PATH] [--max-diff-bytes N] [--semantic]' \u2014 no positional; the --spec-root help now reads 'default: <repo-root>/specs (on `spec check`, this flag overrides the positional ROOT; `spec align` takes no positional ROOT)'. Source: the shared flag helper diff at auger.py:13225-13228 in commit 8059814 (old string 'default: the positional ROOT, else <repo-root>/specs' removed). VERBS.md:621 align entry likewise shows no ROOT."
+              },
+              {
+                "criterion": "5) plan-approve records a non-empty timestamp by default (or documents the empty-at behaviour and its rationale)",
+                "status": "PASS",
+                "detail": "auger.py:11457 `at=a.at or datetime.now(timezone.utc).isoformat()` in cmd_spec_plan_approve (the sole caller of record_plan_approval, auger.py:10452). Live: in /tmp/aug206-check, plan-approve with `--at \"\"` stored at=2026-11-23T20:19:55.618074+00:00; without --at stored at=2026-11-23T20:19:58.551341+00:00; both ledger lines non-empty. Regression test tests/test_plan_approval.py:1149 test_plan_approve_records_a_nonempty_iso_timestamp_by_default asserts non-empty tz-aware `at` plus ledger read-back \u2014 AUGER_CI=1 .venv/bin/python -m pytest tests/test_plan_approval.py \u2192 '12 passed in 4.76s'. Documented at VERBS.md:734-735 ('without it the current UTC time (ISO 8601) is recorded \u2014 the ledger never carries an empty timestamp (AUG-206)') and in the --at help string (auger.py:14693)."
+              },
+              {
+                "criterion": "The documented loop is actually reachable and behaves as the docs say \u2014 a reader can execute the SPEC-CORPUS.md example end-to-end",
+                "status": "PASS",
+                "detail": "Executed on a copy of the shipped example (/tmp/aug206-check): task-packet \u2192 plan-draft \u2192 plan-approve rc=0 (ledger written) \u2192 plan-export invoked boardctl (`stub boardctl: -C /tmp/aug206-board show EXAMPLE-TASK-1` in the calls log; export status 'partial' rc=1 with the stub returning no row payload \u2014 proving the approval gate passed and boardctl was reached). Typed refusals match the docs verbatim: 'spec error (unknown-task): NOPE is not a task block in this corpus (a task packet is built from a <task> block, never from a board row's prose)' rc=2; 'spec error (stale-plan-digest): EXAMPLE-PLAN: approved digest 000\u20260 does not match the current plan 07828ee7\u2026 \u2014 approve the plan you are actually looking at' rc=2 \u2014 both word-for-word the documented texts (VERBS.md:733, SPEC-CORPUS.md:236).",
+                "derived": true
+              },
+              {
+                "criterion": "No regression: the code touch (auger.py +8/-3), the new example and the corpora rebind must keep the doc contract and the spec battery green",
+                "status": "PASS",
+                "detail": "AUGER_CI=1 hermetic spec battery: tests/test_plan_approval.py+test_task_packet.py+test_xml_specs.py \u2192 '80 passed in 17.12s'; test_usage_skill.py+test_spec_validators_agree.py \u2192 '31 passed in 18.11s'; test_xsd_conformance.py+test_spec_repository_root.py \u2192 '21 passed in 9.55s'; test_spec_context.py+test_task_context.py \u2192 '12 passed in 0.65s'; tests/test_spec_ingest.py (covers the follow-up corpora rebind c529571) \u2192 '19 passed in 15.62s'. `bash tests/docs_check.sh` \u2192 exit 0 'PASS: README claims match code \u2026 loop verbs ok (17 listed, 18 shipped), VERBS.md registry ok'. ruff: `git show 8059814^:auger.py` \u2192 37 findings vs current auger.py \u2192 37 findings \u2014 the commit adds zero net lint findings (the new UP017 mirrors 36 pre-existing ones). Full `bash tests/gate.sh` cannot run green in this environment (needs a live DuckBrain URL \u2014 the same env failure recorded in tier1), so the battery above is the regression evidence.",
+                "derived": true
+              }
+            ],
+            "summary": "AUG-206 is complete: VERBS.md documents all 16 spec subcommands with the loop's digest/refusal semantics, SPEC-CORPUS.md gains the spec-to-build loop section whose fenced corpus is byte-identical (rc=0 pin script) to the runnable docs/spec-example/tracker-loop.xml that validates and drives the real loop (approvals recorded, boardctl invoked, stale/unknown refusals verbatim), align --help lost its positional ROOT, plan-approve defaults to a non-empty UTC timestamp (live-verified both paths), and the hermetic spec battery (163 tests) plus docs_check.sh are green with zero net new lint findings. [uncovered failure paths: failure mode 0 (The example-pin guard is wired into no automated arm: scripts/check_spec_example.py exists and passes when run by hand, but nothing (tests/gate.sh, tests/docs_check.sh, pyproject, pre-commit hooks \u2014 all grepped, zero references) executes it, so a future edit to docs/spec-example/tracker-loop.xml or the SPEC-CORPUS.md fence can silently break the doc's 'byte-identical' claim.): detected_by is empty \u2014 uncovered failure path]",
+            "ungraded_criteria": [
+              "1) docs/VERBS.md '## spec' section documents all 16 subcommands incl. the 8 loop verbs with their digest/refusal semantics; 2) docs/SPEC-CORPUS.md gains a 'spec-to-build loop' section with one worked example corpus containing a <task plan=...> block; 3) specs/ (authored corpus) or docs carries a runnable <task> example; 4) 'spec align --help' no longer references a positional ROOT; 5) plan-approve records a non-empty timestamp by default (or documents the empty-at behaviour and its rationale)."
+            ],
+            "provenance": {
+              "model": "glm-5.3-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            },
+            "context_stats": {
+              "diff_source": "working-tree",
+              "diff_bytes": 23898,
+              "prompt_bytes": 45458
+            }
+          }
+        }
+      ],
+      "model": "glm-5.3-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "ungraded_criteria": [
+        "1) docs/VERBS.md '## spec' section documents all 16 subcommands incl. the 8 loop verbs with their digest/refusal semantics; 2) docs/SPEC-CORPUS.md gains a 'spec-to-build loop' section with one worked example corpus containing a <task plan=...> block; 3) specs/ (authored corpus) or docs carries a runnable <task> example; 4) 'spec align --help' no longer references a positional ROOT; 5) plan-approve records a non-empty timestamp by default (or documents the empty-at behaviour and its rationale)."
+      ],
+      "context_stats": {
+        "diff_source": "working-tree",
+        "diff_bytes": 23898,
+        "prompt_bytes": 45458
+      },
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-206\"}",
+          "exit_code": 0,
+          "output_sha": "64de755be6bf01b9fb541e5a1407e4dbc3ee22e0de4f9866718eafd7a88f34d5"
+        },
+        {
+          "tool": "run_command",
+          "command": "git log --oneline -5 && git status --short | head -20",
+          "exit_code": 0,
+          "output_sha": "daccfaa0e1b11c31b47c8aa36730d939056ab14614a1429ba33d3fa4c6647e1e"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 8059814 --stat && echo ---- && git show c529571 --stat",
+          "exit_code": 0,
+          "output_sha": "4332ff3c92536f41b1bd5893819ba7ccaab3f67fe4e73255d242c1f91ea80043"
+        },
+        {
+          "tool": "run_command",
+          "command": "ls docs/ && ls docs/spec-example/ 2>/dev/null; ls specs/ | head; ls scripts/ | grep -i spec",
+          "exit_code": 0,
+          "output_sha": "385f39f5575e73aceb5871a444064001eca8a1340057868c458776eb9b224147"
+        },
+        {
+          "tool": "run_command",
+          "command": "python3 - <<'EOF'\nimport ast, re\nsrc = open('auger.py').read()\ntree = ast.parse(src)\nspec_subs = []\nfor node in ast.walk(tree):\n    if isinstance(node, ast.Call) and getattr(node.func, 'attr', None) == 'add_parser' or getattr(node.func, 'id', '') == 'add_parser':\n        if node.args and isinstance(node.args[0], ast.Constant):\n            spec_subs.append(node.args[0].value)\nprint(\"all add_parser names:\", spec_subs)\nEOF",
+          "exit_code": 1,
+          "output_sha": "ade15a89ab8ef034af69297732f0c317fd1c584a5800f8325d45527647f5c046"
+        },
+        {
+          "tool": "run_command",
+          "command": "python3 - <<'EOF'\nimport ast\nsrc = open('auger.py').read()\ntree = ast.parse(src)\nnames = []\nfor node in ast.walk(tree):\n    if isinstance(node, ast.Call) and isinstance(node.func, (ast.Attribute, ast.Name)):\n        fname = getattr(node.func, 'attr', None) or getattr(node.func, 'id', '')\n        if fname == 'add_parser' and node.args and isinstance(node.args[0], ast.Constant):\n            names.append(node.args[0].value)\nprint(len(names), names)\nEOF",
+          "exit_code": 0,
+          "output_sha": "e2e42a70330504a43be19ceebaac1e8b3b7d2141f72d500f75f13dd259890809"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"## spec\" docs/VERBS.md; awk '/^## spec/{f=1} f&&/^## /&&!/^## spec/{print NR\": \"$0; exit} f&&/^### /{print NR\": \"$0}' docs/VERBS.md | head -30",
+          "exit_code": 0,
+          "output_sha": "b919ebcde6a01815c88448bdc83f16be08ce5b251c029458101bf0ad969be17d"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '590,760p' docs/VERBS.md",
+          "exit_code": 0,
+          "output_sha": "c5bcf560a6eef287122255f7bcb9036f9673dc6c7bd1b693a1c2927c1baf89da"
+        },
+        {
+          "tool": "run_command",
+          "command": "awk 'NR>=598 && NR<=700' docs/VERBS.md | grep -n \"^- \\`auger spec\" ",
+          "exit_code": 0,
+          "output_sha": "d5e9913ee172365cb28b772edcd3d2ee828a17c47bf282ab08b636d8dafe059f"
+        },
+        {
+          "tool": "run_command",
+          "command": "awk 'NR>=700 && NR<=820' docs/VERBS.md | grep -n \"^- \\`auger spec\"",
+          "exit_code": 0,
+          "output_sha": "ef62aa042c9f13affde40b09b3d3194f0088bd0863e462f90e393b9231d8fb27"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '698,730p' docs/VERBS.md && echo ===== && sed -n '718,800p' docs/VERBS.md",
+          "exit_code": 0,
+          "output_sha": "8d1cee36c730649b419a912bcd2d94408502728050aacc18ac62003eeb0c9857"
+        },
+        {
+          "tool": "run_command",
+          "command": "for s in task-packet task-export plan-draft plan-approve plan-export plan-reconcile judge-packet judge-handoff; do printf \"%s: %s\\n\" \"$s\" \"$(grep -c \"\\`auger spec $s\" docs/VERBS.md)\"; done",
+          "exit_code": 0,
+          "output_sha": "8c2f95a7b5bf332e15a80d729f521401e1409e2794990c05b9ae096cb48d6983"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '726,776p' docs/VERBS.md",
+          "exit_code": 0,
+          "output_sha": "1a1ac0913823467dc39567adf68942ba727a1a501e54c8a584f578596a04eac6"
+        },
+        {
+          "tool": "run_command",
+          "command": "for s in validate list assemble check bundle render align context task-packet task-export plan-draft plan-approve plan-export plan-reconcile judge-packet judge-handoff; do n=$(grep -c \"\\`auger spec $s\" docs/VERBS.md); echo \"$s: $n\"; done; echo ---; grep -n \"spec error (\" docs/VERBS.md | wc -l; grep -on \"stale-plan-digest\\|unapproved-plan-digest\\|invalid-plan-digest\\|unknown-task\\|board-row-missing\\|approval-ledger-unwritable\\|approval-ledger-unverified\\|dispatch-unconfigured\\|unknown-requirement\\|xsd-processor-missing\" docs/VERBS.md | head -40",
+          "exit_code": 0,
+          "output_sha": "763af784d09d6d192e386ac2d174397d5ab29be316b27f3f8837d0daac9578f5"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"digest\" docs/VERBS.md | sed -n '1,40p'",
+          "exit_code": 0,
+          "output_sha": "43a0a28ff1b99dfb879b8c0f17e4c57ed7562535ddb2eb3bf3ad8604b6406061"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"unapproved\\|exit 2, nothing written\\|spec error\" docs/VERBS.md | head; echo ===; grep -n \"nothing written\\|approv\" docs/VERBS.md | sed -n '1,25p'",
+          "exit_code": 0,
+          "output_sha": "5dc866ac8760efe122a3fe92d3f34bd2ea3d771d827d9cf762c649504d15d703"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"AC1 evidence: docs/VERBS.md line 598 '## spec'. All 16 subcommands each have a `- `auger spec <sub> ...`` bullet (validate 604, check 610, bundle 612, align 621, list 649, assemble 651, render 679, context 689, task-packet 717, plan-draft 722, plan-approve 730, plan-export 740, task-export 750, plan-reconcile 752, judge-packet 757, judge-handoff 764). Loop block heading 'The spec-to-build loop (AUG-119/AUG-121/AUG-124): the other eight subcommands, one digest chain.' at :709; digest chain prose :713; refusal semantics ':716 (`spec error (<code>)` on stderr, exit 2, nothing written)'. Typed codes named: xsd-processor-missing:606, unknown-requirement:620, invalid-xml:723, unknown-task:724, stale-plan-digest:733, invalid-plan-digest:734, missing-approver:734, approval-ledger-unwritable:738, approval-ledger-unverified:739, dispatch-unconfigured:772. AST census of auger.py add_parser names confirms exactly 16 spec subcommands matching doc order.\", \"key\": \"AC1\"}",
+          "exit_code": 0,
+          "output_sha": "8ec7b829be717ecb56e5f2672d36fa054d007bff69da36070a2e0836f413b5cf"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"AC1 = PASS (evidence above). Next: AC2/AC3 via docs/SPEC-CORPUS.md + docs/spec-example/tracker-loop.xml + scripts/check_spec_example.py.\", \"key\": \"progress\"}",
+          "exit_code": 0,
+          "output_sha": "f15504b6a5355d47b1696fc9221dd9d20857e5c69043d6a9e09518b001b1c9f5"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"spec-to-build\\|<task plan\" docs/SPEC-CORPUS.md | head; echo ===; wc -l docs/SPEC-CORPUS.md docs/spec-example/tracker-loop.xml",
+          "exit_code": 0,
+          "output_sha": "a9d6b6e46fcdbc1b8236b68f7bdc2094f695ce6a5b05322da90cbd45c89ebf6c"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '100,274p' docs/SPEC-CORPUS.md",
+          "exit_code": 0,
+          "output_sha": "2c760f1b118aa18f958a3ccee495fa6bbb3c78fbe285b0fdcaa060275cf90464"
+        },
+        {
+          "tool": "run_command",
+          "command": "cat docs/spec-example/tracker-loop.xml",
+          "exit_code": 0,
+          "output_sha": "5250b5f7e14a691a2f910cab009b3c2899332b28eaa4de7968bbcfcece5a8f8a"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n '<task' docs/SPEC-CORPUS.md | head; echo ===; python3 scripts/check_spec_example.py; echo \"check_spec_example rc=$?\"",
+          "exit_code": 0,
+          "output_sha": "3cc1b945d01775c84b359890ffb066d291f0f25ee56ba72d4cd01e7a0d622353"
+        },
+        {
+          "tool": "run_command",
+          "command": ".venv/bin/python auger.py spec validate docs/spec-example; echo \"rc=$?\"",
+          "exit_code": 0,
+          "output_sha": "c712f4cc273ea072fa8b7de4d44f26233ee59e3cd830ee1d397d4b7ceafbbaab"
+        },
+        {
+          "tool": "run_command",
+          "command": ".venv/bin/python auger.py spec task-packet docs/spec-example --task EXAMPLE-TASK-1 > /tmp/tp.json; echo \"rc=$?\"; .venv/bin/python auger.py spec plan-draft docs/spec-example --plan EXAMPLE-PLAN > /tmp/pd.json; echo \"rc=$?\"; python3 -c \"\nimport json\ntp=json.load(open('/tmp/tp.json')); pd=json.load(open('/tmp/pd.json'))\nprint('packet digest:', tp.get('digest'))\nprint('plan digest:', pd.get('digest'), 'version:', pd.get('version'))\n\"",
+          "exit_code": 0,
+          "output_sha": "e1eaf3bf53d3b5dd8d22bd919fdfa0b004642fe18d3b95b15c568d9398f581ee"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp && rm -rf aug206-check && mkdir aug206-check && cd aug206-check && cp /home/kara/auger/docs/spec-example/tracker-loop.xml . && /home/kara/auger/.venv/bin/python /home/kara/auger/auger.py spec plan-approve . --plan EXAMPLE-PLAN --approve --digest 07828ee7e1b1bd9b50d4645db7e0d7501012efb23859e44ca009e4131114e632 --approver \"evaluator\" --at \"\" ; echo \"rc=$?\"",
+          "exit_code": 0,
+          "output_sha": "cfcb4c392fedfa2c0e45902f6c0a645f4ebf9cb695a0d9a8d3b0c505f70d572c"
+        },
+        {
+          "tool": "run_command",
+          "command": "cat /tmp/aug206-check/.auger/plan-approvals.jsonl; echo ===; cd /tmp/aug206-check && /home/kara/auger/.venv/bin/python /home/kara/auger/auger.py spec plan-approve . --plan EXAMPLE-PLAN --approve --digest 07828ee7e1b1bd9b50d4645db7e0d7501012efb23859e44ca009e4131114e632 --approver \"evaluator2\"; echo \"rc=$?\"; tail -1 .auger/plan-approvals.jsonl",
+          "exit_code": 0,
+          "output_sha": "386cd552b47210bfeaeff3e4b5d76d98b3c1afe0f7cb8b42d7a8a2f794caa55c"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"AUG-206\" auger.py | head; echo ===; grep -n \"def cmd_spec_plan_approve\\|def _spec_plan_approve\\|plan-approve\" auger.py | head",
+          "exit_code": 0,
+          "output_sha": "051c2f92b51c80eb8d3e84f9e80ee4503c10d8681b2259886f329732437ed55c"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 75, \"offset\": 11449, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "1bcf3bf7783c8178e9d48267a98e1427c28dc36f90e0af2c008d74312c534810"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"def record_plan_approval\" auger.py",
+          "exit_code": 0,
+          "output_sha": "5588c7b917f75800a50903570d97e07bb8e8c3ef0cb1dc3d0281274d60b75840"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 80, \"offset\": 10452, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "b65aef49ace56c66793199d6197ef74b504f1781f034d256276014542e9cf192"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -rn \"record_plan_approval(\" auger.py tests/*.py | grep -v \"def record_plan_approval\"",
+          "exit_code": 0,
+          "output_sha": "0c19b29eb7a107327e86ee867f465dd546828dd1e9f6fecfe3224ab4b2dcf647"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -rn \"record_plan_approval\\|at.*=.*now\\|empty.*timestamp\\|empty-at\" tests/test_plan_approval.py | head -20; echo ===; grep -n \"def test\" tests/test_plan_approval.py | head -30",
+          "exit_code": 0,
+          "output_sha": "d5be4603ad18e34e027cd9e8de253ceaaeb8dd981f9c7fbdce0bef69605782d8"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 45, \"offset\": 1149, \"path\": \"tests/test_plan_approval.py\"}",
+          "exit_code": 0,
+          "output_sha": "0977a2b3c550e77c3334d28e38f1521553e9249017e1a3d0dd73921e44d56062"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"AC5 = PASS. Live: `plan-approve` with `--at \\\"\\\"` (empty) stored at=2026-11-23T20:19:55.618074+00:00 (now fallback); without --at stored 2026-11-23T20:19:58.551341+00:00. Code: auger.py:11457 `at=a.at or datetime.now(timezone.utc).isoformat()` in cmd_spec_plan_approve, sole caller of record_plan_approval (auger.py:10452, record 'at': str(at or '')). Regression test tests/test_plan_approval.py:1149 test_plan_approve_records_a_nonempty_iso_timestamp_by_default asserts non-empty tz-aware at + ledger read-back. VERBS.md:734-735 documents 'without it the current UTC time (ISO 8601) is recorded \\u2014 the ledger never carries an empty timestamp (AUG-206)'.\", \"key\": \"AC5\"}",
+          "exit_code": 0,
+          "output_sha": "591632c268a18872bd1a59b51d18a0ad1d4bd61007fc53e77bc1c223abeec868"
+        },
+        {
+          "tool": "run_command",
+          "command": ".venv/bin/python auger.py spec align --help 2>&1; echo \"rc=$?\"",
+          "exit_code": 0,
+          "output_sha": "6062a47e98b1970a9a1d066e3e11d3af58a5898896d80077066e00c83b344a4a"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"align\" docs/VERBS.md | head; echo ===; sed -n '618,632p' docs/VERBS.md",
+          "exit_code": 0,
+          "output_sha": "4a5740791d9aaf880842c0ec13848a4db042c0eb034ba6fcaaca484546fd1f2a"
+        },
+        {
+          "tool": "run_command",
+          "command": "cat .gitreins/config.yaml 2>/dev/null | head -40; echo ===; grep -rn \"check_spec_example\" tests/ scripts/ .gitreins/config.yaml tests/gate.sh 2>/dev/null | grep -v Binary | head",
+          "exit_code": 0,
+          "output_sha": "26938434248cf084dfaafe6c34a572348f23c02140a08f9ba53af4c666190ff5"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -rn \"check_spec_example\\|spec-example\" tests/*.py tests/gate.sh docs/Makefile 2>/dev/null | head; echo ===; grep -rn \"spec-example\" scripts/*.py | head",
+          "exit_code": 0,
+          "output_sha": "bdb5fdffedacb8f8deb4a735c969cadb5cc4db93e2a6706c24e3bc56f394ed44"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"spec\\|docs\" tests/gate.sh | head -30; echo ===; ls tests/*.sh tests/docs_check.sh 2>/dev/null",
+          "exit_code": 0,
+          "output_sha": "1b308509f8e7aa698cdfa4433ca625e736e1bf19f74cbc06c5c007b8d494829a"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"check_spec_example\\|tracker-loop\\|spec-example\\|SPEC-CORPUS\" tests/gate.sh tests/docs_check.sh; echo \"exit=$?\"",
+          "exit_code": 0,
+          "output_sha": "0d09771251dca8f9cf37726773f1cc183a720b1f12829da2b0de84772ad82563"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -rn \"tracker-loop\\|spec-example\\|check_spec_example\\|AUG-206\" tests/test_*.py | head -20",
+          "exit_code": 0,
+          "output_sha": "a0c3ebcc777e84453efb6749b1c7567e89cab94fd83dfcf83a13c8a24e7175b4"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 8059814 --name-only; echo ===; git show 8059814 -- docs/VERBS.md | head -30; git show 8059814 --stat | tail -10",
+          "exit_code": 0,
+          "output_sha": "99931b045a12300d451b1902a11c59597b1d51aaa45e0a412fce0965d41c7bd4"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 8059814 -- docs/SPEC-CORPUS.md | grep -c \"^+\"; git show 8059814 -- docs/VERBS.md | grep -c \"^+\"; echo ===; git show 8059814 -- docs/VERBS.md | grep \"^+\" | grep -i \"digest chain\\|stale\\|unapproved\\|exit 2\\|refus\" | head -20",
+          "exit_code": 0,
+          "output_sha": "c9f6de25d9e09c309200fc6420f7ce7b6721baf40447d3ca0270610e43cd7fdb"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 8059814 -- docs/VERBS.md | grep \"^+\" | grep -n \"unapproved-plan-digest\\|board-row-missing\"; echo \"---- exit=$?\"; git show 8059814 -- docs/VERBS.md | sed -n '/plan-export ROOT --plan ID/,/task-export/p' | head -20",
+          "exit_code": 0,
+          "output_sha": "4e47bc60b4e9013a5ad215da8ac5f7f993399fcc321a59b87cbe37d569ae2412"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '186,260p' docs/SPEC-CORPUS.md",
+          "exit_code": 0,
+          "output_sha": "c8014b682201fc3f6bff715230e253320197ad86a831d0d95b7ce3598aeda452"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '155,186p' docs/SPEC-CORPUS.md; echo '==== omitted middle ====; '; sed -n '222,245p' docs/SPEC-CORPUS.md",
+          "exit_code": 0,
+          "output_sha": "73d5c079e462fae6cc0defcd18f24b9bd5beef8c370d99dd470bb08d23d740b5"
+        },
+        {
+          "tool": "run_command",
+          "command": "head -50 scripts/check_spec_example.py",
+          "exit_code": 0,
+          "output_sha": "f0e9d271727959d2623e8c4bcdf5b7bd9cd8015ba12bc91d9115015c8bdac4eb"
+        },
+        {
+          "tool": "run_command",
+          "command": ".venv/bin/python -m pytest tests/test_plan_approval.py -q 2>&1 | tail -3",
+          "exit_code": 0,
+          "output_sha": "1301f41e4d5bed08e58b2919cea20a0c8e7133d3fe9513478b204a701fdf599b"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -rn \"python3 scripts/check_spec_example.py\\|check_spec_example\" .pre-commit-config.yaml Makefile pyproject.toml .github/ 2>/dev/null | head; echo ===; sed -n '95,135p' tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "2f47d3b932119992355814fa05e96ca6329c3b9db93f35cb6594595652528ab9"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '135,200p' tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "07c58d4456c985d3b84421e73134c6f4413b19a2138ef5439b3385d410e6736c"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"docs-check\\|docs_check\\|DOC-ONLY\" tests/gate.sh | head; awk '/docs-check/,0' tests/gate.sh | sed -n '1,60p'",
+          "exit_code": 0,
+          "output_sha": "bfed1ed9bc2f8889883ec0f3cd5e349f5279cce6f19759f2e7098e273032fbbc"
+        },
+        {
+          "tool": "run_command",
+          "command": "sed -n '420,445p' tests/gate.sh; echo ===; grep -n \"spec\\|VERBS\\|README\" tests/docs_check.sh | head -20",
+          "exit_code": 0,
+          "output_sha": "7e95ab30f2c4497697c0dcbb08480584bc824d9a5741a6e71da02c2da7d08091"
+        },
+        {
+          "tool": "run_command",
+          "command": "bash tests/docs_check.sh; echo \"rc=$?\"",
+          "exit_code": 0,
+          "output_sha": "916477ebe8ecc718630f5b741b521f8df218511efaba09f2fb4ac0a6d1fb5a1b"
+        },
+        {
+          "tool": "run_command",
+          "command": ".venv/bin/python auger.py spec check docs/spec-example; echo \"rc=$?\"; .venv/bin/python auger.py spec plan-approve --help 2>&1 | sed -n '1,12p'; .venv/bin/python auger.py spec judge-handoff --help 2>&1 | sed -n '1,6p'",
+          "exit_code": 0,
+          "output_sha": "c9d87b3f4f34a50a4f3a4a5e19f6cd73c367fe6798bd8e31eeaca0822f091ee1"
+        },
+        {
+          "tool": "run_command",
+          "command": ".venv/bin/python - <<'EOF'\nimport re, xml.etree.ElementTree as ET\ndoc = open('docs/SPEC-CORPUS.md').read()\nm = re.search(r'```xml\\n(.*?)\\n```', doc, re.S)\nfenced = m.group(1)\nshipped = open('docs/spec-example/tracker-loop.xml').read().strip('\\n')\nprint('fence==file:', fenced == shipped)\n# attribute-level check of the fenced task block\nroot = ET.fromstring(fenced)\nfor el in root:\n    if el.tag.endswith('task'):\n        print('task attrs:', {k.split('}')[-1]: v for k, v in el.attrib.items()})\nEOF",
+          "exit_code": 0,
+          "output_sha": "4706122898f70557f7e5c1a1f39f89a10f91bd4b52500e08167d9a9f8942b881"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"AC2/AC3 = PASS. docs/SPEC-CORPUS.md:115 '## The spec-to-build loop, on a runnable example (AUG-206)'; fenced xml block (lines ~132-183) byte-identical to docs/spec-example/tracker-loop.xml (python check fence==file: True; scripts/check_spec_example.py rc=0 'PASS ... (2869 bytes)'); fenced corpus has <task plan=\\\"EXAMPLE-PLAN\\\" plan-version=\\\"1.0.0\\\"> block (SPEC-CORPUS.md:175-180, attrs verified by ElementTree). Runnable: spec validate docs/spec-example \\u2192 '1 document(s), 5 block(s), 5 reference(s) ok' rc=0; spec check \\u2192 status valid rc=0; task-packet rc=0 digest 877d69ee...; plan-draft rc=0 digest 07828ee7...; plan-approve rc=0 (ledger line written in /tmp scratch). Doc also walks the loop command-by-command (SPEC-CORPUS.md:188-225) and names fail-closed refusals (:236-239).\", \"key\": \"AC2_AC3\"}",
+          "exit_code": 0,
+          "output_sha": "c08cbcae37c6ea9d9685679573cdebcf38a58d63d1a537040a224a72e9c24251"
+        },
+        {
+          "tool": "run_command",
+          "command": ".venv/bin/python - <<'EOF'\nimport ast, sys\nsrc = open('specs/verification.xml').read()\nprint('verification.xml has task:', '<task' in src)\nimport pathlib\nfor p in pathlib.Path('specs').rglob('*.xml'):\n    t = p.read_text()\n    if '<task' in t:\n        print('task block in', p)\nEOF\ngrep -rn \"<task\" specs/*.xml | head -3; echo \"grep-rc=$?\"",
+          "exit_code": 0,
+          "output_sha": "c6ba403a920639f8f3fb4efc9eb55ea57d53b9c6c6036b18a9bbcfeeb472e5ec"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug206-check && cat > /tmp/boardctl-stub <<'EOF'\n#!/bin/bash\necho \"stub boardctl: $@\" >> /tmp/boardctl-calls.log\nexit 0\nEOF\nchmod +x /tmp/boardctl-stub && rm -f /tmp/boardctl-calls.log && /home/kara/auger/.venv/bin/python /home/kara/auger/auger.py spec plan-export . --plan EXAMPLE-PLAN --board /tmp/aug206-board --boardctl /tmp/boardctl-stub > /tmp/export.json; echo \"rc=$?\"; python3 -c \"\nimport json; r=json.load(open('/tmp/export.json')); print('status:', r.get('status')); print('rows:', [(o.get('row'), o.get('action'), o.get('status')) for o in r.get('rows', r.get('outcomes', []))])\"; echo ---; cat /tmp/boardctl-calls.log 2>/dev/null | head -4",
+          "exit_code": 0,
+          "output_sha": "479fc6b5f66d71db4518f6efb736b4673d53f5484c4eb6f1437ea6a620058351"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug206-check && /home/kara/auger/.venv/bin/python /home/kara/auger/auger.py spec task-packet . --task NOPE > /dev/null; echo \"unknown-task rc=$?\"; /home/kara/auger/.venv/bin/python /home/kara/auger/auger.py spec plan-approve . --plan EXAMPLE-PLAN --approve --digest 0000000000000000000000000000000000000000000000000000000000000000 --approver x; echo \"stale rc=$?\"",
+          "exit_code": 0,
+          "output_sha": "b657f0f5d67131dd685683987615760cf185172b6bf02c9cf02a7e220a0ee5d2"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"D0 reachability = PASS. Live: on a copy of the shipped example (/tmp/aug206-check), plan-approve rc=0 wrote the ledger; plan-export with the approval hit boardctl (`stub boardctl: -C /tmp/aug206-board show EXAMPLE-TASK-1` in calls log; export status 'partial' rc=1 because the stub returns no row payload \\u2014 proves the approval-gate passed and boardctl was invoked, i.e. the documented digest chain actually executes); typed refusals match the docs verbatim: 'spec error (unknown-task): NOPE is not a task block...' rc=2; 'spec error (stale-plan-digest): ... approve the plan you are actually looking at' rc=2. Both doc texts quote these exact wordings (VERBS.md:733, SPEC-CORPUS.md:236).\", \"key\": \"D0\"}",
+          "exit_code": 0,
+          "output_sha": "d7ac9a2fabc5989683474f8635db7def859482f824137e0389f14671e54954bf"
+        },
+        {
+          "tool": "run_command",
+          "command": "AUGER_CI=1 DUCKBRAIN_URL=http://127.0.0.1:3000 .venv/bin/python -m pytest tests/test_xml_specs.py tests/test_plan_approval.py tests/test_task_packet.py tests/test_spec_context.py tests/test_task_context.py tests/test_usage_skill.py tests/test_spec_validators_agree.py tests/test_xsd_conformance.py tests/test_spec_repository_root.py -q 2>&1 | tail -3",
+          "exit_code": -15,
+          "output_sha": "788e5759df5c55196127d852a22599f30b9262d06607d0b66f2afe8a06f24cbe"
+        },
+        {
+          "tool": "run_command",
+          "command": "AUGER_CI=1 DUCKBRAIN_URL=http://127.0.0.1:3000 timeout 240 .venv/bin/python -m pytest tests/test_plan_approval.py tests/test_task_packet.py tests/test_xml_specs.py -q 2>&1 | tail -3",
+          "exit_code": 0,
+          "output_sha": "1edf7588b9ef7c63622cd76a0067b313cbd9baa6e67ed3cdfa6de04ffb401794"
+        },
+        {
+          "tool": "run_command",
+          "command": "AUGER_CI=1 DUCKBRAIN_URL=http://127.0.0.1:3000 timeout 240 .venv/bin/python -m pytest tests/test_spec_context.py tests/test_task_context.py tests/test_usage_skill.py tests/test_spec_validators_agree.py tests/test_xsd_conformance.py tests/test_spec_repository_root.py -q 2>&1 | tail -3",
+          "exit_code": -15,
+          "output_sha": "0432fc5075635ec68403c769379a605b112851a7cbc538a883f12ba450668d7f"
+        },
+        {
+          "tool": "run_command",
+          "command": "AUGER_CI=1 DUCKBRAIN_URL=http://127.0.0.1:3000 timeout 200 .venv/bin/python -m pytest tests/test_usage_skill.py tests/test_spec_validators_agree.py -q -p no:cacheprovider 2>&1 | tail -2",
+          "exit_code": 0,
+          "output_sha": "9f60508071d63e7477d2b6102257f487adbf381459de2b4ad554b03ff13e0f91"
+        },
+        {
+          "tool": "run_command",
+          "command": "AUGER_CI=1 DUCKBRAIN_URL=http://127.0.0.1:3000 timeout 200 .venv/bin/python -m pytest tests/test_xsd_conformance.py tests/test_spec_repository_root.py -q -p no:cacheprovider 2>&1 | tail -2",
+          "exit_code": 0,
+          "output_sha": "2ad2d843b90f6e30f9710b28e364d7434e7e269ee9a30be567c50d7e9e505426"
+        },
+        {
+          "tool": "run_command",
+          "command": "AUGER_CI=1 DUCKBRAIN_URL=http://127.0.0.1:3000 timeout 200 .venv/bin/python -m pytest tests/test_spec_context.py tests/test_task_context.py -q -p no:cacheprovider 2>&1 | tail -2",
+          "exit_code": 0,
+          "output_sha": "c3b208fb573c885253b0aa7b5f02f22326f3ca57d4f9d0cd73d31e87b9613537"
+        },
+        {
+          "tool": "run_command",
+          "command": "git diff HEAD~2 --stat -- auger.py; echo ===; git log --oneline -3 -- auger.py; echo ===; git diff 8059814^ 8059814 -- auger.py | head -60",
+          "exit_code": 0,
+          "output_sha": "b88e74087304a801fb490b4fcf4208e0b04bfe68b3b56f5c05cc390dc247ec17"
+        },
+        {
+          "tool": "run_command",
+          "command": "ruff check auger.py scripts/check_spec_example.py 2>&1 | tail -5; echo \"ruff-rc=$?\"; ruff --version",
+          "exit_code": 0,
+          "output_sha": "b01a1b54922e4564096ee77f24ca3216addfb22039bac88b84cc4bf046137d27"
+        },
+        {
+          "tool": "run_command",
+          "command": "ruff check scripts/check_spec_example.py 2>&1 | head -20; echo \"rc1=$?\"; git stash list | head -2; git log --oneline -1 -- scripts/check_spec_example.py",
+          "exit_code": 0,
+          "output_sha": "6def6ce1f3b7782b2ccbc824ea6704ed4ce47013d2fa7551380736b438875014"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 8059814^:auger.py > /tmp/auger-prev.py 2>/dev/null && ruff check /tmp/auger-prev.py 2>&1 | tail -2; echo ===; ruff check auger.py 2>&1 | tail -2",
+          "exit_code": 0,
+          "output_sha": "e29791af50483ee78fc4f0890e04f07bf7bfba01a2cb802338687cf436f0f216"
+        },
+        {
+          "tool": "run_command",
+          "command": "ruff check auger.py 2>&1 | grep -n \"11456\\|11457\\|11459\\|--at\\|13225\\|1322[6-9]\\|14690\\|1469[1-2]\" | head; echo \"---\"; ruff check auger.py 2>&1 | grep -c \"^[A-Z]\"",
+          "exit_code": 0,
+          "output_sha": "d0673284a39bf8ff409c57bd373f99fdc92cd19786f5152dbc140e36bf09f707"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Tests/D0-D2 progress: hermetic spec battery green \\u2014 test_plan_approval+test_task_packet+test_xml_specs 80 passed (17.12s); test_usage_skill+test_spec_validators_agree 31 passed (18.11s); test_xsd_conformance+test_spec_repository_root 21 passed (9.55s); test_spec_context+test_task_context 12 passed (0.65s). bash tests/docs_check.sh exit 0 'loop verbs ok (17 listed, 18 shipped), VERBS.md registry ok'. scripts/check_spec_example.py rc=0 (byte-identical fence). ruff: auger.py 37 findings BEFORE 8059814 (git show 8059814^:auger.py) vs 37 after \\u2014 the commit added 0 net lint findings (UP017 on the new datetime.now(timezone.utc) line mirrors 36 pre-existing ones; same rule fires on old code); scripts/check_spec_example.py has 1 trivial EXE001 (not-executable shebang), cosmetic, lint_command is `ruff check auger.py` per .gitreins/config.yaml (script not in lint scope; gate's built-in lint selects staged py files \\u2014 pre-existing red on auger.py anyway). Full gate `bash tests/gate.sh` cannot run green in this env (requires live DuckBrain URL \\u2014 prior tier1 record shows the same env error, and gate pytest budget is 2400s), so the shipped-test battery above stands as evidence.\", \"key\": \"tests_progress\"}",
+          "exit_code": 0,
+          "output_sha": "fe6f098d0ba49a315f9608181e7936682f628e4d52e68861a5ee7ba5d4e21b16"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -rn \"check_spec_example\" tests/gate.sh tests/docs_check.sh pyproject.toml .git/hooks/pre-commit 2>/dev/null; ls .git/hooks/pre-commit 2>/dev/null && grep -n \"check_spec_example\\|gate.sh\" .git/hooks/pre-commit | head -5",
+          "exit_code": 0,
+          "output_sha": "a8e99c1aae38cb356c2af7e52d8f6f593b8f51d7e6891d2fe4a6de98aa88628b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cat .git/hooks/pre-commit 2>/dev/null | head -30",
+          "exit_code": 0,
+          "output_sha": "7c0044eb0b15c6bf94c269479a0028d9e093f83eb2097a6574bb9a3e02ae81a9"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"D1 guard wiring = PARTIAL \\u2192 noted as failure-mode, not a criteria FAIL: scripts/check_spec_example.py exists and passes when run (rc=0), but is wired into NO automated arm (not tests/gate.sh, not tests/docs_check.sh, not pyproject, not .git/hooks/pre-commit \\u2014 grep empty). Nothing re-checks the doc/file byte-identity if tracker-loop.xml or SPEC-CORPUS.md drifts later. However the fence currently IS byte-identical and the doc itself also embeds the full corpus text, so AC3's 'runnable example' is delivered; the pin is advisory-only. Record as failure mode 1.\", \"key\": \"D1\"}",
+          "exit_code": 0,
+          "output_sha": "2b42e7529cab299f9186666108d11df055ef2e8e1749ff3710fcc6190f45f0f7"
+        },
+        {
+          "tool": "run_command",
+          "command": "AUGER_CI=1 DUCKBRAIN_URL=http://127.0.0.1:3000 timeout 200 .venv/bin/python -m pytest tests/test_spec_ingest.py -q -p no:cacheprovider 2>&1 | tail -2; echo ===; git diff 8059814 HEAD --stat | tail -5",
+          "exit_code": 0,
+          "output_sha": "e92829910714f9e304eb36a50ea713911e932d57b574f08187372dec9267180b"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"ALL EVIDENCE COLLECTED. AC1 PASS (VERBS.md 16/16 bullets + loop block + digest/refusal semantics, auger.py AST census 16 subcommands). AC2 PASS (SPEC-CORPUS.md:115 section + worked loop walkthrough). AC3 PASS (runnable <task plan=...> corpus docs/spec-example/tracker-loop.xml validates rc=0; doc fence byte-identical, check_spec_example rc=0). AC4 PASS (align --help has NO positional root; help text names it explicitly; VERBS.md align entry has no ROOT). AC5 PASS (live empty-at and no-flag approvals both store now-UTC; auger.py:11457; regression test green). D0 reachability PASS (live loop run incl. boardctl invocation + verbatim refusals). D1 guard wiring PARTIAL (check_spec_example.py not in any automated arm) \\u2192 failure mode 1. D2 no-regression PASS (spec battery 80+31+21+12+19 tests green; ruff net-zero; docs_check.sh exit 0; c529571 rebound corpora, test_spec_ingest 19 passed). Verdict: COMPLETE.\", \"key\": \"final\"}",
+          "exit_code": 0,
+          "output_sha": "11f446c78e8ed17f3acfb57012759e30ea4912859ac2421b672fa4e89c2372b2"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -n \"align\" auger.py | head -10; sed -n '/\"align\"/,+14p' auger.py | head -20",
+          "exit_code": 0,
+          "output_sha": "c220c7fc17dda027feb3635f971d721eaab075caa98039222ef53688db899dd3"
+        }
+      ]
+    },
+    "fix_verification": {
+      "id": "fix_verification",
+      "passed": true,
+      "any_failed": false,
+      "summary": "fix_verification: 0 finding(s) verified",
+      "steps": [
+        {
+          "id": "fix_verification",
+          "type": "fix_verification",
+          "passed": true,
+          "output": "fix_verification: 0 finding(s) verified",
+          "error": "",
+          "data": {
+            "dispositions": [],
+            "counts": {}
+          }
+        }
+      ]
+    }
+  },
+  "ungraded_criteria": [
+    "1) docs/VERBS.md '## spec' section documents all 16 subcommands incl. the 8 loop verbs with their digest/refusal semantics; 2) docs/SPEC-CORPUS.md gains a 'spec-to-build loop' section with one worked example corpus containing a <task plan=...> block; 3) specs/ (authored corpus) or docs carries a runnable <task> example; 4) 'spec align --help' no longer references a positional ROOT; 5) plan-approve records a non-empty timestamp by default (or documents the empty-at behaviour and its rationale)."
+  ],
+  "context_stats": {
+    "diff_source": "working-tree",
+    "diff_bytes": 23898,
+    "prompt_bytes": 45458
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "",
+    "error": "unparseable reviewer reply: no parseable JSON object in reply: ''",
+    "raw_reply": "",
+    "retry": {
+      "count": 1,
+      "raw_reply": ""
+    },
+    "review_state": {
+      "emitted": [],
+      "carried": []
+    }
+  },
+  "summary": "Stage tier1: FAIL\n    \u2717 tests: scanners: nice=nice -n 10\n  \u2717 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n\nStage tier2: FAIL\n  COMPLETE\n  \u2713 1) docs/VERBS.md '## spec' section documents all 16 subcommands incl. the 8 loop verbs with their digest/refusal semantics: docs/VERBS.md:598 '## spec'; each of the 16 subcommands has a bullet (grep '`auger spec <sub>' = 1 hit each for validate/check/bundle/align/list/assemble/render/context + the 8 loop verbs task-packet:717, plan-draft:722, plan-approve:730, plan-export:740, task-export:750, plan-reconcile:752, judge-packet:757, judge-handoff:764). Loop block ':709 The spec-to-build loop (AUG-119/AUG-121/AUG-124): the other eight subcommands, one digest chain.' states the digest chain (:713 'Every hand is bound to a digest \u2014 the sha256 of the canonical artifact') and the blanket refusal semantics (:716 'typed `spec error (<code>)` on stderr, exit 2, nothing written'); per-verb typed codes named: stale-plan-digest:733, invalid-plan-digest:734, missing-approver:734, approval-ledger-unwritable:738, approval-ledger-unverified:739, unknown-task:724, dispatch-unconfigured:772. AST census of auger.py add_parser constants returned exactly the 16 spec subcommands in doc order.\n  \u2713 2) docs/SPEC-CORPUS.md gains a 'spec-to-build loop' section with one worked example corpus containing a <task plan=...> block: docs/SPEC-CORPUS.md:115 '## The spec-to-build loop, on a runnable example (AUG-206)'; the fenced xml corpus (SPEC-CORPUS.md:175-180) contains `<task id=\"EXAMPLE-TASK-1\" ... plan=\"EXAMPLE-PLAN\" plan-version=\"1.0.0\" in-scope=\"EXAMPLE-REQ-1\" acceptance=\"EXAMPLE-AC-1\" out-of-scope=\"EXAMPLE-REQ-9\">`; fence verified byte-identical to docs/spec-example/tracker-loop.xml (python fence==file True; `python3 scripts/check_spec_example.py` \u2192 rc=0 'PASS: SPEC-CORPUS.md example fence == docs/spec-example/tracker-loop.xml (2869 bytes)'); the doc then walks the chain command-by-command with expected output (SPEC-CORPUS.md:188-225) and its fail-closed refusals (:236-239).\n  \u2713 3) specs/ (authored corpus) or docs carries a runnable <task> example: docs/spec-example/tracker-loop.xml ships the runnable <task plan=...> example: `.venv/bin/python auger.py spec validate docs/spec-example` \u2192 'spec: 1 document(s), 5 block(s), 5 reference(s) ok' rc=0; `spec check` \u2192 status valid rc=0; `spec task-packet docs/spec-example --task EXAMPLE-TASK-1` rc=0 (digest 877d69ee\u2026); `spec plan-draft --plan EXAMPLE-PLAN` rc=0 (digest 07828ee7\u2026); `spec plan-approve` rc=0 recorded the ledger line in a /tmp scratch copy. (specs/ itself has no <task> block; docs carries it, which is what AC3 allows.)\n  \u2713 4) 'spec align --help' no longer references a positional ROOT: `.venv/bin/python auger.py spec align --help` usage line is 'usage: auger spec align [-h] [--repo-root DIR] [--spec-root DIR] [--protocol-version PROTOCOL_VERSION] [--diff-stdin] [--diff-file PATH] [--max-diff-bytes N] [--semantic]' \u2014 no positional; the --spec-root help now reads 'default: <repo-root>/specs (on `spec check`, this flag overrides the positional ROOT; `spec align` takes no positional ROOT)'. Source: the shared flag helper diff at auger.py:13225-13228 in commit 8059814 (old string 'default: the positional ROOT, else <repo-root>/specs' removed). VERBS.md:621 align entry likewise shows no ROOT.\n  \u2713 5) plan-approve records a non-empty timestamp by default (or documents the empty-at behaviour and its rationale): auger.py:11457 `at=a.at or datetime.now(timezone.utc).isoformat()` in cmd_spec_plan_approve (the sole caller of record_plan_approval, auger.py:10452). Live: in /tmp/aug206-check, plan-approve with `--at \"\"` stored at=2026-11-23T20:19:55.618074+00:00; without --at stored at=2026-11-23T20:19:58.551341+00:00; both ledger lines non-empty. Regression test tests/test_plan_approval.py:1149 test_plan_approve_records_a_nonempty_iso_timestamp_by_default asserts non-empty tz-aware `at` plus ledger read-back \u2014 AUGER_CI=1 .venv/bin/python -m pytest tests/test_plan_approval.py \u2192 '12 passed in 4.76s'. Documented at VERBS.md:734-735 ('without it the current UTC time (ISO 8601) is recorded \u2014 the ledger never carries an empty timestamp (AUG-206)') and in the --at help string (auger.py:14693).\n  \u2713 The documented loop is actually reachable and behaves as the docs say \u2014 a reader can execute the SPEC-CORPUS.md example end-to-end: Executed on a copy of the shipped example (/tmp/aug206-check): task-packet \u2192 plan-draft \u2192 plan-approve rc=0 (ledger written) \u2192 plan-export invoked boardctl (`stub boardctl: -C /tmp/aug206-board show EXAMPLE-TASK-1` in the calls log; export status 'partial' rc=1 with the stub returning no row payload \u2014 proving the approval gate passed and boardctl was reached). Typed refusals match the docs verbatim: 'spec error (unknown-task): NOPE is not a task block in this corpus (a task packet is built from a <task> block, never from a board row's prose)' rc=2; 'spec error (stale-plan-digest): EXAMPLE-PLAN: approved digest 000\u20260 does not match the current plan 07828ee7\u2026 \u2014 approve the plan you are actually looking at' rc=2 \u2014 both word-for-word the documented texts (VERBS.md:733, SPEC-CORPUS.md:236).\n  \u2713 No regression: the code touch (auger.py +8/-3), the new example and the corpora rebind must keep the doc contract and the spec battery green: AUGER_CI=1 hermetic spec battery: tests/test_plan_approval.py+test_task_packet.py+test_xml_specs.py \u2192 '80 passed in 17.12s'; test_usage_skill.py+test_spec_validators_agree.py \u2192 '31 passed in 18.11s'; test_xsd_conformance.py+test_spec_repository_root.py \u2192 '21 passed in 9.55s'; test_spec_context.py+test_task_context.py \u2192 '12 passed in 0.65s'; tests/test_spec_ingest.py (covers the follow-up corpora rebind c529571) \u2192 '19 passed in 15.62s'. `bash tests/docs_check.sh` \u2192 exit 0 'PASS: README claims match code \u2026 loop verbs ok (17 listed, 18 shipped), VERBS.md registry ok'. ruff: `git show 8059814^:auger.py` \u2192 37 findings vs current auger.py \u2192 37 findings \u2014 the commit adds zero net lint findings (the new UP017 mirrors 36 pre-existing ones). Full `bash tests/gate.sh` cannot run green in this environment (needs a live DuckBrain URL \u2014 the same env failure recorded in tier1), so the battery above is the regression evidence.\n  \u2717 Coverage FAILED \u2014 ungraded: 1) docs/VERBS.md '## spec' section documents all 16 subcommands incl. the 8 loop verbs with their digest/refusal semantics; 2) docs/SPEC-CORPUS.md gains a 'spec-to-build loop' section with one worked example corpus containing a <task plan=...> block; 3) specs/ (authored corpus) or docs carries a runnable <task> example; 4) 'spec align --help' no longer references a positional ROOT; 5) plan-approve records a non-empty timestamp by default (or documents the empty-at behaviour and its rationale).\nAUG-206 is complete: VERBS.md documents all 16 spec subcommands with the loop's digest/refusal semantics, SPEC-CORPUS.md gains the spec-to-build loop section whose fenced corpus is byte-identical (rc=0 pin script) to the runnable docs/spec-example/tracker-loop.xml that validates and drives the real loop (approvals recorded, boardctl invoked, stale/unknown refusals verbatim), align --help lost its positional ROOT, plan-approve defaults to a non-empty UTC timestamp (live-verified both paths), and the hermetic spec battery (163 tests) plus docs_check.sh are green with zero net new lint findings. [uncovered failure paths: failure mode 0 (The example-pin guard is wired into no automated arm: scripts/check_spec_example.py exists and passes when run by hand, but nothing (tests/gate.sh, tests/docs_check.sh, pyproject, pre-commit hooks \u2014 all grepped, zero references) executes it, so a future edit to docs/spec-example/tracker-loop.xml or the SPEC-CORPUS.md fence can silently break the doc's 'byte-identical' claim.): detected_by is empty \u2014 uncovered failure path]\n\nStage fix_verification: PASS\n  fix_verification: 0 finding(s) verified\n\nOverall: FAIL \u2717",
+  "job_id": "job-56754025842c4bba91d384d81cfcc994",
+  "source": "mcp",
+  "evaluated_at": "2026-11-23T20:27:13.465178",
+  "supersedes": null,
+  "superseded_by": null
+}
