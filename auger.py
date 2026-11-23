@@ -1689,7 +1689,9 @@ def recall(
 @lru_cache(maxsize=128)
 def _spec_http_payload() -> dict:
     """Load the active XML corpus once per API process for external consumers."""
-    _root, _documents, blocks = load_spec_corpus(Path(__file__).resolve().parent / "specs")
+    _root, _documents, blocks = load_spec_corpus(
+        Path(__file__).resolve().parent / "specs"
+    )
     return {
         "root": "specs",
         "count": sum(1 for block in blocks if block["status"] == "active"),
@@ -7706,15 +7708,19 @@ class APIHandler(BaseHTTPRequestHandler):
                     f"- {h.get('key')}: {h.get('content', '')[:400]}" for h in records
                 )
             )
-            answers, err = (None, retrieval_error) if retrieval_error else jev(
-                state,
-                {
-                    "already_answered": {
-                        "type": "noul",
-                        "instructions": "Is the supplied evidence already answering the question? Higher noul means yes.",
-                    }
-                },
-                timeout=10,
+            answers, err = (
+                (None, retrieval_error)
+                if retrieval_error
+                else jev(
+                    state,
+                    {
+                        "already_answered": {
+                            "type": "noul",
+                            "instructions": "Is the supplied evidence already answering the question? Higher noul means yes.",
+                        }
+                    },
+                    timeout=10,
+                )
             )
             val = (
                 _noul((answers or {}).get("answers", {}), "already_answered")
@@ -13314,6 +13320,15 @@ class SpecUnknownRequirement(SpecValidationError):
 
 SPEC_RUNNERS = {"pytest": (sys.executable, "-m", "pytest"), "go": ("go", "test")}
 SPEC_BLOCK_TAGS = {"requirement", "verification", "test"}
+# AUG-152: `spec check` reports the validated node list, so the list's filter is the
+# reported-vocabulary question ("which blocks does the verdict know about"), not the
+# obligation surface. An <acceptance> block resolves like every other authored block —
+# `spec list`/`spec assemble` select it, the loader requires its stable id — but it did
+# not sit in SPEC_BLOCK_TAGS, so `check` kept listing the requirement around it while
+# staying silent about its acceptance criterion: a reader could not tell an UNLISTED
+# acceptance from an ABSENT one. The obligation tags stay narrow; only the enumerated
+# node list widens by one kind.
+SPEC_CHECK_NODE_TAGS = SPEC_BLOCK_TAGS | {"acceptance"}
 
 
 def _xml_spec_documents(spec_root):
@@ -13686,7 +13701,12 @@ def validate_xml_specs(
     for rel, document in documents.items():
         for node in document.iter():
             tag = _spec_local(node.tag)
-            if tag not in SPEC_BLOCK_TAGS:
+            # AUG-152: the enumerated node list follows SPEC_CHECK_NODE_TAGS — every
+            # resolvable requirement/verification/acceptance id, so `check` reports an
+            # acceptance criterion it accepted instead of silently omitting it. Typed
+            # ref resolution below stays as strict as before: nothing here widens what
+            # a `verifies=` edge may point at.
+            if tag not in SPEC_CHECK_NODE_TAGS:
                 continue
             node_id = node.get("id")
             if not node_id:

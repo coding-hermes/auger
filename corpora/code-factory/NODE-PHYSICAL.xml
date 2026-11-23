@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from code-factory/specs/NODE-PHYSICAL.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CF-NODE-PHYSICAL-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: code-factory/specs/NODE-PHYSICAL.md#preamble -->
+  <section id="CF-NODE-PHYSICAL-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+# SPEC — NODE PHYSICAL TOPOLOGY
+
+Owner directive (Bane, 2026-11-21, quoted verbatim): "one bunker instance for a
+project where there's, I mean, one physical system per bunker. Technically
+multiple bunkers in the unit, physical system."
+  </section>
+  <!-- source: code-factory/specs/NODE-PHYSICAL.md#the-mapping -->
+  <section id="CF-NODE-PHYSICAL-THE-MAPPING-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## The mapping
+
+1. **One bunker instance serves exactly one project** — one bunker agent, one
+   repo, one harness (unchanged from this spec's definition of a node).
+2. **One bunker runs on one physical system.** A bunker never spans machines and
+   two bunkers never share one `$HOME` or one harness port.
+3. **Multiple bunkers MAY share one physical system (the unit).** Each co-tenant
+   bunker must independently pass its own layer 00 footprint admission against
+   the shared disk floor; one bunker's checkout, toolchains, harness home and
+   node state are charged to that admission, never amortized across tenants.
+4. **A bunker is CPU-only.** No GPU is provisioned on a node. Inference is
+   served to nodes over the orchestration network by central inference racks;
+   the node's harness points at the rack's OpenAI-compatible endpoint (the
+   layer 20 `inference_key` row already carries this credential path).
+  </section>
+  <!-- source: code-factory/specs/NODE-PHYSICAL.md#resident-context-requirement-the-load-bearing-constraint -->
+  <section id="CF-NODE-PHYSICAL-RESIDENT-CONTEXT-REQUIREMENT-T-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
+## Resident-context requirement (the load-bearing constraint)
+
+A lane re-primes nearly the same context every tick. Measured over the scheduler
+ticks ledger, 2026-10-22 → 2026-11-21 (30 days, 15,500 ticks): the average lane
+tick sends **4.15M in+cache tokens and produces 9.3K output tokens**, and the
+average worker session sends **5.9M in+cache tokens and produces 22K output
+tokens**. Projected over all 77 project families at standard lane cadences with
+worker waves (~2 per tick), the unconstrained fleet generates **~17B in+cache
+tokens/day and ~56M output tokens/day** — naive prefill demand of ~197K tok/s
+average, which no rationally-sized GPU fleet serves statelessly.
+
+The design that makes this tractable is **resident KV / prefix cache per lane**:
+because a bunker runs one project forever, its lane context (board + repo +
+spec + AGENTS.md, the 4-6M-token body re-sent each tick) can stay resident in
+the serving rack and each tick's re-prime becomes a delta prefill (~5-10% of the
+body). With resident caches the same fleet's real prefill demand drops to
+~1-2B tokens/day. Serving stacks that evict KV between ticks (stateless
+per-call serving) are non-conformant with this plan regardless of their decode
+speed.
+
+The sizing census, projection math and rack plan live in
+`docs/HARDWARE-PLAN.md`.
+  </section>
+</spec>

@@ -103,7 +103,12 @@ is never copied into a log or a reply.
   "ok": true,
   "reply_b64": "&lt;base64 of the UTF-8 report the scheduler records on the tick&gt;",
   "host_identity": "node-host-1",
-  "harness": {"name": "hermes", "served_model": "openai/gpt-6.1-sol"},
+  "harness": {
+    "name": "hermes",
+    "model_requested": "openai/gpt-6.1-sol",
+    "served_model": null,
+    "served_model_source": "unobserved"
+  },
   "vars": {"CF_MODEL": {"set": true, "len": 17}, "CF_API_KEY_FILE": {"set": true, "len": 27},
            "CF_HARNESS_OPTS": {"set": false, "len": 0}},
   "exit_codes": [0, 0],
@@ -115,6 +120,15 @@ is never copied into a log or a reply.
   "finished_at": "2026-10-29T18:41:00Z"
 }
 ```
+
+The three model-attribution members are always present on `completed`, `failed` and `refused`
+results. `model_requested` is the dispatched `CF_MODEL`, or JSON `null` when none was supplied;
+`served_model` is populated only from an explicit harness observation, never from the request or a
+route/default. If no observation exists, `served_model` is JSON `null` and
+`served_model_source` is `"unobserved"`; an observed value uses `"harness_report"`. A harness may
+report its observation by writing one line to captured stdout or stderr in the form
+`CF-HARNESS-SERVED-MODEL: &lt;model&gt;`. Empty or conflicting report lines are treated as unobserved.
+The marker carries only the model identifier, not credentials or other run variables.
 
 `host_identity` is the node's hostname, **not** the control host's. The control host recomputes
 every digest from the bytes it pulls; a reported digest that cannot be recomputed is unverified,
@@ -140,7 +154,9 @@ So, for every result:
 - `status: "failed"` or `"refused"` ⇒ `"ok": false`, **plus a reason** the scheduler can record:
   `error` (a short string; the scheduler's verdict reads it before anything else) and `reply_b64`
   (the node's own words, which become the tick's text). A failing gate must name the gate and its
-  exit code, not just its own exit status.
+  exit code, not just its own exit status. The gate's `cmd` is dispatch text, so the plain
+  `error` field names it by bounded identity (length + sha256 prefix, §Reserved field names);
+  the verbatim `cmd` rides in `reply_b64`.
 - A gate that could **not run** (no `cmd`, or a command the node could not start) is a FAILED
   result too: the node's own row for it is a FAIL, and a result may not claim `ok: true` for a
   brief whose gate never produced an exit code.
@@ -230,6 +246,17 @@ crier's prompt-injection guard rejects any JSON whose keys match
 That is why this envelope says `env_version`, never `schema`, and why a field carrying a tool list
 must be named something else (e.g. `capabilities`).
 
+The pre-match runs over the **whole deliver body**, string values included (crier
+`internal/guard/patterns.go`, `PreScanner.Scan`): control-key-shaped text inside a value reaches
+the wire escaped (backslash-quoted, e.g. `\"prompt\":` inside a JSON string) and matches the `stringified_json` pattern, which blocks the same
+way. That is the CF-131 failure mode a result envelope must not create: echoing dispatch text — a
+failing gate's `cmd`, a rejected `vars` value, a mismatched `workdir` or `project` — makes the
+reply refuse **itself** (`403 GUARD_BLOCKED`), the dispatch stays unacked, and every redelivery
+re-sends the same refused body, so the tick never settles. A result envelope therefore never
+carries dispatch-controlled text in a plain (non-base64) member: verbatim prose travels only in
+`reply_b64`, and a plain member names dispatch-controlled input by bounded identity (length plus
+sha256 prefix), the way the `vars` receipt already names variable values.
+
 Authors must not work around this by renaming to opaque keys; the envelope vocabulary is fixed
 here, and any new field is added to this spec first.
   </section>
@@ -237,7 +264,14 @@ here, and any new field is added to this spec first.
   <section id="CF-ENVELOPE-CORRELATION-AND-IDEMPOTENCY-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.code-factory">
 ## Correlation and idempotency
 
-- `corr_id` is the scheduler's join key; `dispatch_id` is the node's.
+- `corr_id` is the scheduler's join key; `dispatch_id` is the node's. The relay message ID
+  `in_reply_to` remains the scheduler's PRIMARY correlation key.
+- Every result carries nonempty `in_reply_to`, `corr_id`, and `run_id`. The run identity is
+  `dispatch.run_id` or, if absent, `dispatch.vars.CF_RUN_ID`, never `corr_id`.
+  A missing member triggers a named `envelope` refusal with `ok: false` and a `missing` array
+  naming each absent member. Refusals retain received identity values, leaving absent values empty;
+  delivery supplies the relay message ID when available. A non-refusal missing any member must
+  not be emitted.
 - Every dispatch carries an `idempotency_key`; a redelivered message must be recognised and the
   previous result returned rather than the work being done twice.
 - A node acks a dispatch **only after** the result message is delivered. A crash between
