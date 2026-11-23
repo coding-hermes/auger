@@ -181,6 +181,19 @@ auger api         serve auger's read-first HTTP API (Muster contract on :8768)
 Every verb is documented — arguments, what it writes, what it must never write — in
 [docs/VERBS.md](docs/VERBS.md).
 
+## XML specs (the `spec` verb family and the spec-to-build loop)
+
+Auger's decision loop is not its only surface: `python3 auger.py spec …` reads a directory of
+XML spec documents (grammar `specs/schema/auger-spec-1.0.xsd`) and drives them from authoring
+to build handoff — 16 subcommands in three tiers: corpus verdicts (`validate`, `check`,
+`bundle`, `render`), selection (`list`, `assemble`, `context`, `align`), and the spec-to-build
+loop (`task-packet` → `plan-draft` → `plan-approve` → `plan-export` → `judge-packet`, fed back
+with `plan-reconcile`). The loop is approval-bound: nothing reaches a board row until a
+`plan-approve` ledger entry binds the plan's CURRENT digest, and every refusal is typed (one
+`spec error (<code>)` line on stderr, exit 2, nothing written). The repository's own corpus
+lives in [docs/SPEC-CORPUS.md](docs/SPEC-CORPUS.md); the working recipe a fresh agent can
+follow from zero is in the `auger-usage` skill, section *The `spec` verb family*.
+
 ## Quick start
 
 First get the substrate up — the obstacles that block a bare Debian box (no `pnpm`, no data dir,
