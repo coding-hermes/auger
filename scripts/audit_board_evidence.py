@@ -16,6 +16,10 @@ construction and ``missing`` counts rows that say nothing:
                    anywhere in the row's own text) resolves to
                    ``.gitreins/history/<date>/<run-id>/verdict.json`` whose ``task_id`` EQUALS the
                    row id.  A verdict for another task is never evidence: it is ``unresolvable``.
+                   AUG-205 reader tolerance: a row whose binding lives ONLY under
+                   ``detail.evidence[].run_id`` (what ``boardctl update --status complete
+                   --evidence-run-id`` writes) is bound the same way when the cited run belongs
+                   to the row's own task.
     none_reason    ``evidence_run_id`` is ``none:<reason>`` and the reason's predicate is TRUE of
                    the repository right now (see ``NONE_REASON_RULES``).  An unexplained absence is
                    the defect this row exists to remove, so a bare ``none`` or an invented reason is
@@ -27,6 +31,15 @@ construction and ``missing`` counts rows that say nothing:
 
 Refusal codes (``audit error (<code>)`` on stderr, exit 2 — the same error contract the ``auger
 spec`` verbs use): ``board-missing``, ``board-malformed``, ``history-missing``, ``no-complete-rows``.
+
+AUG-205 writer-side drift (2026-11-23).  ``boardctl`` in the coding-hermes-tools repo writes a
+complete flip's ``--evidence-run-id`` ONLY into ``detail.evidence[]`` and never into the row's
+top-level ``evidence_run_id`` field, which this audit's test contract used to refuse outright — every
+future boardctl-written closeout was unlandable through a guarded commit.  The in-repo acceptance of
+a ``detail.evidence[]``-only binding is a TEMPORARY READER TOLERANCE, not the fix: the root cause is
+writer-side and belongs in coding-hermes-tools (boardctl must write the top-level
+``evidence_run_id`` alongside the detail entry).  Foreign citations and unexplained absences stay
+refused/missing exactly as before.
 
 Usage:
     python3 scripts/audit_board_evidence.py --board .coding-hermes/board/tasks.jsonl
@@ -337,6 +350,18 @@ def classify(
             result.passed = verdict.passed
         return result
 
+    # AUG-205 reader tolerance: `boardctl` (coding-hermes-tools repo) writes a complete row's
+    # --evidence-run-id binding ONLY into detail.evidence[].run_id, never into the top-level
+    # field. Treat such a structured citation as first-class when it resolves to the row's own
+    # task. Foreign citations (prose or detail labels) still refuse below, and a row with no
+    # resolvable citation at all stays missing: fail-closed on absence is kept.
+    labels = {value for _, value in evidence_labels(row)}
+    if own_tokens & labels:
+        run_id = pick_run(own_tokens & labels, verdicts)
+        result.state = BOUND
+        result.run_id = run_id
+        result.passed = verdicts[run_id].passed
+        return result
     # Legacy row: no machine field, so judge it by the run ids its own text cites. This keeps the
     # pre-fix board measurable (the 35/6/160 falsifier) instead of scoring every row as silent.
     if own_tokens:

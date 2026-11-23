@@ -25,6 +25,12 @@ belonging to a different row, 160 named nothing, and one row wore the fabricated
 
 The live tests read the TRACKED board and the TRACKED ``.gitreins/history`` artifacts, so they are
 deterministic from a clean checkout — no substrate, no network, no gitreins binary.
+
+AUG-205 (2026-11-23): ``boardctl`` closes rows by writing the run binding ONLY into
+``detail.evidence[]``; ``test_every_bound_row_resolves_to_its_own_task`` accepts that shape when
+every resolvable run id under it belongs to the row's own task — foreign citations, unexplained
+absences and unbounded rows still fail, here and on the live board. The writer-side root cause
+lives in the coding-hermes-tools repo.
 """
 
 from __future__ import annotations
@@ -335,31 +341,167 @@ def test_the_committed_board_audits_clean() -> None:
     assert "RESULT: OK" in result.stdout
 
 
-def test_every_bound_row_resolves_to_its_own_task() -> None:
-    """Re-resolve every field binding by hand: the audit's verdict must not be self-certifying."""
-    index = verdict_index()
-    checked = 0
-    for line in BOARD.read_text(encoding="utf-8").splitlines():
+def binding_defects(board: Path, history: Path) -> list[str]:
+    """Hand re-resolution of every complete row's closure binding.
+
+    This is the same on-disk read the audit script gets, re-derived row by row so the audit
+    cannot certify itself. A row is bound when EITHER
+
+      (a) its top-level ``evidence_run_id`` names a run whose ``verdict.json`` belongs to the
+          row's own task (``none:``-typed values are sanctioned absences, skipped), OR
+      (b) AUG-205 reader tolerance: the top-level key is absent and every resolvable run id
+          under ``detail.evidence[]`` belongs to the row's own task — exactly what
+          ``boardctl update --status complete --evidence-run-id <run>`` writes.
+
+    Foreign citations stay strict: a resolvable run id from ANOTHER task is a defect no matter
+    which surface cites it. A row with NEITHER binding is a defect (fail-closed kept).
+    """
+    index: dict[str, dict] = {}
+    for path in sorted(history.glob("*/*/verdict.json")):
+        index[path.parent.name] = json.loads(path.read_text(encoding="utf-8"))
+    defects: list[str] = []
+    for line in board.read_text(encoding="utf-8").splitlines():
         if not line.strip():
             continue
         board_row = json.loads(line)
         if board_row.get("status") != "complete":
             continue
+        row_id = board_row["id"]
         value = board_row.get("evidence_run_id")
-        assert isinstance(value, str) and value.strip(), (
-            f"complete row {board_row['id']} carries no machine-resolvable evidence_run_id"
-        )
-        if value.startswith("none:"):
+        if isinstance(value, str) and value.strip():
+            if value.startswith("none:"):
+                continue
+            verdict = index.get(value)
+            if verdict is None:
+                defects.append(f"{row_id} cites run {value} with no verdict artifact")
+            elif verdict.get("task_id") != row_id:
+                defects.append(
+                    f"{row_id} cites verdict {value} for task {verdict.get('task_id')}"
+                )
             continue
-        assert value in index, (
-            f"{board_row['id']} cites run {value} with no verdict artifact"
-        )
-        verdict = json.loads((index[value]["path"]).read_text(encoding="utf-8"))
-        assert verdict.get("task_id") == board_row["id"], (
-            f"{board_row['id']} cites verdict {value} for task {verdict.get('task_id')}"
-        )
-        checked += 1
-    assert checked > 0, "no row binds to a verdict artifact — the backfill did not land"
+        detail = board_row.get("detail")
+        entries = detail.get("evidence") if isinstance(detail, dict) else None
+        row_defects: list[str] = []
+        has_own_run = False
+        for entry in entries or []:
+            if not isinstance(entry, dict):
+                continue
+            run_id = entry.get("run_id")
+            if not isinstance(run_id, str) or run_id.startswith("none:"):
+                continue  # an explicit absence is a sanctioned annotation, not a cited run
+            verdict = index.get(run_id)
+            if verdict is None:
+                continue  # an unresolvable label is the fabricated-label test's scope
+            if verdict.get("task_id") == row_id:
+                has_own_run = True
+            else:
+                row_defects.append(
+                    f"{row_id} cites verdict {run_id} for task {verdict.get('task_id')} "
+                    "via detail.evidence[]"
+                )
+        if not has_own_run:
+            row_defects.insert(
+                0,
+                f"complete row {row_id} carries neither a top-level evidence_run_id nor a "
+                "resolvable detail.evidence[] binding",
+            )
+        defects.extend(row_defects)
+    return defects
+
+
+def test_every_bound_row_resolves_to_its_own_task(tmp_path: Path) -> None:
+    """Re-resolve every binding by hand: the audit's verdict must not be self-certifying.
+
+    AUG-205 arms: ``boardctl update --status complete --evidence-run-id <run>`` writes the
+    binding ONLY into ``detail.evidence[]``; the fixture below is exactly that shape.
+    """
+    # Fixture (AC1/AC2 shape): a complete row bound only through detail.evidence[], resolved
+    # against the fixture's own verdict dir — the tool path the AUG-200 flip measured.
+    board, history = write_fixture(
+        tmp_path,
+        [
+            row(
+                "AUG-001",
+                detail={
+                    "evidence": [{"run_id": "069cc1b9", "ts": "2026-11-23T04:30:25Z"}]
+                },
+            )
+        ],
+        {("2026-11-23", "069cc1b9"): {"task_id": "AUG-001", "passed": True}},
+    )
+    defects = binding_defects(board, history)
+    assert not defects, defects
+    result = run_audit(board)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert canonical_line(result.stdout) == (
+        "complete_rows=1 bound=1 unresolvable=0 missing=0"
+    ), result.stdout
+    assert "RESULT: OK" in result.stdout
+
+    # AC4 (fail-closed kept): detail.evidence[] carrying ONLY an explicit ``none:``-typed
+    # absence is NOT a citation — the row still has no resolvable binding and must fail.
+    nb_board, _ = write_fixture(
+        tmp_path / "no-binding",
+        [
+            row(
+                "AUG-002",
+                detail={"evidence": [{"run_id": "none:environment-only"}]},
+            )
+        ],
+        {},
+    )
+    nb_defects = binding_defects(
+        nb_board, tmp_path / "no-binding" / ".gitreins" / "history"
+    )
+    assert nb_defects and nb_defects[0].startswith(
+        "complete row AUG-002 carries neither a top-level evidence_run_id nor a resolvable "
+        "detail.evidence[] binding"
+    ), nb_defects
+    nb_result = run_audit(nb_board)
+    assert nb_result.returncode == 1, nb_result.stdout + nb_result.stderr
+    assert "MISSING AUG-002" in nb_result.stdout, nb_result.stdout
+
+    # Foreign strictness: a detail.evidence[] run id resolving to ANOTHER task is refused just
+    # like a foreign top-level citation would be (QA-AUGER-13's rule, unchanged).
+    foreign_board, _ = write_fixture(
+        tmp_path / "foreign",
+        [
+            row(
+                "AUG-003",
+                detail={
+                    "evidence": [{"run_id": "cccccccc", "ts": "2026-09-22T00:00:00Z"}]
+                },
+            )
+        ],
+        {("2026-09-22", "cccccccc"): {"task_id": "AUG-999", "passed": True}},
+    )
+    foreign_defects = binding_defects(
+        foreign_board, tmp_path / "foreign" / ".gitreins" / "history"
+    )
+    assert any(
+        "for task AUG-999 via detail.evidence[]" in d for d in foreign_defects
+    ), foreign_defects
+    foreign_result = run_audit(foreign_board)
+    assert foreign_result.returncode == 1, foreign_result.stdout + foreign_result.stderr
+    assert "UNRESOLVABLE AUG-003 foreign-citation" in foreign_result.stdout, (
+        foreign_result.stdout
+    )
+    assert (
+        "detail.evidence[].run_id=cccccccc resolves to task AUG-999"
+        in foreign_result.stdout
+    ), foreign_result.stdout
+
+    # Live arm: the same hand re-resolution over the TRACKED board (the audit cannot
+    # self-certify), counting every complete row by hand.
+    checked = sum(
+        1
+        for line in BOARD.read_text(encoding="utf-8").splitlines()
+        if line.strip() and json.loads(line).get("status") == "complete"
+    )
+    assert checked > 0, "no complete rows on the board — the backfill did not land"
+    assert not binding_defects(BOARD, HISTORY), (
+        "the tracked board carries unresolvable bindings"
+    )
 
 
 def test_no_complete_row_carries_a_fabricated_label() -> None:
