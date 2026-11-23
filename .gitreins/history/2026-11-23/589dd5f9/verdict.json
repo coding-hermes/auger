@@ -1,0 +1,559 @@
+{
+  "task_id": "AUG-205",
+  "task_title": "boardctl --evidence-run-id binds only detail.evidence[]; tests/test_board_evidence_audit.py strict row audit demands a top-level evidence_run_id, so boardctl-written complete flips fail the audit and cannot land through a guarded commit",
+  "task_criteria": [
+    "AC1 REPRODUCE: a fixture board with a complete row carrying ONLY a resolvable detail.evidence[] binding (no top-level key) makes tests/test_board_evidence_audit.py::test_every_bound_row_resolves_to_its_own_task fail. FAILIF: it passes. AC2 FIX LIVE: after the chosen fix, a complete flip written through the normal tool path (boardctl update --status complete --evidence-run-id 069cc1b9) passes the FULL audit file (all 17 tests) with no hand-patch - proven on the real board or an equivalent fixture, output quoted. AC3 OTHER SEAM RECORDED: if the in-repo audit is relaxed, a note names the boardctl"
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "898f07802a06ec60a034aa62d02fe510ce4ad3a5",
+  "pass_class": "degraded",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "b32b705992c09d7337ab2b86868ece6eb7aa0ac152cb08851250b1a8e7f40e61",
+  "working_tree_dirty_path_count": 1563,
+  "items": [
+    {
+      "criterion": "AC1 REPRODUCE: a fixture board with a complete row carrying ONLY a resolvable detail.evidence[] binding (no top-level key) makes tests/test_board_evidence_audit.py::test_every_bound_row_resolves_to_its_own_task fail. FAILIF: it passes. AC2 FIX LIVE: after the chosen fix, a complete flip written through the normal tool path (boardctl update --status complete --evidence-run-id 069cc1b9) passes the FULL audit file (all 17 tests) with no hand-patch - proven on the real board or an equivalent fixture, output quoted. AC3 OTHER SEAM RECORDED: if the in-repo audit is relaxed, a note names the boardctl",
+      "status": "PASS",
+      "detail": "AC1 RED: pre-fix modules extracted from 9aeb09f^ (fix commit is 9aeb09f); a boardctl-shape fixture (complete row, binding ONLY detail.evidence[].run_id=069cc1b9 resolving to its own task, no top-level key) run through the pre-fix test module failed with the exact expected assertion: `AssertionError: complete row AUG-001 carries no machine-resolvable evidence_run_id` \u2014 `1 failed in 0.02s` (identical to the failure quoted in commit 9aeb09f's message; note the pre-fix audit SCRIPT itself scored the row bound via legacy prose with RESULT OK, so the strict TEST was the refusing seam, matching the task title). AC2 GREEN: measured the real tool path first \u2014 real boardctl (/home/kara/.local/bin/boardctl) on a clone of the tracked board at /tmp/aug205/live2: `boardctl -C .coding-hermes/board update AUG-200 --status complete --evidence-run-id 069cc1b9 --completed-at 2026-11-23T17:00:00Z` exited 0 and wrote TOP-LEVEL evidence_run_id: None, detail.evidence[]: [{\"run_id\": \"069cc1b9\", ...}] (AUG-200 reset to pre-flip pending as fixture prep only; no evidence fields hand-patched). Then ran the FULL audit file against that fixture with the real tree present: `17 passed in 1.10s`; quoted audit output: `complete_rows=269 bound=123 unresolvable=0 missing=0 / bound_legacy_citation=0 label_defects=0 / RESULT: OK` (exit 0). The real tracked repo is also green: `17 passed in 1.33s` (no skips \u2014 tests/conftest.py pytest_collection_modifyitems skips only live_service-fixture tests and this file has none; 17 dots, no S) and the direct audit of the tracked board prints `RESULT: OK` exit 0. AC3: scripts/audit_board_evidence.py docstring (lines ~35-43) records 'AUG-205 writer-side drift (2026-11-23). boardctl in the coding-hermes-tools repo writes a complete flip's --evidence-run-id ONLY into detail.evidence[] ... TEMPORARY READER TOLERANCE, not the fix: the root cause is writer-side and belongs in coding-hermes-tools (boardctl must write the top-level evidence_run_id alongside the detail entry)'; the same naming lives at tests/test_board_evidence_audit.py:29-33 and classify() comments at scripts/audit_board_evidence.py:353-356."
+    },
+    {
+      "criterion": "The fix reaches the guarded-commit entrypoint: the audit file is wired into the guard that gates board commits and passes there",
+      "status": "PASS",
+      "detail": "tests/gate.sh:257 pytest arm names tests/test_board_evidence_audit.py, and test_gate_arm_runs_this_file (passed in both 17/17 runs) asserts the arm exists and every named file is present \u2014 so the relaxed audit is what a guarded commit actually executes. The board-side guard scripts carry no competing evidence check: grep for evidence_run_id in scripts/board_shrink_check.py and scripts/install_board_guard.py returns nothing, so the audit file IS the landing guard.",
+      "derived": true
+    },
+    {
+      "criterion": "The reader tolerance is scoped to the structured boardctl surface (detail.evidence[].run_id), not a blanket citation amnesty, and foreign/none strictness survives",
+      "status": "PASS",
+      "detail": "classify() (scripts/audit_board_evidence.py:353-357) binds only via evidence_labels(row) = detail.evidence[].run_id entries (lines 196-208) intersected with own_tokens; the prose legacy path stays separate and bound_legacy_citation=0 on both the fixture and tracked board proves detail-bound rows are first-class, not prose-scraped. Foreign strictness measured live: an exploratory flip of run 069cc1b9 (owned by AUG-200) onto row AUG-205 produced `UNRESOLVABLE AUG-205 foreign-citation: cites only verdicts for other tasks: 069cc1b9->AUG-200` plus `LABEL AUG-205 detail.evidence[].run_id=069cc1b9 resolves to task AUG-200` with RESULT: FAIL; the post-fix test file keeps the fail-closed arm (detail.evidence[] with only a none: absence \u2192 MISSING, asserted in test_every_bound_row_resolves_to_its_own_task).",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "needs_review",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": false,
+      "any_failed": true,
+      "summary": "  \u2717 tests: scanners: nice=nice -n 10\n  \u2717 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check",
+      "steps": [
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": false,
+          "output": "scanners: nice=nice -n 10\ngate pytest interpreter: /home/kara/auger/.venv/bin/python\nERROR: DuckBrain URL missing \u2014 set DUCKBRAIN_URL before running the live gate (or use AUGER_CI=1 on hosted CI).\n",
+          "error": "",
+          "data": {
+            "exit_code": 2
+          }
+        },
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": false,
+          "output": "scanners: nice=nice -n 10\nI001 [*] Import block is un-sorted or un-formatted\n  --> auger.py:44:1\n   |\n42 |   \"\"\"\n43 |\n44 | / from __future__ import annotations\n45 | |\n46 | | import argparse\n47 | | import contextlib\n48 | | import copy\n49 | | import hashlib\n50 | | import html\n51 | | import importlib\n52 | | import io\n53 | | import json\n54 | | import math\n55 | | import os\n56 | | import re\n57 | | import shlex\n58 | | import sqlite3\n59 | | import shutil\n60 | | import subprocess\n61 | | import sys\n62 | | import sysconfig\n63 | | import tarfile\n64 | | import tempfile\n65 | | import time\n66 | | import urllib.error\n67 | | import urllib.request\n68 | | import xml.etree.ElementTree as ET\n69 | | from collections import Counter, deque\n70 | | from functools import lru_cache\n71 | | from datetime import datetime, timezone\n72 | | from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n73 | | from pathlib import Path\n74 | | from urllib.parse import parse_qs, quote, unquote, urlsplit\n   | |___________________________________________________________^\n75 |\n76 |   AUGER_VERSION = \"0.3\"\n   |\nhelp: Organize imports\n   |\n57 | import shlex\n58 + import shutil\n59 | import sqlite3\n   - import shutil\n60 | import subprocess\n--------------------------------------------------------------------------------\n69 | from collections import Counter, deque\n70 + from datetime import datetime, timezone\n71 | from functools import lru_cache\n   - from datetime import datetime, timezone\n72 | from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n   |\n\nUP017 [*] Use `datetime.UTC` alias\n    --> auger.py:1204:36\n     |\n1202 |         \"source\": source,\n1203 |         \"note\": note,\n1204 |         \"created_at\": datetime.now(timezone.utc).isoformat(),\n     |                                    ^^^^^^^^^^^^\n1205 |     }\n1206 |     for key, val in ((\"src_project\", src_project), (\"dst_project\", dst_project)):\n     |\nhelp: Convert to `datetime.UTC` alias\n     |\n70   | from functools import lru_cache\n     - from datetime import datetime, timezone\n71   + from datetime import datetime, timezone, UTC\n72   | from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n--------------------------------------------------------------------------------\n1203 |         \"note\": note,\n\n\u2026 [152260 chars omitted \u2014 4064 line(s)] \u2026\n1512 |     )\n     |\n\nRUF100 [*] Unused `noqa` directive (non-enabled: `E402`)\n  --> tests/test_xml_task_contract.py:55:15\n   |\n53 |     sys.path.insert(0, str(REPO_ROOT))\n54 |\n55 | import auger  # noqa: E402  (needs REPO_ROOT on sys.path first)\n   |               ^^^^^^^^^^^^\n56 |\n57 | GATE = REPO_ROOT / \"tests\" / \"gate.sh\"\n   |\nhelp: Remove unused `noqa` directive\n   |\n54 |\n   - import auger  # noqa: E402  (needs REPO_ROOT on sys.path first)\n55 + import auger\n56 |\n   |\n\nRUF059 Unpacked variable `out` is never used\n   --> tests/test_xml_task_contract.py:660:11\n    |\n658 |     wrapper.chmod(0o755)\n659 |\n660 |     code, out, err = export(\n    |           ^^^\n661 |         root, board, \"--plan-digest\", payload[\"digest\"], \"--boardctl\", str(wrapper)\n662 |     )\n    |\nhelp: Prefix it with an underscore or any other dummy variable pattern\n    |\n659 |\n    -     code, out, err = export(\n660 +     code, _out, err = export(\n661 |         root, board, \"--plan-digest\", payload[\"digest\"], \"--boardctl\", str(wrapper)\n    |\nnote: This is an unsafe fix and may change runtime behavior\n\nRUF100 [*] Unused `noqa` directive (non-enabled: `E402`)\n  --> tests/test_xsd_conformance.py:54:15\n   |\n52 |     sys.path.insert(0, str(REPO_ROOT))\n53 |\n54 | import auger  # noqa: E402  (needs REPO_ROOT on sys.path first)\n   |               ^^^^^^^^^^^^\n55 |\n56 | FIXTURES = REPO_ROOT / \"tests\" / \"fixtures\" / \"xml\"\n   |\nhelp: Remove unused `noqa` directive\n   |\n53 |\n   - import auger  # noqa: E402  (needs REPO_ROOT on sys.path first)\n54 + import auger\n55 |\n   |\n\n",
+          "error": "",
+          "data": {
+            "exit_code": 1
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nsecrets: gitleaks bound=timeout 600s (0=off)\nscanners: nice=nice -n 10\nsecrets: gitleaks scope=repo-root /home/kara/auger\nsecrets: gitleaks parallelism=GOMAXPROCS=4\n11:22AM INF scanned ~8578261 bytes (8.58 MB) in 3.71s\n11:22AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 1074 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 AC1 REPRODUCE: a fixture board with a complete row carrying ONLY a resolvable detail.evidence[] binding (no top-level key) makes tests/test_board_evidence_audit.py::test_every_bound_row_resolves_to_its_own_task fail. FAILIF: it passes. AC2 FIX LIVE: after the chosen fix, a complete flip written through the normal tool path (boardctl update --status complete --evidence-run-id 069cc1b9) passes the FULL audit file (all 17 tests) with no hand-patch - proven on the real board or an equivalent fixture, output quoted. AC3 OTHER SEAM RECORDED: if the in-repo audit is relaxed, a note names the boardctl: AC1 RED: pre-fix modules extracted from 9aeb09f^ (fix commit is 9aeb09f); a boardctl-shape fixture (complete row, binding ONLY detail.evidence[].run_id=069cc1b9 resolving to its own task, no top-level key) run through the pre-fix test module failed with the exact expected assertion: `AssertionError: complete row AUG-001 carries no machine-resolvable evidence_run_id` \u2014 `1 failed in 0.02s` (identical to the failure quoted in commit 9aeb09f's message; note the pre-fix audit SCRIPT itself scored the row bound via legacy prose with RESULT OK, so the strict TEST was the refusing seam, matching the task title). AC2 GREEN: measured the real tool path first \u2014 real boardctl (/home/kara/.local/bin/boardctl) on a clone of the tracked board at /tmp/aug205/live2: `boardctl -C .coding-hermes/board update AUG-200 --status complete --evidence-run-id 069cc1b9 --completed-at 2026-11-23T17:00:00Z` exited 0 and wrote TOP-LEVEL evidence_run_id: None, detail.evidence[]: [{\"run_id\": \"069cc1b9\", ...}] (AUG-200 reset to pre-flip pending as fixture prep only; no evidence fields hand-patched). Then ran the FULL audit file against that fixture with the real tree present: `17 passed in 1.10s`; quoted audit output: `complete_rows=269 bound=123 unresolvable=0 missing=0 / bound_legacy_citation=0 label_defects=0 / RESULT: OK` (exit 0). The real tracked repo is also green: `17 passed in 1.33s` (no skips \u2014 tests/conftest.py pytest_collection_modifyitems skips only live_service-fixture tests and this file has none; 17 dots, no S) and the direct audit of the tracked board prints `RESULT: OK` exit 0. AC3: scripts/audit_board_evidence.py docstring (lines ~35-43) records 'AUG-205 writer-side drift (2026-11-23). boardctl in the coding-hermes-tools repo writes a complete flip's --evidence-run-id ONLY into detail.evidence[] ... TEMPORARY READER TOLERANCE, not the fix: the root cause is writer-side and belongs in coding-hermes-tools (boardctl must write the top-level evidence_run_id alongside the detail entry)'; the same naming lives at tests/test_board_evidence_audit.py:29-33 and classify() comments at scripts/audit_board_evidence.py:353-356.\n  \u2713 The fix reaches the guarded-commit entrypoint: the audit file is wired into the guard that gates board commits and passes there: tests/gate.sh:257 pytest arm names tests/test_board_evidence_audit.py, and test_gate_arm_runs_this_file (passed in both 17/17 runs) asserts the arm exists and every named file is present \u2014 so the relaxed audit is what a guarded commit actually executes. The board-side guard scripts carry no competing evidence check: grep for evidence_run_id in scripts/board_shrink_check.py and scripts/install_board_guard.py returns nothing, so the audit file IS the landing guard.\n  \u2713 The reader tolerance is scoped to the structured boardctl surface (detail.evidence[].run_id), not a blanket citation amnesty, and foreign/none strictness survives: classify() (scripts/audit_board_evidence.py:353-357) binds only via evidence_labels(row) = detail.evidence[].run_id entries (lines 196-208) intersected with own_tokens; the prose legacy path stays separate and bound_legacy_citation=0 on both the fixture and tracked board proves detail-bound rows are first-class, not prose-scraped. Foreign strictness measured live: an exploratory flip of run 069cc1b9 (owned by AUG-200) onto row AUG-205 produced `UNRESOLVABLE AUG-205 foreign-citation: cites only verdicts for other tasks: 069cc1b9->AUG-200` plus `LABEL AUG-205 detail.evidence[].run_id=069cc1b9 resolves to task AUG-200` with RESULT: FAIL; the post-fix test file keeps the fail-closed arm (detail.evidence[] with only a none: absence \u2192 MISSING, asserted in test_every_bound_row_resolves_to_its_own_task).\nAC1 reproduced red (pre-fix strict test fails on the boardctl-shape fixture with the exact quoted assertion), AC2 proven green through a real boardctl flip on a real-clone fixture \u2014 full audit file 17/17 passed with the quoted RESULT: OK and no hand-patch \u2014 and AC3's writer-side note naming coding-hermes-tools boardctl is recorded in the audit script and test docstrings.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n\n\u2026 [3344 chars omitted \u2014 2 line(s)] \u2026\n  \u2713 The reader tolerance is scoped to the structured boardctl surface (detail.evidence[].run_id), not a blanket citation amnesty, and foreign/none strictness survives: classify() (scripts/audit_board_evidence.py:353-357) binds only via evidence_labels(row) = detail.evidence[].run_id entries (lines 196-208) intersected with own_tokens; the prose legacy path stays separate and bound_legacy_citation=0 on both the fixture and tracked board proves detail-bound rows are first-class, not prose-scraped. Foreign strictness measured live: an exploratory flip of run 069cc1b9 (owned by AUG-200) onto row AUG-205 produced `UNRESOLVABLE AUG-205 foreign-citation: cites only verdicts for other tasks: 069cc1b9->AUG-200` plus `LABEL AUG-205 detail.evidence[].run_id=069cc1b9 resolves to task AUG-200` with RESULT: FAIL; the post-fix test file keeps the fail-closed arm (detail.evidence[] with only a none: absence \u2192 MISSING, asserted in test_every_bound_row_resolves_to_its_own_task).\nAC1 reproduced red (pre-fix strict test fails on the boardctl-shape fixture with the exact quoted assertion), AC2 proven green through a real boardctl flip on a real-clone fixture \u2014 full audit file 17/17 passed with the quoted RESULT: OK and no hand-patch \u2014 and AC3's writer-side note naming coding-hermes-tools boardctl is recorded in the audit script and test docstrings.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "AC1 REPRODUCE: a fixture board with a complete row carrying ONLY a resolvable detail.evidence[] binding (no top-level key) makes tests/test_board_evidence_audit.py::test_every_bound_row_resolves_to_its_own_task fail. FAILIF: it passes. AC2 FIX LIVE: after the chosen fix, a complete flip written through the normal tool path (boardctl update --status complete --evidence-run-id 069cc1b9) passes the FULL audit file (all 17 tests) with no hand-patch - proven on the real board or an equivalent fixture, output quoted. AC3 OTHER SEAM RECORDED: if the in-repo audit is relaxed, a note names the boardctl",
+                "status": "PASS",
+                "detail": "AC1 RED: pre-fix modules extracted from 9aeb09f^ (fix commit is 9aeb09f); a boardctl-shape fixture (complete row, binding ONLY detail.evidence[].run_id=069cc1b9 resolving to its own task, no top-level key) run through the pre-fix test module failed with the exact expected assertion: `AssertionError: complete row AUG-001 carries no machine-resolvable evidence_run_id` \u2014 `1 failed in 0.02s` (identical to the failure quoted in commit 9aeb09f's message; note the pre-fix audit SCRIPT itself scored the row bound via legacy prose with RESULT OK, so the strict TEST was the refusing seam, matching the task title). AC2 GREEN: measured the real tool path first \u2014 real boardctl (/home/kara/.local/bin/boardctl) on a clone of the tracked board at /tmp/aug205/live2: `boardctl -C .coding-hermes/board update AUG-200 --status complete --evidence-run-id 069cc1b9 --completed-at 2026-11-23T17:00:00Z` exited 0 and wrote TOP-LEVEL evidence_run_id: None, detail.evidence[]: [{\"run_id\": \"069cc1b9\", ...}] (AUG-200 reset to pre-flip pending as fixture prep only; no evidence fields hand-patched). Then ran the FULL audit file against that fixture with the real tree present: `17 passed in 1.10s`; quoted audit output: `complete_rows=269 bound=123 unresolvable=0 missing=0 / bound_legacy_citation=0 label_defects=0 / RESULT: OK` (exit 0). The real tracked repo is also green: `17 passed in 1.33s` (no skips \u2014 tests/conftest.py pytest_collection_modifyitems skips only live_service-fixture tests and this file has none; 17 dots, no S) and the direct audit of the tracked board prints `RESULT: OK` exit 0. AC3: scripts/audit_board_evidence.py docstring (lines ~35-43) records 'AUG-205 writer-side drift (2026-11-23). boardctl in the coding-hermes-tools repo writes a complete flip's --evidence-run-id ONLY into detail.evidence[] ... TEMPORARY READER TOLERANCE, not the fix: the root cause is writer-side and belongs in coding-hermes-tools (boardctl must write the top-level evidence_run_id alongside the detail entry)'; the same naming lives at tests/test_board_evidence_audit.py:29-33 and classify() comments at scripts/audit_board_evidence.py:353-356."
+              },
+              {
+                "criterion": "The fix reaches the guarded-commit entrypoint: the audit file is wired into the guard that gates board commits and passes there",
+                "status": "PASS",
+                "detail": "tests/gate.sh:257 pytest arm names tests/test_board_evidence_audit.py, and test_gate_arm_runs_this_file (passed in both 17/17 runs) asserts the arm exists and every named file is present \u2014 so the relaxed audit is what a guarded commit actually executes. The board-side guard scripts carry no competing evidence check: grep for evidence_run_id in scripts/board_shrink_check.py and scripts/install_board_guard.py returns nothing, so the audit file IS the landing guard.",
+                "derived": true
+              },
+              {
+                "criterion": "The reader tolerance is scoped to the structured boardctl surface (detail.evidence[].run_id), not a blanket citation amnesty, and foreign/none strictness survives",
+                "status": "PASS",
+                "detail": "classify() (scripts/audit_board_evidence.py:353-357) binds only via evidence_labels(row) = detail.evidence[].run_id entries (lines 196-208) intersected with own_tokens; the prose legacy path stays separate and bound_legacy_citation=0 on both the fixture and tracked board proves detail-bound rows are first-class, not prose-scraped. Foreign strictness measured live: an exploratory flip of run 069cc1b9 (owned by AUG-200) onto row AUG-205 produced `UNRESOLVABLE AUG-205 foreign-citation: cites only verdicts for other tasks: 069cc1b9->AUG-200` plus `LABEL AUG-205 detail.evidence[].run_id=069cc1b9 resolves to task AUG-200` with RESULT: FAIL; the post-fix test file keeps the fail-closed arm (detail.evidence[] with only a none: absence \u2192 MISSING, asserted in test_every_bound_row_resolves_to_its_own_task).",
+                "derived": true
+              }
+            ],
+            "summary": "AC1 reproduced red (pre-fix strict test fails on the boardctl-shape fixture with the exact quoted assertion), AC2 proven green through a real boardctl flip on a real-clone fixture \u2014 full audit file 17/17 passed with the quoted RESULT: OK and no hand-patch \u2014 and AC3's writer-side note naming coding-hermes-tools boardctl is recorded in the audit script and test docstrings.",
+            "provenance": {
+              "model": "glm-5.3-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            },
+            "context_stats": {
+              "diff_source": "working-tree",
+              "diff_bytes": 0,
+              "prompt_bytes": 6822
+            }
+          }
+        }
+      ],
+      "model": "glm-5.3-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "context_stats": {
+        "diff_source": "working-tree",
+        "diff_bytes": 0,
+        "prompt_bytes": 6822
+      },
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-205\"}",
+          "exit_code": 0,
+          "output_sha": "c3f0786186a100119d26b6f17ccb24bf4e441830ad6c1538218224af3d246600"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git log --oneline -8 && git status --short | head -20 && ls tests/ | head -60",
+          "exit_code": 0,
+          "output_sha": "31eeea2ca59bb7e4abe8cb84840e10a554859205bcd914cc9b113ca1bfec3bee"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"tests/test_board_evidence_audit.py\"}",
+          "exit_code": 0,
+          "output_sha": "5aeb4be0cf319ad02aa68b8ad9fc4acc1310b4eaac2671cc991cc0131fc85054"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"offset\": 400, \"path\": \"tests/test_board_evidence_audit.py\"}",
+          "exit_code": 0,
+          "output_sha": "ddfbe801f72aaaeee2da6ed05c8e31235a8b3005b4c0df4fb02b5f989ead7937"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && wc -l scripts/audit_board_evidence.py && grep -rn \"boardctl\" --include=\"*.py\" -l . | head -20 && grep -rn \"evidence-run-id\\|evidence_run_id\" --include=\"*.py\" -l . | head -20",
+          "exit_code": 0,
+          "output_sha": "03fbe27d054bd405245ab83c62471de9559538fe1e5348138a200d01ba971bd9"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show --stat 9aeb09f && echo ---- && git show 9aeb09f | head -250",
+          "exit_code": 0,
+          "output_sha": "dd3db102564830a40fa00df68e3695aba075659753adb4cc91fc15b12182e8b9"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -rn \"boardctl\" auger.py | head -30 && echo ------- && grep -rn \"coding-hermes-tools\\|boardctl\" scripts/audit_board_evidence.py | head -20",
+          "exit_code": 0,
+          "output_sha": "3b928bfb089e3eea573ea97edbe570567b4be36a250363cbed3ccc31326d8bc0"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 120, \"offset\": 1, \"path\": \"scripts/audit_board_evidence.py\"}",
+          "exit_code": 0,
+          "output_sha": "8acf6c002357605f3d145f4cff4678ecdd4839ae420dc6dad07bedbd9d8c2feb"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && sed -n '300,480p' scripts/audit_board_evidence.py",
+          "exit_code": 0,
+          "output_sha": "92b0fcc6927fc3f582e12a53fb5bf2733596b60863fb279ef84f16ff732fbb84"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && sed -n '344,404p' scripts/audit_board_evidence.py",
+          "exit_code": 0,
+          "output_sha": "65a3497a6bf4e228d9997c56f17dc43d6c34edcaaf8d757444810da91af2b3e1"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && cat tests/gate.sh | grep -n \"pytest\\|test_board_evidence\" | head",
+          "exit_code": 0,
+          "output_sha": "180ae7bda18a410ad90cc2f24df20f95388fa5730cdecd0335fb7d625382e296"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"pytest\" tests/gate.sh | head -10",
+          "exit_code": 0,
+          "output_sha": "632f40c92d9773a5332a7e81b53e709f48f7615888ebef633cf2daeaabaad643"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"python3 -m pytest\" tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "3002f2a6909ff47fbc0a04a0496c3eee232affa94686358defa50a6d104a7cfa"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show 9aeb09f^:tests/test_board_evidence_audit.py > /tmp/prefix_test.py && wc -l /tmp/prefix_test.py && grep -n \"def binding\\|def test_every_bound\\|machine-resolvable\\|evidence_run_id\" /tmp/prefix_test.py | head -30",
+          "exit_code": 0,
+          "output_sha": "5f0d9f74ee94a9f9073c36a158f8f3d8c6c1243b24278744a1a80d7610117c1f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && which boardctl; echo \"boardctl exit: $?\"; ls .gitreins/history/2026-11-23/ 2>/dev/null | head; grep -c \"\" .coding-hermes/board/tasks.jsonl",
+          "exit_code": 0,
+          "output_sha": "4bcdcf7168d09418e69d2d56afe9f8fcc63cf6e9125e585d8771500b1d6adc53"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && cat .gitreins/history/2026-11-23/069cc1b9/verdict.json | head -c 600; echo; grep -o '\"id\": *\"[^\"]*\"' .coding-hermes/board/tasks.jsonl | sort | uniq -c | sort -rn | head -3; grep -n \"AUG-200\" .coding-hermes/board/tasks.jsonl | head -2 | cut -c1-400",
+          "exit_code": 0,
+          "output_sha": "4c59250acbacb76030f531fac405b156a2214e79b4043ab8510f676713344ffd"
+        },
+        {
+          "tool": "run_command",
+          "command": "boardctl --help 2>&1 | head -40; echo ====; boardctl update --help 2>&1 | head -40",
+          "exit_code": 0,
+          "output_sha": "d4da05cfa4dbaab801dbecd1067baf44a08cb3a9da6e809f022201883c6bfa01"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"[]\\n\\n[\\\"Setup confirmed: repo /home/kara/auger, HEAD=898f078, AUG-205 fix = commit 9aeb09f (scripts/audit_board_evidence.py classify() reader tolerance + tests/test_board_evidence_audit.py binding_defects() rewrite), evidence commit e2c6889 (run 069cc1b9 artifacts). boardctl real binary exists at /home/kara/.local/bin/boardctl with --evidence-run-id on update. Given criterion index 0 = the whole AC1+AC2+AC3 text. Plan: (1) AC1 red-run of pre-fix test module vs pre-fix audit script with the detail.evidence[]-only fixture; (2) AC2 run real `boardctl update --status complete --evidence-run-id 069cc1b9` on a fixture board and pass all 17 tests of the audit file; (3) AC3 check docstrings name the writer-side root cause.\\\", \\\"derived_0\\\", \\\"Plan derived criterion: fix must reach the guarded-commit entrypoint \\u2014 the audit file (all 17 tests incl. test_gate_arm_runs_this_file and the tracked-board arms) must pass, proving no hand-patch was applied to the tracked board for this shape.\\\"]\\n\", \"key\": \"checked\"}",
+          "exit_code": 0,
+          "output_sha": "448262be2353ab4c13bdd522bfbbb6adea80206a77dac283c9d5ab9cdc8dd9d8"
+        },
+        {
+          "tool": "run_command",
+          "command": "mkdir -p /tmp/aug205 && cp tests/test_board_evidence_audit.py scripts/audit_board_evidence.py /tmp/aug205/ && mkdir -p /tmp/aug205/scripts && cp scripts/audit_board_evidence.py /tmp/aug205/scripts/ && cd /tmp/aug205 && python3 - <<'EOF'\nimport sys, json, subprocess\nsys.path.insert(0, '/tmp/aug205')\nimport importlib\nspec = importlib.util.spec_from_file_location(\"prefix_test\", \"/tmp/aug205/prefix_test.py\")\nmod = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(mod)\nimport tempfile\nfrom pathlib import Path\ntmp = Path(tempfile.mkdtemp())\nboard, history = mod.write_fixture(\n    tmp,\n    [mod.row(\"AUG-001\", detail={\"evidence\": [{\"run_id\": \"069cc1b9\", \"ts\": \"2026-11-23T04:30:25Z\"}]})],\n    {(\"2026-11-23\", \"069cc1b9\"): {\"task_id\": \"AUG-001\", \"passed\": True}},\n)\nprint(\"fixture board line:\", board.read_text().strip())\nr = mod.run_audit(board)\nprint(\"PRE-FIX audit returncode:\", r.returncode)\nprint(\"PRE-FIX stdout tail:\")\nprint(\"\\n\".join(r.stdout.splitlines()[-6:]))\nEOF",
+          "exit_code": 1,
+          "output_sha": "7782110670dc0f4fee340d4262a47f7f8c638a19afb43abdba3376db413e18f4"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug205 && python3 - <<'EOF'\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"prefix_test\", \"/tmp/aug205/prefix_test.py\")\nmod = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(mod)\nimport tempfile\nfrom pathlib import Path\ntmp = Path(tempfile.mkdtemp())\nboard, history = mod.write_fixture(\n    tmp,\n    [mod.row(\"AUG-001\", detail={\"evidence\": [{\"run_id\": \"069cc1b9\", \"ts\": \"2026-11-23T04:30:25Z\"}]})],\n    {(\"2026-11-23\", \"069cc1b9\"): {\"task_id\": \"AUG-001\", \"passed\": True}},\n)\nprint(\"fixture board line:\", board.read_text().strip())\nr = mod.run_audit(board)\nprint(\"PRE-FIX audit returncode:\", r.returncode)\nprint(\"PRE-FIX stdout tail:\")\nprint(\"\\n\".join(r.stdout.splitlines()[-6:]))\nEOF",
+          "exit_code": 1,
+          "output_sha": "68357426f0e5c5060b98c071c689cfee10c67a466b73ca66c8c141a2198c86e1"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show 9aeb09f^:tests/test_board_evidence_audit.py > /tmp/aug205/prefix_test.py && ls -la /tmp/aug205/ && sed -n '330,360p' /tmp/aug205/prefix_test.py",
+          "exit_code": 0,
+          "output_sha": "c84a92924a1b1317e8711d43cef2d08568d969d7750e10a5df5e1e7ec9335288"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug205 && python3 - <<'EOF'\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"prefix_test\", \"/tmp/aug205/prefix_test.py\")\nmod = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(mod)\nimport tempfile\nfrom pathlib import Path\ntmp = Path(tempfile.mkdtemp())\nboard, history = mod.write_fixture(\n    tmp,\n    [mod.row(\"AUG-001\", detail={\"evidence\": [{\"run_id\": \"069cc1b9\", \"ts\": \"2026-11-23T04:30:25Z\"}]})],\n    {(\"2026-11-23\", \"069cc1b9\"): {\"task_id\": \"AUG-001\", \"passed\": True}},\n)\nprint(\"fixture board line:\", board.read_text().strip())\nr = mod.run_audit(board)\nprint(\"PRE-FIX audit returncode:\", r.returncode)\nprint(\"PRE-FIX stdout tail:\")\nprint(\"\\n\".join(r.stdout.splitlines()[-6:]))\nEOF",
+          "exit_code": 0,
+          "output_sha": "39edc7c36018712b07693a95c1fd2026aeaa4317d168c9c21fce735e61b66cb2"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug205 && python3 - <<'EOF'\nimport importlib.util\nspec = importlib.util.spec_from_file_location(\"prefix_test\", \"/tmp/aug205/prefix_test.py\")\nmod = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(mod)\nimport tempfile\nfrom pathlib import Path\ntmp = Path(tempfile.mkdtemp())\nboard, history = mod.write_fixture(\n    tmp,\n    [mod.row(\"AUG-001\", detail={\"evidence\": [{\"run_id\": \"069cc1b9\", \"ts\": \"2026-11-23T04:30:25Z\"}]})],\n    {(\"2026-11-23\", \"069cc1b9\"): {\"task_id\": \"AUG-001\", \"passed\": True}},\n)\nr = mod.run_audit(board)\nprint(\"PRE-FIX returncode:\", r.returncode)\nprint(\"PRE-FIX stderr:\", r.stderr.strip())\nprint(\"PRE-FIX stdout:\", r.stdout.strip())\nEOF",
+          "exit_code": 0,
+          "output_sha": "92c015265f78208f3c31233915a9cde3cd65fafb62b58cec45b9c2e3de51cc15"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug205 && python3 - <<'EOF'\nimport importlib.util, sys\nsys.path.insert(0, \"/tmp/aug205\")\nspec = importlib.util.spec_from_file_location(\"prefix_test\", \"/tmp/aug205/prefix_test.py\")\nmod = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(mod)\nmod.SCRIPT = __import__(\"pathlib\").Path(\"/tmp/aug205/scripts/audit_board_evidence.py\")\nimport tempfile\nfrom pathlib import Path\ntmp = Path(tempfile.mkdtemp())\nboard, history = mod.write_fixture(\n    tmp,\n    [mod.row(\"AUG-001\", detail={\"evidence\": [{\"run_id\": \"069cc1b9\", \"ts\": \"2026-11-23T04:30:25Z\"}]})],\n    {(\"2026-11-23\", \"069cc1b9\"): {\"task_id\": \"AUG-001\", \"passed\": True}},\n)\nr = mod.run_audit(board)\nprint(\"PRE-FIX returncode:\", r.returncode)\nprint(\"PRE-FIX stderr:\", r.stderr.strip())\nprint(\"PRE-FIX stdout:\", r.stdout.strip())\nEOF",
+          "exit_code": 0,
+          "output_sha": "d67fa84581d04220ae4f76c4d6bdf1698ade42ffc4749da90865c61d47f76b15"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show 9aeb09f^:scripts/audit_board_evidence.py > /tmp/aug205/scripts/audit_board_evidence.py && git diff --no-index --stat /dev/null /dev/null; diff <(git show 9aeb09f^:scripts/audit_board_evidence.py) scripts/audit_board_evidence.py | head -80",
+          "exit_code": 2,
+          "output_sha": "553b6c75f07fdcc354b81442a4f565b91e07e3412993efb65b5ecfcbaa2ef7dc"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show 9aeb09f^:scripts/audit_board_evidence.py > /tmp/aug205/scripts/audit_board_evidence.py && bash -c 'diff <(git show 9aeb09f^:scripts/audit_board_evidence.py) scripts/audit_board_evidence.py | head -100'",
+          "exit_code": 0,
+          "output_sha": "7f5d6b6534c2205a13bd813c779c908aae082f70a13ff80a5fcacc3c271a2eeb"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug205 && python3 - <<'EOF'\nimport importlib.util, sys\nfrom pathlib import Path\nsys.path.insert(0, \"/tmp/aug205\")\nspec = importlib.util.spec_from_file_location(\"prefix_test\", \"/tmp/aug205/prefix_test.py\")\nmod = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(mod)\nmod.SCRIPT = Path(\"/tmp/aug205/scripts/audit_board_evidence.py\")\nimport tempfile\ntmp = Path(tempfile.mkdtemp())\nboard, history = mod.write_fixture(\n    tmp,\n    [mod.row(\"AUG-001\", detail={\"evidence\": [{\"run_id\": \"069cc1b9\", \"ts\": \"2026-11-23T04:30:25Z\"}]})],\n    {(\"2026-11-23\", \"069cc1b9\"): {\"task_id\": \"AUG-001\", \"passed\": True}},\n)\nr = mod.run_audit(board)\nprint(\"AC1 PRE-FIX returncode:\", r.returncode)\nprint(\"PRE-FIX stdout:\", r.stdout.strip())\n# and the pre-fix per-row hand check asserted a top-level key; simulate it:\nline = board.read_text().splitlines()[0]\nimport json\nrow = json.loads(line)\nvalue = row.get(\"evidence_run_id\")\ntry:\n    assert isinstance(value, str) and value.strip(), f\"complete row {row['id']} carries no machine-resolvable evidence_run_id\"\n    print(\"pre-fix hand check: PASSED (unexpected)\")\nexcept AssertionError as e:\n    print(\"AC1 PRE-FIX hand-check assertion:\", e)\nEOF",
+          "exit_code": 0,
+          "output_sha": "839c6f2e9e0bf69f347d12f4848453a516a32d828955edb0901d61b96c42776c"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show 9aeb09f^:.coding-hermes/board/tasks.jsonl > /tmp/aug205/prefix_board.jsonl && python3 - <<'EOF'\nimport json\nfor name, path in [(\"PRE-FIX\", \"/tmp/aug205/prefix_board.jsonl\"), (\"CURRENT\", \".coding-hermes/board/tasks.jsonl\")]:\n    for line in open(path, encoding=\"utf-8\"):\n        if not line.strip():\n            continue\n        r = json.loads(line)\n        if r.get(\"id\") in (\"AUG-200\", \"AUG-205\"):\n            print(name, r[\"id\"], \"status=\", r.get(\"status\"), \"top_evidence=\", repr(r.get(\"evidence_run_id\")),\n                  \"detail_evidence=\", (r.get(\"detail\") or {}).get(\"evidence\"))\nEOF",
+          "exit_code": 0,
+          "output_sha": "63977b9d08a4f8f309bb08edaa1b9eee411db6ea7c3fc9f0ec57a2f51d50c024"
+        },
+        {
+          "tool": "run_command",
+          "command": "mkdir -p /tmp/aug205/red && cd /tmp/aug205/red && python3 - <<'EOF'\nimport importlib.util, sys, tempfile\nfrom pathlib import Path\nsys.path.insert(0, \"/tmp/aug205\")\nspec = importlib.util.spec_from_file_location(\"prefix_test\", \"/tmp/aug205/prefix_test.py\")\nmod = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(mod)\n# Build the boardctl-shape fixture and point the PRE-FIX module's live arms at it\ntmp = Path(\"/tmp/aug205/red/fixture\")\nboard, history = mod.write_fixture(\n    tmp,\n    [mod.row(\"AUG-001\", detail={\"evidence\": [{\"run_id\": \"069cc1b9\", \"ts\": \"2026-11-23T04:30:25Z\"}]})],\n    {(\"2026-11-23\", \"069cc1b9\"): {\"task_id\": \"AUG-001\", \"passed\": True}},\n)\nmod.BOARD = board\nmod.HISTORY = history\nmod.SCRIPT = Path(\"/tmp/aug205/scripts/audit_board_evidence.py\")  # pre-fix script\nimport json as _json\n# serialize the fixture config for the pytest runner\nPath(\"/tmp/aug205/red/fixture_path.txt\").write_text(str(tmp))\nprint(\"fixture at\", tmp)\nprint(\"board:\", board.read_text().strip())\nEOF\ncat > /tmp/aug205/red/test_red.py <<'EOF'\nimport importlib.util, sys\nfrom pathlib import Path\nsys.path.insert(0, \"/tmp/aug205\")\nspec = importlib.util.spec_from_file_location(\"prefix_test\", \"/tmp/aug205/prefix_test.py\")\nmod = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(mod)\nfixture = Path(Path(\"/tmp/aug205/red/fixture_path.txt\").read_text())\nmod.BOARD = fixture / \".coding-hermes\" / \"board\" / \"tasks.jsonl\"\nmod.HISTORY = fixture / \".gitreins\" / \"history\"\nmod.SCRIPT = Path(\"/tmp/aug205/scripts/audit_board_evidence.py\")\n\ndef test_every_bound_row_resolves_to_its_own_task_prefix():\n    mod.test_every_bound_row_resolves_to_its_own_task()\nEOF\n/home/kara/auger/.venv/bin/python -m pytest /tmp/aug205/red/test_red.py -x -q 2>&1 | tail -15",
+          "exit_code": 0,
+          "output_sha": "b58fccd8a8e27320cb08e03a5be7bb0cd6651dcfbf110a04cd0c65945c5faa14"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug205/green && /home/kara/auger/.venv/bin/python - <<'EOF'\nimport importlib.util, sys\nfrom pathlib import Path\nsys.path.insert(0, \"/tmp/aug205\")\nspec = importlib.util.spec_from_file_location(\"prefix_test\", \"/tmp/aug205/prefix_test.py\")\nmod = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(mod)\ntmp = Path(\"/tmp/aug205/green/fixture\")\nboard, history = mod.write_fixture(\n    tmp,\n    [mod.row(\"AUG-001\", detail={\"evidence\": [{\"run_id\": \"069cc1b9\", \"ts\": \"2026-11-23T04:30:25Z\"}]})],\n    {(\"2026-11-23\", \"069cc1b9\"): {\"task_id\": \"AUG-001\", \"passed\": True}},\n)\nPath(\"/tmp/aug205/green/fixture_path.txt\").write_text(str(tmp))\nprint(\"fixture:\", tmp)\nEOF\ncat > /tmp/aug205/green/test_green.py <<'EOF'\nimport importlib.util, sys\nfrom pathlib import Path\nsys.path.insert(0, \"/tmp/aug205\")\nspec = importlib.util.spec_from_file_location(\"prefix_test\", \"/tmp/aug205/prefix_test.py\")\nmod = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(mod)\nfixture = Path(Path(\"/tmp/aug205/green/fixture_path.txt\").read_text())\nmod.BOARD = fixture / \".coding-hermes\" / \"board\" / \"tasks.jsonl\"\nmod.HISTORY = fixture / \".gitreins\" / \"history\"\n\ndef test_every_bound_row_resolves_to_its_own_task_postfix():\n    mod.test_every_bound_row_resolves_to_its_own_task()\nEOF\n/home/kara/auger/.venv/bin/python -m pytest /tmp/aug205/green/test_green.py -x -q 2>&1 | tail -6",
+          "exit_code": 0,
+          "output_sha": "848e9ef2aaac223417c5670fb8499ff921b227dca0663c404b0183092888e920"
+        },
+        {
+          "tool": "run_command",
+          "command": "mkdir -p /tmp/aug205/green && cd /tmp/aug205/green && /home/kara/auger/.venv/bin/python - <<'EOF'\nimport importlib.util, sys\nfrom pathlib import Path\nsys.path.insert(0, \"/tmp/aug205\")\nspec = importlib.util.spec_from_file_location(\"prefix_test\", \"/tmp/aug205/prefix_test.py\")\nmod = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(mod)\ntmp = Path(\"/tmp/aug205/green/fixture\")\nboard, history = mod.write_fixture(\n    tmp,\n    [mod.row(\"AUG-001\", detail={\"evidence\": [{\"run_id\": \"069cc1b9\", \"ts\": \"2026-11-23T04:30:25Z\"}]})],\n    {(\"2026-11-23\", \"069cc1b9\"): {\"task_id\": \"AUG-001\", \"passed\": True}},\n)\nPath(\"/tmp/aug205/green/fixture_path.txt\").write_text(str(tmp))\nprint(\"fixture:\", tmp)\nEOF\ncat > /tmp/aug205/green/test_green.py <<'EOF'\nimport importlib.util, sys\nfrom pathlib import Path\nsys.path.insert(0, \"/tmp/aug205\")\nspec = importlib.util.spec_from_file_location(\"prefix_test\", \"/tmp/aug205/prefix_test.py\")\nmod = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(mod)\nfixture = Path(Path(\"/tmp/aug205/green/fixture_path.txt\").read_text())\nmod.BOARD = fixture / \".coding-hermes\" / \"board\" / \"tasks.jsonl\"\nmod.HISTORY = fixture / \".gitreins\" / \"history\"\n\ndef test_every_bound_row_resolves_to_its_own_task_postfix():\n    mod.test_every_bound_row_resolves_to_its_own_task()\nEOF\n/home/kara/auger/.venv/bin/python -m pytest /tmp/aug205/green/test_green.py -x -q -p no:cacheprovider 2>&1 | tail -6",
+          "exit_code": 0,
+          "output_sha": "7b9ab9ac0923707a5e93ec5a93bb2b10a1745d84df7f2a35693268f4b4a2f44e"
+        },
+        {
+          "tool": "run_command",
+          "command": "cat > /tmp/aug205/green/test_green.py <<'EOF'\nimport importlib.util, sys\nfrom pathlib import Path\nspec = importlib.util.spec_from_file_location(\"postfix_test\", \"/home/kara/auger/tests/test_board_evidence_audit.py\")\nmod = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(mod)\nfixture = Path(Path(\"/tmp/aug205/green/fixture_path.txt\").read_text())\nmod.BOARD = fixture / \".coding-hermes\" / \"board\" / \"tasks.jsonl\"\nmod.HISTORY = fixture / \".gitreins\" / \"history\"\n\ndef test_every_bound_row_resolves_to_its_own_task_postfix():\n    mod.test_every_bound_row_resolves_to_its_own_task()\nEOF\n/home/kara/auger/.venv/bin/python -m pytest /tmp/aug205/green/test_green.py -x -q -p no:cacheprovider 2>&1 | tail -6",
+          "exit_code": 0,
+          "output_sha": "26516989d5ea9d7d825d095eef9e342f95d402117aae32171db07f93fb61e2c8"
+        },
+        {
+          "tool": "run_command",
+          "command": "cat > /tmp/aug205/green/test_green.py <<'EOF'\nimport importlib.util, sys\nfrom pathlib import Path\nspec = importlib.util.spec_from_file_location(\"postfix_test\", \"/home/kara/auger/tests/test_board_evidence_audit.py\")\nmod = importlib.util.module_from_spec(spec)\nspec.loader.exec_module(mod)\nfixture = Path(Path(\"/tmp/aug205/green/fixture_path.txt\").read_text())\nmod.BOARD = fixture / \".coding-hermes\" / \"board\" / \"tasks.jsonl\"\nmod.HISTORY = fixture / \".gitreins\" / \"history\"\n\ndef test_every_bound_row_resolves_to_its_own_task_postfix(tmp_path):\n    mod.test_every_bound_row_resolves_to_its_own_task(tmp_path)\nEOF\n/home/kara/auger/.venv/bin/python -m pytest /tmp/aug205/green/test_green.py -x -q -p no:cacheprovider 2>&1 | tail -5",
+          "exit_code": 0,
+          "output_sha": "12c394df2dc5311e9e10d7cd38dcbcea6abbbe89254484461af81b31308f015b"
+        },
+        {
+          "tool": "run_command",
+          "command": "mkdir -p /tmp/aug205/live && cd /tmp/aug205/live && cp /home/kara/auger/scripts/audit_board_evidence.py scripts_tmp 2>/dev/null; mkdir -p scripts tests .gitreins/history/2026-11-23/069cc1b9 .coding-hermes/board && cp /home/kara/auger/scripts/audit_board_evidence.py scripts/ && cp /home/kara/auger/tests/gate.sh tests/ && cp /home/kara/auger/tests/test_board_evidence_audit.py tests/ && cp /home/kara/auger/.gitreins/history/2026-11-23/069cc1b9/verdict.json .gitreins/history/2026-11-23/069cc1b9/ && ls -R . | head -30",
+          "exit_code": 0,
+          "output_sha": "328c6eb985c0181e3742abf83b8e904604a8369cf53cbd9cf36d47cd78acbb8f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug205/live && rm -f scripts_tmp && boardctl -C .coding-hermes/board init --project AUG205LIVE 2>&1 | tail -3; ls .coding-hermes/board/",
+          "exit_code": 0,
+          "output_sha": "d50955c1533bc6a256a415593a07afe1fd526a807e33d2a81c4c54ee8eb20a93"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug205/live && boardctl -C .coding-hermes/board create --id AUG-001 --title \"AC2 fixture row (boardctl-written)\" 2>&1 | tail -2 && boardctl -C .coding-hermes/board update AUG-001 --status complete --evidence-run-id 069cc1b9 --completed-at \"2026-11-23T04:30:25Z\" 2>&1 | tail -3; echo \"update exit: $?\"; python3 -c \"\nimport json\nline = open('.coding-hermes/board/tasks.jsonl').read().strip().splitlines()[0]\nrow = json.loads(line)\nprint('id:', row['id'], 'status:', row['status'])\nprint('TOP-LEVEL evidence_run_id:', repr(row.get('evidence_run_id')))\nprint('detail.evidence[]:', json.dumps((row.get('detail') or {}).get('evidence')))\n\"",
+          "exit_code": 0,
+          "output_sha": "b8a5ccda23bccf59569e67f15cb8559b17ef943f55268ef728567a5c9d67666c"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug205/live && python3 -c \"\nimport json\nfor line in open('.coding-hermes/board/tasks.jsonl'):\n    if not line.strip(): continue\n    row = json.loads(line)\n    if row.get('id')=='AUG-001':\n        print('id:', row['id'], 'status:', row['status'])\n        print('TOP-LEVEL evidence_run_id:', repr(row.get('evidence_run_id')))\n        print('detail.evidence[]:', json.dumps((row.get('detail') or {}).get('evidence')))\n\"",
+          "exit_code": 0,
+          "output_sha": "1009ccd05570f8cf0ae9334b9360af622416927e33a381f60f6258bc440ff977"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug205/live && boardctl -C .coding-hermes/board create --id RELEASE-018 --title \"release row (fixture twin of the real one)\" 2>&1 | tail -1 && boardctl -C .coding-hermes/board update RELEASE-018 --status complete --evidence-run-id none:no-verdict-artifact-for-task-id --completed-at \"2026-11-23T04:30:25Z\" 2>&1 | tail -2; echo \"exit: $?\"; python3 -c \"\nimport json\nfor line in open('.coding-hermes/board/tasks.jsonl'):\n    if not line.strip(): continue\n    row = json.loads(line)\n    if row.get('status')=='complete':\n        print(row['id'], '| top:', repr(row.get('evidence_run_id')), '| detail.evidence:', json.dumps((row.get('detail') or {}).get('evidence')))\n\"",
+          "exit_code": 0,
+          "output_sha": "e900296151cc8cbaca22e12f6d7043b9f002b65d5bdae6b6958614339a468958"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && for f in .gitreins/history/*/*/verdict.json; do tid=$(python3 -c \"import json,sys; print(json.load(open('$f')).get('task_id'))\" 2>/dev/null); echo \"$f -> $tid\"; done | tail -8; echo ====; python3 -c \"\nimport json\nfor line in open('.coding-hermes/board/tasks.jsonl'):\n    if not line.strip(): continue\n    r=json.loads(line)\n    if r.get('status')=='pending':\n        print('pending:', r['id'])\n\" | head -15",
+          "exit_code": 0,
+          "output_sha": "832ee086ed412693159400267c435132209f95078bb27c0509ee2b98da95f48d"
+        },
+        {
+          "tool": "run_command",
+          "command": "rm -rf /tmp/aug205/live2 && mkdir -p /tmp/aug205/live2 && cd /home/kara/auger && cp -r .coding-hermes /tmp/aug205/live2/ && cp -r .gitreins/history /tmp/aug205/live2/.gitreins_history && mkdir -p /tmp/aug205/live2/.gitreins && mv /tmp/aug205/live2/.gitreins_history /tmp/aug205/live2/.gitreins/history && cp scripts/audit_board_evidence.py /tmp/aug205/live2/scripts_backup.py && cp tests/gate.sh /tmp/aug205/live2/gate.sh && ls /tmp/aug205/live2 && ls /tmp/aug205/live2/.gitreins/history | head -5",
+          "exit_code": 0,
+          "output_sha": "3e26b53f71acbaf5381f58c5c0412b07631ec5fff7f779ce528410e6ba30fe18"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug205/live2 && cp /home/kara/auger/tests/test_board_evidence_audit.py /tmp/aug205/live2/test_module_snapshot.py && boardctl -C .coding-hermes/board update AUG-200 --status complete --evidence-run-id 069cc1b9 --completed-at \"2026-11-23T16:40:00Z\" 2>&1 | tail -2; echo \"boardctl exit: $?\"; python3 -c \"\nimport json\nfor line in open('.coding-hermes/board/tasks.jsonl'):\n    if not line.strip(): continue\n    r=json.loads(line)\n    if r.get('id')=='AUG-200':\n        print('AUG-200 status:', r.get('status'))\n        print('  TOP-LEVEL evidence_run_id:', repr(r.get('evidence_run_id')))\n        print('  detail.evidence[]:', json.dumps((r.get('detail') or {}).get('evidence')))\n        print('  completed_at:', r.get('completed_at'))\n\"",
+          "exit_code": 0,
+          "output_sha": "b2e67e0836e25effe7b9846a2920ea190cd2605c558887918b0d0e6b076db98a"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug205/live2 && python3 -c \"\nimport json\nfor line in open('.coding-hermes/board/tasks.jsonl'):\n    if not line.strip(): continue\n    r=json.loads(line)\n    if r.get('id')=='AUG-195':\n        print('AUG-195 status:', r.get('status'))\n        print('  TOP-LEVEL evidence_run_id:', repr(r.get('evidence_run_id')))\n        print('  detail.evidence[]:', json.dumps((r.get('detail') or {}).get('evidence')))\n\"; echo ==== flip via boardctl ====; boardctl -C .coding-hermes/board update AUG-195 --status complete --evidence-run-id a261ca8b --completed-at \"2026-11-23T16:45:00Z\" 2>&1 | tail -2; echo \"boardctl exit: $?\"; python3 -c \"\nimport json\nfor line in open('.coding-hermes/board/tasks.jsonl'):\n    if not line.strip(): continue\n    r=json.loads(line)\n    if r.get('id')=='AUG-195':\n        print('AUG-195 status:', r.get('status'))\n        print('  TOP-LEVEL evidence_run_id:', repr(r.get('evidence_run_id')))\n        print('  detail.evidence[]:', json.dumps((r.get('detail') or {}).get('evidence')))\n\"",
+          "exit_code": 0,
+          "output_sha": "6e4c687dcee0998db51b6c3bc554344c9dfeae288f3898412049137f350c420d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug205/live2 && python3 -c \"\nimport json\nfor line in open('.coding-hermes/board/tasks.jsonl'):\n    if not line.strip(): continue\n    r=json.loads(line)\n    if r.get('id')=='AUG-205':\n        print('AUG-205 status:', r.get('status'), '| top:', repr(r.get('evidence_run_id')), '| detail:', json.dumps((r.get('detail') or {}).get('evidence')))\n\"; boardctl -C .coding-hermes/board update AUG-205 --status complete --evidence-run-id 069cc1b9 --completed-at \"2026-11-23T16:47:00Z\" 2>&1 | tail -2; echo \"boardctl exit: $?\"; python3 -c \"\nimport json\nfor line in open('.coding-hermes/board/tasks.jsonl'):\n    if not line.strip(): continue\n    r=json.loads(line)\n    if r.get('id')=='AUG-205':\n        print('AUG-205 status:', r.get('status'))\n        print('  TOP-LEVEL evidence_run_id:', repr(r.get('evidence_run_id')))\n        print('  detail.evidence[]:', json.dumps((r.get('detail') or {}).get('evidence')))\n\"",
+          "exit_code": 0,
+          "output_sha": "699ca9a9169a34c474737be02fb11fe119f68d240dce9ab4e0650d21cd451ef8"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"bound_failed\" scripts/audit_board_evidence.py | head && sed -n '480,591p' scripts/audit_board_evidence.py",
+          "exit_code": 0,
+          "output_sha": "e4267315e64119dcdf7a43bf16d39ed1b53e6ebe7da2fd8d9f40c707bbf36b0c"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug205/live2 && python3 -c \"\nimport json\nrows = []\nfor line in open('.coding-hermes/board/tasks.jsonl'):\n    if not line.strip():\n        continue\n    r = json.loads(line)\n    if r.get('id') == 'AUG-200':\n        r['status'] = 'pending'\n        r.pop('evidence_run_id', None)\n        d = r.get('detail') or {}\n        d.pop('evidence', None)\n        if d:\n            r['detail'] = d\n        else:\n            r.pop('detail', None)\n        r.pop('completed_at', None)\n    rows.append(r)\nopen('.coding-hermes/board/tasks.jsonl', 'w').write('\\n'.join(json.dumps(r) for r in rows) + '\\n')\nprint('AUG-200 reset to pre-flip state (fixture prep)')\n\" && python3 -c \"\nimport json\nfor line in open('.coding-hermes/board/tasks.jsonl'):\n    if not line.strip(): continue\n    r=json.loads(line)\n    if r.get('id')=='AUG-200':\n        print('pre-flip AUG-200: status=', r.get('status'), '| top=', repr(r.get('evidence_run_id')), '| detail.evidence=', json.dumps((r.get('detail') or {}).get('evidence')))\n\"",
+          "exit_code": 0,
+          "output_sha": "a8fee2844eb50fe621787eaf863c6ae216eb7341e2cdfc2831b73b21bbd3cef5"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug205/live2 && boardctl -C .coding-hermes/board update AUG-200 --status complete --evidence-run-id 069cc1b9 --completed-at \"2026-11-23T17:00:00Z\" 2>&1 | tail -2; echo \"boardctl exit: $?\"; python3 -c \"\nimport json\nfor line in open('.coding-hermes/board/tasks.jsonl'):\n    if not line.strip(): continue\n    r=json.loads(line)\n    if r.get('id')=='AUG-200':\n        print('POST-FLIP AUG-200: status=', r.get('status'))\n        print('  TOP-LEVEL evidence_run_id:', repr(r.get('evidence_run_id')))\n        print('  detail.evidence[]:', json.dumps((r.get('detail') or {}).get('evidence')))\n\"",
+          "exit_code": 0,
+          "output_sha": "d4981c9c492f6db4649bad5465b5f331bdd763e4a61863aa729c5470198115da"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug205/live2 && mkdir -p scripts tests && cp /home/kara/auger/scripts/audit_board_evidence.py scripts/ && cp /home/kara/auger/tests/gate.sh tests/ && cp /tmp/aug205/live2/test_module_snapshot.py tests/test_board_evidence_audit.py && /home/kara/auger/.venv/bin/python -m pytest tests/test_board_evidence_audit.py -q -p no:cacheprovider --rootdir=/tmp/aug205/live2 2>&1 | tail -12",
+          "exit_code": 0,
+          "output_sha": "86205522cc86ec209faea48698532c2bca72349db9b5cad2c2c0ec5dc1212d96"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug205/live2 && python3 scripts/audit_board_evidence.py --board .coding-hermes/board/tasks.jsonl 2>&1 | head -25",
+          "exit_code": 0,
+          "output_sha": "4e70e1d0d16659e99a624ae76bf260bfd619efc390be3492304cb91eab3d9a06"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug205/live2 && python3 -c \"\nimport json\nrows = []\nfor line in open('.coding-hermes/board/tasks.jsonl'):\n    if not line.strip():\n        continue\n    r = json.loads(line)\n    if r.get('id') == 'AUG-205':\n        r['status'] = 'pending'\n        r.pop('evidence_run_id', None)\n        d = r.get('detail') or {}\n        d.pop('evidence', None)\n        if d:\n            r['detail'] = d\n        else:\n            r.pop('detail', None)\n        r.pop('completed_at', None)\n    rows.append(r)\nopen('.coding-hermes/board/tasks.jsonl', 'w').write('\\n'.join(json.dumps(r) for r in rows) + '\\n')\nprint('AUG-205 restored to pending (undo of my exploratory flip)')\n\" && cp /home/kara/auger/tests/test_*.py tests/ && cp /home/kara/auger/tests/conftest.py tests/ 2>/dev/null; ls tests/ | wc -l && /home/kara/auger/.venv/bin/python -m pytest tests/test_board_evidence_audit.py -q -p no:cacheprovider 2>&1 | tail -6",
+          "exit_code": 0,
+          "output_sha": "60fa1fa6470f4a37959209508b579222ac14bb155af2dabaabe883325afc6db0"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug205/live2 && python3 scripts/audit_board_evidence.py --board .coding-hermes/board/tasks.jsonl --verbose 2>&1 | grep -E \"complete_rows=|bound_legacy_citation|AUG-200|RESULT\" | head -8",
+          "exit_code": 0,
+          "output_sha": "b1d89d5143ce728da78f59c04cce8a8ac49d875016a4cdb15f135739695452ba"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"def evidence_labels\\|def row_runs\" -A 18 scripts/audit_board_evidence.py | head -45",
+          "exit_code": 0,
+          "output_sha": "dd85013b78d77df439b276acf84ecaff8d3d70f6c6c7051c1b2d5598f96a9f6d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && /home/kara/auger/.venv/bin/python -m pytest tests/test_board_evidence_audit.py -q -p no:cacheprovider 2>&1 | tail -4; echo ====; grep -n \"AUGER_TEST_LOCK\\|live arms\" tests/conftest.py | head -8",
+          "exit_code": 0,
+          "output_sha": "72f3efd36dd72ecbcefba26b6815f5d50b11d9a6945248f58b7e709423eeea4a"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -rn \"AUGER_BLOCKED_BY\\|live arms will be skipped\\|skip\" tests/conftest.py | sed -n '1,40p'",
+          "exit_code": 0,
+          "output_sha": "2126ca15fc752ba879a6a557b2ec174d683c4dfb6495f6228b72f81a9a6dd983"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && sed -n '750,790p' tests/conftest.py && grep -rn \"live_arm\\|skip_live\\|mark\" tests/test_board_evidence_audit.py | head -5",
+          "exit_code": 0,
+          "output_sha": "8c4372f3440e88cf34de6ed8ad521216499bd7b2083f135dd74457765d5b87fc"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"evidence_run_id\\|detail.evidence\\|evidence_labels\" scripts/board_shrink_check.py scripts/install_board_guard.py 2>/dev/null | head -20; echo ====; grep -rn \"test_board_evidence_audit\\|audit_board_evidence\" scripts/install_board_guard.py .gitreins/config.yaml 2>/dev/null | head -10",
+          "exit_code": 0,
+          "output_sha": "7468e74ba895263609a88ae33a01b855e460ac46ed453e7aecbe31cebfd7b845"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -rln \"audit_board_evidence\" --include=\"*.sh\" --include=\"*.yaml\" --include=\"*.py\" . 2>/dev/null | grep -v \"^./build\\|/evidence/\\|.gitreins/\" | head && grep -rn \"audit_board_evidence\\|test_board_evidence\" tests/gate.sh | head -5",
+          "exit_code": 0,
+          "output_sha": "d8da40c68b04f0af92b8c8b8fdf846a2781b71bb465d27b5f8fbe6cf5c6f1c56"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && python3 scripts/audit_board_evidence.py --board .coding-hermes/board/tasks.jsonl 2>&1 | grep -E \"complete_rows=|bound_legacy|RESULT|AUG-200\" | head -6; echo \"exit: $?\"",
+          "exit_code": 0,
+          "output_sha": "18056aeeb6cdfe110692e4d955f01fdcd3f37578d4ef82bfbaabe66b5ccbe452"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show e2c6889 --stat | head -12 && sed -n '48,95p' scripts/audit_board_evidence.py",
+          "exit_code": 0,
+          "output_sha": "154046d08c79c19d9006b7cdccea6c9a8285207523519ce66d0d8fbdfd28127f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -rn \"boardctl\\|coding-hermes-tools\" tests/test_board_evidence_audit.py | head -12",
+          "exit_code": 0,
+          "output_sha": "40be8e8ed48294def0b314da81ff9678ab9fc971a0e88a5a88e0eaa85bea4a86"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug205/live && python3 scripts/audit_board_evidence.py --board .coding-hermes/board/tasks.jsonl 2>&1 | grep -E \"complete_rows|MISSING|LABEL|RESULT\" | head -6",
+          "exit_code": 0,
+          "output_sha": "a4c07039ea3b63ee867c8d10125f469ed8ca8aafd4cb130cd358a77745ae5476"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -rn \"evidence_run_id\" README.md skills/ docs/ 2>/dev/null | head -8; echo ====; grep -rn \"AUG-205\" .coding-hermes/board/tasks.jsonl | head -1 | python3 -c \"\nimport json,sys\nline=sys.stdin.read()\nrow=json.loads(line[line.index('{'):])\nprint('AUG-205 row status:', row.get('status'))\nprint('criteria:', json.dumps(row.get('criteria') or row.get('acceptance_criteria'))[:400])\n\"",
+          "exit_code": 0,
+          "output_sha": "f39b69b8ab38c47b00bf530f3762b56022033c3bfcc1c87210be5105ffa0dd89"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"[\\\"AC1: RED proven. Pre-fix modules extracted from 9aeb09f^ (commit 9aeb09f is the fix). Boardctl-shape fixture (complete row, binding ONLY detail.evidence[] run_id=069cc1b9 resolving to its own task, NO top-level key) run through pre-fix test module: `AssertionError: complete row AUG-001 carries no machine-resolvable evidence_run_id` \\u2014 1 failed in 0.02s (matches the failure quoted in commit 9aeb09f). Pre-fix audit SCRIPT itself scored the row bound_legacy_citation=1/RESULT OK \\u2014 the strict TEST was the refusing seam, matching the task title.\\\", \\\"AC2: GREEN proven on a real-clone fixture with a REAL boardctl flip, no hand-patch. Measured premise: boardctl (real binary /home/kara/.local/bin/boardctl) update AUG-200 --status complete --evidence-run-id 069cc1b9 wrote TOP-LEVEL evidence_run_id=None and detail.evidence[]=[{run_id: 069cc1b9}] (exit 0). Cloned the real tracked board+history to /tmp/aug205/live2, reset AUG-200 to pre-flip pending (fixture prep only), did the real boardctl flip, then ran the FULL audit file: `17 passed in 1.10s`. Quoted audit: complete_rows=269 bound=123 unresolvable=0 missing=0 / bound_legacy_citation=0 label_defects=0 / RESULT: OK (exit 0). Real tracked repo also green: 17 passed in 1.33s (no skips \\u2014 conftest skips only live_service-fixture tests; this file has none; 17 dots, no S) and direct audit on tracked board RESULT: OK exit 0.\\\", \\\"AC3: RECORDED. scripts/audit_board_evidence.py docstring (lines ~35-43): AUG-205 writer-side drift \\u2014 boardctl in the coding-hermes-tools repo writes the binding ONLY into detail.evidence[]... TEMPORARY READER TOLERANCE, not the fix; root cause writer-side in coding-hermes-tools (boardctl must write the top-level evidence_run_id alongside the detail entry). Same note at tests/test_board_evidence_audit.py:29-33 and classify() comments at :353-356.\\\", \\\"derived_0 verified PASS: guarded-commit entrypoint = tests/gate.sh:257 pytest arm which names tests/test_board_evidence_audit.py; test_gate_arm_runs_this_file asserts the arm and that every named file exists (passed in both 17/17 runs); board-side guard scripts (scripts/board_shrink_check.py, scripts/install_board_guard.py) contain no evidence_run_id check (grep empty) so the audit file IS the landing guard, and it passes.\\\", \\\"derived_1 verified PASS: reader tolerance is scoped to the structured boardctl surface, not a blanket citation scan. classify() (scripts/audit_board_evidence.py:353-357) binds only via evidence_labels(row) = detail.evidence[].run_id entries (lines 196-208) intersected with own_tokens; prose legacy path (legacy=True) stays separate \\u2014 bound_legacy_citation=0 on both the fixture and tracked board proves detail-bound rows are first-class. Foreign strictness kept: exploratory flip of run 069cc1b9 (owned by AUG-200) onto row AUG-205 produced `UNRESOLVABLE AUG-205 foreign-citation: cites only verdicts for other tasks: 069cc1b9->AUG-200` + LABEL defect; post-fix test file arms the none-only->MISSING fail-closed case (AC4 arm inside test_every_bound_row_resolves_to_its_own_task).\\\"]\", \"key\": \"checked\"}",
+          "exit_code": 0,
+          "output_sha": "20bbc140e9263efee463372bb9ae0f5361c2962ba207a086176c6fbf069eaa19"
+        }
+      ]
+    },
+    "fix_verification": {
+      "id": "fix_verification",
+      "passed": true,
+      "any_failed": false,
+      "summary": "fix_verification: 0 finding(s) verified",
+      "steps": [
+        {
+          "id": "fix_verification",
+          "type": "fix_verification",
+          "passed": true,
+          "output": "fix_verification: 0 finding(s) verified",
+          "error": "",
+          "data": {
+            "dispositions": [],
+            "counts": {}
+          }
+        }
+      ]
+    }
+  },
+  "context_stats": {
+    "diff_source": "working-tree",
+    "diff_bytes": 0,
+    "prompt_bytes": 6822
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "",
+    "error": "unparseable reviewer reply: no parseable JSON object in reply: ''",
+    "raw_reply": "",
+    "retry": {
+      "count": 1,
+      "raw_reply": ""
+    },
+    "review_state": {
+      "emitted": [],
+      "carried": []
+    }
+  },
+  "summary": "Stage tier1: FAIL\n    \u2717 tests: scanners: nice=nice -n 10\n  \u2717 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 AC1 REPRODUCE: a fixture board with a complete row carrying ONLY a resolvable detail.evidence[] binding (no top-level key) makes tests/test_board_evidence_audit.py::test_every_bound_row_resolves_to_its_own_task fail. FAILIF: it passes. AC2 FIX LIVE: after the chosen fix, a complete flip written through the normal tool path (boardctl update --status complete --evidence-run-id 069cc1b9) passes the FULL audit file (all 17 tests) with no hand-patch - proven on the real board or an equivalent fixture, output quoted. AC3 OTHER SEAM RECORDED: if the in-repo audit is relaxed, a note names the boardctl: AC1 RED: pre-fix modules extracted from 9aeb09f^ (fix commit is 9aeb09f); a boardctl-shape fixture (complete row, binding ONLY detail.evidence[].run_id=069cc1b9 resolving to its own task, no top-level key) run through the pre-fix test module failed with the exact expected assertion: `AssertionError: complete row AUG-001 carries no machine-resolvable evidence_run_id` \u2014 `1 failed in 0.02s` (identical to the failure quoted in commit 9aeb09f's message; note the pre-fix audit SCRIPT itself scored the row bound via legacy prose with RESULT OK, so the strict TEST was the refusing seam, matching the task title). AC2 GREEN: measured the real tool path first \u2014 real boardctl (/home/kara/.local/bin/boardctl) on a clone of the tracked board at /tmp/aug205/live2: `boardctl -C .coding-hermes/board update AUG-200 --status complete --evidence-run-id 069cc1b9 --completed-at 2026-11-23T17:00:00Z` exited 0 and wrote TOP-LEVEL evidence_run_id: None, detail.evidence[]: [{\"run_id\": \"069cc1b9\", ...}] (AUG-200 reset to pre-flip pending as fixture prep only; no evidence fields hand-patched). Then ran the FULL audit file against that fixture with the real tree present: `17 passed in 1.10s`; quoted audit output: `complete_rows=269 bound=123 unresolvable=0 missing=0 / bound_legacy_citation=0 label_defects=0 / RESULT: OK` (exit 0). The real tracked repo is also green: `17 passed in 1.33s` (no skips \u2014 tests/conftest.py pytest_collection_modifyitems skips only live_service-fixture tests and this file has none; 17 dots, no S) and the direct audit of the tracked board prints `RESULT: OK` exit 0. AC3: scripts/audit_board_evidence.py docstring (lines ~35-43) records 'AUG-205 writer-side drift (2026-11-23). boardctl in the coding-hermes-tools repo writes a complete flip's --evidence-run-id ONLY into detail.evidence[] ... TEMPORARY READER TOLERANCE, not the fix: the root cause is writer-side and belongs in coding-hermes-tools (boardctl must write the top-level evidence_run_id alongside the detail entry)'; the same naming lives at tests/test_board_evidence_audit.py:29-33 and classify() comments at scripts/audit_board_evidence.py:353-356.\n  \u2713 The fix reaches the guarded-commit entrypoint: the audit file is wired into the guard that gates board commits and passes there: tests/gate.sh:257 pytest arm names tests/test_board_evidence_audit.py, and test_gate_arm_runs_this_file (passed in both 17/17 runs) asserts the arm exists and every named file is present \u2014 so the relaxed audit is what a guarded commit actually executes. The board-side guard scripts carry no competing evidence check: grep for evidence_run_id in scripts/board_shrink_check.py and scripts/install_board_guard.py returns nothing, so the audit file IS the landing guard.\n  \u2713 The reader tolerance is scoped to the structured boardctl surface (detail.evidence[].run_id), not a blanket citation amnesty, and foreign/none strictness survives: classify() (scripts/audit_board_evidence.py:353-357) binds only via evidence_labels(row) = detail.evidence[].run_id entries (lines 196-208) intersected with own_tokens; the prose legacy path stays separate and bound_legacy_citation=0 on both the fixture and tracked board proves detail-bound rows are first-class, not prose-scraped. Foreign strictness measured live: an exploratory flip of run 069cc1b9 (owned by AUG-200) onto row AUG-205 produced `UNRESOLVABLE AUG-205 foreign-citation: cites only verdicts for other tasks: 069cc1b9->AUG-200` plus `LABEL AUG-205 detail.evidence[].run_id=069cc1b9 resolves to task AUG-200` with RESULT: FAIL; the post-fix test file keeps the fail-closed arm (detail.evidence[] with only a none: absence \u2192 MISSING, asserted in test_every_bound_row_resolves_to_its_own_task).\nAC1 reproduced red (pre-fix strict test fails on the boardctl-shape fixture with the exact quoted assertion), AC2 proven green through a real boardctl flip on a real-clone fixture \u2014 full audit file 17/17 passed with the quoted RESULT: OK and no hand-patch \u2014 and AC3's writer-side note naming coding-hermes-tools boardctl is recorded in the audit script and test docstrings.\n\nStage fix_verification: PASS\n  fix_verification: 0 finding(s) verified\n\nOverall: FAIL \u2717",
+  "job_id": "job-db42e57c44de4ad095583188a7491385",
+  "source": "mcp",
+  "evaluated_at": "2026-11-23T16:32:08.406987",
+  "supersedes": null,
+  "superseded_by": null
+}
