@@ -1,0 +1,257 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd34/manuscript/12-01.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD34-MA-95EB72-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd34/manuscript/12-01.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD34-MA-95EB72-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+&lt;!-- CHD3.4A-03-BLOCK I; SPEC V3.4; section 12; source src/110-archives-restore.md --&gt;
+
+&gt; **REVISION NOTICE — CHD-3.4 supersedes CHD-3.3.** This revised section integrates the audit disposition and selected contracts. All body blocks below carry change bars.
+
+&lt;div class="chg" markdown="1"&gt;
+
+# §L — Session exports, archive audit, and replacement restore
+
+**Status:** operational contract for CHD-3.4.
+
+**Authority.** This chapter is the operational contract for the `session_archive` data class. It
+implements VOL-B §§1, 2, 3.12 and 5.10 (`VOLB-006`, `VOLB-011`, `VOLB-053`,
+`VOLB-068..071`), VOL-C §8.8 (`VOLC-070..072c`), VOL-D §5.2 (`VOLD-089`),
+R31-016 and R31-023. The machine-readable contracts are
+`schemas/archive-manifest.schema.json` and `schemas/export-envelope.schema.json`.
+The existing `schemas/policy-snapshot.schema.json` is the policy input to restore;
+it is not a live-session database export.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/manuscript/12-01.md#l-1-separate-archive-authority-and-trust-boundary -->
+  <section id="CHD-HANDBOOK-CHD34-MA-95EB72-L-1-SEPARATE-ARCHIVE-AUTHORITY-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## L.1 Separate archive authority and trust boundary
+
+Native Hermes exports are preserved in a separate central DuckBrain namespace,
+`chd-archive`, never mixed with controller state in `chd`:
+
+TABLE 12.1-1 — L.1 Separate archive authority and trust boundary
+
+| Class | Namespace | Writer | Acknowledgement | Purpose |
+|---|---|---|---|---|
+| `coordination_report` | `chd` | controller single writer | controller `fsync` + readback | rooms, reports, audit, work state |
+| `control_key` | `chd` | controller single writer | controller `fsync` + readback | bonds, grants, manifests, tickets |
+| `session_archive` | `chd-archive` | archive ingestor only | payload + manifest committed | replacement inspection and import |
+| `project_code_memory` | deployment-selected | configured owner | eventual checkpoint | optional project observations |
+
+No agent, replacement host, or ordinary controller request receives an archive
+write credential. The exporter reads the permitted Hermes session through the
+export boundary, stages an immutable payload, and the archive ingestor verifies,
+deduplicates, commits, and advertises it. The controller never writes an archive
+record as a side effect of a report. The archive is historical evidence, not a
+live session and not a control-plane replica. It is therefore not a controller
+backup: it cannot restore rooms, tickets/workflows, manifests/attempts,
+reservations, grants, configuration, assets, or the controller's archive indexes.
+The separate controller disaster-recovery boundary is defined by
+`runbooks/controller-backup-restore.md` and
+`schemas/controller-backup-manifest.schema.json`.
+
+A committed manifest means **the named bytes are durable and readable with the
+stated coverage**. It does not make archived authority effective; restore policy is
+always the current-policy decision in `schemas/restore-decision.schema.json`. It does not mean that the source host is alive, that the
+session can resume, or that every turn is present. A report or control record is
+not acknowledged by an archive upload.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/manuscript/12-01.md#l-2-checkpoints-coverage-and-known-gaps -->
+  <section id="CHD-HANDBOOK-CHD34-MA-95EB72-L-2-CHECKPOINTS-COVERAGE-AND-K-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## L.2 Checkpoints, coverage, and known gaps
+
+A checkpoint is a monotone boundary for one `(agent, profile, session_id)`. It is required for every session and temporary-worker retirement; archive capture is not an optional feature unless the owner explicitly changes the release scope.
+Export triggers are `turn_end` (after the covered controller write has received
+its `fsync` acknowledgement), configured `checkpoint_interval`, `bond_retire`,
+and `session_end`. The exporter records `checkpoint_seq`, coverage timestamps,
+the last known room/thread sequence, and the native export name and version.
+
+The archive never claims continuous backup. It claims only the committed
+checkpoint windows listed by its manifest. Each export is one of:
+
+- `complete`: all records in the stated window were included;
+- `partial`: only a bounded subset was captured, with an `ArchiveGapRecord`;
+- `declared_gap`: capture stopped at a named boundary, with an
+  `ArchiveGapRecord`.
+
+A failed upload, truncation, digest mismatch, missing source read, or exporter
+crash leaves both a failed manifest and a gap record. The session index carries
+that gap in `open_gaps`. A later committed checkpoint may mark the gap resolved
+only when its coverage window subsumes the gap; it never erases the old evidence.
+A restore/audit report must include `completeness`, `checkpoint_seq`,
+`covered_through_ts`, and every open gap. “Backed up continuously” is prohibited
+unless checkpoint evidence proves it; the approved wording is “covered through
+checkpoint `&lt;id&gt;` at `&lt;time&gt;`, with `&lt;n&gt;` declared gaps.”
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/manuscript/12-01.md#l-3-native-export-envelope-and-immutable-upload -->
+  <section id="CHD-HANDBOOK-CHD34-MA-95EB72-L-3-NATIVE-EXPORT-ENVELOPE-AND-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## L.3 Native export envelope and immutable upload
+
+The exporter emits an `hermes.session.export` envelope with a probed native
+`version`, stable source identity, checkpoint, coverage, and a payload reference. The
+native export/import adapter and supported API/version are an unresolved release gate
+(OPEN-ARCHIVE-1); this text requires a capability probe and does not invent a version,
+request shape, or transport. A safe `native_adapter_unresolved` result blocks restore
+activation rather than silently switching to transcript copy or raw SQLite import.
+The payload is opaque native Hermes export data; CHD does not invent a SQLite
+layout or claim that an arbitrary SQLite file is a native export. The envelope
+schema is versioned independently from the native payload and is validated before
+publication.
+
+Upload is an ordered transaction:
+
+1. Read the source using a protected source credential and freeze the checkpoint
+   boundary; record source host/profile/session identity.
+2. Serialize the native export, calculate `sha256`, byte count, and content
+   identity. For an incremental export, name the base checkpoint and dedupe
+   unchanged records by content digest.
+3. Write a staging payload inaccessible to archive readers.
+4. Validate envelope, native format/version, coverage, source identity, and
+   digest; reject unknown schema versions.
+5. Atomically commit payload and manifest, then update the session index. Only
+   this commit makes the checkpoint discoverable.
+6. Read back the manifest and payload digest. Advertise success only after
+   readback; on any failure write a failed manifest plus gap record.
+
+A retry with the same `(session_id, checkpoint_seq, payload_digest)` is an exact
+replay and returns the existing immutable manifest. A changed digest for that
+checkpoint is a conflict and cannot overwrite it. Superseding a base checkpoint
+adds a new manifest and marks the old manifest `superseded`; no historical
+payload or manifest is modified or deleted in place.
+
+Retention is configured per archive class and recorded as `retention_until`.
+Retention cleanup may tombstone an expired payload only after policy review and
+must preserve the manifest, digest, gap, audit, and lineage needed to explain
+what was retained or removed. Authority records and evidence required by an
+open audit are held. A retention operation is not a state transition and cannot
+turn a missing payload into a successful read.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/manuscript/12-01.md#l-4-own-history-and-delegated-audit -->
+  <section id="CHD-HANDBOOK-CHD34-MA-95EB72-L-4-OWN-HISTORY-AND-DELEGATED-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## L.4 Own history and delegated audit
+
+Archive access is a distinct grant family. The three selectors are:
+
+TABLE 12.1-2 — L.4 Own history and delegated audit
+
+| Scope | Explicit selector | Meaning |
+|---|---|---|
+| `own_history` | `{agents:[self], profiles?, sessions?, threads?, max_checkpoint_seq?}` | the caller’s own current/prior exports |
+| `room_log` | `{rooms:[...], max_checkpoint_seq?}` | archived references for authorized rooms |
+| `cross_agent_archive` | `{agents:[...], profiles?, sessions?, threads?, max_checkpoint_seq?}` | named other-agent exports |
+
+`archive.read` use and `archive.grant_use`/`meta_grant` authority are separate.
+A manager role does not itself authorize a delegated audit. The grant records the
+target agent/profile/session/thread, checkpoint ceiling, expiry, sub-delegation
+flag, grant lineage, and approval requirement. VP configuration bounds the
+maximum scope; a grant outside that pool is refused.
+
+Every archive page is authorized against the current grant and selector. A
+revocation or narrowing denies the next page; the grant is not cached for the
+remainder of a pagination session. A missing, expired, or out-of-scope target
+returns the same `404 not_found` as an unknown target. It never says whether an
+archive exists. An unavailable archive is `503 archive_unavailable`, never an
+empty successful result. Every allow, deny, replay, unavailable read, and
+selector is an audit record with actor, grant, scope, selector, page cursor,
+records read, checkpoint, and outcome.
+
+Delegated audit is an ordinary controller assignment: the manager names the
+archive selectors and questions, the auditor reads centrally without logging
+into the source host, and the resulting report cites exact archive keys,
+manifest revisions, checkpoint ids, and gap records. The manager accepts a
+finding only after each cited key and revision resolves. A grantor with grant
+authority but no `archive.read` use cannot issue a usable read grant; a
+meta-grant attempt without `meta_grant` is denied and audited.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/manuscript/12-01.md#l-5-replacement-discovery-and-validated-import -->
+  <section id="CHD-HANDBOOK-CHD34-MA-95EB72-L-5-REPLACEMENT-DISCOVERY-AND-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## L.5 Replacement discovery and validated import
+
+When the original host is absent, the replacement uses the archive lookup API,
+not a host login:
+
+1. Prove replacement readiness: supported Hermes export importer, non-default
+   target profile, local session store initialized, controller reachable, and
+   archive read grant resolved.
+2. QA-1 lists `/sessions/&lt;agent&gt;/&lt;profile&gt;/` and returns session indexes. QA-2
+   selects the newest `state=committed` manifest under the explicit session
+   selector. QA-4 lists gaps; QA-5 assembles the honest coverage window.
+3. Fetch the exact immutable payload and recompute its SHA-256. A mismatch,
+   missing payload, or no committed manifest stops with a restore incident.
+4. Validate `export_schema.name == "hermes.session.export"` and that its
+   version is supported by this importer. Unsupported names/versions stop with
+   `export_version_unsupported`.
+5. Create a **new** local Hermes session and the required non-default profile.
+   Import through the supported native import API into that store. Mint a new
+   local session id; never reuse the archived id. The identity map is committed
+   before the first replacement turn.
+6. Preserve the archived policy snapshot as immutable history, but **always resolve
+   current permissions** for the replacement under D-039. Record the exact `source_checkpoint` when
+   one was selected, otherwise `null` plus a verified reason; record `source_policy_rev` when the
+   archive contains it, otherwise `null` plus `source_policy_rev_reason` (never fabricate a revision),
+   and record the newly created `effective_policy_rev`; exclude revoked or expired
+   ancestor-derived grants while retaining independent current VP grants. The decision is always
+   `restore_decision: current_policy`; archived grants never become effective automatically.
+   `snapshot_missing` records absent historical coverage only and never changes the current-policy
+   decision. Identity mapping records old agent/profile/session/bond/thread ids to new
+   agent/profile/session/bond/thread ids. The replacement snapshot is committed before its first
+   turn and all restore/audit decisions name effective revision and source checkpoint.
+7. Create a new bond generation and record the imported checkpoint, parent bond,
+   source manifest, coverage, gaps, and import decision in controller state.
+8. Reconcile pending work from controller tickets and send manifests: map open
+   assignments to the new bond, retain unresolved sends/capacity when execution
+   is unknown, route delayed old-generation replies to `retired_generation`,
+   and do not replay a committed external effect. A report lists every mapped,
+   pending, blocked, and intentionally not-restored item.
+9. Read back profile readiness, policy, new session/bond, imported checkpoint,
+   and pending-work reconciliation. Only then mark the replacement ready.
+
+**Unsupported:** copying a Hermes SQLite file, copying a whole profile directory,
+reusing an archived session id, restoring a live session, or declaring success
+because a file exists. Those paths are rejected as
+`blind_sqlite_copy_unsupported` or `live_session_restore_unsupported`.
+Restore is a compatible import into a new local database/profile, not a database
+copy or continuation of the old process.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/manuscript/12-01.md#l-6-host-loss-evidence-trace-wf-07-wf-08 -->
+  <section id="CHD-HANDBOOK-CHD34-MA-95EB72-L-6-HOST-LOSS-EVIDENCE-TRACE-W-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## L.6 Host-loss evidence trace (WF-07/WF-08)
+
+The evidence chain is: source host loss incident → last committed checkpoint
+manifest → immutable payload digest → declared gaps → authorized QA-1/QA-2
+lookup → compatibility check → new profile/session identity map → pending-work
+reconciliation → restore report. The original host is deliberately unavailable
+in the fixture. The evidence must show the exact manifest key and revision,
+not merely a timestamp or “archive healthy” status.
+
+WF-08 additionally proves: an out-of-scope archive read receives indistinguishable
+`404`; an inaccessible archive does not become an empty result; a grantor without
+use cannot create a usable delegated read; and revocation between pages denies
+the next page. See `runbooks/replacement-restore.md`,
+`examples/bridge/` and `examples/bridge/untrusted-peer/` for runnable-shaped
+fixtures and expected evidence.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/manuscript/12-01.md#l-7-operator-surfaces -->
+  <section id="CHD-HANDBOOK-CHD34-MA-95EB72-L-7-OPERATOR-SURFACES-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## L.7 Operator surfaces
+
+TABLE 12.1-3 — L.7 Operator surfaces
+
+| Operation | Required readback |
+|---|---|
+| `archive_capture` | manifest key, checkpoint, digest, state, completeness, gaps |
+| `archive_read` | selector, grant, page cursor, checkpoint, records, audit id |
+| `archive_restore` | source manifest, source checkpoint, compatibility result, identity map, new ids, `restore_decision: current_policy`, source/effective policy revisions, excluded/retained grants, pending reconciliation |
+| `archive_retention` | policy revision, selected keys, tombstones, preserved evidence |
+
+The operation cards under `opcards/` remain the transport-level contract. This
+chapter supplies the cross-record invariants and runbook ordering; it does not
+create a second archive state machine.
+
+
+**D-039 decision:** `schemas/restore-decision.schema.json` and `tables/restore-policy-decisions.csv` implement the current-policy restore rule; archived policy is historical evidence only. D-038 fork modes remain separate: preserve-parent is the default for forks, current-policy is an explicit fork alternative, and resync is explicit and authorized.
+
+
+&lt;/div&gt;
+  </section>
+</spec>

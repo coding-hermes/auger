@@ -1,0 +1,221 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd34/src/230-lifecycle-projections.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD34-SRC-230-L-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd34/src/230-lifecycle-projections.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-230-L-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# §25 — Typed lifecycle and acceptance projections
+
+**CHD-3.4 · SPEC V3.4. REVISION NOTICE — supersedes CHD-3.3.**
+
+These state machines separate logical obligations from native execution and capacity. The concrete storage encoding and runtime proof producer remain unresolved; the model is specified, not deployed.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/230-lifecycle-projections.md#25-1-logical-send -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-230-L-25-1-LOGICAL-SEND-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 25.1 logical_send
+
+Record: `SendManifest`. Writer: `controller`. States: `composed`, `queued`, `admitted`, `dispatched`, `await_report`, `waiting`, `verified`, `closed`. Terminal states: closed.
+
+![FIGURE 25.1-1](../figures/fig-25.1-1.svg)
+
+FIGURE 25.1-1 — logical send transitions. Snapshot: 2026-11-11.
+
+Every arrow is one typed transition. Its event, guard, ordered writes and external effect are printed immediately below. No unlisted shortcut is permitted.
+
+TABLE 25.1-1 — Exact transitions and guards
+
+| ID | From → To | Event / guard | Ordered writes / external effect |
+|---|---|---|---|
+| LS-01 | composed → queued | manifest_committed: durable_send_manifest_and_admission_request | SendManifest → AuditEvent; none |
+| LS-02 | queued → admitted | reservation_committed: authorization_passes AND shared_capacity_available | Reservation → SendManifest → AuditEvent; none |
+| LS-03 | admitted → dispatched | attempt_run_prepared: attempt_and_run_records_committed_before_gateway_post | AttemptRecord → RunRecord → SendManifest → AuditEvent; gateway_post_allowed |
+| LS-04 | dispatched → await_report | dispatch_accepted: gateway_response_recorded AND target_binding_matches | SendManifest → AuditEvent; none |
+| LS-05 | await_report → verified | report_verified: fresh_correlated_report AND criteria_content_valid AND trusted_terminal_runtime_proof | ReportLink → AttemptClosure → SendManifest → ReservationRelease → AuditEvent; none |
+| LS-06 | await_report → waiting | human_wait_opened: waiting_human_content_valid AND trusted_stop_attestation AND no_success_claim | AttemptClosure → WaitRecord → SendManifest → ReservationRelease → AuditEvent; none |
+| LS-07 | waiting → queued | resolution_recorded: new_authorized_resolution AND successor_link_committed AND no_current_attempt | ResolutionRecord → SuccessorLink → AttemptRecord → SendManifest → AuditEvent; new_attempt_may_reserve |
+| LS-08 | verified → closed | closure_committed: verified_closure_read_back | SendManifest → AuditEvent; none |
+| LS-09 | await_report → closed | non_success_closure: authorized_cancel_or_terminal_outcome AND trusted_terminal_runtime_proof | AttemptClosure → SendManifest → ReservationRelease → AuditEvent; none |
+
+1. Authenticate the actor and load current committed state and guard evidence.
+2. Evaluate the named transition and every guard before preparing writes.
+3. Commit ordered writes under current storage authority; read back before external effects.
+4. A failed guard leaves prior state unchanged and records a typed denial; uncertain external execution holds capacity.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/230-lifecycle-projections.md#25-2-attempt -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-230-L-25-2-ATTEMPT-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 25.2 attempt
+
+Record: `AttemptRecord`. Writer: `controller`. States: `open`, `closed`. Terminal states: closed.
+
+![FIGURE 25.2-1](../figures/fig-25.2-1.svg)
+
+FIGURE 25.2-1 — attempt transitions. Snapshot: 2026-11-11.
+
+Every arrow is one typed transition. Its event, guard, ordered writes and external effect are printed immediately below. No unlisted shortcut is permitted.
+
+TABLE 25.2-1 — Exact transitions and guards
+
+| ID | From → To | Event / guard | Ordered writes / external effect |
+|---|---|---|---|
+| AT-01 | open → closed | attempt_outcome_committed: report_classified AND (trusted_terminal_runtime_proof OR explicit_wait_stop_attestation) | AttemptRecord → AuditEvent; reservation_release_only_after_proof |
+| AT-02 | closed → closed | late_or_duplicate_report: report_is_not_exact_replay | LateReportAudit; none |
+
+1. Authenticate the actor and load current committed state and guard evidence.
+2. Evaluate the named transition and every guard before preparing writes.
+3. Commit ordered writes under current storage authority; read back before external effects.
+4. A failed guard leaves prior state unchanged and records a typed denial; uncertain external execution holds capacity.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/230-lifecycle-projections.md#25-3-run -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-230-L-25-3-RUN-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 25.3 run
+
+Record: `RunRecord`. Writer: `controller`. States: `queued`, `admitted`, `running`, `stopped`, `terminal`, `unknown`, `unreachable`. Terminal states: stopped, terminal.
+
+![FIGURE 25.3-1](../figures/fig-25.3-1.svg)
+
+FIGURE 25.3-1 — run transitions. Snapshot: 2026-11-11.
+
+Every arrow is one typed transition. Its event, guard, ordered writes and external effect are printed immediately below. No unlisted shortcut is permitted.
+
+TABLE 25.3-1 — Exact transitions and guards
+
+| ID | From → To | Event / guard | Ordered writes / external effect |
+|---|---|---|---|
+| RN-01 | queued → admitted | reservation_committed: reservation_commit_marker_read_back | RunRecord → Reservation → AuditEvent; none |
+| RN-02 | admitted → running | runtime_started: gateway_acceptance AND start_observed | RunRecord → AuditEvent; none |
+| RN-03 | running → stopped | stop_attested: trusted_correlated_stop_attestation_from_provider_or_native_adapter | RunRecord → StopAttestation → ReservationRelease → AuditEvent; none |
+| RN-04 | running → terminal | runtime_terminal: trusted_correlated_terminal_status_or_exit_readback | RunRecord → ReservationRelease → AuditEvent; none |
+| RN-05 | running → unknown | status_unavailable_after_effect: external_effect_may_have_occurred AND no trusted stop proof | RunRecord → ReconciliationRecord → AuditEvent; none |
+| RN-06 | running → unreachable | transport_unavailable: provider_or_gateway_unreachable AND no trusted stop proof | RunRecord → ReconciliationRecord → AuditEvent; none |
+| RN-07 | unknown → stopped | reconciliation_stop: trusted_correlated_stop_attestation | RunRecord → StopAttestation → ReservationRelease → AuditEvent; none |
+| RN-08 | unreachable → terminal | reconciliation_terminal: trusted_correlated_terminal_status_or_exit_readback | RunRecord → ReservationRelease → AuditEvent; none |
+
+1. Authenticate the actor and load current committed state and guard evidence.
+2. Evaluate the named transition and every guard before preparing writes.
+3. Commit ordered writes under current storage authority; read back before external effects.
+4. A failed guard leaves prior state unchanged and records a typed denial; uncertain external execution holds capacity.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/230-lifecycle-projections.md#25-4-wait -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-230-L-25-4-WAIT-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 25.4 wait
+
+Record: `WaitRecord`. Writer: `controller`. States: `open`, `resolved`, `cancelled`. Terminal states: resolved, cancelled.
+
+![FIGURE 25.4-1](../figures/fig-25.4-1.svg)
+
+FIGURE 25.4-1 — wait transitions. Snapshot: 2026-11-11.
+
+Every arrow is one typed transition. Its event, guard, ordered writes and external effect are printed immediately below. No unlisted shortcut is permitted.
+
+TABLE 25.4-1 — Exact transitions and guards
+
+| ID | From → To | Event / guard | Ordered writes / external effect |
+|---|---|---|---|
+| WT-01 | open → resolved | resolution_recorded: resolution_id_new AND authorized_actor AND current_gate_matches | ResolutionRecord → WaitRecord → SuccessorLink → AuditEvent; successor_may_be_queued |
+| WT-02 | open → open | wait_replay: same_gate AND same_resolution_absent | ReplayAudit; return_existing_wait |
+| WT-03 | open → cancelled | wait_withdrawn: authorized_withdrawal AND reason_present | WaitRecord → AuditEvent; no_successor |
+| WT-04 | resolved → resolved | resolution_replay: same_resolution_id AND canonical_bytes_equal | ReplayAudit; return_original_resolution |
+
+1. Authenticate the actor and load current committed state and guard evidence.
+2. Evaluate the named transition and every guard before preparing writes.
+3. Commit ordered writes under current storage authority; read back before external effects.
+4. A failed guard leaves prior state unchanged and records a typed denial; uncertain external execution holds capacity.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/230-lifecycle-projections.md#25-5-assignment -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-230-L-25-5-ASSIGNMENT-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 25.5 assignment
+
+Record: `AssignmentRecord`. Writer: `controller`. States: `proposed`, `assigned`, `active`, `waiting`, `accepted`, `rework`, `blocked`, `cancelled`, `withdrawn`. Terminal states: accepted, cancelled, withdrawn.
+
+![FIGURE 25.5-1](../figures/fig-25.5-1.svg)
+
+FIGURE 25.5-1 — assignment transitions. Snapshot: 2026-11-11.
+
+Every arrow is one typed transition. Its event, guard, ordered writes and external effect are printed immediately below. No unlisted shortcut is permitted.
+
+TABLE 25.5-1 — Exact transitions and guards
+
+| ID | From → To | Event / guard | Ordered writes / external effect |
+|---|---|---|---|
+| AS-01 | proposed → assigned | assignment_bound: one_accountable_owner AND delegated_scope_recorded AND criteria_snapshot_present | AssignmentRecord → AuditEvent; none |
+| AS-02 | assigned → active | assignment_started: assignment_guard_passes AND required_profile_runtime_credentials_present AND admission_committed | AssignmentRecord → SendManifest → AuditEvent; dispatch_may_occur |
+| AS-03 | active → accepted | assignment_acceptance: report_verified AND all_assignment_criteria_pass AND evidence_refs_nonempty AND no_blocking_send AND no_unresolved_human_gate AND trusted_terminal_runtime_proof | AssignmentVerdict → AssignmentRecord → AuditEvent; feeds_objective_aggregate |
+| AS-04 | active → waiting | assignment_wait: valid_waiting_human_report AND trusted_stop_attestation AND gate_record_open | WaitRecord → AssignmentRecord → AuditEvent; no_acceptance |
+| AS-05 | waiting → active | assignment_resumed: authorized_resolution_recorded AND successor_attempt_selected | AssignmentRecord → SuccessorLink → AuditEvent; new_attempt_may_dispatch |
+| AS-06 | active → rework | criteria_failed: criterion_failure_recorded AND rework_scope_named | AssignmentVerdict → AssignmentRecord → AuditEvent; none |
+| AS-07 | active → blocked | blocking_dependency: blocking_dependency_or_capability_missing AND evidence_recorded | AssignmentRecord → AuditEvent; no_dispatch |
+| AS-08 | assigned → cancelled | assignment_cancelled: authorized_cancel AND reason_present | AssignmentRecord → AuditEvent; not_success |
+
+1. Authenticate the actor and load current committed state and guard evidence.
+2. Evaluate the named transition and every guard before preparing writes.
+3. Commit ordered writes under current storage authority; read back before external effects.
+4. A failed guard leaves prior state unchanged and records a typed denial; uncertain external execution holds capacity.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/230-lifecycle-projections.md#25-6-objective -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-230-L-25-6-OBJECTIVE-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 25.6 objective
+
+Record: `ObjectiveRecord`. Writer: `controller`. States: `draft`, `decomposing`, `in_acceptance`, `composing`, `delivering`, `awaiting_approval`, `accepted`, `rework`, `blocked`, `cancelled`, `withdrawn`. Terminal states: accepted, cancelled, withdrawn.
+
+![FIGURE 25.6-1](../figures/fig-25.6-1.svg)
+
+FIGURE 25.6-1 — objective transitions. Snapshot: 2026-11-11.
+
+Every arrow is one typed transition. Its event, guard, ordered writes and external effect are printed immediately below. No unlisted shortcut is permitted.
+
+TABLE 25.6-1 — Exact transitions and guards
+
+| ID | From → To | Event / guard | Ordered writes / external effect |
+|---|---|---|---|
+| OB-01 | draft → decomposing | objective_opened: objective_and_criteria_durable | ObjectiveRecord → CriteriaSet → AuditEvent; none |
+| OB-02 | decomposing → in_acceptance | acceptance_started: all_required_assignments_have_verdicts AND no_blocking_send | ObjectiveRecord → AcceptanceReview → AuditEvent; none |
+| OB-03 | in_acceptance → accepted | noncomposition_acceptance: authorized_director_acceptance AND current_criteria_set_all_pass AND evidence_refs_nonempty AND composition_required=false AND all_required_assignments_accepted AND no_blocking_send AND no_unresolved_human_gate AND (delivery_required=false OR delivery_verified) AND (approval_required=false OR approval_approved) | ObjectiveVerdict → ObjectiveRecord → AuditEvent; none |
+| OB-04 | in_acceptance → composing | composition_started: composition_required=true AND all_required_assignments_accepted AND no_blocking_send | CompositionRecord → ObjectiveRecord → AuditEvent; none |
+| OB-05 | composing → delivering | composition_accepted: composition_artifact_accepted AND delivery_required=true AND no_blocking_send | CompositionVerdict → ObjectiveRecord → AuditEvent; none |
+| OB-06 | composing → awaiting_approval | composition_accepted: composition_artifact_accepted AND delivery_required=false AND approval_required=true AND no_blocking_send | CompositionVerdict → ObjectiveRecord → AuditEvent; none |
+| OB-07 | composing → accepted | composition_acceptance: composition_artifact_accepted AND delivery_required=false AND approval_required=false AND no_blocking_send | CompositionVerdict → ObjectiveRecord → AuditEvent; none |
+| OB-08 | delivering → awaiting_approval | delivery_verified: delivery_evidence_verified AND approval_required=true | DeliveryEvidence → ObjectiveRecord → AuditEvent; none |
+| OB-09 | delivering → accepted | delivery_acceptance: delivery_evidence_verified AND approval_required=false | DeliveryEvidence → ObjectiveVerdict → ObjectiveRecord → AuditEvent; none |
+| OB-10 | awaiting_approval → accepted | human_approval: approval_required=true AND approval_approved=true AND no_blocking_send | ApprovalRecord → ObjectiveVerdict → ObjectiveRecord → AuditEvent; none |
+| OB-11 | in_acceptance → rework | acceptance_rework: required_assignment_missing_or_failed OR blocking_send_present OR required_gate_unmet | ObjectiveVerdict → ObjectiveRecord → ReworkScope → AuditEvent; none |
+| OB-12 | decomposing → blocked | objective_blocked: blocking_dependency_or_capability_missing | ObjectiveRecord → AuditEvent; no_acceptance |
+
+1. Authenticate the actor and load current committed state and guard evidence.
+2. Evaluate the named transition and every guard before preparing writes.
+3. Commit ordered writes under current storage authority; read back before external effects.
+4. A failed guard leaves prior state unchanged and records a typed denial; uncertain external execution holds capacity.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/230-lifecycle-projections.md#25-7-visibility-and-stop-proof-boundaries -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-230-L-25-7-VISIBILITY-AND-STOP-PROOF-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 25.7 Visibility and stop-proof boundaries
+
+```json
+{
+  "charged_record": "Reservation linked to AttemptRecord and RunRecord",
+  "allowed_proof": [
+    "trusted_correlated_terminal_runtime_proof",
+    "trusted_correlated_stop_attestation"
+  ],
+  "forbidden_proof": [
+    "report_receipt",
+    "waiting_report",
+    "logical_send_closure",
+    "timeout",
+    "lease_expiry",
+    "process_exit",
+    "cancellation_intent",
+    "uncorrelated_process_absence"
+  ],
+  "concrete_producer": "OPEN: native/provider stop-attestation producer, versioned transport, schema, and executable fault traces are not selected or exercised.",
+  "ordering": [
+    "read_provider_status_or_attestation",
+    "validate_correlation_and_signature_or_authority",
+    "write_run_proof",
+    "read_back_proof",
+    "write_reservation_release",
+    "read_back_release"
+  ]
+}
+```
+  </section>
+</spec>

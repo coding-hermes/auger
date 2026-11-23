@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd32/runbooks/controller-restart.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD32-RU-4CA192-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/controller-restart.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD32-RU-4CA192-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# Runbook: controller restart during a send
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/controller-restart.md#trigger -->
+  <section id="CHD-HANDBOOK-CHD32-RU-4CA192-TRIGGER-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Trigger
+The controller exits, loses its connection, or fails readiness while a send is `queued`, `admitted`, `dispatched` or `await_report`.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/controller-restart.md#do -->
+  <section id="CHD-HANDBOOK-CHD32-RU-4CA192-DO-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Do
+
+1. Start in `recovering`; acquire `/chd/system/writer` with a fresh `boot_id` and external compare-and-set. If ownership is unknown, remain refused with `503 writer_lease_held_or_unknown`.
+2. Require config validity, DuckBrain health and achieved `X-Durability: fsync` before dispatch.
+3. Read canonical room heads/messages, manifests/attempts, reservations, run references, reports, bonds, tickets/events, datasets and audits. Re-derive worklists; never use an in-memory queue or board file as authority.
+4. For `composed|queued|admitted`, re-drive the durable next step with the retained identity. For `dispatched`, reconcile the remote run before any POST. For `staging` datasets, mark failed and keep the report unpublished.
+5. Re-register scheduler lanes and read them back before accepting callbacks. Resume only after all recovery writes and evidence reads succeed.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/controller-restart.md#evidence -->
+  <section id="CHD-HANDBOOK-CHD32-RU-4CA192-EVIDENCE-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Evidence
+Record boot id, writer lease revision, read prefixes, effective manifest revisions, run-status probes, action, final capacity decision and test `WF-07-CONTROLLER-RESTART`. The expected result is one logical `send_id`, one attempt and at most one gateway run.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/controller-restart.md#never -->
+  <section id="CHD-HANDBOOK-CHD32-RU-4CA192-NEVER-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Never
+Do not reset `_head`, reclaim reserved sequence tails, infer that a missing response means no execution, or start a second worker from a failed process exit.
+  </section>
+</spec>

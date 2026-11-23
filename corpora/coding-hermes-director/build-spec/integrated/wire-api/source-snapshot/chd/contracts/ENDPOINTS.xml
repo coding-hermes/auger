@@ -1,0 +1,703 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-BUILD-SPEC-INTEGR-44DEF4-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#preamble -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# CODING-HERMES-DIRECTOR — HARNESS API ENDPOINT CONTRACT
+
+```
+DOC     : contracts/ENDPOINTS.md
+REV     : 1.1 (R31 revision pass 2026-11-09). Delta vs 1.0: §4.2 carries the
+          seven-value kind enum and the single non-member error contract;
+          §4.4 non-member wake target collapsed into 404 not_found;
+          §5 table aligned one-to-one with VOL-C §3.6 (the bare `403
+          forbidden` row is deleted — unknown and unreadable room are
+          indistinguishable `404 not_found`, cause in audit only).
+DATE    : 2026-11-09
+IMPLEMENTS: DESIGN.md v2 CT-02/CT-03/CT-05/CT-06/CT-07, §3.3, §4.4, §6
+STATUS  : CONTRACT TO BUILD AGAINST. No server exists yet; every shape
+          here is normative for the M2+ milestones. Base URL for all
+          paths below: the harness service (its per-lane gateway_url
+          target, FACT-27). All bodies are JSON (application/json).
+```
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#1-conventions -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-1-CONVENTIONS-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 1. Conventions
+
+- **Envelope.** Every error response uses:
+  ```json
+  { "error": { "code": "bad_request", "message": "human-readable", "detail": {} } }
+  ```
+- **Idempotency.** Mutating endpoints accept an optional `dedupe_key`
+  (string). A replayed `dedupe_key` returns the original response with
+  `200` (not `201`) and writes nothing.
+- **Timestamps** are RFC 3339 UTC strings.
+- **DuckBrain writes** go through the harness's own authenticated
+  surface; key names in §7 per endpoint.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#2-auth-model-vp -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-2-AUTH-MODEL-VP-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 2. Auth model (VP)
+
+Two principal classes:
+
+- **VP (virtual principal)** — the owner or a surface the owner
+  delegates (web UI, CLI on the owner's host, approved webhooks).
+  Authenticated by a VP token (operator-provisioned, like DuckBrain
+  role tokens, FACT-20).
+- **Internal agents** — director/manager/supervisor sessions,
+  authenticated by their role tokens.
+
+**Rule (normative):**
+- VP callers are **default-allow**: a valid VP token grants every
+  harness endpoint in this document (the owner may post to any room,
+  wake anyone, read anything, verify, and bump).
+- Internal agents are **default-deny for every endpoint in this
+  document** — even with a valid agent token, a request that claims VP
+  identity (`as: "vp"` or a VP token presented by an agent principal)
+  is refused `403 vp_identity_misuse` and counted as an integrity
+  violation (DESIGN §6.3). Agents reach rooms only via CT-05 DuckBrain
+  writes with their own role token; they never call the harness API as
+  VP.
+- Scheduler callbacks authenticate with the scheduler's own credential
+  (mutating credential held only by the harness service and scheduler,
+  §6.1); auth failure is terminal, no retry flood (FACT-12).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#3-signal-ingress -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-3-SIGNAL-INGRESS-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 3. Signal ingress
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#3-1-post-v1-signals-api-webhook-entry-point -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-3-1-POST-V1-SIGNALS-API-WEBHOO-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.1 `POST /v1/signals` — API/webhook entry point
+
+External systems (webhook, CI, another fleet component) push a signal;
+the harness turns it into a room message and/or a wake.
+
+Request:
+```json
+{
+  "source": "ci-webhook",            // caller-chosen source id
+  "type": "board-row|alert|external-event",
+  "payload": { "board_row": "row-42" },
+  "target_room": "obj-fleet",        // existing room
+  "as": "vp",                        // literal; VP-only endpoint
+  "dedupe_key": "gh-run-1234"
+}
+```
+Response `202`:
+```json
+{
+  "signal_id": "sig-20261107-1530-x9y2",
+  "accepted": true,
+  "message_seq": 41,
+  "wakes": ["mgr-infra"]
+}
+```
+Writes: message at `chd/room/&lt;target_room&gt;/&lt;seq&gt;` (`from: "signal:&lt;source&gt;"`),
+wake decisions recorded in the send manifest (§7).
+Errors: `400` malformed, `401` unauthenticated, `403` non-VP caller,
+`404` unknown room, `409` dedupe replay (only when body differs),
+`429` gateway at `max_inflight` (signal logged, wake queued, not lost),
+`503` DuckBrain down (§5.3: nothing dispatches).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#3-2-mcp-tool-surface -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-3-2-MCP-TOOL-SURFACE-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.2 MCP tool surface
+
+Exposed to owner-side MCP clients; each tool is a thin wrapper on an
+endpoint below (same request/response shapes, same auth):
+
+| MCP tool | Backing endpoint |
+|----------|------------------|
+| `chd_create_room` | `POST /v1/rooms` |
+| `chd_post_message` | `POST /v1/rooms/{room}/messages` |
+| `chd_reply` | `POST /v1/rooms/{room}/messages/{seq}/replies` |
+| `chd_wake` | `POST /v1/rooms/{room}/messages/{seq}/wake` |
+| `chd_read_room` | `GET /v1/rooms/{room}/messages` |
+| `chd_verify_report` | `POST /v1/reports/verify` |
+| `chd_status` | `GET /v1/status` |
+
+MCP exposure rides Muster or Hermes-native MCP (UQ-4/OQ-4); the tool
+names and payloads above are the stable part of the contract.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#3-3-cli-verbs -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-3-3-CLI-VERBS-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.3 CLI verbs
+
+```
+chd rooms                                  -&gt; GET /v1/status
+chd rooms create --kind objective ...      -&gt; POST /v1/rooms
+chd post &lt;room&gt; --body "..." [--to X]      -&gt; POST /v1/rooms/&lt;room&gt;/messages
+chd reply &lt;room&gt; &lt;seq&gt; --body "..."        -&gt; POST /v1/rooms/&lt;room&gt;/messages/&lt;seq&gt;/replies
+chd wake &lt;room&gt; &lt;seq&gt; --agent mgr-infra    -&gt; POST /v1/rooms/&lt;room&gt;/messages/&lt;seq&gt;/wake
+chd read &lt;room&gt; [--since &lt;seq&gt;] [--thread &lt;seq&gt;]
+                                           -&gt; GET /v1/rooms/&lt;room&gt;/messages
+chd verify &lt;report-id&gt;                     -&gt; POST /v1/reports/verify
+```
+CLI runs on the owner's host and authenticates as VP (default-allow).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#3-4-scheduler-callback-lane-contract-ct-02-ct-03-rl-1 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-3-4-SCHEDULER-CALLBACK-LANE-CO-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.4 Scheduler-callback lane contract (CT-02/CT-03, RL-1)
+
+The harness registers NORMAL scheduler cooldown lanes whose per-lane
+`gateway_url` is the harness API (FACT-27). When a lane fires, the
+scheduler POSTs the tick here:
+
+`POST /v1/cycle`
+```json
+{
+  "cycle": "director-sync",          // or "manager-&lt;agent-id&gt;"
+  "lane": "director-sync-lane",
+  "namespace": "director",
+  "ts": "2026-11-07T18:00:00Z",
+  "dedupe_key": "tick-20261107-1800-director-sync"
+}
+```
+Response `200` (the scheduler's tick completes cleanly):
+```json
+{
+  "cycle": "director-sync",
+  "accepted": true,
+  "sends_composed": 3,
+  "sends_queued": 1,
+  "bump_requests": 3
+}
+```
+Behavior: the harness calls itself back into its cycle path — compose
+sends under per-gateway `max_inflight`, request admission ONLY via the
+scheduler bump API `POST /api/v1/projects/{name}/bump` (FACT-14) or the
+owner-approved `wake_once` extension (Q-6) — and returns 2xx. It never
+spawns directly (R-018) and never overrides admission (R-003).
+Writes: `chd/send/&lt;send-id&gt;/manifest` per composed send.
+Errors: `401` callback not from the scheduler, `400` unknown cycle,
+`429` nothing dispatched (all sends queued — still 2xx to the scheduler
+when the callback itself is valid; 429 is reserved for other callers).
+With zero trigger lanes registered this endpoint is never called and the
+harness emits no gateway traffic (R-012).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#4-room-ops -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-4-ROOM-OPS-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 4. Room ops
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#4-1-post-v1-rooms-create-room-vp -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-4-1-POST-V1-ROOMS-CREATE-ROOM-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.1 `POST /v1/rooms` — create room (VP)
+
+Request:
+```json
+{
+  "id": "obj-fleet",
+  "kind": "objective",
+  "participants": ["director", "mgr-infra", "mgr-fleet-ops"],
+  "opening_post": { "from": "director", "kind": "directive", "body": "..." },
+  "dedupe_key": "obj-fleet"
+}
+```
+Response `201`:
+```json
+{ "room": "obj-fleet", "kind": "objective", "seq": 1, "created": true }
+```
+Validation: kind-consistent membership (§1.3 DATA-MODEL); `space`
+refused `403 registry_unjustified` when a member has no registry entry
+(CT-09). Writes: `chd/room/&lt;id&gt;/1` (opening post).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#4-2-post-v1-rooms-room-messages-post-message-vp-or-agent-surface -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-4-2-POST-V1-ROOMS-ROOM-MESSAGE-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.2 `POST /v1/rooms/{room}/messages` — post message (VP or agent surface)
+
+`kind` is one of the complete seven-value enum `msg | question | status |
+directive | task | report | incident` (R31-003; identical in VOL-B §3.1 and
+VOL-C §3.6). Per-role/per-room legality is the single VOL-C §3.6 table
+(VOLC-066): a prohibited kind is refused `403 kind_not_allowed` naming
+`{kind, room_kind, role}`.
+
+Request:
+```json
+{
+  "from": "owner",
+  "to": "mgr-infra",                 // agent id | "group" | "@mgr-infra"
+  "kind": "msg",
+  "body": "prioritize the crier red main",
+  "attach": [],
+  "dedupe_key": "owner-177"
+}
+```
+Response `201`:
+```json
+{
+  "room": "obj-fleet",
+  "seq": 42,
+  "key": "chd/room/obj-fleet/42",
+  "wakes": ["mgr-infra"]
+}
+```
+Semantics: `from: "owner"` posts are **not** echoed back to the owner
+(no self-echo, RL-6). `to` decides wakes only; the log is visible to
+every member. Writes: `chd/room/&lt;room&gt;/&lt;seq&gt;`.
+Non-member contract (single, all doors — R31-002): a room that does not
+exist **or** is not readable by the caller returns one `404 not_found`
+with the identical body shape in both cases — existence and membership
+are deliberately indistinguishable; the detailed denial cause is written
+to the audit record only (VOLC-064).
+Errors: `403 identity_mismatch` (owner-id spoofing by a non-owner
+principal, VOLC-001); `403 kind_not_allowed` (§3.6 legality, VOL-C);
+`404 not_found` (unknown or unreadable room, per the non-member contract
+above); `429` gateway at `max_inflight` (message persisted, wake queued —
+the log is indifferent to wake timing). The complete code table is §5.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#4-3-post-v1-rooms-room-messages-seq-replies-reply-into-a-thread -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-4-3-POST-V1-ROOMS-ROOM-MESSAGE-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.3 `POST /v1/rooms/{room}/messages/{seq}/replies` — reply into a thread
+
+Request:
+```json
+{ "from": "mgr-infra", "to": "group", "body": "on it — details tonight", "dedupe_key": "r-42-1" }
+```
+Response `201`:
+```json
+{ "room": "obj-fleet", "seq": 43, "thread": 42, "key": "chd/room/obj-fleet/43", "wakes": ["director"] }
+```
+The new message carries `thread: &lt;seq&gt;`. Threads are reads over the
+same log — no separate storage.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#4-4-post-v1-rooms-room-messages-seq-wake-wake-vp -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-4-4-POST-V1-ROOMS-ROOM-MESSAGE-S012" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.4 `POST /v1/rooms/{room}/messages/{seq}/wake` — @-wake (VP)
+
+Force a single-agent wake pointing at a message that stays searchable in
+the log (RL-6). Request:
+```json
+{ "agent": "mgr-infra", "as": "vp", "note": "see this now" }
+```
+Response `202`:
+```json
+{ "woken": ["mgr-infra"], "queued": false, "mode": "REUSE" }
+```
+`mode` is one of the only two delivery modes (CT-04): the message lands
+as the next turn of the bonded session (REUSE) or opens a fresh session
+(NEW) per the agent's `reuse_policy`. Target must be a member of the
+room: an unknown **or** non-member agent returns one `404 not_found` —
+existence and membership are indistinguishable (same non-member contract
+as §4.2, R31-002); the denial cause is recorded in the audit record only.
+Subject to per-gateway limits: at
+capacity the wake queues and the response is `202 {queued: true}`.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#4-5-post-v1-rooms-room-bump-bump-post-v1-rooms-room-missing-replies-notify -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-4-5-POST-V1-ROOMS-ROOM-BUMP-BU-S013" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.5 `POST /v1/rooms/{room}/bump` — bump + `POST /v1/rooms/{room}/missing-replies/notify`
+
+**Bump** (VP): re-paces the room's outstanding sends — for each open
+send in the room, request one scheduler admission via bump (FACT-14):
+```json
+{ "as": "vp", "scope": "all-open-sends" }
+```
+Response `200`:
+```json
+{ "room": "obj-fleet", "bumped": 2, "already_queued": 1 }
+```
+
+**Missing-reply notify** (VP or the verify loop): compute members who
+were addressed (`to:` them, or `group`) since `since_seq` and have no
+later message in the room, then wake them:
+```json
+{ "since_seq": 40, "as": "vp" }
+```
+Response `200`:
+```json
+{
+  "room": "obj-fleet",
+  "missing": ["mgr-fleet-ops"],
+  "notified": ["mgr-fleet-ops"],
+  "ladder_started": []
+}
+```
+Agents already inside the re-prompt ladder (§5.1) are reported in
+`ladder_started` instead of being double-woken. Writes: wakes recorded
+in `chd/send/&lt;send-id&gt;/manifest` rows; no room write unless a wake
+message is composed.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#4-6-post-v1-reports-verify-report-verification-ct-06 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-4-6-POST-V1-REPORTS-VERIFY-REP-S014" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.6 `POST /v1/reports/verify` — report verification (CT-06)
+
+Idempotent re-check of a report against its send.
+
+Request:
+```json
+{ "report_id": "r-20261107-1531-k4m8" }
+```
+or, to verify a raw report v3 before posting:
+```json
+{ "report": { "schema_version": 3, "envelope": {
+  "id": "r-20261107-1531-k4m8", "send_id": "s-20261107-1530-a1b2",
+  "attempt_id": "at-20261107-1530-c3d4", "request_ref": "/chd/room/task-crier-42/m000000000041",
+  "session_ref": {"mode":"REUSE", "session_key":"chd-sess-sup-crier"},
+  "status": "done", "summary": "...", "content_ref": "/chd/report/s-20261107-1530-a1b2/r-20261107-1531-k4m8",
+  "content_digest": "sha256:...", "ingest_ts": "service-stamped",
+  "assignment": {"required_content":"free_form", "validation_policy":"none", "completion_policy":"manager_reported"}
+}, "content": {"class":"free_form", "text":"..."} } }
+```
+Response `200`:
+```json
+{
+  "report_id": "r-20261107-1531-k4m8",
+  "verdict": "verified",                 // verified | no_report | bad_report | failed
+  "checks": {
+    "schema_valid": true,
+    "freshness": true,                   // ingest_ts &gt;= dispatch_ts for same attempt
+    "artifacts_present": true,
+    "artifact_sampled": true             // harness samples existence (M5)
+  },
+  "send_closed": true
+}
+```
+Failure shapes: `verdict: "bad_report"` with
+`checks.freshness: false` and `reason: "stale"` when the v3 freshness rule
+(DATA-MODEL §1.5) fails; `reason: "done_without_artifacts"`; or
+`reason: "wrong_request"|"attempt_mismatch"`. Writes: outcome recorded in the
+send manifest; a `bad_report` starts the §5.1 ladder. Errors: `404` unknown
+report/send, `422 schema_unsupported|schema_validation|dataset_row_invalid`
+for v3 schema negotiation/content/row failures, `503` DuckBrain down (cannot
+read the report message → no verdict is manufactured).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#4-7-get-v1-rooms-room-messages-ui-read-endpoint -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-4-7-GET-V1-ROOMS-ROOM-MESSAGES-S015" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.7 `GET /v1/rooms/{room}/messages` — UI read endpoint
+
+Read-scoped room log for the web UI and `chd read`. Query params:
+`since` (seq), `thread` (root seq), `limit` (1–500, default 100).
+
+Response `200`:
+```json
+{
+  "room": "obj-fleet",
+  "messages": [
+    { "seq": 41, "from": "director", "to": "group", "kind": "directive",
+      "body": "...", "thread": null, "attach": [], "ts": "..." }
+  ],
+  "next_since": 42
+}
+```
+Auth: VP tokens read anything. UI read-only tokens (§6.1 supervisor
+tier) read only rooms their agent is a member of — read scoping per
+§4.6/§6.2: a caller that cannot name a room gets `404` (not `403`, so
+key names do not leak). Errors: `404` unknown/unreadable room,
+`400` bad `limit`.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#4-9-ticket-operations-controller-routed-boardctl-compatible -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-4-9-TICKET-OPERATIONS-CONTROLL-S016" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.9 Ticket operations (controller-routed, boardctl-compatible)
+
+Tickets are shared control-plane state. These endpoints are exposed to the
+same principal classes as `chd_ticket_*` MCP tools; boardctl uses these APIs
+rather than a local authoritative board. All mutations require the controller
+CAS token described below and use the `TicketRecord` schema in
+`contracts/DATA-MODEL.md §1.9`.
+
+#### `POST /v1/tickets` / `chd_ticket_create`
+
+Request:
+```json
+{
+  "request_id": "req-rel-412",
+  "ticket_id": "REL-412",
+  "title": "Release readiness pack",
+  "kind": "epic",
+  "workflow": {"workflow_id":"chd.objective", "version":1,
+    "machine_ref":"build-spec/state-machines.json#/machines/0"},
+  "parent_id": null, "depends_on": [],
+  "accountable_owner": "director",
+  "assignees": ["mgr-infra"], "watchers": ["vp"],
+  "criteria": [{"criterion_id":"C1","text":"all evidence accepted",
+    "provenance":"vp-supplied","version":1,"evidence_refs":[]}],
+  "authorization": {"required_grants":["ticket.write"],"actor_scope":"director"},
+  "links": {"objective_id":"obj-relpack","room":"obj-relpack"},
+  "priority": 5
+}
+```
+The controller assigns an unused id when `ticket_id` is omitted, validates
+workflow binding, ownership, acyclic edges and authorization, then atomically
+writes the TicketRecord and returns `201 {ticket, revision: 1}`. Same
+`request_id` replays the original response; a different body returns `409
+admission_conflict`.
+
+#### `GET /v1/tickets/{ticket_id}` / `chd_ticket_get`
+
+Returns the TicketRecord, current machine-derived allowed transitions, the
+latest immutable transition event, link consistency flags and `revision`. An
+unknown or unreadable ticket returns the shared `404 not_found` shape.
+
+#### `PATCH /v1/tickets/{ticket_id}` / `chd_ticket_update`
+
+Request `{request_id, expected_revision, title?, kind?, parent_id?,
+depends_on?, accountable_owner?, assignees?, watchers?, criteria?,
+authorization?, links?, priority?}`. The controller checks the principal's
+family/room grant and governed owner/dependency rules before atomically
+updating the record, appending an audit event, and returning the new revision.
+No state transition is implicit in a field update.
+
+#### `POST /v1/tickets/{ticket_id}/transitions` / `chd_ticket_transition`
+
+Request `{request_id, expected_revision, to, reason?, evidence_refs?}`. The
+controller resolves the ticket's `machine_ref` against
+`build-spec/state-machines.json`, checks the registered edge, writer and
+required facts, then atomically writes the new TicketRecord revision, immutable
+`/chd/ticket/&lt;id&gt;/event/m&lt;seq:012d&gt;` event and audit record. The operation
+returns `200` with the updated ticket and event. It cannot create a second
+workflow or bypass the objective/assignment state canon.
+
+#### `GET /v1/tickets` / `chd_ticket_query`
+
+Supports keyset filters `workflow`, `state`, `kind`, `accountable_owner`,
+`assignee`, `parent_id`, `depends_on`, `room`, `objective_id`, `updated_since`,
+`inconsistent`, and `limit` (1–500), with `cursor` and `next_cursor`. Results
+include link consistency flags and the controller revision. The query is the
+reconciliation input for boardctl exports and restart recovery.
+
+#### `POST /v1/tickets/import` and `GET /v1/tickets/export`
+
+Export returns a read-only JSONL board view. Import matches rows by
+`ticket_id` (or a registered source alias), reports `added`, `updated`,
+`conflicts`, and `ignored`, never deletes by absence, and cannot alter state
+unless an authorized transition request with `expected_revision` is emitted.
+Conflicting board edits are preserved as reconciliation records; no blind
+last-writer-wins path exists.
+
+Errors are `400 bad_request`, `401 unauthenticated`, `403 tool_not_granted` or
+`ticket_transition_not_allowed`, `404 not_found`, `409 ticket_revision_conflict`
+or `duplicate`, `422 workflow_version_unknown`/`ticket_owner_required`, and
+`503 duckbrain_unavailable`. Failed validation and failed persistence make no
+partial TicketRecord, event, audit or link write. Every call is audited with
+principal, operation, ticket, expected/actual revision and decision.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#4-10-post-v1-workers-dispatch-managed-worker-dispatch -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-4-10-POST-V1-WORKERS-DISPATCH-S017" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.10 `POST /v1/workers/dispatch` — managed worker dispatch
+
+This is the only conforming worker-launch operation. The transport is explicitly
+**foreman → controller → gateway**: the controller brokers the gateway call,
+owns the shared reservation ledger, and supplies the profile-bound gateway
+credential. Direct foreman → gateway transport is not authorized in the
+conformance envelope.
+
+Request (all fields are persisted with the durable request):
+```json
+{
+  "request_id": "wr-20261109-1015-a1b2",
+  "retry_identity": "CRIER-412:worker:wrk-crier-01:attempt:1",
+  "worker": {"agent_id":"wrk-crier-01", "profile":"chd-worker-crier-01"},
+  "work": {"ticket_id":"CRIER-412", "assignment_id":"a-7", "room":"task-crier-42", "thread_root":41, "send_id":"s-7", "attempt_id":"at-7"},
+  "instructions": {"body_ref":"/chd/room/task-crier-42/m000000000041", "criteria_ref":"CRIER-412#criteria", "inline_instructions":"bounded text"},
+  "workspace": {"workdir":"/srv/work/crier-412", "scope":["repo","tmp"]},
+  "runtime": {"provider":"deepseek", "model":"deepseek-flash", "context_window":160000},
+  "authorization": {"principal":"foreman-crier", "capability":"worker.dispatch"},
+  "admission": {"mode":"run_now"}
+}
+```
+
+Validation is authentication → role/capability → ticket/assignment/thread
+refs → non-default distinct profile → workspace scope → provider/model/context
+pass-through → shared capacity reservation → gateway dispatch. The response is
+`202 {"request_id","run_id","state":"queued|admitted|running"}`. The
+controller persists `request_id`, `run_id`, `retry_identity`, `ticket_id`,
+`assignment_id`, `send_id`, `attempt_id`, profile, gateway, and authorization
+path; no CLI launch or inherited foreman environment is permitted.
+
+`GET /v1/workers/runs/{run_id}` returns asynchronous state (`queued`, `admitted`,
+`running`, `succeeded`, `failed`, `cancelled`, `uncertain`, `unreachable`),
+progress heartbeat, result/report reference, and effective profile/config
+revision. `POST /v1/workers/runs/{run_id}/cancel` records cancellation intent,
+requests gateway stop, waits for proven stop before releasing capacity, and
+returns the durable result. Timeout uses the same recovery path. Same
+`request_id` replays the original `run_id`; a new request with the same
+`retry_identity`/logical work returns `409 duplicate` with the existing ids.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#4-11-post-v1-assignments-wake-request-enqueue-only-or-run-now -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-4-11-POST-V1-ASSIGNMENTS-WAKE-S018" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.11 `POST /v1/assignments` — wake request (`enqueue_only` or `run_now`)
+
+This operation is controller-authenticated and accepts supervisor requests for
+its assigned foreman and director requests within delegated scope. The scheduler
+remains authoritative for timed lanes; for immediate requests the controller's
+bounded admission path owns the same durable per-gateway/per-agent ledger (one
+atomic reserve, no second counter), with `scheduler_bump_fallback` only when
+configured. `enqueue_only` always persists and returns `202 {"state":"queued"}`
+without a gateway call. `run_now` checks authorization, target readiness and
+shared capacity atomically; at full cap it persists the request and returns
+`202 {"state":"queued","reason":"at_capacity"}` (or `429 at_capacity` on
+synchronous callers), never bypassing the cap. Same `request_id` is idempotent;
+a different id for the same ticket + assignee + open send returns `409 duplicate`
+with the winning `send_id`/`attempt_id`.
+
+Request fields are `{request_id, retry_identity, ticket_id, assignment_id,
+room, thread_root, target_agent, target_gateway, admission, instructions_ref,
+criteria_ref, authorization}`. The target gateway and agent must be ready and
+have capacity under the shared ledger before an atomic reservation. Timed
+scheduler and supervisor-triggered requests race on that primitive: under cap 1
+exactly one dispatch/attempt wins and the loser receives the winner ids; when
+full, both remain queued and exactly one dispatch occurs when a slot is proven
+free. Restart re-derives reservations from manifests, preserving duplicate
+identity and preventing leaked slots.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#4-12-get-v1-status-harness-observability -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-4-12-GET-V1-STATUS-HARNESS-OBS-S019" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.12 `GET /v1/status` — harness observability
+
+Response `200`:
+```json
+{
+  "agents": 6, "rooms": 4, "gateways": [
+    { "id": "gw-main", "inflight": 2, "max_inflight": 4, "queued": 0 }
+  ],
+  "counters": {
+    "sends_total": 118, "sends_deferred": { "backpressure": 3, "drained": 12 },
+    "reports_missing_total": 2, "reprompts_total": { "0": 1, "1": 0, "2": 0 }
+  }
+}
+```
+(Counter names per DESIGN §3.4.)
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#5-common-error-codes -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-5-COMMON-ERROR-CODES-S020" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 5. Common error codes
+
+Single public error contract (R31-002/003). This table is identical to
+VOL-C §3.6 — no second variant exists anywhere (schema, tools, probes).
+Non-member rule: a room (or agent/report/ticket target) that does not
+exist **or** is not accessible to the caller yields the identical `404
+not_found` status and body shape; the denial cause is recorded only in
+the authorized audit record (VOLC-064). There is no `403 forbidden`
+code: agent tokens on VP endpoints are `403 vp_identity_misuse`, and
+non-member room access is `404 not_found`.
+
+| Status | `error.code` | When |
+|--------|--------------|------|
+| 400 | `bad_request` | Malformed body, unknown field, bad limit/pattern |
+| 401 | `unauthenticated` | Missing/invalid token |
+| 403 | `identity_mismatch` | Body identity ≠ credential (VOLC-001) |
+| 403 | `kind_not_allowed` | Message-kind legality violation (VOL-C §3.6) |
+| 403 | `vp_identity_misuse` | Internal agent claiming VP identity — default-deny, counted |
+| 403 | `approval_required` | Approval gate denied/explicitly refused |
+| 403 | `policy_resync_not_granted` | Resync without authority |
+| 403 | `tool_not_granted` | No effective `use` for the operation |
+| 403 | `assignment_not_grant` | Assignment payload tried to mutate permissions |
+| 403 | `registry_unjustified` | `space` creation without registry justification (CT-09) |
+| 404 | `not_found` | Unknown **or** unreadable room/agent/report/ticket — one code, one shape (non-member contract above) |
+| 409 | `duplicate` | `dedupe_key` replay with differing body |
+| 409 | `report_already_posted` | Second different report for one (send, attempt) |
+| 409 | `thread_not_owned` | Reply to a subthread no live bond owns |
+| 409 | `admission_conflict` | Idempotency key already names other work |
+| 409 | `ticket_revision_conflict` | Stale `expected_revision` |
+| 422 | `schema_unsupported` / `schema_validation` / `dataset_row_invalid` | Report v3 schema negotiation, content validation, or typed dataset row failure |
+| 422 | `attempt_target_conflict` | Reused gateway key against a new target |
+| 429 | `at_capacity` | Gateway at `max_inflight`; message persisted, wake queued |
+| 503 | `duckbrain_unavailable` | Store down — sends do not dispatch (§5.3), no verdicts manufactured |
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#6-endpoint-actor-matrix -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-6-ENDPOINT-ACTOR-MATRIX-S021" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 6. Endpoint → actor matrix
+
+| Endpoint | VP | director | manager | supervisor | scheduler |
+|---|---|---|---|---|---|
+| `POST /v1/signals` | ✅ default-allow | ❌ deny | ❌ deny | ❌ deny | n/a |
+| `POST /v1/cycle` | ❌ | ❌ | ❌ | ❌ | ✅ (callback credential) |
+| room ops (create/post/reply/wake/bump/notify) | ✅ | ❌ (via CT-05 room writes) | ❌ | ❌ | ❌ |
+| `POST /v1/reports/verify` | ✅ | ❌ | ❌ | ❌ | ❌ |
+| `GET /v1/rooms/*/messages` | ✅ | read-only, own rooms | read-only, own rooms | read-only, own rooms | ❌ |
+| `GET /v1/status` | ✅ | ❌ | ❌ | ❌ | ❌ |
+
+Agents post INTO rooms with their role token (CT-05); the router wakes
+targets (CT-07). They never need these endpoints.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#7-endpoint-duckbrain-key-write-map -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-7-ENDPOINT-DUCKBRAIN-KEY-WRITE-S022" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 7. Endpoint → DuckBrain key-write map
+
+| Endpoint | Keys written |
+|----------|--------------|
+| `POST /v1/rooms` | `chd/room/&lt;room-id&gt;/1` |
+| `POST /v1/rooms/{room}/messages` | `chd/room/&lt;room-id&gt;/&lt;seq&gt;` |
+| `.../messages/{seq}/replies` | `chd/room/&lt;room-id&gt;/&lt;seq&gt;` (with `thread`) |
+| `.../messages/{seq}/wake` | none (wake recorded in send manifest) |
+| `POST /v1/rooms/{room}/bump` | none (scheduler bump only) |
+| `.../missing-replies/notify` | none (manifest updates only) |
+| `POST /v1/reports/verify` | `chd/send/&lt;send-id&gt;/manifest` (outcome) |
+| `POST /v1/signals` | `chd/room/&lt;target_room&gt;/&lt;seq&gt;` + manifest rows |
+| `POST /v1/cycle` | `chd/send/&lt;send-id&gt;/manifest` per composed send |
+| config change (startup) | `chd/registry/&lt;agent-id&gt;`, `chd/bond/&lt;agent-id&gt;` — **harness only** |
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#8-complete-operation-reference -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-8-COMPLETE-OPERATION-REFERENCE-S023" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 8. Complete operation reference
+
+The endpoint cards and failure branches are authoritative in `build-spec/VOL-E-operation-reference.md` §7. This contract remains the transport-level source for endpoint paths and JSON shapes; VOL-E adds the operation identity, ordered validation, idempotency boundary, storage effects, attachment lifecycle and test cross-link. Every endpoint below is represented there: signals/cycle, room create/post/reply/wake/bump/notify, report verification, room read, ticket CRUD/transition/query/import/export, status, administration, worker dispatch/run control, grants, approvals, archive and profile operations.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#8-1-common-request-response-error-rules -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-8-1-COMMON-REQUEST-RESPONSE-ER-S024" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 8.1 Common request/response/error rules
+
+All mutating endpoints accept `request_id` (required, 1–128) and optional `dedupe_key` (1–256); requests are JSON `application/json`, unknown fields fail `400 bad_request`, and mutating success is acknowledged only after fsync. `202` means queued or approval-pending, not completed. Every error code resolves to VOL-E §4; no endpoint invents a private error vocabulary.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#8-2-administration-and-lifecycle-endpoint-shapes -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-8-2-ADMINISTRATION-AND-LIFECYC-S025" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 8.2 Administration and lifecycle endpoint shapes
+
+`POST /v1/admin/bootstrap` accepts `{request_id, schema_version:1, control_namespace:"chd", archive_namespace:"chd-archive"}` and returns `{ok, bootstrap_id, readiness}`. `POST /v1/admin/agents` accepts `{request_id, id, role, profile, gateway, model, context_limit, max_turns, token_budget, skills, tools, rooms}`; `POST /v1/admin/gateways` accepts `{request_id, id, url, transport, auth_token_ref, max_inflight}`. `POST /v1/admin/profiles/{agent}/sync` accepts `{request_id, desired_config_digest, skills:[{name,version,digest}], assets:[{name,digest,content_ref}], rollback_to_config_digest?}` and returns desired/effective digests plus `drifted`. Missing profile, shared/default profile and digest mismatch return `422 profile_not_distinct` or `converge_failed`; no partial effective config is published.
+
+`POST /v1/workers/provision` accepts `{request_id, worker_id, work_uid, profile, model, context_limit, lifetime, workspace}`. `POST /v1/admin/agents/{agent}/offboard` accepts `{request_id, reason, drain_timeout_s, archive:true, revoke_credentials:true}` and returns `{state:"retiring", poll_ref}`; final retirement is reported only after archive/revoke/registry evidence. These shapes are operation OP-001–OP-009 and OP-040–OP-041.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#8-3-attachment-endpoints -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-8-3-ATTACHMENT-ENDPOINTS-S026" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 8.3 Attachment endpoints
+
+`POST /v1/attachments` accepts `{request_id, content_type, size, digest, transfer:"binary"|"reference", reference?}` and returns a staging `attachment_id`. `POST /v1/attachments/{id}/finalize` accepts `{request_id, digest, size}` and returns a published reference. `POST /v1/attachments/{id}/cleanup` accepts `{request_id, reason}`. Supported content types and limits are exactly VOL-E §3.2; image/PDF binary upload is unsupported and must be a reference. Staging is not readable or linkable.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#8-4-ticket-grant-archive-and-policy-endpoint-expansion -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-8-4-TICKET-GRANT-ARCHIVE-AND-P-S027" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 8.4 Ticket, grant, archive and policy endpoint expansion
+
+Ticket endpoint request/response fields are the `TicketRecord` fields in DATA-MODEL §1.9 plus `request_id`, `expected_revision`, `to`, `reason`, and `evidence_refs` as appropriate. Grant issue/revoke accepts the GrantRecord lineage and scope fields from VOL-B §3.13; approval resolution accepts `{approval_id, decision:"approved"|"refused", reason, evidence_refs}`. Archive export/restore/read accepts the SessionArchive, ExportManifest, ArchiveGapRecord and explicit selector/grant fields from DATA-MODEL §1.10–§1.11 and VOL-B §3.12/§5.10. The action-specific failure and rollback contract is in VOL-E §7 OP-023–OP-041.
+
+
+
+&lt;!-- END VOL-E ENDPOINT EXPANSION --&gt;
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#8-complete-operation-reference -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-8-COMPLETE-OPERATION-REFERENCE-S028" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 8. Complete operation reference
+
+The endpoint cards and failure branches are authoritative in `build-spec/VOL-E-operation-reference.md` §7. This contract remains the transport-level source for endpoint paths and JSON shapes; VOL-E adds the operation identity, ordered validation, idempotency boundary, storage effects, attachment lifecycle and test cross-link. Every endpoint below is represented there: signals/cycle, room create/post/reply/wake/bump/notify, report verification, room read, ticket CRUD/transition/query/import/export, status, administration, worker dispatch/run control, grants, approvals, archive and profile operations.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#8-1-common-request-response-error-rules -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-8-1-COMMON-REQUEST-RESPONSE-ER-S029" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 8.1 Common request/response/error rules
+
+All mutating endpoints accept `request_id` (required, 1–128) and optional `dedupe_key` (1–256); requests are JSON `application/json`, unknown fields fail `400 bad_request`, and mutating success is acknowledged only after fsync. `202` means queued or approval-pending, not completed. Every error code resolves to VOL-E §4; no endpoint invents a private error vocabulary.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#8-2-administration-and-lifecycle-endpoint-shapes -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-8-2-ADMINISTRATION-AND-LIFECYC-S030" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 8.2 Administration and lifecycle endpoint shapes
+
+`POST /v1/admin/bootstrap` accepts `{request_id, schema_version:1, control_namespace:"chd", archive_namespace:"chd-archive"}` and returns `{ok, bootstrap_id, readiness}`. `POST /v1/admin/agents` accepts `{request_id, id, role, profile, gateway, model, context_limit, max_turns, token_budget, skills, tools, rooms}`; `POST /v1/admin/gateways` accepts `{request_id, id, url, transport, auth_token_ref, max_inflight}`. `POST /v1/admin/profiles/{agent}/sync` accepts `{request_id, desired_config_digest, skills:[{name,version,digest}], assets:[{name,digest,content_ref}], rollback_to_config_digest?}` and returns desired/effective digests plus `drifted`. Missing profile, shared/default profile and digest mismatch return `422 profile_not_distinct` or `converge_failed`; no partial effective config is published.
+
+`POST /v1/workers/provision` accepts `{request_id, worker_id, work_uid, profile, model, context_limit, lifetime, workspace}`. `POST /v1/admin/agents/{agent}/offboard` accepts `{request_id, reason, drain_timeout_s, archive:true, revoke_credentials:true}` and returns `{state:"retiring", poll_ref}`; final retirement is reported only after archive/revoke/registry evidence. These shapes are operation OP-001–OP-009 and OP-040–OP-041.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#8-3-attachment-endpoints -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-8-3-ATTACHMENT-ENDPOINTS-S031" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 8.3 Attachment endpoints
+
+`POST /v1/attachments` accepts `{request_id, content_type, size, digest, transfer:"binary"|"reference", reference?}` and returns a staging `attachment_id`. `POST /v1/attachments/{id}/finalize` accepts `{request_id, digest, size}` and returns a published reference. `POST /v1/attachments/{id}/cleanup` accepts `{request_id, reason}`. Supported content types and limits are exactly VOL-E §3.2; image/PDF binary upload is unsupported and must be a reference. Staging is not readable or linkable.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/wire-api/source-snapshot/chd/contracts/ENDPOINTS.md#8-4-ticket-grant-archive-and-policy-endpoint-expansion -->
+  <section id="CHD-BUILD-SPEC-INTEGR-44DEF4-8-4-TICKET-GRANT-ARCHIVE-AND-P-S032" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 8.4 Ticket, grant, archive and policy endpoint expansion
+
+Ticket endpoint request/response fields are the `TicketRecord` fields in DATA-MODEL §1.9 plus `request_id`, `expected_revision`, `to`, `reason`, and `evidence_refs` as appropriate. Grant issue/revoke accepts the GrantRecord lineage and scope fields from VOL-B §3.13; approval resolution accepts `{approval_id, decision:"approved"|"refused", reason, evidence_refs}`. Archive export/restore/read accepts the SessionArchive, ExportManifest, ArchiveGapRecord and explicit selector/grant fields from DATA-MODEL §1.10–§1.11 and VOL-B §3.12/§5.10. The action-specific failure and rollback contract is in VOL-E §7 OP-023–OP-041.
+  </section>
+</spec>

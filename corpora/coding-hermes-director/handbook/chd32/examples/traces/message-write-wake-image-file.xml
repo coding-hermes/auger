@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd32/examples/traces/message-write-wake-image-file.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD32-EX-E29C68-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd32/examples/traces/message-write-wake-image-file.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD32-EX-E29C68-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# Trace WF-05 — file upload → publish → read
+
+**Payloads:**
+```json
+{"schema_version":"chd.operation.v1","request_id":"req-att-001","dedupe_key":"attachment:file-001","content_type":"text/plain; charset=utf-8","attachment_id":"att-file-001","sha256":"sha256:example","size":18,"mode":"binary"}
+{"schema_version":"chd.operation.v1","request_id":"req-fin-001","dedupe_key":"attachment-finalize:file-001","attachment_id":"att-file-001","expected_sha256":"sha256:example"}
+```
+
+1. `attachment_upload` writes staging Attachment `/chd/attachment/att-file-001` in `state=staging`; staging is not readable or linkable.
+2. `attachment_finalize` verifies bytes, size, digest and content type, then atomically changes the same Attachment to `state=published`. It never writes a RoomMessage by itself.
+3. A subsequent `chd_post_message` may link the published attachment reference while writing `/chd/room/&lt;room-id&gt;/m&lt;seq:012d&gt;` and `_head`. Only after that durable message is acknowledged does the router compute a wake target; routing is not a store write.
+4. An authorized reader uses `chd_read_room` and the attachment read selector. Direct bytes are supported for text/JSON/CSV/octet-stream within the limits. Binary `image/*` and `application/pdf` upload is explicitly unsupported; clients use an authorized external reference and no finalize call.
+
+**Partial upload:** a disconnect leaves `state=staging`; retry with the same attachment id and digest resumes. A changed digest returns `409 integrity_equal_rev_conflict` and never publishes. Cleanup removes only abandoned staging after retention and preserves audit evidence.
+
+**Readback:** read `/chd/attachment/att-file-001` and the linked RoomMessage key under `namespace=chd`; read routing/run status separately. No wake is described as a DuckBrain record.
+  </section>
+</spec>

@@ -1,0 +1,389 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd34/src/30-provisioning-lifecycle.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD34-SRC-30-PR-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd34/src/30-provisioning-lifecycle.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-30-PR-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# §D — Installation, provisioning and agent lifecycle
+
+**CHD-3.4 revision notice (D-039/readiness):** This chapter supersedes CHD-3.3
+provisioning/readiness wording where it conflicts with current-policy replacement,
+capability-specific readiness, explicit temporary-worker inputs, or unresolved
+substrate gates. A scheduler outage is not a global controller outage. Native
+export/import and storage fencing remain required release gates; this chapter does
+not guess an adapter, native API version, or transport.
+
+**Status:** buildable normative source for CHD-3.4. This section owns installation order,
+profile lifecycle, gateway/host enrollment, readiness, migration, upgrade, rollback,
+retirement, and the operation-card index. It consumes VOL-A §2.4–2.6, VOL-D
+§2 (VOLD-064–076, OPEN-VOLD-1/2), VOL-C §11.1, R31-020, D-005, D-009, and D-015.
+The cards in `opcards/` are the executable detail; this chapter does not replace them.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/30-provisioning-lifecycle.md#d-1-non-negotiable-identity-boundary -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-30-PR-D-1-NON-NEGOTIABLE-IDENTITY-BO-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## D.1 Non-negotiable identity boundary
+
+A CHD agent is the tuple `(agent_id, gateway_id, hermes_profile, credential_ref,
+agent_state_root, session_state_root)`. Every director, manager, supervisor, foreman,
+and worker has its own tuple. The `(gateway_id, hermes_profile)` pair is unique across
+the deployment and `hermes_profile != default`. A profile is not an OS sandbox: it
+separates credentials, session stores, memory scopes, skills, and attribution; host
+privileges remain a host concern.
+
+The controller never infers a host from an agent id, profile from a role, credential
+from a gateway, or authorization from a skill. Every request names `gateway_id`,
+`hermesBinding.profile`, `credential_ref`, workdir/state roots, and the logical work
+identity. A startup/readiness check rejects missing, `default`, or shared profiles
+before any run record or gateway request (`profile_missing`, `profile_not_distinct`,
+`profile_shared`; R31-020). The target profile is also echoed by the gateway in the
+smoke-turn metadata. An echo for `default` or another agent fails closed.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/30-provisioning-lifecycle.md#d-2-supported-creation-policy -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-30-PR-D-2-SUPPORTED-CREATION-POLICY-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## D.2 Supported creation policy
+
+| Role | Operator provisioning | Authorized hierarchy creation | Result |
+|---|---|---|---|
+| director | supported | not applicable | operator creates the root |
+| manager | supported | director when `hierarchy.manager_creation.enabled=true`, bounded by `max_director_created` | configured manager creation proceeds with service credential installation; no blanket human-token gate |
+| supervisor | supported | manager when `create_subordinate=supervisor` and policy permits | manager-created supervisor follows the same profile/readiness path |
+| foreman | supported | supervisor/manager when the caller has explicit `create` authority and the target policy allows it | no self-creation or direct gateway call |
+| worker | supported | foreman for an explicit work unit, including `temporary: true` requests | profile/capacity/archive invariants still apply |
+
+“Supported” means the complete card can create the binding. It does not mean
+the role may create itself, edit its own profile, or call the gateway directly.
+The controller installs the credential by approved `credential_ref`; an
+operator may approve policy or supply an external secret, but that is not an
+implicit prerequisite when the configured issuer is authorized. Apparent
+sub-directors are invocations of the same director, not a seventh tier (D-015).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/30-provisioning-lifecycle.md#d-2-1-version-matrix-and-compatibility -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-30-PR-D-2-1-VERSION-MATRIX-AND-COMPA-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## D.2.1 Version matrix and compatibility
+
+| Domain | Canonical version | Owner | Compatibility rule |
+|---|---|---|---|
+| desired configuration | schema v4 | VOL-D/config schema | v4 only at load; v2/v3 documents require an explicit migration transaction |
+| controller records | record schema v3 | VOL-B/record schemas | records carry `schema_version: 3`; never reinterpret as config v4 |
+| asset bundle | bundle manifest v1 | provisioning controller | verify every file digest before activation; bundle version is independent of config |
+| operation envelope | `chd.operation.v1` | VOL-C operation schemas | all mutating requests use this envelope; API/MCP/CLI share the payload |
+| archive manifest | archive manifest v1 | archive ingestor | immutable checkpoint manifests; native Hermes payload version is probed |
+
+The authoritative table is `tables/section-4-version-matrix.csv`. The legacy
+`contracts/config.schema.json` label `schema_version: 2` is a compatibility
+reference only; it is not the Section 4 loader contract. A v3 record or v1
+bundle is not a v3/v1 configuration document.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/30-provisioning-lifecycle.md#d-3-fresh-setup-and-ordered-provisioning -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-30-PR-D-3-FRESH-SETUP-AND-ORDERED-PR-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## D.3 Fresh setup and ordered provisioning
+
+The installation sequence is a dependency chain, not a summary verb. Every operation uses the typed `chd.operation.v1` envelope; records use schema v3, bundles use manifest v1, and archive checkpoints use archive-manifest v1.
+
+1. `life-enroll-gateway-host` validates the host route, gateway id, URL, transport,
+   credential reference, capabilities, and capacity; it writes `/chd/gateway/&lt;id&gt;` and
+   `/chd/limits/&lt;id&gt;` only after health and capability readback.
+2. The operator writes a schema-valid desired config with explicit role, gateway,
+   non-default profile, credential/token references, state roots, runtime, composition,
+   permissions, rooms, caps, and triggers. The controller rejects unknown fields and
+   absent required fields.
+3. `life-create-director` creates the director profile, reads it back, uploads each
+   content-addressed asset, applies settings, runs a profile-bound smoke turn, and
+   commits `/chd/registry/&lt;director&gt;` only after all reads agree.
+4. The operator repeats the same sequence for managers and supervisors. An
+   authorized director/manager creation request may install the credential through
+   the configured issuer; if the issuer is unavailable, the record is
+   `credential_pending` and is not dispatchable, but no human-token step is implied.
+5. Authorized managers/supervisors/foremen may create their configured subordinate
+   when the caller has the explicit `create` grant. Foremen may provision workers,
+   including explicit temporary workers, through the worker card; no role calls a
+   gateway directly.
+6. `life-verify-readiness` evaluates the gate table in order and writes a durable
+   probe. It sets `dispatchable=true` only when every required gate passes.
+7. The first actual wake uses the target profile and writes the smoke report/evidence;
+   a successful profile probe is not a substitute for a real wake/report.
+
+Every stage writes a durable `/chd/provisioning/&lt;agent&gt;/...` record before its external
+side effect. The record includes `logical_work_id`, request/dedupe key, request digest,
+old/new profile, `state`, completed steps, `next_step`, exact error code, recovery query,
+asset digests, effective/desired digests, and actor. Secrets never appear: records carry
+only `credential_ref`, issuer, credential generation and a redacted fingerprint. A
+restart reads that record and resumes the named next step. Exact replay returns the
+existing result; it never creates a second profile, credential, registry entry, room,
+or worker. An exact replay is defined as the same operation id, target, request bytes,
+request id and dedupe key; a name match with different request bytes is
+`name_collision` and requires a new identity or an explicit update operation.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/30-provisioning-lifecycle.md#d-4-profile-asset-and-settings-convergence -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-30-PR-D-4-PROFILE-ASSET-AND-SETTINGS-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## D.4 Profile, asset, and settings convergence
+
+The desired document is operator-owned. The effective document is gateway-reported.
+`GET /v1/effective-config/{agent-id}` returns both, provenance, source refs, digests,
+and `drifted`; it must not report a cached desired copy as effective. `POST
+`/v1/admin/profiles/{agent}/sync` is not a hand-wave: it computes a field/asset diff,
+executes explicit `PUT /settings` and one `POST /assets` per manifest file, reads the
+inventory (`name`, `version`, `sha256`), reads the effective settings/runtime, and
+runs a profile-bound smoke turn. It never replaces learned memory, session history,
+archives, or work artifacts.
+
+Activation is staged: `desired → staged → active`, with the prior active revision
+retained as `rollback_target`. Settings are applied only after the bundle manifest
+and all asset digests validate; the active pointer changes only after settings,
+asset inventory and smoke readback agree. Failure injection between asset upload and
+settings activation must yield `converge_failed`, preserve the prior active bundle/
+settings and learned-state reference, and publish a readback showing the old active
+revision plus the failed staged revision. Rollback re-applies the prior bundle and
+settings, reads both back, and records lineage; it never deletes the failed evidence.
+
+Content-addressed bundles contain `manifest.json`, file names, versions, and SHA-256.
+The controller upload transport is the default in the contract. Text, JSON, CSV, and
+small octet-stream assets follow the attachment limits in VOL-E; binary image/PDF
+processing is unsupported and must use an authorized external reference. A digest
+mismatch retains the prior effective revision and records the exact file.
+
+Runtime provider/model/context values pass through verbatim. Hermes owns fallback. CHD
+never reroutes after a provider failure, copies a profile credential, or silently uses
+`default`. Use, grant-use, meta-grant, and create are independent checks; a skill or
+assignment cannot grant a capability.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/30-provisioning-lifecycle.md#d-5-credentials-probes-lost-responses-and-recovery -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-30-PR-D-5-CREDENTIALS-PROBES-LOST-RE-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## D.5 Credentials, probes, lost responses, and recovery
+
+Credential records contain only `credential_ref`, issuer, scope, generation,
+created/rotated/revoked timestamps and a redacted fingerprint. The secret value
+is loaded by the approved issuer/agent adapter and is never accepted in a CHD
+request or written to `chd`, `chd-archive`, audit, logs, examples or reports.
+`POST /v1/admin/credentials/install` installs a reference, `POST
+/v1/admin/credentials/rotate` stages a new generation and activates it only after
+an authenticated probe, and `POST /v1/admin/credentials/revoke` disables the
+old generation after active work is drained or explicitly held as unknown.
+`GET /v1/admin/credentials/{agent}/probe` returns principal, generation, scope,
+expiry and status, never the secret.
+
+Every credential operation records request/result/error/idempotency/recovery in
+its normal operation envelope. A lost install/rotate response is recovered by
+reading the request ledger and credential generation, then probing the exact
+reference; it is never retried as an untracked create. A probe failure leaves
+`credential_pending` or `credential_probe_failed`, keeps the agent
+non-dispatchable, and retries the same request after repair. Revocation is
+idempotent; a repeated revoke returns the first result.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/30-provisioning-lifecycle.md#d-6-partial-creation-cleanup-and-idempotent-retry -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-30-PR-D-6-PARTIAL-CREATION-CLEANUP-A-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## D.6 Partial creation, cleanup, and idempotent retry
+
+A partial record is not partial readiness. The profile may exist while the agent remains
+`provisioning`, `blocked`, `archive_pending`, or `converge_failed`; the registry remains
+`dispatchable=false`. Recovery reads the record and performs exactly `next_step`:
+
+| Failed step | Durable state | Exact recovery |
+|---|---|---|
+| credential/transport probe | `blocked` | repair the named credential/route; rerun the same request id |
+| profile create with unknown response | `profile_pending` | `GET /v1/admin/profiles/&lt;profile&gt;`; create only if absent |
+| asset upload/readback | `asset_pending` | query inventory; upload only missing/digest-mismatched files |
+| settings convergence | `converge_failed` | retain prior revision; rerun `PUT /settings` with the recorded desired digest |
+| smoke/readiness | `not_ready` | rerun the named gate; no registration or dispatch |
+| archive export | `archive_pending` | resume export at the recorded session/checkpoint; do not switch/delete |
+| retirement run status | `drain_pending` | read run status until terminal; retain capacity/profile on `unknown` |
+
+Cleanup is ordered: stop new admission; drain/cancel and prove terminal; export and
+commit archive checkpoints; revoke credentials/grants/triggers; remove live profile
+state; retain control records and archive indexes. A cleanup timeout is not proof of
+stop. Unknown external execution is reconciled before retrying.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/30-provisioning-lifecycle.md#d-7-readiness-gates -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-30-PR-D-7-READINESS-GATES-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## D.7 Readiness gates
+
+The machine-readable roster is `tables/readiness-gates.csv`. Gates run in order and
+record `pass`, `fail`, or `not_evaluated`; the first failure is the recovery anchor.
+The readiness evidence key and profile-bound probe are stored centrally. A green log
+line without a readback is not evidence. Readiness is a capability vector, not one
+global boolean. The controller publishes three independently evaluated results:
+
+* **read-only-ready** requires authenticated authoritative reads, intact registry and
+  policy mirrors, and a readable control store. It never authorizes a write or dispatch.
+* **immediate-ready** additionally requires the configured controller-local admission
+  owner, an authoritative attempt/run reservation, storage-boundary fencing and
+  snapshot capability, profile/credential/runtime probes, and gateway capability
+  readbacks. A scheduler outage does not fail this capability when controller-local
+  admission is configured and its gates pass.
+* **scheduled-ready** additionally requires scheduler registration and readback for
+  every configured lane. Scheduler outage makes this capability false and leaves
+  triggers unarmed; it does not revoke read-only or otherwise-ready immediate service.
+  In scheduler-owner mode, immediate-ready is also false until the scheduler approval
+  path is available, because that mode explicitly makes scheduler approval part of
+  admission.
+
+The required storage-boundary fencing and authoritative snapshot primitives are not
+claimed to be supplied by native DuckBrain. Until the versioned adapter/transport,
+stale-writer rejection, persistence and multi-page snapshot traces are selected and
+verified, immediate-ready and scheduled-ready remain release-gated even if a process
+can acquire a lease. A controller process timestamp, external lease checked before an
+unfenced write, or a report-only status is not a substitute.
+
+| Gate | Required proof | Failure |
+|---|---|---|
+| G1 schema | v4 desired config validates with cross-record checks | `schema_validation` |
+| G2 identity | unique non-default profile and explicit gateway | `profile_not_distinct` |
+| G3 credential | named credential/token references load and authenticate | `unauthenticated` |
+| G4 gateway | declared URL/transport health and capabilities match | `gateway_unavailable` |
+| G5 profile | profile exists and returned id equals requested profile | `profile_missing` |
+| G6 assets/settings | every digest and effective config revision read back | `digest_mismatch` / `converge_failed` |
+| G7 smoke | real response turn echoes agent and profile | `profile_not_distinct` / `readiness_failed` |
+| G8 trigger | every configured trigger is registered and read back; scheduled capability only | `readiness_failed` |
+| G9 control store | `/chd` fsync write/readback succeeds | `storage_unavailable` |
+| G10 registration | registry row is committed with capability-specific dispatch flags after the applicable reservation/fence gates | `readiness_failed` |
+| G11 first wake | one real wake and one correlated report are stored | `readiness_failed` |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/30-provisioning-lifecycle.md#d-8-migration-from-default -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-30-PR-D-8-MIGRATION-FROM-DEFAULT-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## D.8 Migration from `default`
+
+Migration is not a rename. The operator creates a new unique profile, converges desired
+config/assets, verifies readiness and smoke, archives every old session into
+`chd-archive`, then switches the registry through the §G journal commit marker. Only after marker readback may the old
+binding be retired. No session id is reused across profiles; an archive is an import
+source for a new session, never proof that a live session exists. An archive gap blocks
+the switch and leaves the old binding intact.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/30-provisioning-lifecycle.md#d-9-upgrade-and-rollback -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-30-PR-D-9-UPGRADE-AND-ROLLBACK-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## D.9 Upgrade and rollback
+
+Upgrade records old and new runtime/config/asset digests, compatibility proof, open-run
+state, and rollback target. It changes only managed config/assets/runtime and preserves
+control records, learned memory, work artifacts, session archives, and grants. After
+restart, the operator reads the registry, profile effective state, control records,
+and archive index. Rollback restores the prior desired document and exact managed
+assets, then repeats readback/readiness/smoke. Both failed and restored digests remain
+in lineage. A failed converge never publishes a half-applied profile.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/30-provisioning-lifecycle.md#d-10-retirement-and-archive-preservation -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-30-PR-D-10-RETIREMENT-AND-ARCHIVE-PR-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## D.10 Retirement and archive preservation
+
+Retirement marks the registry non-dispatchable, stops admission, drains or cancels open
+sends/runs, archives sessions with committed checkpoints, revokes credentials/grants,
+removes live profile state, and marks the registry `retired`. It preserves `/chd` control
+records and `chd-archive` indexes/payloads for retention. Archive reads require an
+explicit archive grant and selector; retirement does not grant history access. Evidence
+is the retired registry, revocation audit, terminal run ledger, and committed archive
+manifest—not a deletion log.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/30-provisioning-lifecycle.md#d-11-operation-card-index-and-acceptance-traces -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-30-PR-D-11-OPERATION-CARD-INDEX-AND-S012" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## D.11 Operation-card index and acceptance traces
+
+Every operation card supplies the same typed envelope: request, result, error,
+idempotency, recovery and valid/invalid examples. The cards for host/profile/
+role/worker/archive lifecycle also name their exact records and readback keys.
+Credential values are never examples or record fields; only references and
+redacted fingerprints are allowed.
+
+| Card | Operation | Primary proof |
+|---|---|---|
+| `life-enroll-gateway-host` | OP-007 | gateway health/capability + limit readback |
+| `life-create-director` | OP-002 | unique profile, registry, smoke report |
+| `life-add-manager` | OP-003 | responsibility registry + credential generation/readiness |
+| `life-add-supervisor` | OP-004 | manager edge + supervisor profile |
+| `life-add-foreman` | OP-005 | two-plane identity + operator-only lower-tier boundary |
+| `life-add-worker` | OP-006 | work UID + distinct worker profile |
+| `life-upload-skill-asset` | OP-008 | per-file digest inventory |
+| `life-apply-settings` | OP-008 | desired/effective digest and smoke |
+| `life-verify-readiness` | OP-009 | zero failed gates and dispatchable registry |
+| `life-migrate-default-profile` | OP-040 | archive checkpoint before binding switch |
+| `life-upgrade` | OP-041 | compatible revision survives restart |
+| `life-rollback` | OP-042 | prior digest restored and read back |
+| `life-retire` | OP-042 | terminal drain + archive retained + live profile absent |
+
+`examples/provisioning/two-agents-one-gateway/` proves two workers on one gateway have
+profiles `wkr-wf01-a-p1` and `wkr-wf01-b-p1`, separate credential/session/state roots,
+and a probe that rejects a swapped profile. `wrong-profile-fails-closed/` proves the
+startup check. `partial-create-resume/` proves no duplicate on retry. `retire-preserves-archive/`
+proves offboarding preserves archive and control evidence. The WF-01 roster is a
+foreman plus two workers and is creatable by the operator cards without invented
+foreman/worker hierarchy creation.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/30-provisioning-lifecycle.md#d-12-failure-injection-and-readback-trace -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-30-PR-D-12-FAILURE-INJECTION-AND-REA-S013" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## D.12 Failure-injection and readback trace
+
+The profile sync transaction is explicitly staged and testable. With active revision `r41`, active bundle digest `sha256:old…`, and protected learned-state reference `/chd/learned-state/pf-w1`, submit OP-008 with desired revision `r42`, its digest and bundle reference. The controller records `staged` and uploads each manifest member. Inject a settings failure after the last asset upload and before activation. The required result is:
+
+```text
+POST /v1/admin/profiles/w1/sync          -&gt; 503 converge_failed
+GET  /v1/admin/profiles/w1               -&gt; active_revision=41, active_digest=sha256:old…, staged_revision=42,
+                                           staged_state=failed, learned_state_ref=/chd/learned-state/pf-w1
+GET  /chd/provisioning/w1/req-op-008-001 -&gt; next_step=rollback, rollback_target=41,
+                                           asset_digests_retained=true, secret_values=absent
+POST /v1/admin/agents/w1/update          -&gt; activation=rollback, expected_revision=41
+GET  /v1/admin/profiles/w1               -&gt; active_revision=41, effective_digest=sha256:old…, drifted=false
+```
+
+Rollback re-applies the previous bundle/settings, reads both inventories back, and keeps the failed staged evidence. A digest mismatch follows the same path before settings activation. The trace is a contract example: it proves the required observable state transitions and readback fields without claiming that a live CHD service was exercised.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/30-provisioning-lifecycle.md#d-13-credential-operation-cards-and-response-loss-recovery -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-30-PR-D-13-CREDENTIAL-OPERATION-CARD-S014" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## D.13 Credential operation cards and response-loss recovery
+
+Credential lifecycle is part of provisioning, not an undocumented adapter side effect. The controller uses the common `chd.operation.v1` envelope and typed bodies with `credential_ref`, issuer, scope, and generation; secret bytes are accepted only by the approved issuer and never by CHD. The four operations are:
+
+| Operation | Request/result | Error and recovery | Idempotency |
+|---|---|---|---|
+| `credential_install` | `POST /v1/admin/credentials/install`; result records reference, issuer, generation and probe state | `credential_pending` retains the non-dispatchable record; `credential_probe_failed` keeps the old generation | same request bytes return the original generation; changed bytes under the key conflict |
+| `credential_rotate` | `POST /v1/admin/credentials/rotate`; result stages new generation, probes it, then activates it | probe failure leaves old generation active; retry the same key after repair | generation activation is a CAS against the recorded old generation |
+| `credential_revoke` | `POST /v1/admin/credentials/revoke`; result records revoked generation after drain/hold decision | unknown active work keeps the generation held and non-dispatchable | repeated revoke returns the original revocation record |
+| `credential_probe` | `GET /v1/admin/credentials/{agent}/probe`; result returns principal, scope, generation, expiry and status | no secret is returned; unavailable issuer is `credential_probe_failed` | read-only; request identity is retained in the audit record |
+
+If the install or rotate response is lost, read the request ledger, then `GET` the exact credential reference and generation, then run the authenticated probe. A present matching generation returns the recorded result; an absent generation resumes the recorded next step; a different generation is a conflict. Never issue an untracked second install. The record contains `credential_ref`, issuer, scope, generation, timestamps and a redacted fingerprint only.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/30-provisioning-lifecycle.md#d-14-explicit-temporary-worker-acceptance-path -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-30-PR-D-14-EXPLICIT-TEMPORARY-WORKER-S015" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## D.14 Explicit temporary-worker acceptance path
+
+A fully explicit temporary-worker request is supported; unsettled defaults are not a blanket refusal. The OP-006 body must include `temporary=true`, `worker_id`, `work_uid`, non-default `profile_id`, `gateway_id`, `credential_ref`, `provider`, `model`, `context_window`, `max_turns`, `token_budget`, positive `lifetime`, `workspace`, `asset_bundle_ref`, explicit `archive_policy` and `capacity_class`. Any omission returns `temporary_field_missing{path}` before reservation or external effects. The canonical sequence is:
+
+```text
+reserve capacity -&gt; write provisioning record -&gt; install/probe credential -&gt;
+create/read back profile -&gt; stage/read back assets and settings -&gt;
+controller-brokered execute -&gt; ingest correlated report -&gt; commit archive checkpoint -&gt;
+retire -&gt; revoke -&gt; read retired registry
+```
+
+Capacity remains held for an unknown run/report or failed archive until terminal execution and checkpoint evidence are read back. A lost create response is reconciled with `GET /v1/admin/profiles/{profile}` and the request ledger; a lost report is reconciled with the run manifest and report identity. Name collision is a `409` when a name exists with different request bytes, generation, or profile binding; exact replay is only the same operation id, target, request bytes, request id and dedupe key, and returns the original result without a second effect. A temporary retirement interrupted after execution is `temporary_retire_pending`, not successful retirement. Archive capture is required and uses archive-manifest v1; a gap is explicit and blocks retirement unless the owner changes the release scope.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/30-provisioning-lifecycle.md#d-15-dispatchable-manager-readiness-route -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-30-PR-D-15-DISPATCHABLE-MANAGER-READ-S016" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## D.15 Dispatchable manager readiness route
+
+An authorized manager-created supervisor follows the same OP-004 path: the manager's effective policy contains `create_subordinate=supervisor`, the service credential issuer is configured, and the target has a unique non-default profile, gateway, credential reference, asset bundle and runtime. `life-verify-readiness` stores each probe and readback, then publishes the applicable capability vector. G1–G7 and G9 establish read-only/profile readiness; authoritative reservation, fencing and snapshot gates are required before `immediate_ready=true`; G8 is required only before `scheduled_ready=true`. A scheduler outage therefore leaves a controller-local, otherwise-ready supervisor readable and immediately dispatchable, while its scheduled triggers remain unarmed. `credential_pending`, `converge_failed`, `not_ready`, missing archive checkpoint, or any unavailable gate required by the requested capability leaves that capability false; it does not create an implicit human-token approval requirement. A manager may create a supervisor through the authorized controller route, while no role may call a gateway directly or self-create.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/30-provisioning-lifecycle.md#d-16-release-gated-native-and-fencing-capabilities -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-30-PR-D-16-RELEASE-GATED-NATIVE-AND-S017" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### D.16 Release-gated native and fencing capabilities
+
+Provisioning must not mark a deployment release-ready merely because profile and
+gateway probes pass. Two unresolved capabilities remain visible in every readiness
+and release readback:
+
+1. **Native archive adapter:** the exporter/importer must report the supported
+   `hermes.session.export` name/version, request and response contract, compatibility
+   errors, response-loss reconciliation and an executable export → import → first-turn
+   trace. CHD does not invent a payload format or native API version. Until this probe
+   passes, archive capture/restore remains required but the release gate is OPEN.
+2. **Storage boundary:** the selected LeaseAuthority/FencedStore/SnapshotToken (or an
+   explicitly owned equivalent) must prove atomic reservation/fence binding, stale
+   writer rejection at the write boundary, durable high-water reads and multi-page
+   snapshot consistency. A preflight lease or `/chd/system/writer` record is not proof.
+   Until those traces pass, immediate and scheduled dispatch are not release-ready.
+
+The readback names `native_archive_adapter: unresolved|verified` and
+`storage_fencing: unresolved|verified`, with evidence keys or an exact blocking
+error. Unknown is not converted to pass and no alternate SQLite ledger is introduced.
+
+**References:** `opcards/op-*.md`; `tables/readiness-gates.csv`; `tables/section-4-version-matrix.csv`; `build-spec/VOL-A-story-roles-lifecycle.md` §2.1/§2.5; `build-spec/VOL-D-config-acceptance-ops.md` §1.5/§2; `build-spec/VOL-C-tools-messaging-admission-authz.md` §8.2/§11.1; `build-spec/VOL-E-operation-reference.md` OP-001–OP-009 and OP-040–OP-042.
+  </section>
+</spec>

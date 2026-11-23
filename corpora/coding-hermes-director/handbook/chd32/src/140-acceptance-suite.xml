@@ -1,0 +1,233 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd32/src/140-acceptance-suite.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD32-SRC-140-A-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd32/src/140-acceptance-suite.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-140-A-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# §P — Runnable acceptance suite, traceability and handover
+
+**Status.** This is the executable CHD-3.2 acceptance trace. The ten scenarios are concrete, committed fixture workflows; they are not customer
+deployments or live connector claims. The committed
+fixture adapter is deterministic and evidence-producing. A fixture pass proves
+only the adapter and handbook contracts. Each advertised live adapter still
+needs an independently captured end-to-end run against its actual API.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/140-acceptance-suite.md#p-1-reviewer-contract -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-140-A-P-1-REVIEWER-CONTRACT-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## P.1 Reviewer contract
+
+Run from the repository root:
+
+```sh
+for n in $(seq -w 1 10); do
+  python3 handbook/chd32/harness/run_scenario.py "wf-$n"
+done
+```
+
+Each run prints expected and observed field-level effects for every ordered
+step, exits non-zero on a mismatch, and writes `evidence/runs/&lt;run&gt;/report.json`,
+`observed-records.json` and an immutable fixture copy. The report includes the
+fixture and config digest, request body, expected body, observed body, comparison,
+evidence query and negative-case marker. Labels and test ids alone are never
+evidence.
+
+A scenario passes only if every expected field matches, every negative probe
+returns the named safe outcome, every evidence query is present in the report,
+and cleanup leaves no external effect. It fails on a missing record, an
+unauthorized effect, a wrong profile, a false completion, a released unknown
+reservation, or an archive lineage gap treated as success.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/140-acceptance-suite.md#p-2-shared-invariants-and-critical-gates -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-140-A-P-2-SHARED-INVARIANTS-AND-CRIT-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## P.2 Shared invariants and critical gates
+
+The suite applies these invariants where relevant: no default/shared profile;
+structured HTTP-backed dispatch; immediate and scheduled work share capacity;
+enqueue-only does not force wake; same-room tasks use distinct branch sessions;
+roll-up waits for assigned review; structured data validates before publish;
+control reports are central immediately; project memory may sync later;
+protected records and archive reads obey grants; use/grant/meta-grant/create are
+separate; waiting grants no approval; revocation follows declared session
+lifetime; retry/restart neither loses accepted work nor blindly repeats unknown
+execution; and archives remain available after host loss.
+
+The critical failure gates are explicit negative steps in the fixtures:
+`wrong_profile`, `cross_owner_leak`, `unauthorized_meta_grant`,
+`duplicate_external_action`, `lost_acknowledged_work`, `false_completion`,
+`capacity_leak`, and `unrecoverable_archive_lineage`. Each must be observed to
+fail safely and produce a retained audit/effect record. A performance or soak
+counter cannot discharge a gate.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/140-acceptance-suite.md#p-3-scenario-cards -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-140-A-P-3-SCENARIO-CARDS-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## P.3 Scenario cards
+
+Every fixture contains the same machine-readable shape: `fixture_revision`,
+`config_revision`, a roster of distinct non-default profiles, effective
+permission snapshots, directed room/thread/fork graph, synthetic inputs,
+ordered requests, expected states, evidence queries and cleanup rules.
+
+| ID / goal | Positive ordered trace and exact evidence | Failure/rework probes | Release boundary |
+|---|---|---|---|
+| **WF-01** — resolve a fixture bug into a reviewable change | configure → HTTP dispatch → report persist; read config, send manifest and report records; verify queued→admitted→dispatched→persisted→verified | wrong profile, lost acknowledged work, false completion | Fixture repository only; live Git hosting proof pending |
+| **WF-02** — reconcile bills and receipts | configure → extraction dispatch → structured report persist; duplicate source key is one logical row and totals remain queryable | duplicate external action, false completion, capacity leak | Payment is not exercised; sandbox payment proof pending |
+| **WF-03** — triage and resolve support cases | configure → specialist dispatch → sourced report; ticket owner/thread and report refs join | cross-owner leak, wrong profile, duplicate external action | Helpdesk adapter is test-only |
+| **WF-04** — watch sources and brief decisions | configure → research dispatch → cited report; source identity/date/uncertainty remain in records | lost acknowledged work, false completion, capacity leak | Source snapshots are synthetic; live watch proof pending |
+| **WF-05** — prepare controlled campaign publication | configure → asset/dispatch → report persist; publication remains separate from acceptance | unauthorized meta-grant, false completion, duplicate external action | No paid or live publication; separately authorized E2E required |
+| **WF-06** — maintain scoped CRM and follow-up | configure → account dispatch → report persist; stale revision and restricted notes are retained safely | cross-owner leak, duplicate external action, wrong profile | CRM adapter is fixture-only |
+| **WF-07** — diagnose and recover incident work | configure → dispatch → persist; recovery preserves unknown run, holds capacity, and restores archive lineage | lost acknowledged work, capacity leak, false completion | Disposable fixture host only; production repair unverified |
+| **WF-08** — audit delegated document/archive evidence | configure → archive read/audit dispatch → report persist; read refs identify document/archive revisions | unauthorized meta-grant, unrecoverable archive lineage, cross-owner leak; D-038 variants below | No legal/compliance claim; archive adapter test-only |
+| **WF-09** — plan and schedule from constraints | configure → planning dispatch → report persist; proposed calendar changes remain approval-gated | duplicate external action, false completion, capacity leak | Calendar write proof pending |
+| **WF-10** — collaborate across two owners | configure → scoped peer dispatch → combined report; Crier connectivity does not confer VP rights | cross-owner leak, unauthorized meta-grant, lost acknowledged work | Bridge is fixture-only; live federation proof pending |
+
+The exact request and response bodies are the `steps[].request` and
+`steps[].expected` fields in each committed `fixtures/wf-*/scenario.json`.
+The harness creates the corresponding observed records; no prose interpretation
+is needed to decide a step. Each observed record has a stable `record_key`,
+scenario/step/request identity, actor and profile, expected and observed bodies,
+negative marker, and the exact `evidence_query` used by the receiver. The
+fixture adapter does not pretend to be a live HTTP service; its explicit
+boundary is recorded in every report.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/140-acceptance-suite.md#p-3-1-receiver-execution-map -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-140-A-P-3-1-RECEIVER-EXECUTION-MAP-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### P.3.1 Receiver execution map
+
+| Workflow | Fixture inputs and records | Runnable command | Evidence queries/assertions | Status |
+|---|---|---|---|---|
+| WF-01 | `fixtures/wf-01/{config,roster,permissions,graph,inputs,scenario}.json`; config, manifest, report, audit records | `python3 handbook/chd32/harness/run_scenario.py wf-01` | `/chd/config/wf-01`; `/chd/send/wf-01/manifest`; `/chd/report/wf-01/r1`; wrong-profile and unknown-execution audit rows | `run` — dated fixture artifact in `evidence/runs/wf-01-20261109T162819Z/report.json` |
+| WF-02 | Same six-file tree; invoice, dedupe, reconciliation and audit records | `python3 handbook/chd32/harness/run_scenario.py wf-02` | `/chd/config/wf-02`; `/chd/send/wf-02/manifest`; `/chd/report/wf-02/r1`; duplicate/capacity assertions | `run` — dated fixture artifact in `evidence/runs/wf-02-20261109T162819Z/report.json` |
+| WF-03 | Same six-file tree; ticket, thread, report and audit records | `python3 handbook/chd32/harness/run_scenario.py wf-03` | `/chd/ticket/wf-03`; `/chd/room/wf-03/`; `/chd/report/wf-03/r1`; owner-scope assertion | `run` — dated fixture artifact in `evidence/runs/wf-03-20261109T162819Z/report.json` |
+| WF-04 | Same six-file tree; source snapshot, finding, report and audit records | `python3 handbook/chd32/harness/run_scenario.py wf-04` | `/chd/source/wf-04/`; `/chd/report/wf-04/r1`; source date/uncertainty assertion | `run` — dated fixture artifact in `evidence/runs/wf-04-20261109T162819Z/report.json` |
+| WF-05 | Same six-file tree; asset, campaign manifest, approval and audit records | `python3 handbook/chd32/harness/run_scenario.py wf-05` | `/chd/asset/wf-05/`; `/chd/campaign/wf-05/manifest`; no-publication-without-grant assertion | `run` — dated fixture artifact in `evidence/runs/wf-05-20261109T162819Z/report.json` |
+| WF-06 | Same six-file tree; account revision, scoped field update, draft and audit records | `python3 handbook/chd32/harness/run_scenario.py wf-06` | `/chd/account/wf-06/`; `/chd/report/wf-06/r1`; stale-revision and restricted-note assertions | `run` — dated fixture artifact in `evidence/runs/wf-06-20261109T162819Z/report.json` |
+| WF-07 | Same six-file tree; incident, run, capacity hold, checkpoint and audit records | `python3 handbook/chd32/harness/run_scenario.py wf-07` | `/chd/incident/wf-07/`; `/chd/run/wf-07/`; `/chd/capacity/wf-07/`; archive-lineage assertion | `run` — dated fixture artifact in `evidence/runs/wf-07-20261109T162819Z/report.json` |
+| WF-08 | Same six-file tree; archive, grant, fork, restore and audit records | `python3 handbook/chd32/harness/run_scenario.py wf-08` | `/chd/session/fork/wf-08-preserve`; `/chd/session/fork/wf-08-current`; `/chd/audit/policy-resync/wf-08`; `/chd/restore/wf-08/d039` | `run` — dated fixture artifact in `evidence/runs/wf-08-20261109T162819Z/report.json` |
+| WF-09 | Same six-file tree; calendar proposal, task links, approval and audit records | `python3 handbook/chd32/harness/run_scenario.py wf-09` | `/chd/plan/wf-09/`; `/chd/calendar/wf-09/proposal`; no-write-before-approval assertion | `run` — dated fixture artifact in `evidence/runs/wf-09-20261109T162819Z/report.json` |
+| WF-10 | Same six-file tree; peer request, local authorization, delivery and combined report records | `python3 handbook/chd32/harness/run_scenario.py wf-10` | `/chd/peer/wf-10/`; `/chd/bridge/wf-10/`; `/chd/report/wf-10/r1`; peer-scope/no-VP assertion | `run` — dated fixture artifact in `evidence/runs/wf-10-20261109T162819Z/report.json` |
+
+The `run` above means only a dated, version-bound fixture report exists. It
+does not mean a live connector ran. A receiver must inspect the report's
+`fixture_revision`, `config_revision`, `fixture_sha256`, expected/observed
+records, queries and negative steps before accepting the result. `planned`,
+`runnable-but-not-run`, and `blocked` remain valid statuses for future live
+adapter harnesses and must not be promoted by labels or test IDs.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/140-acceptance-suite.md#p-3-2-canonical-records-and-superseded-expectations -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-140-A-P-3-2-CANONICAL-RECORDS-AND-SU-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### P.3.2 Canonical records and superseded expectations
+
+The canonical record joins are: `send_id → attempt_id → run_id → report_id`,
+`room_id + thread_root + seq` for message lineage, and
+`agent_id + room_id + subthread_root + work_uid + generation` for a session
+bond. A room may contain multiple bonds and concurrent branch sessions; there
+is no one-bond-per-room rule. Human waiting closes the current attempt with
+`close_reason=waiting_human` while the logical send remains open through a
+`WaitRecord`; a successor attempt is linked explicitly. `await_report` is an
+attempt-level state only, never a stale terminal send expectation. Queries
+must assert these exact joins and records rather than prose-only placeholders.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/140-acceptance-suite.md#p-4-wf-08-d-038-fork-and-resync-variants -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-140-A-P-4-WF-08-D-038-FORK-AND-RESYN-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## P.4 WF-08 D-038 fork and resync variants
+
+WF-08's archive fixture includes the required policy cases, with expected
+read-back fields:
+
+1. **Preserve parent snapshot:** parent revision 7 has a director-derived grant
+   plus an independent `vp_configured` grant. Revoke the parent-derived grant,
+   fork with `preserve_parent_snapshot`, and require child revision 7 with both
+   provenance entries and lineage.
+2. **Current policy:** repeat with `current_policy`; require revision 8, omit the
+   revoked-derived grant, and retain `vp_configured`.
+3. **Explicit resync:** authorized resync advances exactly one revision and
+   writes an audit row. Unauthorized or disabled resync returns named `403`,
+   writes no snapshot and is audited. New tool calls do not implicitly resync.
+4. **In-flight boundary:** operations already authorized under the captured
+   snapshot finish; new boundaries use selected snapshot/current policy.
+5. **Lifecycle:** restart retains an existing session snapshot. Replacement and
+   restore create a new session/bond. A replacement restore always resolves
+   current permissions under D-039; the archived snapshot is history only.
+   Missing historical snapshot records `snapshot_missing` without changing the
+   current-policy decision. This is distinct from D-038 fork inheritance.
+
+6. **D-039 restore readback:** the synthetic `d039_restore_variant` in WF-08
+   records the source manifest/checkpoint and source policy revision, new
+   identity and bond, effective current revision, revoked derived grants,
+   retained independent VP grants, and historical-policy audit reference.
+   The query `/chd/restore/wf-08/d039` must show
+   `restore_decision=current_policy`, the revoked derived grant absent from
+   effective grants, and the independent current VP grant retained.
+
+D-038 labels select declared variants; they are not run evidence. Only a dated
+report containing the variant's expected and observed readback can establish a
+fixture observation.
+
+
+These checks correspond to `schemas/policy-snapshot.schema.json`,
+`schemas/restore-decision.schema.json`, the grant fixtures in `examples/grants/`,
+`tables/restore-policy-decisions.csv`, and the archive/restore contracts in §L/§N.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/140-acceptance-suite.md#p-5-traceability-and-live-adapter-status -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-140-A-P-5-TRACEABILITY-AND-LIVE-ADAP-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## P.5 Traceability and live-adapter status
+
+| Artifact | Coverage claim | Authority and evidence |
+|---|---|---|
+| `matrices/operation-coverage.csv` | OP-001..OP-048 mapped to a scenario and step | read-back report, not row existence |
+| `matrices/decision-coverage.csv` | D-001..D-038 have positive/negative branches | fixture report links |
+| `matrices/finding-coverage.csv` | R31-001..R31-030 are mapped to observed tests | named report/evidence query |
+| `matrices/invariant-coverage.csv` | every shared invariant exercised | positive and negative evidence columns |
+| `matrices/test-matrix.csv` | all eight critical gates have observed negative probes | expected failure plus audit query |
+| `src/130-measurement.md` | R31-012 measurement and counter boundaries | metric/event/log register |
+| this section | R31-013 executable trace and handover | committed fixtures and harness |
+
+The supported catalog must be consulted before claiming a live adapter. This
+package declares all ten domain adapters as `test-adapter`; none is silently
+promoted to live. A future live report must include endpoint, credential
+reference (not secret), request and response bodies, UTC timestamp, commit or
+image digest, fixture digest and separate pass/fail results. Unsupported and
+pending behavior remains explicit.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/140-acceptance-suite.md#p-6-handover-and-pass-fail-rules -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-140-A-P-6-HANDOVER-AND-PASS-FAIL-RUL-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## P.6 Handover and pass/fail rules
+
+Before handover, an operator runs all ten scenarios, archives the evidence
+folders, verifies that each report has expected/observed records, and runs the
+CSV checks below:
+
+```sh
+python3 -m py_compile handbook/chd32/harness/run_scenario.py handbook/chd32/harness/lib/adapter.py
+python3 - &lt;&lt;'PY'
+import csv, pathlib
+root=pathlib.Path('handbook/chd32')
+for name in ('operation-coverage','decision-coverage','finding-coverage','invariant-coverage','test-matrix'):
+    rows=list(csv.DictReader((root/'matrices'/f'{name}.csv').open()))
+    assert rows, name
+    print(name, len(rows))
+PY
+```
+
+The independent reviewer compares the retained report, not a counter, and may
+rerun a single scenario by its committed id. Cleanup removes only the isolated
+fixture namespace after export; evidence remains retained according to
+`evidence/README.md`. A green build, a page count, or a token trend never
+constitutes semantic acceptance, deployment proof or owner acceptance.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/140-acceptance-suite.md#p-7-current-handover-state -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-140-A-P-7-CURRENT-HANDOVER-STATE-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## P.7 Current handover state
+
+`specified`: schemas, contracts, fixtures, matrices and deterministic adapter are present.
+`internally_checked`: package/schema/fixture checks have passed where listed.
+`source_cross_checked`: Hermes API claims are bounded by the recorded source check.
+`implemented`: no CHD runtime is claimed by this authored package.
+`exercised/measured`: each fixture definition carries `run_status` and `evidence_status`; only a dated, version-bound report may use `run`, and a fixture pass remains `fixture-observed` rather than live certification.
+`owner_accepted`: not claimed. Production connectors, paid publication, payment execution,
+live CRM/helpdesk/calendar integrations, production host repair and legal/compliance judgment
+remain unverified.
+
+The status vocabulary is deliberately machine-checkable: `planned` means the scenario is specified but its dependencies are not present; `runnable-but-not-run` means the harness can be invoked but no dated report exists; `run` requires `run_artifact`, `run_at`, fixture/config revisions and a passing report; `blocked` names the missing dependency or failed prerequisite. A scenario ID, label, or green package check never promotes a scenario to `run`.
+  </section>
+</spec>

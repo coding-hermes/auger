@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd32/examples/capacity-race/README.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD32-EX-602FF1-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd32/examples/capacity-race/README.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD32-EX-602FF1-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# Capacity race: timed request versus run-now
+
+**Fixture:** `assignment=T-101`, `max_inflight=1`, no existing open send.
+
+1. Send a scheduler callback and a supervisor `POST /v1/assignments` with `admission=run_now` concurrently.
+2. Both resolve the same logical-work identity `(ticket, assignment, assignee, open obligation)`.
+3. The controller's shared atomic `compare-and-reserve` serializes the decision.
+4. The winner writes one manifest/reservation and dispatches once.
+5. The loser reads the committed identity and returns `409 duplicate` with the winner's `send_id` and `attempt_id`.
+
+**Assertions:** one send, one attempt, one gateway POST, usage never above one. A changed request body under an already-used idempotency key is `409 admission_conflict`, not a second admission. If the cap was already full, both remain durably queued; capacity is not bypassed.
+
+**Evidence query:** read `/chd/send/&lt;send-id&gt;/manifest`, the reservation/audit record and `/v1/status`; count gateway requests by `gateway_request_key`. **Test:** `T-ADM-RACE`.
+  </section>
+</spec>

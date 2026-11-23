@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd32/runbooks/gateway-outage.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD32-RU-A1445E-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/gateway-outage.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD32-RU-A1445E-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# Runbook: gateway outage
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/gateway-outage.md#trigger -->
+  <section id="CHD-HANDBOOK-CHD32-RU-A1445E-TRIGGER-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Trigger
+`/v1/capabilities` or transport probe fails, or a send returns `paused:unreachable`.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/gateway-outage.md#do -->
+  <section id="CHD-HANDBOOK-CHD32-RU-A1445E-DO-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Do
+
+1. Read the effective gateway record, transport mode, open SendManifests and reservations. Do not switch transport silently.
+2. Mark affected sends `paused:unreachable` with a monotone manifest revision and audit row. Suspend deadline arithmetic and ladder burn.
+3. Hold every reservation charged by a dispatched or unknown attempt. An unreachable gateway is not proof of stop.
+4. Probe the configured transport with bounded backoff. Then probe `/v1/capabilities`; require auth, session continuity and canonical idempotency behavior.
+5. After a healthy readback, mark the gateway reachable, resume queued work oldest-first, and re-arm deadlines from recorded non-paused time. Do not burst-fire missed reminders.
+6. For each in-flight attempt, run `GET /v1/runs/{id}` → `resolve-unknown` → session history. Release a slot only after `proven-stopped` or a matching terminal report.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/gateway-outage.md#evidence -->
+  <section id="CHD-HANDBOOK-CHD32-RU-A1445E-EVIDENCE-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Evidence
+Record gateway id, transport probe output, manifest revisions before/after, held reservation ids, run status, recovery audit id and the first healthy readback. Expected test: `WF-07-GATEWAY-DISCONNECT`.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/gateway-outage.md#never -->
+  <section id="CHD-HANDBOOK-CHD32-RU-A1445E-NEVER-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Never
+Do not issue a fresh POST because the socket timed out, do not release on lease expiry, and do not fall back to another transport without an explicit configuration change and readiness cycle.
+  </section>
+</spec>

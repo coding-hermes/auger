@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd32/examples/manager-branches/README.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD32-EX-BCC29D-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd32/examples/manager-branches/README.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD32-EX-BCC29D-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# One manager, one room, two concurrent manager branches
+
+This fixture is the R32-004 proof for identity, routing, and parent roll-up.
+Every step repeats the complete routing identity: `principal`, `profile`, `room`,
+`thread_root`, `work_uid`, `bond`, `parent bond`, and `session`.
+
+The profile is `pf-manager-infra`, the principal is `pr-manager-infra`, and the
+policy owner is explicit `pr-vp-owner`. The two branches share room
+`task-auth-14` but never share a thread root, work UID, bond, or native session.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/examples/manager-branches/README.md#ordered-trace -->
+  <section id="CHD-HANDBOOK-CHD32-EX-BCC29D-ORDERED-TRACE-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Ordered trace
+
+| Step | Principal | Profile | Room | Thread root | Work UID | Bond | Parent bond | Session | Result |
+|---|---|---|---|---:|---|---|---|---|---|
+| 1. Parent assignment | `pr-manager-infra` | `pf-manager-infra` | `task-auth-14` | `42` | `work-T101` | `b-20261109-0914-mgr-a` | `b-parent-director` | `sess-manager-parent` | Manager receives the parent assignment as `NEW`. |
+| 2. Branch A fork | `pr-manager-infra` | `pf-manager-infra` | `task-auth-14` | `42` | `work-T101` | `b-20261109-0914-a` | `b-20261109-0914-mgr-a` | `sess-manager-a` | Same-profile native fork; D-038 `preserve_parent_snapshot`; supervisor A targets this bond. |
+| 3. Branch B fork | `pr-manager-infra` | `pf-manager-infra` | `task-auth-14` | `57` | `work-T205` | `b-20261109-0917-b` | `b-20261109-0914-mgr-a` | `sess-manager-b` | Same-profile native fork; D-038 `preserve_parent_snapshot`; supervisor B targets this bond. |
+| 4. Supervisor A result | `pr-manager-infra` | `pf-manager-infra` | `task-auth-14` | `42` | `work-T101` | `b-20261109-0914-a` | `b-20261109-0914-mgr-a` | `sess-manager-a` | `REUSE` routes only to branch A; it cannot target branch B. |
+| 5. Supervisor B result | `pr-manager-infra` | `pf-manager-infra` | `task-auth-14` | `57` | `work-T205` | `b-20261109-0917-b` | `b-20261109-0914-mgr-a` | `sess-manager-b` | `REUSE` routes only to branch B; it cannot target branch A. |
+| 6. Parent roll-up | `pr-manager-infra` | `pf-manager-infra` | `task-auth-14` | `18` | `work-parent-rollup` | `b-20261109-0914-mgr-a` | `b-parent-director` | `sess-manager-parent` | One parent report references both child report IDs; it does not copy either transcript. |
+
+The routing key is `(principal, profile, room, thread_root, work_uid, bond,
+parent bond, session)`. Room membership alone is insufficient. A cross-profile
+or cross-host variant is a new assignment and must use the context-transfer
+request/result/error schemas plus an adapter capability probe; this fixture
+claims no native cross-profile fork.
+  </section>
+</spec>

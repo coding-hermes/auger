@@ -1,0 +1,463 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd35/manuscript/09-01.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD35-MA-962281-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/09-01.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD35-MA-962281-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+&lt;!-- CHD3.5A-03-BLOCK I; SPEC V3.5; section 9; source src/60-authorization.md --&gt;
+
+&gt; **REVISION NOTICE — CHD-3.5 supersedes CHD-3.4.** This revised section integrates the audit disposition and selected contracts. All body blocks below carry change bars.
+
+&lt;div class="chg" markdown="1"&gt;
+
+# Section I — Authorization, grant lineage, and session policy
+
+**CHD-3.5 revision notice (D-039):** This section supersedes CHD-3.4
+restore/replacement authority wording. Restore and lost-session replacement always
+resolve current policy before activation. Fork policy is separate: preserve-parent is
+the fork default and current-policy is an explicit authorized alternative. Mode
+selection is not an ordered strictness lattice, and live sessions never resync
+automatically.
+
+**Status:** normative handbook section. The machine contracts are `schemas/grant.schema.json` and
+`schemas/policy-snapshot.schema.json`; the operation coverage is `matrices/capability-matrix.csv`.
+The source of the operation names is `register/operations.csv`. This section implements the
+authorization boundary described by VOL-A §2, VOL-B §7.2 and VOL-C §8. It does not create a
+second permission system.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/09-01.md#i-1-the-boundary-and-its-authorities -->
+  <section id="CHD-HANDBOOK-CHD35-MA-962281-I-1-THE-BOUNDARY-AND-ITS-AUTHO-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## I.1 The boundary and its authorities
+
+Every request has one authenticated principal, one operation, one resource selector, one
+request id, and one effective policy revision. The controller is the only component that decides
+CHD authorization. Hermes profile isolation, a Crier peer identity, a skill prompt, an assignment,
+a room membership, or a bridge assertion may provide context; none can elevate the principal.
+A bridge never becomes the VP and `as: vp` is rejected. Credential fields in records are
+references only, such as `/chd/credentials/mgr-comms`; token, cookie, private key, and secret
+values never appear in configuration, examples, readback, or audit records.
+
+CHD carries **four independent authority classes**. They are sets, not a ladder:
+
+&lt;figure&gt;
+&lt;img class="mdfig" src="../figures/fig-9.1-1.svg" alt="Figure 9.1-1 authorization boundary"&gt;
+&lt;figcaption&gt;FIGURE 9.1-1 — AUTHORIZATION BOUNDARY. Snapshot: 2026-11-15. The request producer supplies identity, operation, scope, and context; the controller validates and resolves policy; the consumer receives either a revision-bound effect, a non-oracle rejection, or a durable readback receipt. The decision diamond makes the fail-closed branch visible rather than leaving it as an enumerated rule.&lt;/figcaption&gt;
+&lt;/figure&gt;
+
+
+The decision plate is read left to right: the producer supplies only a bounded request, the controller owns the authorization decision and durable audit, and the consumer receives either a revision-bound effect or a non-oracle rejection. The lower branch is operationally explicit: queue-full work remains held by the controller, a wait record resumes only when the consumer resolves it, and a rejected report returns to the producer for named rework.
+
+TABLE 9.1-1 — I.1 The boundary and its authorities
+
+| Class | Meaning | Does not imply |
+|---|---|---|
+| `use` | Exercise the named tool, skill, storage class, room, ticket, archive selector, or profile action. | grant-use, meta-grant, or create. |
+| `grant_use` | Issue a bounded `use` grant from a named allowed pool to a permitted recipient. | the issuer's own use, meta-grant, or create. |
+| `meta_grant` | Confer bounded authority to issue further grants; this is the authority named `confer_delegation` in the config contract. | use, grant-use of the target capability, or create. |
+| `create` | Create the explicitly named agent or object kind within its creation scope. | use of the created object, grant-use, or meta-grant. |
+
+The grantor may hold `grant_use` while lacking `use`. This is intentional and is tested by the
+`grantor-without-use` example; `grant_use` does not imply use. No assignment text, role name, skill wording, profile, or
+successful prior call can fill a missing class. An absent class is default-deny.
+
+`use` is exercised only by the subject of the call. A grant operation is authorized by
+`grant_use` on the issuer and does not test whether the issuer can use the capability being
+conferred. A grant carrying downstream `grant_use` or `meta_grant` additionally requires
+`meta_grant`; `grant_use` alone can never mint another grantor.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/09-01.md#i-2-principals-scopes-and-records -->
+  <section id="CHD-HANDBOOK-CHD35-MA-962281-I-2-PRINCIPALS-SCOPES-AND-RECO-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## I.2 Principals, scopes, and records
+
+A permission decision is over the tuple `(principal, class, capability, resource_scope,
+operation, policy_rev)`. Scope is explicit and closed over the resource vocabulary:
+
+- **tools:** `telegram.send`, `artifact.deliver`, `chd_post`, `chd_read_room`, worker and
+  admission tools;
+- **skills:** named skill asset or skill family, with version/digest where applicable;
+- **storage:** `coordination_report`, `control_key`, `session_archive`, and
+  `project_code_memory`; the namespace is never inferred from a path;
+- **rooms:** room id, group/tag and membership selector;
+- **tickets:** ticket id, workflow, transition, owner and query scope;
+- **archives:** `own_history`, `room_log`, or the explicitly selected
+  `cross_agent_archive` set; archive selectors include agent/profile/session/thread and
+  checkpoint ceiling;
+- **profiles:** named profile/config read, update, sync, enrollment, or retirement action.
+
+`GrantRecord` is the durable issuance record. It contains `grant_id`, issuer and recipient
+principal ids, the exact class, capability and resource scope, recipients/tiers, approval
+conditions, expiry, origin, authority reference, immutable lineage, and state. The issuer and
+recipient are never inferred from a room sender or a Crier peer. The grant's `origin` is one of:
+
+- `vp_configured`: a VP/operator configuration row and the root of the allowed pool;
+- `director_grant`: a director issuance bounded by the VP-approved pool;
+- `manager_grant`: a downstream issuance made under an explicitly authorized lineage.
+
+A director may delegate only from the VP-approved pool. A manager or other downstream issuer
+may delegate only the subset represented by its valid `meta_grant`/`grant_use` authority. A
+record with an unknown origin, missing authority reference, widened scope, or broken lineage is
+not effective. VP configuration is a source of authority, not a secret and not a role claim.
+
+Every effective readback returns issuer, recipient, scope, class, origin, authority reference,
+lineage, effective policy revision, source checkpoint (or null outside restore), approval conditions
+and expiry. Readback is generated from the same
+effective-policy structure used for enforcement. The endpoint spellings
+`/v1/sessions/{id}/policy`, `/v1/policy/effective?session={id}`, and self `chd_whoami` must
+return the same snapshot bytes and digest for the same session. A session readback never
+silently re-resolves the live grant table.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/09-01.md#i-3-grant-issuance-and-lineage -->
+  <section id="CHD-HANDBOOK-CHD35-MA-962281-I-3-GRANT-ISSUANCE-AND-LINEAGE-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## I.3 Grant issuance and lineage
+
+The controller processes `grant_issue` in this order:
+
+1. Authenticate the principal and bind the request to one non-default profile and request id.
+2. Validate the schema, class, capability vocabulary, resource selector, recipient selector,
+   approval conditions, expiry, and dedupe key.
+3. Resolve the issuer's current authority. For a root VP row, `authority_ref` is null. For a
+   delegated row it is the exact grant id that authorizes this issuance.
+4. Require `grant_use` for an ordinary use grant. If the requested downstream rights include
+   `grant_use` or `meta_grant`, require `meta_grant` and verify its `max_conferable`, recipient
+   scope, depth and count limits. There is no fallback from `grant_use` to `meta_grant`.
+5. Intersect the request with the issuer's capability, resource, recipient, depth, count and
+   expiry bounds and the VP-approved pool. Any non-subset request fails; the service never
+   narrows and silently writes a different grant.
+6. Apply deny precedence and detect cycles/revoked or expired ancestors. A conflict is written
+   to audit even when the final decision is denial.
+7. Atomically write the `GrantRecord` and `grant_issued` audit row, or write only the denial
+   audit row. A replay with the same dedupe key returns the original grant id and writes a
+   `grant_replayed` audit event.
+8. Read back the grant and effective policy by id. The response is not success until the
+   durable record and audit row are readable.
+
+Lineage is root-first and immutable: `ancestors` ends with `authority_ref`, `depth` equals the
+number of hops, and a child `max_conferable` is a subset of the issuer's bound. A revoked or
+expired ancestor blocks new issuance (`authority_revoked`) but does not rewrite an already
+captured ordinary session snapshot. Revocation is itself auditable and read back as state;
+revoke is not deletion.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/09-01.md#i-3-1-worked-example-grant-use-without-use-d-009 -->
+  <section id="CHD-HANDBOOK-CHD35-MA-962281-I-3-1-WORKED-EXAMPLE-GRANT-USE-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### I.3.1 Worked example: grant-use without use (D-009)
+
+`mgr-comms` has:
+
+```json
+{
+  "permissions": {
+    "use": {"capabilities": [], "resource_scope": []},
+    "grant": {
+      "capabilities": ["telegram.send"],
+      "resource_scope": ["telegram:delivery-gate-17"],
+      "recipients": {"agents": ["sup-crier"], "roles": [], "tiers": ["supervisor"]}
+    },
+    "confer_delegation": {"capabilities": [], "resource_scope": []}
+  }
+}
+```
+
+The director first verifies the VP pool and approval condition, then `mgr-comms` calls
+`grant_issue` for `telegram.send` to `sup-crier`. The call succeeds because R2 checks
+`grant_use`, not `use`; the response includes `grant_id`, `origin: director_grant`,
+`issuer: mgr-comms`, `recipient: sup-crier`, scope, policy revision and a readback reference.
+The supervisor's own approval policy is evaluated when `sup-crier` calls `telegram.send`.
+If that policy requires approval, the call returns its normal pending-approval result until the
+configured approver resolves it; the grant does not bypass the policy.
+
+When `mgr-comms` attempts `telegram.send` itself, R1 finds no `use` capability and returns
+`403 tool_not_granted`. The service writes one audit record containing the actor, operation,
+resource, `decision: deny`, `cause: tool_not_granted`, and the relevant policy revision. The
+successful issuance and failed self-use are independent facts.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/09-01.md#i-4-deny-precedence-and-conflict-audit-d-016 -->
+  <section id="CHD-HANDBOOK-CHD35-MA-962281-I-4-DENY-PRECEDENCE-AND-CONFLI-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## I.4 Deny precedence and conflict audit (D-016)
+
+The effective resolver is fail-closed and ordered:
+
+TABLE 9.1-2 — I.4 Deny precedence and conflict audit (D-016)
+
+| Rule | Check | Result |
+|---|---|---|
+| R0 | Existing session is bound to its snapshot. | Ignore grants issued after its snapshot. |
+| R1 | `use` contains capability and resource scope. | Allow or `tool_not_granted`; never infer from another class. |
+| R2 | `grant_use` contains pool, recipient and scope. | Allow issuance or `grant_outside_pool`. |
+| R3 | Downstream `grant_use`/`meta_grant` is requested. | Require `meta_grant`; otherwise `meta_grant_exceeds_authority`. |
+| R4 | Requested envelope is a subset of issuer, lineage and VP caps. | Deny overflow; never widen or rewrite. |
+| R5 | VP configured row narrows or denies the same capability/pool. | VP denial wins; write `grant_conflict`. |
+| R6 | Authority or ancestor is revoked/expired. | Deny new issuance with `authority_revoked`/`grant_expired`. |
+| R7 | Ordinary use in an existing session. | Use the session snapshot, including ancestor-revoked-derived rights. |
+| R8 | Archive selector and checkpoint are complete. | Incomplete selector is `grant_scope_incomplete`. |
+| R9 | Archive page read. | Re-check current archive grant, expiry and selector per page. |
+
+A VP-configured denial beats a director delegation over the same pool. The director delegation
+remains a durable attempted/issued record for accountability, but it is not effective. Readback
+shows `origin: vp_configured` on the denying policy row, `effective: false` on the conflicted
+delegation, and the two source ids. The audit row is `grant_conflict`, with no secret values.
+`deny-precedence/README.md` is the fixture for this case.
+
+All allowed and denied calls, grants, revocations, policy reads, resyncs and conflict checks
+write one `/chd/audit/...` record. A denial without an audit row is a conformance failure. Audit
+read is itself authorized and is VP/auditor scoped; it does not become a side channel for
+unauthorized callers.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/09-01.md#i-5-reads-non-oracle-errors-and-approval -->
+  <section id="CHD-HANDBOOK-CHD35-MA-962281-I-5-READS-NON-ORACLE-ERRORS-AN-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## I.5 Reads, non-oracle errors, and approval
+
+Room, ticket, archive and profile reads first establish whether the caller may read the
+selected resource. Unknown and unreadable resources use the same public response:
+`404 not_found`. This includes a guessed room key, a non-member room, an unreadable ticket,
+and an archive outside the caller's selectors. The body does not say whether the key exists,
+which membership check failed, or which principal is a member. The attempt is still audited
+internally with the protected cause (`not_member`, `unknown_resource`, or `scope_denied`) and
+rate-limited consistently. A caller may not compare detailed status, timing, count, or error
+text to discover existence (R31-002).
+
+A caller who is authenticated but lacks a tool `use` grant receives `403 tool_not_granted`.
+A caller who lacks authorization to read the policy of another principal receives the catalogue's
+non-oracle read error (`404 not_found`), not a policy document or a proof that the principal
+exists. The same policy applies to direct API, MCP, CLI, webhook, and bridge routes. A bridge
+identity cannot turn a peer request into a local VP read.
+
+The same class checks apply to every resource family; the capability vocabulary changes, not the
+authority rule. For a tool the leaf is a named operation such as `telegram.send`; for a skill it is
+a named skill and digest; for storage it is a named data class plus namespace; for agent creation it
+is an object kind plus parent/profile/tier limits. A successful check must match the requested class,
+capability, closed resource scope, recipient selector and policy revision. A resource availability,
+membership, retention, or expiry check is an additional check and is never treated as a policy
+resync. `grant_use` does not imply use, `meta_grant` does not imply use or grant-use, and `create`
+does not imply use of the created agent or object.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/09-01.md#i-5-1-class-truth-table-same-rule-for-tools-skills-storage-and-agent-creation -->
+  <section id="CHD-HANDBOOK-CHD35-MA-962281-I-5-1-CLASS-TRUTH-TABLE-SAME-R-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### I.5.1 Class truth table (same rule for tools, skills, storage and agent creation)
+
+The request's **output class** is explicit. `use` asks to exercise a capability; `grant-use` asks
+to issue a bounded use grant; `meta-only` asks to confer bounded authority to issue grants; and
+`create` asks to create the named subordinate/object. A row marked *allow* still requires the
+scope, recipient, expiry, approval, lineage, cycle and VP checks below; a row marked *deny* is
+not repaired by narrowing the request silently.
+
+TABLE 9.1-3 — I.5.1 Class truth table (same rule for tools, skills, storage and agent creation)
+
+| Held classes by issuer | Requested output | Tools / skills / storage | Agent creation | Required checks and result |
+|---|---|---|---|---|
+| `use` only | exercise capability | allow only inside bound scope | allow only if `create` is separately held: otherwise deny | `use` matches capability/scope; no other class is inferred |
+| `grant_use` only | issue a use grant | allow to an allowed recipient and subset of the named pool | deny unless a separate `create` authority is requested and held | `grant_use` authorizes only the use grant; issuer's own use is independent |
+| `meta_grant` only | confer grant authority | allow only for bounded downstream grant authority | deny; creation is a separate class | recipient, subset, depth/count and downstream cap are checked |
+| `use` + `grant_use` | exercise and/or issue a use grant | each requested action is allowed independently | deny unless `create` is also held | possessing both does not merge or widen either scope |
+| `grant_use` without `meta_grant` | create a new grantor / downstream grant-use | deny `403 meta_grant_exceeds_authority` | deny | no-meta new grantor; `grant_use` never mints `meta_grant` |
+| bounded `meta_grant` + `grant_use` | scoped delegation | allow only for the intersection of capability, resource, recipients, depth, count and expiry bounds | deny unless `create` is also held | child envelope is a strict subset; cycle and revoked/expired ancestor checks apply |
+| independent VP `use` | exercise capability after a derived grant is revoked | allow if current VP row still permits it | allow only when VP `create` row permits it | `origin=vp_configured` survives; derived lineage cannot revoke or widen it |
+
+This table is repeated by resource family intentionally: a skill digest cannot be converted into a
+tool, a storage namespace into a profile action, or an agent `create` row into use. Each decision
+readback names `effective_policy_rev`, `source_checkpoint` (or `null` for a non-restore decision),
+`origin`, `grant_id`, `authority_ref`, recipient and scope. The audit row carries the same revision
+and checkpoint fields.
+
+
+Approvals are a second condition, not a replacement for authorization. A granted operation with
+`require_approval` returns `202 approval_required` with an opaque `approval_id`; denial returns
+`403 approval_denied`. Timeout never becomes approval. The approver's credential reference and
+the approval record id may be read back; secret credential values may not.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/09-01.md#i-6-session-permission-lifetime-d-038-and-r31-027 -->
+  <section id="CHD-HANDBOOK-CHD35-MA-962281-I-6-SESSION-PERMISSION-LIFETIM-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## I.6 Session permission lifetime (D-038 and R31-027)
+
+Every fresh or forked session receives a `SessionPolicySnapshot` before its first tool call.
+The snapshot contains the effective grant set, each origin and lineage, `policy_snapshot_id`,
+`policy_rev`, `effective_policy_rev`, `source_checkpoint`, capture time, profile, fork lineage,
+and `fork_mode`. Existing ordinary calls
+use this snapshot for the session lifetime. Future sessions resolve current valid policy.
+Revocation immediately blocks new issuance, but it does not reach backward into an existing
+ordinary session's snapshot. Archive resource existence, selector scope and expiry are checked per page. Ordinary use of
+an existing live session remains bound to its session snapshot; archive-read authorization is a
+separate current-resource/grant check and is not a silent session-policy resync.
+
+The default fork mode is `preserve_parent_snapshot`; an operator may explicitly configure
+`current_policy`, and a project override may narrow but never widen the VP setting. Mode is
+recorded at fork and never inferred from delivery mode (`NEW`/`REUSE`). Activation changes
+future forks only; it never silently rewrites existing snapshots.
+
+TABLE 9.1-4 — I.6 Session permission lifetime (D-038 and R31-027)
+
+| Fork mode | Parent grant revoked before fork | Independent VP grant | Child policy revision |
+|---|---|---|---|
+| `preserve_parent_snapshot` (default) | Kept as copied revoked-derived right, with original lineage. | Kept. | Parent revision copied verbatim. |
+| `current_policy` | Excluded by current resolution. | Kept with `origin: vp_configured`. | Current resolver revision. |
+
+Under preserve-parent mode, no event triggers automatic resync: not revocation, grant issuance,
+policy activation, readback, or a tool call. A fork has a durable `parent_session_id`,
+`parent_bond_id`, `fork_point_seq`, mode, and copied grant provenance. Under current-policy mode,
+the child records the current resolution and current revision instead.
+
+At a fork boundary, an already-authorized parent operation finishes under the parent revision;
+the child cannot act until its snapshot is committed. At explicit resync, an operation already
+authorized continues under its captured revision, and the next authorization boundary uses the
+new revision. A grant issuance already admitted completes only for that request and still checks
+current ancestor revocation; no partial grant or snapshot set is visible. Every decision and audit
+row names `effective_policy_rev` and `source_checkpoint`; `source_checkpoint` is `null` unless the
+decision is part of a restore/import trace.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/09-01.md#i-6-2-restore-is-not-a-fork-d-039 -->
+  <section id="CHD-HANDBOOK-CHD35-MA-962281-I-6-2-RESTORE-IS-NOT-A-FORK-D-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### I.6.2 Restore is not a fork (D-039)
+
+A restore/import is always a **replacement** operation, never a fork and never a continuation of
+the archived session. It creates a new agent/profile/session/bond identity and a replacement
+`SessionPolicySnapshot`. The replacement snapshot is resolved from current VP configuration and
+currently valid lineage at restore time, even when an archived policy snapshot is present. The
+archived policy is retained as immutable audit evidence only and is never activated as replacement
+authority. `source_policy_rev` identifies the archived policy revision when the archive actually records one;
+otherwise it is explicitly `null` with `source_policy_rev_reason` describing `snapshot_missing`,
+`revision_not_recorded`, or another verified absence. It must never be inferred from a checkpoint
+number, file timestamp, current revision, or schema version. `effective_policy_rev` identifies the
+newly resolved current revision. `source_checkpoint` identifies the exact committed archive
+checkpoint used for the import; it is nullable only when no archive checkpoint was selected, with a
+reason recorded in the restore incident. The restore decision is always `current_policy`.
+
+The resolver excludes revoked or expired derived ancestors while retaining independent current
+`vp_configured` grants that remain allowed. A missing archived policy sets `snapshot_missing` for
+historical coverage and does not alter the current-policy result. The restore readback and audit
+record must contain the source manifest/checkpoint, old-to-new identity map, both policy revisions,
+`restore_decision: current_policy`, excluded derived grant ids, retained independent VP grant ids,
+and the historical-policy audit reference. No archived grant is effective merely because its bytes
+were imported.
+
+TABLE 9.1-5 — I.6.2 Restore is not a fork (D-039)
+
+| Operation | Source policy | Effective policy | Identity / mode | Revoked derived right | Independent current VP right |
+|---|---|---|---|---|---|
+| D-038 preserve-parent fork | parent live snapshot | parent snapshot | new child, `preserve_parent_snapshot` | may remain in copied snapshot | survives |
+| D-038 current-policy fork | parent live snapshot | current resolver at fork | new child, `current_policy` | absent | survives |
+| D-038 explicit resync | existing live snapshot | current resolver after authorization | same session, new snapshot revision | absent if revoked | survives if current VP allows |
+| D-039 restore | archived checkpoint snapshot (history only) | current resolver at restore | replacement identity, `current_policy` | absent | survives if current VP allows |
+
+The archive page itself is not a session-policy resync. It checks the archive grant, selector,
+resource availability and expiry for that page; ordinary use of an existing live session continues
+under its bound snapshot. A page read may be denied after revocation without changing the live
+session's snapshot or policy revision.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/09-01.md#i-6-1-explicit-policy-resync -->
+  <section id="CHD-HANDBOOK-CHD35-MA-962281-I-6-1-EXPLICIT-POLICY-RESYNC-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### I.6.1 Explicit policy resync
+
+`POST /v1/sessions/{session_id}/policy-resync` (or `chd_session_policy_resync`) accepts:
+
+```json
+{"expected_policy_rev": 7, "reason": "operator-approved rotation", "approval_ref": "apr-42"}
+```
+
+The caller must be the session's own authorized policy actor or hold an explicit
+`session.policy_resync` grant that names this agent/session. The controller also checks the
+session is VP-bound and `session.resync.enabled` is true. `expected_policy_rev` is a compare-and-
+swap guard. On success it computes current policy, writes exactly one new snapshot revision
+(`from_rev + 1`) and one audit record, then reads back the new revision and digest. The write is
+atomic: either the complete grant set and audit are durable/readable, or no snapshot changes.
+Resync can remove revoked-derived rights and acquire newly valid grants only within the
+configured use pool; it cannot widen VP authority.
+
+- Unauthorized: `403 policy_resync_not_granted`, audited, no snapshot write.
+- Disabled: `403 policy_resync_disabled`, audited, no snapshot write.
+- Stale expected revision: `409 policy_revision_conflict`, audited, no snapshot write.
+- Missing/invalid scope: `403 grant_scope_incomplete` or schema `400`, audited.
+
+The readback proves `policy_rev`, `policy_snapshot_id`, fork lineage, resync scope, actor,
+reason, `approval_ref`, and effective grants. There is no automatic resync in preserve-parent
+mode.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/09-01.md#i-7-create-authority-and-profile-safety -->
+  <section id="CHD-HANDBOOK-CHD35-MA-962281-I-7-CREATE-AUTHORITY-AND-PROFI-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## I.7 Create authority and profile safety
+
+Creation is independent of all grant classes. `create` is checked against the requested object
+kind, parent scope, tier, profile reference and limits. Creating an agent does not authorize its
+first tool call: the new agent receives an explicit policy snapshot and must pass profile,
+credential-reference, readiness and approval checks. A director-created manager still requires
+the operator to supply or authorize the credential reference; lower-tier creation remains
+unsupported unless the configuration explicitly names it. A profile may be read or updated only
+through its own profile authority; it is never a privilege bridge to another agent.
+
+Creation must not copy secrets or silently copy a parent's broader policy. A child receives only
+the explicitly requested subset permitted by the creator's `create` scope and the VP policy.
+Profile identity is non-default and distinct per agent. A missing, shared, default, or mismatched
+profile fails closed before session creation.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/09-01.md#i-8-worked-policy-traces -->
+  <section id="CHD-HANDBOOK-CHD35-MA-962281-I-8-WORKED-POLICY-TRACES-S012" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## I.8 Worked policy traces
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/09-01.md#i-8-1-meta-grant-denied -->
+  <section id="CHD-HANDBOOK-CHD35-MA-962281-I-8-1-META-GRANT-DENIED-S013" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### I.8.1 Meta-grant denied
+
+`mgr-comms` holds `grant_use` for `telegram.send` but no `meta_grant`. It submits a grant with
+`downstream_rights: ["grant_use"]`. R3 rejects it with `403 meta_grant_exceeds_authority`; the
+response does not create a narrowed child grant. The denial audit names actor, requested rights,
+`authority_ref: null`, policy revision, and the machine code. A later `telegram.send` grant with
+`downstream_rights: ["use"]` is allowed if the ordinary pool and recipient checks pass. This
+proves `grant_use` never implies meta-grant.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/09-01.md#i-8-2-vp-conflict -->
+  <section id="CHD-HANDBOOK-CHD35-MA-962281-I-8-2-VP-CONFLICT-S014" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### I.8.2 VP conflict
+
+The VP policy excludes `terminal` tools for `sup-crier`. A director submits a delegation for the
+same pool. The issuance is recorded with `origin: director_grant`, but effective readback keeps
+the VP-configured exclusion and returns the call as denied. Audit includes
+`event: grant_conflict`, `winning_origin: vp_configured`, both grant ids, and the selected scope.
+No role or bridge claim overrides the VP row.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/09-01.md#i-8-3-d-038-resync -->
+  <section id="CHD-HANDBOOK-CHD35-MA-962281-I-8-3-D-038-RESYNC-S015" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### I.8.3 D-038 resync
+
+A parent at revision 7 contains a director grant and an independent VP room grant. After the
+director grant is revoked, a preserve-parent child reads revision 7 and still has both grants;
+a current-policy child reads revision 8 and has only the VP grant. An authorized resync of the
+preserve-parent session advances it to revision 8 and removes the revoked-derived grant. An
+unauthorized resync leaves revision 7 unchanged and records `policy_resync_not_granted`. The
+fixtures under `examples/grants/revocation-preserve/` and `current-policy-resync/` contain the
+readback bodies and audit expectations.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/09-01.md#i-9-evidence-and-validation -->
+  <section id="CHD-HANDBOOK-CHD35-MA-962281-I-9-EVIDENCE-AND-VALIDATION-S016" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## I.9 Evidence and validation
+
+The following checks are part of this section's acceptance surface:
+
+```text
+python3 handbook/chd32/scripts/check_capability_matrix.py
+python3 -m json.tool handbook/chd32/schemas/grant.schema.json &gt;/dev/null
+python3 -m json.tool handbook/chd32/schemas/policy-snapshot.schema.json &gt;/dev/null
+```
+
+The matrix checker reads `register/operations.csv` and reports every operation absent from the
+matrix or containing an empty authority/action cell. It must report `unclassified=0`; adding an
+operation to the register without a matrix row fails the check. The examples are documentation
+fixtures, not claims that credentials or external channels were exercised by this handbook
+build; every fixture uses references and synthetic ids only.
+
+The operation register is the complete scope inventory. `capability-matrix.csv` therefore
+classifies profile, tool, skill, storage, room, ticket, archive, grant, session and creation
+operations across all four authorities, including request-vs-direct behavior. Other sections may
+add explanatory examples, but they may not add an unregistered authorization door.
+
+
+&lt;figure&gt;
+&lt;img class="mdfig" src="../figures/fig-9.2-1.svg" alt="Figure 9.2-1 policy lifetime"&gt;
+&lt;figcaption&gt;FIGURE 9.2-1 — POLICY LIFETIME. Snapshot: 2026-11-15. The producer selects a live call, fork, restore, or explicit resync; the controller resolves captured or current policy; the consumer state distinguishes keep-captured, preserve-parent, current-policy replacement, and history-only evidence.&lt;/figcaption&gt;
+&lt;/figure&gt;
+
+The policy-lifetime plate makes the recovery boundary visible: preserve-parent keeps the captured snapshot, current-policy resolves valid lineage at the fork or restore boundary, and archived policy remains history only. Explicit resync is called out as its own compare-and-swap, commit, audit, and readback path; absence, expiry, or invalid authority follows the reject/hold branch rather than silently changing a live session.
+
+**Full-size figure detail:** FIGURE 9.2-1 in §27; the detail sheets carry the drawing, explanation, steps and failure branches.
+
+
+&lt;/div&gt;
+  </section>
+</spec>

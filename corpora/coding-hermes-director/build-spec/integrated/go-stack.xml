@@ -1,0 +1,221 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/build-spec/integrated/go-stack.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-BUILD-SPEC-INTEGRATED-GO-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/build-spec/integrated/go-stack.md#preamble -->
+  <section id="CHD-BUILD-SPEC-INTEGRATED-GO-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# GOLANG STACK — coding-hermes-director
+
+**Research date:** 2026-11-11 (UTC). **Task:** `t_fe11e324`. **Status:** library recommendation with an executed compatibility probe; not a claim that CHD or its durable storage adapter is implemented.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/go-stack.md#decision -->
+  <section id="CHD-BUILD-SPEC-INTEGRATED-GO-DECISION-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Decision
+
+Implement CHD in **Go 1.27.4**, the stable release published 2026-11-10, with standard-library HTTP, SQL interfaces, JSON and structured logging. The release feed and release history were fetched live, rather than inferring the current version from this host's original Go 1.26.5 installation.[1][33]
+
+Choose one small composition per concern, below. Do **not** add Redis, NATS, an ORM, a separate authoritative KV database, or a generic workflow engine to the initial implementation merely to fill a stack diagram. These are design recommendations, not statements that those alternatives are defective.
+
+**Storage authority is a hard boundary.** `build-spec/VOL-A-story-roles-lifecycle.md`, VOL-A-023/024 (lines 700–734, inspected 2026-11-11), makes DuckBrain authoritative for CHD control state. `audit/astra-audit.md`, G-12, identifies an unresolved versioned binding for LeaseAuthority/FencedStore/SnapshotToken. Selecting SQLite does not authorize moving manifests, reservations, tickets or grants into a second authoritative store. This report selects SQLite for **local rebuildable KV/index/cache uses**, and a manifest-backed application queue through the canonical store interface. A native durable-storage binding still needs resolution by the integration task; no local database library closes G-12 by itself.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/go-stack.md#1-exact-recommended-stack -->
+  <section id="CHD-BUILD-SPEC-INTEGRATED-GO-1-EXACT-RECOMMENDED-STACK-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 1. Exact recommended stack
+
+Versions are pins observed on the research date, not a promise that `@latest` will resolve identically later. Module dates below are the Go proxy's `Time` field; Go and Crier dates are published release dates.
+
+| Concern | One selected composition and exact version | Why this choice | Repository | License / version evidence |
+|---|---|---|---|---|
+| Language and standard library | **Go 1.27.4**, released 2026-11-10 | One Go executable; use `context`, `net/http`, `encoding/json`, `database/sql`, `embed` and `log/slog` before adding wrappers | https://github.com/golang/go | BSD-3-Clause.[20] Current release verified.[1][33] |
+| Storage / KV + SQLite | **`modernc.org/sqlite v1.62.0`**, 2026-11-07, behind Go `database/sql`; KV represented by a SQL table, not another engine | CGo-free SQLite driver; transactions and SQL indexes in the same local file; pure-Go build/cross-compilation path. Local cache/index role only unless a separate authority decision changes the contract | https://github.com/modernc-org/sqlite ; upstream https://gitlab.com/cznic/sqlite | BSD-3-Clause for driver.[21] Version and driver characteristics.[2][10] |
+| Queue / federation: Crier bridge client | **Application-owned `internal/crierclient` over Go 1.27.4 `net/http`, targeting Crier v0.6.0**, released 2026-11-09 | Small typed HTTP client for the existing fleet service; durable inbox retrieve/ACK rather than a replacement broker; HTTP long-poll avoids a WebSocket dependency | https://github.com/crier-dev/crier ; client transport https://github.com/golang/go | Crier MIT.[30] Release/API and inventory verified.[8][31][32] Client is new CHD code, **not** an independently released Go SDK |
+| Configuration load + validate | **`go.yaml.in/yaml/v3 v3.0.6`** (2026-10-13) + **`github.com/santhosh-tekuri/jsonschema/v6 v6.0.3`** (2026-06-28) + typed Go semantic checks | Direct strict YAML loading and Draft 2020-12 schema validation; no merge framework or implicit environment precedence for a single operator-owned file | https://github.com/yaml/go-yaml ; https://github.com/santhosh-tekuri/jsonschema | YAML has Apache-2.0 and MIT-covered portions; retain LICENSE and NOTICE.[22][23] Validator Apache-2.0.[24] Pins.[3][4] |
+| OpenAPI server + codegen | **`github.com/oapi-codegen/oapi-codegen/v2 v2.8.2`** (2026-10-31), build-time; **`github.com/oapi-codegen/runtime v1.9.0`** (2026-11-10), generated runtime helpers; strict Chi server | Contract-first generation of models/server interfaces; handwritten service logic and explicit request validation remain separate | https://github.com/oapi-codegen/oapi-codegen ; https://github.com/oapi-codegen/runtime | Both Apache-2.0.[26][28] Pins.[5][6] |
+| Durable task / queue | **CHD-3.2 application manifest-backed queue**, built with Go 1.27.4; canonical FencedStore adapter, plus the SQLite v1.62.0 local index above | Preserve one admission/reservation authority and the specified send/attempt/recovery semantics; no third-party task engine becomes a second ledger | Application package is proposed, not published; substrate library https://github.com/modernc-org/sqlite ; language https://github.com/golang/go | Application license must follow CHD's repository decision; do not label unpublished code MIT by assumption. Go and optional local driver licenses as above. **No independent queue release exists** |
+| Structured logging | **Go 1.27.4 `log/slog` + `slog.JSONHandler`** | Standard-library structured attributes, context-aware calls and handler customization; no logging dependency | https://github.com/golang/go | BSD-3-Clause.[20] API documentation.[18] |
+| HTTP routing | **`github.com/go-chi/chi/v5 v5.5.0`**, 2026-10-14, on Go `net/http` | Thin middleware/route composition compatible with generated server handlers; no application framework | https://github.com/go-chi/chi | MIT.[29] Pin and design documentation.[7][14] |
+
+The durable task selection is deliberately an **application implementation**, not a fabricated library recommendation. None of the researched queue packages establishes CHD's project-specific storage-authority, fencing and stop-proof contracts merely by being installed. The exact deployed DuckBrain/adapter revision remains an integration gate, not an omitted invented version.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/go-stack.md#2-storage-one-local-sql-store-no-parallel-kv-authority -->
+  <section id="CHD-BUILD-SPEC-INTEGRATED-GO-2-STORAGE-ONE-LOCAL-SQL-STORE-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 2. Storage: one local SQL store, no parallel KV authority
+
+Use `database/sql` with `modernc.org/sqlite`; a local KV table can contain `(namespace, key, value, source_revision)` with a primary key on `(namespace, key)`. SQL indexes can accelerate pending-work lookup and read models. Reconstruct these from authoritative records after loss; cache hits must not decide grants, capacity ownership or fencing.
+
+For any local durability that is actually required, explicitly configure WAL, `synchronous=FULL`, foreign keys and a bounded busy timeout. Apply connection-local settings to **every** connection, not just whichever connection executes startup PRAGMAs. Start with a single writer connection and short transactions; do not hold a write transaction across a gateway or Crier request. SQLite WAL permits readers alongside a writer but still only one writer, requires same-host shared-memory coordination, and is not a shared network-filesystem database.[19]
+
+Do not copy a live `.db` file alone while ignoring its WAL. Test a supported consistent backup/checkpoint procedure. Do not claim filesystem durability from a successful SQL readback alone; power loss, fsync behavior and restore are separate acceptance tests. Modernc's documentation also warns that its `modernc.org/libc` version must match the driver's dependency expectations: retain the resolved dependency graph instead of upgrading libc independently.[10]
+
+**Alternatives assessed:** bbolt's current proxy version was v1.5.0 (2026-06-03).[16] It is not selected because adding another local store gains little for CHD's relational read models and would add another migration/recovery surface. The reason is architectural simplicity, not a benchmark claim. A CGo SQLite driver is unnecessary for the tested pure-Go path; no performance superiority is claimed here.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/go-stack.md#3-crier-bridge-use-its-actual-protocol-not-an-imaginary-go-sdk -->
+  <section id="CHD-BUILD-SPEC-INTEGRATED-GO-3-CRIER-BRIDGE-USE-ITS-ACTUAL-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 3. Crier bridge: use its actual protocol, not an imaginary Go SDK
+
+Crier v0.6.0's public tree contains Python and TypeScript clients and internal Go clients for other surfaces; it does not expose a first-party general Go inbox SDK under `clients/`. Its server OpenAPI file is `cmd/server/openapi.yaml`, with another document at `docs/openapi.yaml`. Treat the service's published API and a reviewed, hashed schema snapshot as the compatibility boundary; do not import Crier's `internal/` server packages into CHD.[32]
+
+Use a small handwritten typed client, release-coupled to CHD, for the selected inbox endpoints. Pin the Crier compatibility baseline to **v0.6.0** and test the actual deployed revision independently; a public tag does not establish the fleet's current deployment. This avoids importing the entire Crier server module and avoids assuming its full OpenAPI surface is already adequate for generating every required operation.
+
+Required client behavior:
+
+- Use `POST /agents/{id}/inbox` and `GET /agents/{id}/inbox?wait_seconds=N`, plus the ACK operation from the reviewed API snapshot. The documented long-poll range is 0–120 seconds; configure transport/overall timeouts above the chosen server wait while preserving cancellation.[31]
+- Persist the bridge obligation in the **canonical CHD store** before external delivery. Retry using the same documented transport idempotency identity and payload; a lost response is an uncertain outcome to reconcile, not permission to create a new logical send. Confirm the precise header/body field and retention window against the pinned endpoint schema before coding.
+- On inbound delivery, authenticate the peer, perform local policy checks and commit the deduplicated room event **before ACK**. A crash between commit and ACK must replay harmlessly. Peer identity does not grant VP authority.
+- Use a dedicated `http.Client`, bounded response bodies, TLS verification, explicit context deadlines, secret-reference resolution and bounded retry/backoff. Do not follow redirects that could leak credentials to a different authority.
+- Do not equate lease expiry with proof that CHD execution stopped. Crier delivery leases and CHD run reservations are distinct mechanisms.
+
+The v0.6.0 README states that relay publication is fire-and-forget and drops events when there are zero subscribers. Its durable inbox deployment uses PostgreSQL via `CR_DATABASE_URL`; the documented no-database mode is demo-only memory storage. Backend diagnostics and restart tests must verify real durability; an HTTP 202 or a healthy WebSocket is not that evidence.[31] Reusing an existing Crier service avoids adding a new broker, but does **not** make the end-to-end system dependency-free.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/go-stack.md#4-configuration-strict-direct-loading-not-implicit-configuration-magic -->
+  <section id="CHD-BUILD-SPEC-INTEGRATED-GO-4-CONFIGURATION-STRICT-DIRECT-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 4. Configuration: strict direct loading, not implicit configuration magic
+
+Use the maintained YAML organization/module at `go.yaml.in/yaml/v3`, not a new dependency on the older `gopkg.in/yaml.v3 v3.0.1` pin. The maintained project and the exact selected release were retrieved.[3][11] The selected validator's tagged documentation explicitly lists Draft 2020-12 support, matching `contracts/config.schema.json`.[25]
+
+Recommended pipeline:
+
+1. Read one bounded configuration file. Reject duplicate mappings, extra YAML documents and non-string mapping keys; constrain aliases/depth and total size.
+2. Preserve integers during YAML-to-JSON conversion, including values outside JavaScript's exact integer range; use `json.Number` where relevant. Do not silently round identifiers or counters.
+3. Validate against the **embedded, versioned** JSON Schema. Resolve references only from approved bundled resources; do not fetch arbitrary remote `$ref` URLs during startup. Explicitly enable format assertions where the contract relies on them—the validator documents these as opt-in for newer drafts.[25]
+4. Decode to typed structs with strict unknown-field checking. Run semantic checks for references, IDs, namespace separation, routing, paths and policy rules; schema validity alone is insufficient.
+5. Resolve token references separately without printing secret values. Publish a redacted effective-config digest and clear field-path diagnostics.
+
+No generic environment overlay is selected. If the normative configuration contract authorizes interpolation or precedence later, implement that exact grammar explicitly and reject missing/disallowed substitutions. Koanf v2.4.1 was checked as a current candidate, but is unnecessary for this single-source configuration design.[17] This avoids adding file/env/parser provider modules and accidentally inheriting their merge semantics.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/go-stack.md#5-openapi-routing-generate-interfaces-not-authority -->
+  <section id="CHD-BUILD-SPEC-INTEGRATED-GO-5-OPENAPI-ROUTING-GENERATE-INT-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 5. OpenAPI + routing: generate interfaces, not authority
+
+Use `oapi-codegen v2.8.2` with `models`, `chi-server` and `strict-server`. Its tagged documentation supports OpenAPI 3.0 and 3.1 generation; a small OpenAPI 3.1.0 example was actually generated and executed with the chosen Chi/runtime pins during this task.[27] That probe does **not** establish compatibility with every CHD operation, union, extension or JSON Schema keyword.
+
+Keep the generator as a pinned build tool, separate from the deployed runtime dependency set:
+
+```sh
+go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.2 \
+  --config codegen.yaml openapi.yaml
+```
+
+Commit the approved input, generated code and dependency lock data; regenerate in CI and fail on unexpected diff. The integration phase must identify one canonical, operation-complete OpenAPI input and reconcile it with the schema/contract deliverables. This task's tiny `openapi.yaml` is **only a probe**, not that product contract.
+
+**Important limitation:** strict-server does not perform complete request validation. The generator documents that substantial validation remains and points to separate middleware.[27] In this selected composition, the already-selected JSON Schema v6 validator checks the canonical JSON request schemas before typed service execution; application transport code must separately enforce path/query/header constraints, content type, size limits and error precedence. Do not assume OpenAPI 3.1 support in an unrelated validation middleware merely because the generator supports it. Authentication, authorization, idempotency, concurrency and audit commits remain handwritten business rules.
+
+Run Chi under `http.Server` with explicit header/read/idle limits and graceful shutdown. Give long-poll/streaming routes appropriate per-route deadlines rather than a blanket write timeout shorter than their contract. Do not trust forwarded IP headers without an explicit trusted-proxy configuration.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/go-stack.md#6-durable-task-execution-one-canonical-manifest-backed-queue -->
+  <section id="CHD-BUILD-SPEC-INTEGRATED-GO-6-DURABLE-TASK-EXECUTION-ONE-C-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 6. Durable task execution: one canonical manifest-backed queue
+
+Implement `internal/taskqueue` as CHD-3.2 application code over the canonical store interface. Use Go contexts, bounded goroutines and timers for execution and wake hints; durable manifests—not Go channels—determine which work still exists.
+
+The required algorithmic responsibilities are project obligations, not features supplied by the selected libraries:
+
+- Atomically or through the **specified authoritative storage protocol** couple admission, idempotency, reservation and state transitions. An in-process mutex or local SQLite transaction cannot fence a second controller writing DuckBrain.
+- Rebuild eligible work from authoritative manifests on restart. Keep a local SQLite eligibility index disposable and tied to source revision/high-water evidence.
+- Preserve request/send/attempt/run distinctions, canonical retry identity, fairness, retry timing and deadline semantics. Never create a second capacity ledger in a queue engine.
+- Use an outbox/reconciliation protocol for external effects. A crash after remote acceptance but before local observation requires lookup/replay discipline, not exactly-once claims.
+- Retain reservation on uncertain execution. Expired worker lease, absent heartbeat or a report body is not automatically runtime stop proof.
+
+**Why no River/Asynq/Temporal dependency?** River was researched as an embedded-job candidate; its SQLite documentation still labels SQLite support experimental.[15] Introducing it would not resolve CHD's authority and fencing contract, and a separate job table could duplicate the manifest ledger. Redis-backed or separate workflow-service architectures are unnecessary deployment additions for this recommendation. No optional queue engine is quietly included in the chosen stack.
+
+**Residual gate, not a library-choice ambiguity:** integration must bind LeaseAuthority, FencedStore and SnapshotToken to a concrete versioned backend/adapter, including takeover, stale-writer refusal, atomicity and consistent scans. If the chosen implementation cannot provide these on the authorized DuckBrain path, revise the normative architecture explicitly or remain not buildable. Do not claim that choosing SQLite solved this.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/go-stack.md#7-structured-logging-and-license-hygiene -->
+  <section id="CHD-BUILD-SPEC-INTEGRATED-GO-7-STRUCTURED-LOGGING-AND-LICEN-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 7. Structured logging and license hygiene
+
+Use `slog.NewJSONHandler` with stable request/send/attempt/run identifiers, service/build revision, operation and typed result. Use allowlisted attributes, safe `LogValuer` representations and redaction handlers; never log credential values, raw authorization headers, prompts or entire config structs by default. The standard API provides structured handlers and attribute replacement.[18] A probe verified one named attribute's redaction, not comprehensive secret-leak resistance.
+
+Logs are operational evidence, **not** the authoritative audit/queue journal. Audit durability still follows the canonical storage contract.
+
+Retain the direct dependencies' license/notice files cited above. YAML's mixed licensing must not be flattened into an unqualified “MIT only” label.[22][23] Before shipment, produce an SBOM and scan the **resolved** runtime and tool graphs for vulnerabilities and transitive license obligations. This research verified direct licenses; it is not a legal opinion or a complete transitive vulnerability/license audit.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/go-stack.md#8-execution-evidence-and-reproducibility -->
+  <section id="CHD-BUILD-SPEC-INTEGRATED-GO-8-EXECUTION-EVIDENCE-AND-REPRO-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 8. Execution evidence and reproducibility
+
+The evidence archive accompanying this deliverable contains fetched primary-source bodies, the citation ledger, fetch scripts, and `probe/` with `go.mod`, `go.sum`, generator input/config/output, test source and test output. No CHD service or production configuration was modified.
+
+Executed on Linux/amd64 using **Go 1.27.4**:
+
+```text
+go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.8.2 --config codegen.yaml openapi.yaml
+go mod edit -require=github.com/oapi-codegen/runtime@v1.9.0
+go mod tidy
+go test -count=1 -v ./...
+```
+
+**Observed result: all four tests passed.**
+
+| Executed test | What it established | What it did not establish |
+|---|---|---|
+| `TestGeneratedStrictServer` | OpenAPI 3.1.0 generation, strict interface, runtime helper imports and Chi handler compile together; HTTP `/health` returns the expected JSON | Complete CHD OpenAPI/schema support, auth or endpoint coverage |
+| `TestSQLiteReopen` | Selected driver opens a file, enables/readbacks WAL, commits a KV row, and reads it after clean close/reopen | Abrupt process death, power loss, concurrency fencing or DuckBrain atomicity |
+| `TestConfigSchema` | Actual repository YAML template passes actual repository schema through the chosen parser/validator; added unknown top-level property and duplicate YAML key are rejected | Every schema constraint, integer edge case, semantic reference or policy rule |
+| `TestStructuredLog` | JSON structured logging and redaction of a synthetic `token` attribute work | Nested/error/payload secret redaction or log throughput |
+
+Evidence identities (SHA-256, computed after execution):
+
+- `probe/openapi.yaml`: `cbac7b3c713d8a18da056b7fddb31430b37249bcf5342febabda33e2749b346c`
+- `probe/api.gen.go`: `0e8f434a24febbf5770f21091c89582c746fd6c4ec06601828f7790c4f405677`
+- `probe/test-output.txt`: `06303fd5fee83760e6c713c738fed983aa723b10c19e9a1d987b782c433bed32`
+- Inspected `contracts/config.schema.json`: `abfb119562f27c3e0fae11c1e20674393f1c8436b1ea08d9fe5f87b54b65e7eb`
+- Inspected `contracts/config.template.yaml`: `8b26fd7e8fcda57f67f365d6ac450b26eb87ef00a56f9b171207e67f6d642974`
+
+The template/schema test currently reads the repository's files at the documented project path; reproduce against those exact hashes rather than silently substituting a later template. The probe's module graph is evidence of this smoke test, not a final production lockfile. Modernc brings supporting modules: “minimal” here means few direct components and no new daemon, **not zero transitive dependencies**.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/go-stack.md#9-integration-handoff -->
+  <section id="CHD-BUILD-SPEC-INTEGRATED-GO-9-INTEGRATION-HANDOFF-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 9. Integration handoff
+
+Accept these library pins as a tested starting point, subject to the production security/dependency gate. Preserve the following unfinished product obligations:
+
+1. Bind authoritative storage/fencing/snapshot behavior; do not promote SQLite caches to authority implicitly (audit G-12).
+2. Supply and validate the complete canonical OpenAPI and operation schemas; run negative request/response tests against them.
+3. Verify Crier v0.6.0 compatibility against the deployed backend, including authentication, durable restart, duplicate delivery, ACK loss, lease expiry and response loss. No live Crier delivery was performed by this research task.
+4. Test queue takeover, concurrent admission, stale writer, uncertain run and stop-proof behavior. These remain application tests, not library smoke tests.
+5. Reconcile rather than blindly copy `audit/companion-go-stack.md`: that earlier companion uses Crier v0.2.0, older YAML/validator pins, an unverified Go patch recommendation, optional River, and a local-authority suggestion incompatible with VOL-A-023 unless explicitly amended. This task leaves the companion untouched.
+
+Research transport note: web search succeeded; `web_extract` was unavailable because the configured backend was search-only. Primary pages, tagged source/license files, Go release metadata and module metadata were instead fetched successfully over HTTPS and retained. An initial DuckBrain keyword query timed out; exact-key recall of the parent audit succeeded. These failures were not replaced by invented retrieval results.
+
+Moving-branch READMEs were fetched for discovery, but tagged sources and module metadata—not a branch's version banner—determine the final pins.[9][12][13]
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/go-stack.md#sources -->
+  <section id="CHD-BUILD-SPEC-INTEGRATED-GO-SOURCES-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Sources
+
+[1] https://go.dev/dl/?mode=json — go-releases (accessed 2026-11-11)
+[2] https://proxy.golang.org/modernc.org/sqlite/@latest — sqlite (accessed 2026-11-11)
+[3] https://proxy.golang.org/go.yaml.in/yaml/v3/@latest — yaml (accessed 2026-11-11)
+[4] https://proxy.golang.org/github.com/santhosh-tekuri/jsonschema/v6/@latest — schema (accessed 2026-11-11)
+[5] https://proxy.golang.org/github.com/oapi-codegen/oapi-codegen/v2/@latest — oapi (accessed 2026-11-11)
+[6] https://proxy.golang.org/github.com/oapi-codegen/runtime/@latest — runtime (accessed 2026-11-11)
+[7] https://proxy.golang.org/github.com/go-chi/chi/v5/@latest — chi (accessed 2026-11-11)
+[8] https://api.github.com/repos/crier-dev/crier/releases/latest — crier-release (accessed 2026-11-11)
+[9] https://raw.githubusercontent.com/crier-dev/crier/main/README.md — crier-readme (accessed 2026-11-11)
+[10] https://pkg.go.dev/modernc.org/sqlite — sqlite-doc (accessed 2026-11-11)
+[11] https://raw.githubusercontent.com/yaml/go-yaml/main/README.md — yaml-readme (accessed 2026-11-11)
+[12] https://raw.githubusercontent.com/santhosh-tekuri/jsonschema/master/README.md — schema-readme (accessed 2026-11-11)
+[13] https://raw.githubusercontent.com/oapi-codegen/oapi-codegen/main/README.md — oapi-readme (accessed 2026-11-11)
+[14] https://raw.githubusercontent.com/go-chi/chi/master/README.md — chi-readme (accessed 2026-11-11)
+[15] https://riverqueue.com/docs/sqlite — river (accessed 2026-11-11)
+[16] https://proxy.golang.org/go.etcd.io/bbolt/@latest — bbolt (accessed 2026-11-11)
+[17] https://proxy.golang.org/github.com/knadh/koanf/v2/@latest — koanf (accessed 2026-11-11)
+[18] https://pkg.go.dev/log/slog — slog (accessed 2026-11-11)
+[19] https://www.sqlite.org/wal.html — sqlite-wal (accessed 2026-11-11)
+[20] https://raw.githubusercontent.com/golang/go/go1.27.4/LICENSE — go-license (accessed 2026-11-11)
+[21] https://raw.githubusercontent.com/modernc-org/sqlite/v1.62.0/LICENSE — sqlite-license (accessed 2026-11-11)
+[22] https://raw.githubusercontent.com/yaml/go-yaml/v3.0.6/LICENSE — yaml-license (accessed 2026-11-11)
+[23] https://raw.githubusercontent.com/yaml/go-yaml/v3.0.6/NOTICE — yaml-notice (accessed 2026-11-11)
+[24] https://raw.githubusercontent.com/santhosh-tekuri/jsonschema/v6.0.3/LICENSE — schema-license (accessed 2026-11-11)
+[25] https://raw.githubusercontent.com/santhosh-tekuri/jsonschema/v6.0.3/README.md — schema-pinned (accessed 2026-11-11)
+[26] https://raw.githubusercontent.com/oapi-codegen/oapi-codegen/v2.8.2/LICENSE — oapi-license (accessed 2026-11-11)
+[27] https://raw.githubusercontent.com/oapi-codegen/oapi-codegen/v2.8.2/README.md — oapi-pinned (accessed 2026-11-11)
+[28] https://raw.githubusercontent.com/oapi-codegen/runtime/v1.9.0/LICENSE — runtime-license (accessed 2026-11-11)
+[29] https://raw.githubusercontent.com/go-chi/chi/v5.5.0/LICENSE — chi-license (accessed 2026-11-11)
+[30] https://raw.githubusercontent.com/crier-dev/crier/v0.6.0/LICENSE — crier-license (accessed 2026-11-11)
+[31] https://raw.githubusercontent.com/crier-dev/crier/v0.6.0/README.md — crier-pinned (accessed 2026-11-11)
+[32] https://api.github.com/repos/crier-dev/crier/git/trees/v0.6.0?recursive=1 — crier-tree (accessed 2026-11-11)
+[33] https://go.dev/doc/devel/release — go-history (accessed 2026-11-11)
+  </section>
+</spec>

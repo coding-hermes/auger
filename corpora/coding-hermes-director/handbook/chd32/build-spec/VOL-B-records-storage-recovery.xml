@@ -1,0 +1,1888 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD32-BU-48C870-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# VOL-B — CHD RECORDS, DUCKBRAIN CONTRACTS, ORDERED THREADS, CRASH-SAFE PERSISTENCE
+
+**Recovery terminology:** [re-drive](terminology.md#re-drive), [re-derive](terminology.md#re-derive), [reconcile](terminology.md#reconcile), [stop confirmation](terminology.md#stop-confirmation), [snapshot](terminology.md#snapshot), and [resync](terminology.md#resync).
+
+```
+DOC     : build-spec/VOL-B-records-storage-recovery.md
+RESOLVES: §0–§10 anchors of this volume; ids VOL-B-001..073
+          (volume -&gt; § anchors -&gt; ids: `manifest/package-manifest.json`,
+          `build-spec/REFERENCE-INDEX.md` §1); archive contracts are included
+          under `contracts/schemas/` and `runbooks/`
+REV     : 2.2 (R31 revision pass 2026-11-09). Delta vs 2.1: four routing classes
+          split coordination/report from protected control keys (R31-028).
+          Delta vs 2.0 (R31-016, R31-022):
+          3.3 concurrency fixture VOLB-067 (two concurrent tasks, same agent,
+          same room, two distinct bond/thread ids); 3.12 restructured to the
+          SessionArchive + ExportManifest + ArchiveGapRecord records with
+          VOLB-068 (trigger/cadence/incremental dedupe) and VOLB-069
+          (failed-export visibility); new 5.10 archive lookup queries +
+          ordered restore procedure (VOLB-070/VOLB-071); 7.5 roll-up fixture
+          VOLB-072 (child report -&gt; manager review -&gt; parent report
+          attachment, exact record ids); archive key table made
+          checkpoint-scoped with a per-session index.
+          Delta vs 1.1 (2.0):
+          3.1 kind enum completed (question added, legality delegated to
+          VOL-C §3.6); 3.3 bond identity extended to per-subthread forks
+          (R31-022); new 3.10 dataset/report rows, 3.11 SessionPolicySnapshot
+          (D-038), 3.12 archive records, 3.13 GrantRecord incl. meta-grant,
+          3.14 TicketRecord; 3.10/5.12 report-v3 dataset/query contracts and
+          5.4 freshness rule v3 on harness-recorded times with one precedence
+          (R31-011/R31-030); 6.4/6.7
+          retained head reservations and run-status reconciliation before slot
+          release (R31-006, R31-007); 7.2 forks now used for subthread
+          provisioning while delivery stays NEW/REUSE (R31-022/D-025); data
+          classes and the archive namespace added in 1.1/2.1 (R31-016/028).
+DATE    : 2026-11-09
+NORMATIVE BASIS : DESIGN.md rev 3.0 (owner red lines RL-1..RL-20, contracts CT-01..CT-15,
+                  requirements R-001..R-031), evidence/r32-review/inputs/03-REVIEW-LOG.json
+                  and evidence/r32-review/inputs/01-REVISION-HANDOFF.txt; all review
+                  inputs are included under evidence/r32-review/inputs/.
+DEPENDENCY PIN  : DuckBrain github.com/wojons/duckbrain @ 972aeb0023973b2d62186a748eab5ccede2dd0f8
+                  (v1.1.0). Hermes Agent API server — https://hermes-agent.nousresearch.com/docs
+                  /user-guide/features/api-server (fetched 2026-11-08) and
+                  /user-guide/features/memory (fetched 2026-11-08).
+STATUS  : CONTRACT TO BUILD AGAINST. Statements marked OPEN DESIGN WORK are explicit
+          unresolved items; nothing else may be treated as optional.
+SCOPE   : VOL-B owns CHD durable control state ONLY. Native Hermes memory/session/skill
+          storage and agent work artifacts are NOT modeled here (review Scope boundary;
+          DESIGN §4.6). DuckBrain-only invariant applies to CHD control state (D-007 scope).
+```
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#0-how-to-read-this-volume -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-0-HOW-TO-READ-THIS-VOLUME-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 0. How to read this volume
+
+Every normative statement carries a stable requirement id `VOLB-nnn`. Section 10 maps
+each of this volume's findings (F-006, F-007, F-010, F-019) to its requirements and
+sections. Where this volume amends an earlier contract (DATA-MODEL.md rev 1.0,
+ENDPOINTS.md rev 1.0), the amendment is called out inline and controls on conflict.
+
+Two identities appear throughout and must never be conflated (F-010):
+
+- **Thread identity** — a CHD-owned logical conversation: a room (`obj-*`, `task-*`,
+  `space-*`) plus a reply tree over that room's ordered log. Durable in DuckBrain.
+- **Hermes session identity** — the session id of a Hermes agent conversation,
+  minted and owned by Hermes. CHD stores only a *reference* to it (the bond).
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#1-storage-substrate-what-duckbrain-actually-provides-f-019 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-1-STORAGE-SUBSTRATE-WHAT-DUCKB-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 1. Storage substrate: what DuckBrain actually provides (F-019)
+
+This section is normative context for every contract below. All claims are read from
+the pinned revision's README and `docs/api/http-api.md` on 2026-11-08.
+
+**VOLB-001 (D1 — pinned dependency).** CHD builds against DuckBrain at revision
+`972aeb0023973b2d62186a748eab5ccede2dd0f8`. The build MUST re-verify the behavioral
+contracts relied on below (multi-version same-key semantics, durability headers,
+attribute filters) against the release tag actually deployed before M3 sign-off
+(VOLB-001).
+
+**VOLB-002 (D2 — memories, not tables).** The deployed surface is a memory store: hierarchical
+slash-prefixed keys, JSONL append-only segments, DuckDB query layer, per-namespace
+git repos. **Generic REST over declared tables (SUPA-3/SUPA-6) and role grants/token
+lifecycle (DB-SUPA-4) are implemented on branch but NOT released** ("release evidence
+pending" per the pinned README). CHD MUST NOT use declared tables, MUST NOT assume
+server-side auth grants beyond `X-API-Key` authentication, and MUST NOT assume
+server-side schema validation (VOLB-002).
+
+**D3 — Keys are slash-prefixed.** A DuckBrain memory key is a path like
+`/projects/myapp/database`. The pre-review contract notation omitted the
+leading slash (the F-019 defect); every key in this specification is
+normalized to the canonical **`/chd/...`** form. Section 2
+defines the layout (VOLB-003).
+
+**VOLB-004 (D4 — same-key writes are append-only multi-version).** N writes to one key produce
+N independent versions with distinct UUID `id`s; nothing is overwritten; a key has
+no privileged "current" version. `GET /api/memories/key/:key` returns the most
+recent **non-tombstoned** version ordered `timestamp DESC, id ASC`; the list route
+(`GET /api/memories`) returns all versions. The `timestamp DESC, id ASC` order is
+deterministic per dataset but is **not write order within one millisecond** — the
+`id` tiebreak is a random UUIDv4. The process-local serializer `seq` is not durable
+and is not a cursor (VOLB-004, VOLB-005).
+
+**D5 — No durable ordering service-side.** Because of D4, DuckBrain provides **no
+durable room ordering** from its default timestamp/UUID ordering. CHD must allocate
+and carry its own sequence numbers (Section 5.1).
+
+**VOLB-006 (D6 — write durability is per-namespace and mode-dependent).** Modes:
+`buffered` (default; page-cache append; process-kill safe, **OS crash/power loss can
+lose acked writes with an unbounded window**), `fsync` (fdatasync + directory fsync
+barrier before the 2xx; **RPO = 0 on a single node**), `direct` (O_DIRECT block
+framing; RPO = 0). Every successful write response carries `X-Durability` (mode
+achieved), `X-Durability-Configured` (mode configured), and — only when they differ —
+`X-Durability-Degraded`.
+
+**VOLB-007 (D6 — durability failures are loud; git history and S3 are never the
+acknowledgement).** Durability failures are loud HTTP 500s with codes
+(`DURABILITY_FSYNC_FAILED`, `DURABILITY_UNSUPPORTED`, …); a failed write is **never
+acknowledged**. Git commits are debounced (~30 s default) and S3 push rides the same
+window — **git history and S3 are never the write acknowledgement**.
+
+**VOLB-008 (D7 — read surface).** `GET /api/memories` supports `prefix`, `domain`, `author`,
+`q` (needs embeddings; CHD MUST NOT depend on it), `contains`, `after`/`before`/
+`between` (ISO-8601), `attr.&lt;name&gt;=&lt;value&gt;` (repeatable), `historical`, `limit`
+(default 50), `offset`. Unknown query parameters are refused 400 (no silent
+ignoring); `?key=` is not a parameter of this route. `GET /api/memories/key/:key`
+returns the latest non-tombstoned version by key. `GET /api/keys/flat` lists keys by
+`prefix` with `limit`/`offset`. `GET /api/memories/:id` fetches one version by id
+(VOLB-008).
+
+**VOLB-009 (D8 — tombstones and PUT).** `DELETE /api/memories/:id` appends a tombstone for one
+version; `PUT /api/memories/:id` tombstones the old version and appends a new one.
+Tombstoned versions are excluded from both current and historical list views. CHD
+treats delete as a retention operation only, never as part of a state machine
+transition (VOLB-009).
+
+**D9 — Single namespace, single writer.** All CHD records live in the `chd`
+namespace (one git repo server-side). The **harness service is the ONLY writer** of
+every `/chd/*` key family (Section 2, R-028, CT-13); agents read rooms and write
+only through the harness API (Section 5; this AMENDS CT-05's "writer: the sending
+session via its role token" — see VOLB-020). One harness instance is authoritative
+per `chd` namespace; multi-writer harness replicas are out of scope for this
+revision (VOLB-010).
+
+**D10 — Durability configuration for CHD (decision).** The operator MUST configure
+the `chd` namespace override to `fsync`:
+
+```json
+{ "durability": { "defaultMode": "buffered", "overrides": { "chd": "fsync" } } }
+```
+
+Rationale: every CHD record is control state whose loss on OS crash would violate
+F-007's acceptance (crashes neither lose an accepted request nor double-execute
+work). `buffered`'s unbounded power-loss window is unacceptable for the record
+families that carry the acceptance sequence of Section 6. `direct` adds nothing for
+this workload and requires block framing. The harness verifies on every write ack
+that `X-Durability` == `fsync` (VOLB-011).
+
+**VOLB-011 (D11 — data classes and store separation; R31-016, R31-028).** CHD distinguishes
+four logical data classes; they are not interchangeable and not all share a
+consistency requirement. `coordination_report` and `control_key` are separate
+routing classes even though both are controller-authoritative in the default deployment:
+
+| Class | Contents | Namespace | Consistency required |
+|---|---|---|---|
+| `coordination_report` | rooms, messages, reports, objective/assignment/criterion records, waits, audit | `chd` | **immediate** on the controller; `fsync` ack |
+| `control_key` | manifests, tickets, grants, bonds, registry and other protected `/chd/*` keys | `chd` | **immediate** on the controller; `fsync` ack |
+| `session_archive` | native Hermes session exports, archive manifests, checkpoint/gap records | `chd-archive` | committed export durable before it is advertised; may lag the live session by at most one checkpoint |
+| `project_code_memory` | project/code knowledge and observations (optional, deployment-selected) | deployment-defined (e.g. `chd-project`) | eventual; background sync permitted |
+
+`coordination_report`, `control_key`, `session_archive`, and `project_code_memory`
+MUST be routed as separate logical classes. The first two share the controller
+namespace only because their authority and immediate consistency are the same;
+they retain distinct tool-class routing, grants, audits, and readback fields.
+A completion report or any coordination-critical record MUST be written to
+`coordination_report` on the controller path; a `project_code_memory` write MUST
+never be presented as the acknowledgement of a report. The namespace mapping is
+configuration (`storage.*` in VOL-D §1.10) and is readable via effective-routing
+readback; an implementation that routes coordination or control writes through a
+delayed sync path is non-conforming (VOLB-050). The archive class has its own
+writer (the archive ingestor, the archive contract §2), its own grants (VOL-C §8.8) and its own
+retention rules (§8); it is never the writer of coordination/control records, and
+no control record is duplicated into archive except the policy snapshot required
+for restore (§3.11).
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#2-key-normalization-and-layout -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-2-KEY-NORMALIZATION-AND-LAYOUT-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 2. Key normalization and layout
+
+**VOLB-003 (key layout, canonical form).** Every DuckBrain key in this
+specification is normalized to the canonical leading-slash form (F-019:
+DuckBrain requires keys to start with `/`). The canonical key layout is:
+
+| Canonical DuckBrain key | Writer | Content |
+|---|---|---|
+| `/chd/room/&lt;room-id&gt;/m&lt;seq:012d&gt;` | harness only | RoomMessage (§3.1) |
+| `/chd/room/&lt;room-id&gt;/_head` | harness only | SeqHead (§5.1) |
+| `/chd/registry/&lt;agent-id&gt;` | harness only | RegistryEntry (§3.2) |
+| `/chd/bond/&lt;agent-id&gt;/&lt;bond-id&gt;` | harness only | SessionBond (§3.3) |
+| `/chd/limits/&lt;scope&gt;` | harness only | LimitSet (§3.4) |
+| `/chd/send/&lt;send-id&gt;/manifest` | harness only | SendManifest (§3.5) |
+| `/chd/objective/&lt;objective-id&gt;` | harness only | ObjectiveRecord (§3.6) |
+| `/chd/assignment/&lt;assignment-id&gt;` | harness only | AssignmentRecord (§3.6) |
+| `/chd/delegation/&lt;delegation-id&gt;` | harness only | DelegationRecord (§3.6) |
+| `/chd/rule/&lt;rule-id&gt;` | harness only | StandingRule (§3.7) |
+| `/chd/acceptance/&lt;objective-id&gt;/&lt;crit-id&gt;` | harness only | AcceptanceCriterion (§3.8) |
+| `/chd/wait/&lt;gate-id&gt;` | harness only | Wait record (VOL-C §6.5, VOLC-047) |
+| `/chd/audit/&lt;yyyymmddThhmmssZ&gt;-&lt;id&gt;` | harness only | Audit record (VOL-C §8.6, VOLC-064) |
+| `/chd/aggregation/&lt;send-id&gt;` | harness only | Fan-out aggregation record (VOL-C §5.6, VOLC-032) |
+| `/chd/ticket/&lt;ticket-id&gt;` | controller ticket service (VOL-E) | TicketRecord (§3.14) |
+| `/chd/ticket/&lt;ticket-id&gt;/event/m&lt;seq:012d&gt;` | controller ticket service | Ticket transition event, ordered per ticket |
+| `/chd/report/&lt;send-id&gt;/&lt;report-id&gt;` | harness only | Report envelope + content descriptor (VOL-D §3.1) |
+| `/chd/dataset/&lt;send-id&gt;/&lt;dataset-id&gt;` | harness only | DatasetDescriptor (§3.10) |
+| `/chd/dataset/&lt;send-id&gt;/&lt;dataset-id&gt;/r&lt;row:08d&gt;` | harness only | One dataset row (§3.10) |
+| `/chd/grant/&lt;grant-id&gt;` | harness only | GrantRecord incl. meta-grant (§3.13) |
+| `/chd/policy/&lt;session-id&gt;/&lt;snapshot-id&gt;` | harness only | SessionPolicySnapshot (§3.11) |
+| `/chd/pattern/&lt;pattern-id&gt;` | harness (mirror) | AdvisoryLearnedPattern (§3.9) |
+
+Archive namespace `chd-archive` (volume and grants per VOLD-044/D-018),
+checkpoint-scoped as of rev 2.1 (one ExportManifest per checkpoint, one
+SessionArchive index per session):
+
+| Canonical key | Writer | Content |
+|---|---|---|
+| `/sessions/&lt;agent&gt;/&lt;profile&gt;/&lt;session-id&gt;` | archive ingestor | SessionArchive index (§3.12) — discovery entry for a replacement |
+| `/sessions/&lt;agent&gt;/&lt;profile&gt;/&lt;session-id&gt;/&lt;checkpoint-id&gt;/export.json` | archive ingestor | Native Hermes session export payload (§3.12) |
+| `/sessions/&lt;agent&gt;/&lt;profile&gt;/&lt;session-id&gt;/&lt;checkpoint-id&gt;/manifest` | archive ingestor | ExportManifest for that checkpoint (§3.12) |
+| `/sessions/&lt;agent&gt;/&lt;profile&gt;/&lt;session-id&gt;/&lt;checkpoint-id&gt;/policy` | archive ingestor | SessionPolicySnapshot copy for restore (§3.11) |
+| `/gaps/&lt;agent&gt;/&lt;profile&gt;/&lt;session-id&gt;/&lt;checkpoint-id&gt;` | archive ingestor | ArchiveGapRecord — declared coverage gap or failed export (§3.12, VOLB-069) |
+
+The archive namespace is written only by the archive ingestor using its own
+credential; the harness never writes it, and no agent holds a direct archive
+credential (the archive contract in `schemas/archive.schema.json`). Archive reads are grant-gated (VOL-C §8.8) and
+resolved through the lookup queries of §5.10.
+
+Older DESIGN.md/DATA-MODEL.md rev 1.0 examples that show these families
+without the leading slash are superseded by this table; the normalization is
+mechanical and total (prepend `/`).
+
+**VOLB-012 (key grammar).** Room message seq is zero-padded to 12 digits
+(`m000000000042`) so the lexicographic key order equals the numeric order in
+`GET /api/keys/flat` listings. Regexes enforced by the harness write gate (agents
+cannot write any `/chd/*` key directly; D9):
+
+```
+room message key:  ^/chd/room/(obj|task|space)-[a-z0-9-]+/m[0-9]{12}$
+bond key:          ^/chd/bond/[a-z][a-z0-9-]*/b-[0-9]{8}-[0-9]{4}-[a-z0-9]+$
+manifest key:      ^/chd/send/s-[0-9]{8}-[0-9]{4}-[a-z0-9]+/manifest$
+general:           ^/chd/[a-z0-9_-]+(/[A-Za-z0-9._-]+)*$
+```
+
+**VOLB-013 (no reserved-key collisions).** `_head` is the only reserved final
+segment under a room prefix; the write gate rejects any non-`_head` key whose final
+segment does not match `m[0-9]{12}`.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#3-logical-record-schemas -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-3-LOGICAL-RECORD-SCHEMAS-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 3. Logical record schemas
+
+Conventions for every record: JSON content stored as the DuckBrain `content` string;
+`attributes` carry the indexed filter fields (D7); every record carries
+`schema_version` (int, §8), `rev` (int, writer-monotone per key, §4.2), and `ts`
+(RFC 3339 UTC, harness clock). Field types below are JSON types. Constraints are
+enforced by the harness on write; DuckBrain performs no validation (D2).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#3-1-roommessage -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-3-1-ROOMMESSAGE-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.1 RoomMessage
+
+One entry in a room's ordered log. Stored at `/chd/room/&lt;room-id&gt;/m&lt;seq&gt;`.
+Extends DATA-MODEL §1.4; amendments noted.
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `room` | string | matches room id grammar | Key family this seq belongs to |
+| `seq` | int | ≥ 1, allocated per §5.1, unique per room | Durable position in the room's total order |
+| `thread_root` | int \| null | null for room-level messages | Seq of the thread ROOT message (the original request). Set on every reply |
+| `reply_to` | int \| null | null, or an existing `seq` in this room | Immediate parent (RL-12 tree edge) |
+| `from` | string | `owner`, `vp/&lt;surface-id&gt;`, `signal:&lt;source&gt;`, or member agent id | Attribution |
+| `to` | string | agent id \| `group` \| `@&lt;agent-id&gt;` \| null | Wake routing only; never read scoping |
+| `kind` | enum | `msg \| question \| status \| directive \| task \| report \| incident` — the complete enum (R31-003); no other value validates | `question` = answer owed in-thread; `status` = progress/state post (incl. waiting-for-human notices); `directive` opens an objective; `task` opens a task/subthread; `report` carries the report attachment; `incident` is service-written only. Per-role/per-room legality is the single table in VOL-C §3.6 (VOLC-066) — this schema does not restate it |
+| `body` | string | non-empty | Human-readable text |
+| `attach` | object[] | optional | Report objects ride here for `kind=report` (RL-6) |
+| `dedupe_key` | string | optional, caller-chosen | Idempotent acceptance (§6.2); indexed in `attributes` |
+| `send_id` | string | optional; required for `kind=report` | The send this report answers; indexed in `attributes` |
+| `ts` | string | RFC 3339 UTC | Harness-observed write time (message time, not DuckBrain server time) |
+
+`attributes` (for D7 attr filters): `{ "kind": &lt;kind&gt;, "from": &lt;from&gt;, "send_id":
+&lt;send_id or ""&gt;, "dedupe_key": &lt;dedupe_key or ""&gt;, "thread_root": &lt;int or ""&gt; }`.
+
+Amendment vs DATA-MODEL §1.4: the ambiguous optional `thread` field is replaced by
+the explicit pair `thread_root` (stable grouping key for reads) and `reply_to` (tree
+edge); `dedupe_key` and `send_id` are promoted into attributes so the pending-send
+and dedupe queries (§5) are single prefix reads.
+
+**VOLB-014.** A message is accepted only with a `seq` allocated by §5.1; the seq is
+part of the key and the content, and a message without a well-formed key/seq match
+is refused by the write gate.
+
+**VOLB-015 (no self-echo, owner posting).** `from: owner` / `from: vp/*` messages
+are logged once; the harness MUST NOT compose a wake back to the VP surface for its
+own message (RL-6, DESIGN.md §11.3).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#3-2-registryentry -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-3-2-REGISTRYENTRY-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.2 RegistryEntry
+
+Responsibilities registry mirror (CT-09, RL-8). Config remains authoritative; the
+record is the readable mirror agents resolve "who owns X" from.
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `agent` | string | agent id | Subject |
+| `role` | enum | `director \| manager \| supervisor` | Role at mirror time |
+| `responsibility` | string | non-empty | "who owns X" |
+| `config_rev` | string | harness config generation hash | Which config generation this mirror reflects |
+| `ts` | string | RFC 3339 UTC | Mirror time |
+
+**VOLB-016.** The harness rewrites every registry key on config load when
+`config_rev` changes; a registry read that returns a `config_rev` older than the
+loaded generation is served with a `stale_mirror: true` marker by the read API
+(§5.6) but never blocks a read.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#3-3-sessionbond -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-3-3-SESSIONBOND-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.3 SessionBond
+
+The bond between one agent and one Hermes session in the context of one room
+and one work branch. Replaces DATA-MODEL §1.6's one-bond-per-agent shape and
+the earlier one-bond-per-(agent × room) shape: **a bond is per
+(agent, room, subthread_root, work_uid)** so one agent can hold several
+concurrent tasks in the same room, each with its own session, without mixing
+conversations (R31-022, D-025). Full identity contract in §7.
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `bond_id` | string | `b-YYYYMMDD-HHMM-&lt;rand&gt;` | Stable CHD identity of this bond |
+| `agent` | string | agent id | Owner |
+| `room` | string | room id the bond is attached to | Thread identity context (NOT a Hermes identity) |
+| `subthread_root` | int \| null | seq of the task/subthread root; null for room-level work | Which branch of the room this session serves (R31-022) |
+| `work_uid` | string \| null | ticket id, assignment id, or send id | The one work item this session owns; prevents two tasks sharing a session |
+| `generation` | int | ≥ 1, incremented on replacement | Distinguishes successive sessions for the same work item |
+| `parent_bond_id` | string \| null | existing bond id | Set when this session was provisioned by fork (§7.5) |
+| `fork_mode` | enum \| null | `preserve_parent_snapshot \| current_policy`; null for fresh sessions | Which D-038 policy produced this session (§3.11) |
+| `policy_snapshot_id` | string \| null | existing snapshot id | Effective permission snapshot bound to this session (VOLB-051) |
+| `policy_rev` | int \| null | ≥ 1; null until the snapshot is written | The snapshot revision this bond froze at creation; readback of a session returns exactly this revision's contents (VOL-C §8.3.1 VOLC-068b) and resync increments it atomically (§8.9) |
+| `hermes_base_url` | string | the gateway URL serving this session | Which Hermes instance owns the session |
+| `hermes_session_id` | string \| null | Hermes session id (`X-Hermes-Session-Id` value) | The session reference; null until first NEW delivery returns one |
+| `session_key` | string \| null | `X-Hermes-Session-Key` value scoped to this bond | Stable memory-scope key for the session (VOL-C §0/VOLC-022); null for NEW-mode bonds until the gateway echoes one |
+| `hermes_profile` | string | the named Hermes profile the session runs under | Profile-bound auth: authentication binds to the routed profile (hermes_gateway_check; VOLD-014 binding) |
+| `state` | enum | `provisioned \| active \| retired \| lost` | Lifecycle per §7.4 |
+| `runtime_caps` | object | capabilities snapshot from `GET /v1/capabilities` | What the serving Hermes advertised at bind time |
+| `reuse_policy` | enum | `reuse-until-wedged \| always-new` | CT-04 knob (unchanged) |
+| `ts` / `retired_ts` | string | RFC 3339 UTC | State times |
+
+**VOLB-017.** A bond is keyed by `(agent, room, subthread_root, work_uid)`, with
+`generation` selecting the live one; the DuckBrain key carries `bond_id` so that a
+retired bond's record remains readable (audit) while the *current* bond for an
+identity tuple is resolved by highest `(generation, rev)` with
+`state ∈ {provisioned, active}` (version selection §4.2). Two tasks in one room
+assigned to one agent therefore hold two bonds with distinct
+`hermes_session_id`s; a reply or report is routed to the bond whose
+`subthread_root` owns the message's thread (§7.5). `max_sessions` bounds the
+number of simultaneously `active` bonds of one agent, not the number of rooms.
+
+**VOLB-067 (concurrency fixture — R31-022 acceptance).** The fixture below is
+the normative proof that the bond key grammar admits **two concurrent tasks
+for the same agent in the same room**, each with a distinct bond id and a
+distinct thread (mirrored as the worked example in DATA-MODEL §1.6). Setup:
+supervisor `sup-nova` (max_sessions ≥ 2) is a member of task room
+`task-auth-14`; two `kind=task` messages opened two subthreads:
+
+| # | bond key | agent | room | subthread_root | work_uid | gen | hermes_session_id | thread owned | state |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | `/chd/bond/sup-nova/b-20261109-0914-q4x7` | sup-nova | task-auth-14 | 42 | T-101 | 1 | `sess-aa11…` | replies under root 42 | active |
+| 2 | `/chd/bond/sup-nova/b-20261109-0917-m8k3` | sup-nova | task-auth-14 | 57 | T-205 | 1 | `sess-bb22…` | replies under root 57 | active |
+
+Both bonds are simultaneously `active`; the identity tuples differ in
+`(subthread_root, work_uid)` only. A reply to message `m…042` is owned by
+bond 1 and delivered (REUSE) to `sess-aa11…`; a reply to `m…057` is owned by
+bond 2 and delivered to `sess-bb22…` — never the other way round (VOLB-063).
+The old one-bond-per-(agent × room) key could not express this state; that
+grammar is retired (R31-022). `capacity accounting` derives from the same
+identities: runnable queue = active bonds whose work item is runnable, capped
+by `max_sessions` (bonds) and `max_parallel.&lt;kind&gt;` (work items per room
+kind).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#3-4-limitset -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-3-4-LIMITSET-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.4 LimitSet
+
+Typed caps (RL-14/RL-15, CT-13). Config is the authority; `/chd/limits/&lt;scope&gt;` is
+the readback mirror. One record per scope: `scope = "gateway:&lt;gw-id&gt;"`,
+`"type:&lt;role&gt;"`, or `"agent:&lt;agent-id&gt;"`.
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `scope` | string | one of the three forms above | What the cap gates |
+| `caps` | object | e.g. `{"max_inflight": 4}` / `{"max_parallel": {...}}` / `{"max_sessions": 2}` | Configured ceilings |
+| `config_rev` | string | generation hash | Mirror freshness marker |
+
+**VOLB-018 (cap accounting is derived, not counted twice).** Runtime usage per
+scope is DERIVED from SendManifest states (§3.5): `usage(gateway) = # manifests in
+states {admitted, dispatched, await_report} with lease_expires_at &gt; now`;
+`usage(agent) = # active bonds of that agent` (bounded by `max_sessions`).
+There is **no separate inflight counter record** — a derived count cannot drift from
+its evidence, and crash recovery of §6.4 re-derives it from manifests. Caps gate
+RUNNING only; scheduling/queuing is never refused for capacity (RL-15).
+
+**VOLB-019 (cap read/update contract).** Reading effective caps and usage is the
+harness API `GET /v1/status` (ENDPOINTS §4.10) extended with, per scope,
+`{ "caps": {...}, "usage": N, "queued": M }`. "Update" of a cap is a **config
+change** through the operator-owned `harness.toml` path (R-001, N-2); agents cannot
+write `/chd/limits/*` (D9). A cap update activates on harness reload and is visible
+when `config_rev` advances.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#3-5-sendmanifest -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-3-5-SENDMANIFEST-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.5 SendManifest
+
+One record per composed send; the durable heart of the crash-safe sequence (§6).
+Stored at `/chd/send/&lt;send-id&gt;/manifest`. Extends DATA-MODEL §2's one-line sketch
+into the full state machine.
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `send_id` | string | `s-YYYYMMDD-HHMM-&lt;rand&gt;` | Identity of the logical send (one owed piece of work) |
+| `attempt_id` | string | `at-YYYYMMDD-HHMM-&lt;rand&gt;` | Identity of THIS execution attempt; a fresh-session rung or a wait-resume mints a new attempt (§5.4a, R31-004/R31-005) |
+| `attempt` | int | ≥ 1, monotone per send | Attempt ordinal used in reports and idempotency derivation |
+| `gateway_request_key` | string | derived `Idempotency-Key` = `sha256(send_id,attempt_id,target_session_id)` | The exact key sent to Hermes; never reused against a different target |
+| `room` | string | room id | Where the request lives |
+| `seq` | int | existing message seq in `room` | The request message this send delivers |
+| `thread_root` | int \| null | — | Thread grouping of the request |
+| `target` | string | agent id | Woken agent |
+| `mode` | enum | `NEW \| REUSE` | Delivery mode decision (CT-04) |
+| `bond_id` | string | existing bond id | Bond used (REUSE) or to receive the new session (NEW) |
+| `gateway` | string | gateway id | Route |
+| `run_ref` | object \| null | `{ "run_id": "...", "admission_id": "..." }` | Hermes run reference captured at dispatch (§7.2) |
+| `state` | enum | see below | State machine position; `waiting` is send-open and attempt-terminal |
+| `session_target` | object \| null | immutable `{gateway_id, session_id, agent_id, mode, bond_generation}` | Exact target snapshot for this attempt |
+| `supersedes_attempt_id` | string \| null | prior attempt id | Lineage for a fresh-session or wait-resume successor |
+| `dispatch_ts` | string \| null | RFC 3339 UTC | Gateway POST time; null until dispatched |
+| `deadline_ts` | string | RFC 3339 UTC | `verify.deadline_s` from dispatch |
+| `lease_expires_at` | string \| null | RFC 3339 UTC | Detection deadline only; never proof of stop (§6.7) |
+| `verify_outcome` | enum \| null | `verified \| no_report \| bad_report \| failed` | CT-06 outcome |
+| `report_ref` | object \| null | `{ "room": "...", "seq": N, "message_key": "..." }` | Linked report (§6.6) |
+| `close_reason` | string \| null | free text | Terminal reason (escalated / stale / cancelled / drained / …) |
+| `rung_history` | object[] | append-only | Ladder rungs taken: `{ "rung": 0\|1\|2, "ts": "..." }` |
+| `ts` / `rev` | — | — | Envelope (§3 conventions) |
+
+State machine (owner of every transition: the harness verify/orchestrator loop;
+every transition = one manifest version write, §4.2). **The normative SEND state
+machine is VOL-C §6.4 (VOLC-044)** — send orchestration is VOL-C's surface; the
+enum and transition names below are aligned to it (rev 1.1 rename note:
+`admission_requested` → `queued`, `report_received` → `await_report`, terminal
+`escalated` → `closed{escalated}`):
+
+```
+composed → queued → admitted → dispatched → await_report
+         → verified (terminal) → closed{verified}
+   composed/queued/admitted → cancelled (terminal, VP/director only)
+   queued past 2×cycle → deferred{reason: backpressure} (terminal, counted)
+   dispatched → deferred{reason: parent_down | drained} (terminal, counted)
+   dispatched → paused:unreachable (VOLC-046) → queued on restore
+   await_report (deadline passed, no report) → no_report ladder rungs
+         → closed{escalated} (terminal)
+   await_report + verdict bad_report → ladder rungs → closed{escalated} (terminal)
+   await_report + valid waiting_human report → logical send enters waiting;
+         current attempt closes as attempt-terminal, with a wait record (VOLC-067).
+         On recorded approval/resolution a SUCCESSOR ATTEMPT is minted (new
+         attempt_id, attempt+1, same send_id) and the send re-enters composed→queued;
+         the closed attempt is never reopened. A wait timeout changes nothing
+         (visibility escalation only, never approval)
+   dispatched, lease expired unconfirmed → reconcile (§6.4) → verified | closed{escalated} | cancelled
+```
+
+Terminal states are recorded as `closed{reason}` with `close_reason ∈ {verified,
+escalated, cancelled, expired, failed}`; `verify_outcome` records the verdict
+class independently (below).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#3-6-objective-assignment-delegation-state-f-006 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-3-6-OBJECTIVE-ASSIGNMENT-DELEG-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.6 Objective / Assignment / Delegation state (F-006)
+
+Three records that make the objective lifecycle (F-004 owner: VOL-A/C) *durable*.
+VOL-B defines the storage; the lifecycle transitions themselves are VOL-A's.
+
+**ObjectiveRecord** at `/chd/objective/&lt;objective-id&gt;` (objective-id == room id of
+kind objective):
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `objective_id` | string | `obj-*` | == room id |
+| `title` / `body` | string | non-empty | VP ask, as delivered |
+| `vp_ref` | object | `{ "surface": "hermes\|cli\|mcp\|webhook", "signal_id": "..." }` | Originating VP signal (CT-10 audit) |
+| `state` | enum | `open \| in_progress \| awaiting_acceptance \| accepted \| delivered \| cancelled` | Lifecycle (VOL-A defines transitions) |
+| `acceptance_set_rev` | int | ≥ 1 | rev of the acceptance criteria set in effect |
+| `created_ts` / `closed_ts` | string | RFC 3339 UTC | Times |
+
+**AssignmentRecord** at `/chd/assignment/&lt;assignment-id&gt;` — one director→manager (or
+manager→supervisor) unit of work:
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `assignment_id` | string | `a-YYYYMMDD-HHMM-&lt;rand&gt;` | Identity |
+| `objective_id` | string | existing objective | Upward link |
+| `parent_assignment_id` | string \| null | existing assignment or null | Decomposition tree |
+| `room` | string | room id | Thread identity of the work |
+| `request_seq` | int | existing seq | The directive/task message that constitutes the request |
+| `owner` / `assignee` | string | agent ids | Accountability (F-009: one accountable owner per deliverable) |
+| `required_content` | enum | requester-selected `free_form`, `structured`, or `dataset` | Report class copied into each envelope |
+| `schema_ref` | object or null | `{name, version, digest}` when structured/dataset | Immutable schema identity |
+| `validation_policy` | enum | `none`, `json_schema`, or `dataset_columns` | Validation contract |
+| `completion_policy` | enum | `manager_reported`, `director_acceptance`, or `objective_acceptance` | Completion layer |
+| `state` | enum | `pending \| active \| blocked \| awaiting_human \| reported \| accepted \| rework \| cancelled` | Lifecycle |
+| `open_send_ids` | string[] | manifest ids | Currently open sends charging this assignment |
+| `blocked_reason` | string \| null | — | Set in `blocked` |
+| `ts` / `rev` | — | — | Envelope |
+
+**DelegationRecord** at `/chd/delegation/&lt;delegation-id&gt;` — an on-demand grant or
+subtree reassignment decision (D-003/D-009/D-016; enforcement is VOL-A/D's, this is
+the durable record):
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `delegation_id` | string | `d-YYYYMMDD-HHMM-&lt;rand&gt;` | Identity |
+| `kind` | enum | `grant \| reassignment \| subordinate_creation` | Decision type |
+| `grantor` / `grantee` | string | agent ids | Director (or authorized manager) → recipient |
+| `capability` | object | `{ "tool": "...", "scope": "room\|lanes\|pools", "bounds": {...} }` | What was delegated; use/grant/creation are distinct grants (D-009) |
+| `origin` | enum | `vp_configured \| director_delegated` | Provenance (D-016: VP configuration wins conflicts) |
+| `authority_ref` | string | VP authorization reference | The delegatable-authority evidence for on-demand grants |
+| `state` | enum | `active \| expired \| revoked` | — |
+| `ts` / `rev` | — | — | Envelope |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#3-7-standingrule-records-f-006-d-010-d-013 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-3-7-STANDINGRULE-RECORDS-F-006-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.7 StandingRule records (F-006; D-010, D-013)
+
+Persistent user standing rules, checked on applicable future work. **These are
+authoritative control records, categorically distinct from advisory learned
+patterns (§3.9).**
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `rule_id` | string | `rule-YYYYMMDD-HHMM-&lt;rand&gt;` | Identity |
+| `statement` | string | non-empty | The rule, human-readable |
+| `applicability` | object | `{ "room_kinds": [...], "roles": [...], "tags": [...], "always": bool }` | When the rule applies; `always: true` for unconditional rules |
+| `provenance` | object | `{ "origin": "vp_statement", "signal_id": "...", "vp_surface": "...", "stated_ts": "..." }` | The VP signal that authored it — never agent inference |
+| `integration` | object | `{ "channel": "hermes_learning", "status": "pending \| acknowledged", "evidence_ref": "..." }` | D-013 dependency: integration is Hermes learning/self-improvement behavior; CHD records the requirement and the effective-rule evidence, NOT a propagation guarantee |
+| `state` | enum | `active \| superseded \| retired` | `superseded_by` points at the replacing rule |
+| `superseded_by` | string \| null | existing rule_id | — |
+| `ts` / `rev` | — | — | Envelope |
+
+**VOLB-021 (authoritative retrieval).** Acceptance review MUST resolve applicable
+rules via the query contract Q-7 (§5.7) over `state=active` rules only, and MUST
+record which rule versions (rule_id + rev) were applied to each acceptance decision
+in the AcceptanceCriterion evidence (§3.8). A rule's authority comes from its
+`provenance.origin == "vp_statement"`; no agent-authored record may create or
+modify a standing rule (write gate; D-010 "learning does not itself establish
+authority to change user rules").
+
+**VOLB-022 (Hermes integration dependency, no invented guarantee).** CHD does NOT
+reimplement standing-rule propagation (D-013). The contract required of Hermes is:
+user rule statements reach Hermes-native memory through the user's own channel, and
+an agent session can produce effective-rule evidence when asked. If a session's
+effective behavior contradicts a stored `active` rule, the incident path (§5.1
+DESIGN ladder) applies; CHD stores the contradiction as evidence, it does not
+adjudicate it.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#3-8-acceptancecriterion-records-f-006-f-013-boundary -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-3-8-ACCEPTANCECRITERION-RECORD-S012" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.8 AcceptanceCriterion records (F-006, F-013 boundary)
+
+Director-owned acceptance criteria for an objective, with applicability and
+provenance. Content acceptance criteria live here; delivery success and human
+sign-off remain separate stages (F-013; VOL-A owns those flows).
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `crit_id` | string | `crit-&lt;rand&gt;` | Identity, unique per objective |
+| `objective_id` | string | existing objective | Owner set |
+| `statement` | string | non-empty | The criterion |
+| `origin` | enum | `vp_supplied \| director_derived \| standing_rule` | Provenance class (D-010) |
+| `provenance` | object | for `vp_supplied`: the VP signal ref; for `director_derived`: `{ "derived_from": [vp signal refs / criterion ids], "decision_owner": "director" }`; for `standing_rule`: `{ "rule_id": "...", "rule_rev": N }` | Full lineage; director-derived criteria must cite what they derive from |
+| `version` | int | ≥ 1, monotone per crit_id | Criteria may be extended (D-010) but never silently rewritten — each version is a new manifest rev |
+| `applicability` | object | same shape as StandingRule.applicability | Scope of application |
+| `state` | enum | `draft \| in_effect \| satisfied \| rejected(rework) \| withdrawn` | Evaluation state |
+| `evidence` | object[] | append-only | Per-criterion evidence refs (report refs, artifact refs, checks run) |
+| `rejection_reason` | string \| null | required when `state=rejected` | Feeds rework (F-013) |
+| `ts` / `rev` | — | — | Envelope |
+
+**VOLB-023.** An objective's acceptance review reads the criteria set via Q-8
+(§5.8); a criterion set is identified by `(objective_id, acceptance_set_rev)` on the
+ObjectiveRecord, and criteria versions used in a decision are immutable evidence
+(prior versions remain readable as older manifest versions, §4.2).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#3-9-advisorylearnedpattern-separated-from-authority -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-3-9-ADVISORYLEARNEDPATTERN-SEP-S013" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.9 AdvisoryLearnedPattern (separated from authority)
+
+Learned patterns surfaced by Hermes learning are mirrored **for observability only**,
+never as acceptance inputs:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `pattern_id` | string | Identity |
+| `summary` | string | Pattern text |
+| `source` | object | `{ "channel": "hermes_learning", "session_ref": "..." }` |
+| `advisory` | bool | **always `true`**; enforced by write gate |
+
+**VOLB-024.** No acceptance, verify, or admission code path may read
+`/chd/pattern/*` as authority. The separation is structural: patterns live under a
+distinct key family and carry `advisory: true`; standing rules live under
+`/chd/rule/*` with `provenance.origin == "vp_statement"`.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#3-10-report-envelope-dataset-descriptor-and-dataset-rows-r31-030 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-3-10-REPORT-ENVELOPE-DATASET-D-S014" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.10 Report envelope, dataset descriptor, and dataset rows (R31-030)
+
+A report is one immutable envelope plus one content variant. The envelope is CHD's
+(identity, correlation, verdict inputs); the content is requester-selected. The
+authoritative report schema is VOL-D §3.1; this section owns storage.
+
+**ReportEnvelope** at `/chd/report/&lt;send-id&gt;/&lt;report-id&gt;` (mirrors the report
+attachment carried by the `kind=report` message; one write, same transaction):
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `report_id` | string | `r-YYYYMMDD-HHMM-&lt;rand&gt;` | Identity; immutable |
+| `send_id` / `attempt_id` | string | existing | Correlation (R31-004 attempt identity) |
+| `request_ref` | string | `/chd/room/&lt;room&gt;/m&lt;seq&gt;` | Must equal the manifest's request key |
+| `produced_by` / `room` | string | member agent / existing room | Producer and place |
+| `content_variant` | enum | legacy alias; v3 uses `content.class` (`free_form`, `structured`, or `dataset`) | Which content form follows |
+| `content_ref` | string | key of the message carrying content | Immutable content identity |
+| `schema_ref` | object \| null | `{name, version, digest}`; required for `structured` and `dataset` | Versioned validation contract |
+| `dataset_id` | string \| null | required iff `dataset` | Links to the descriptor below |
+| `status` | enum | `done \| deferred \| blocked \| failed \| waiting_human` | Outcome vocabulary |
+| `content_digest` | string | sha256 of the canonical content bytes | Immutability check |
+| `ts` | string | harness-recorded ingest time | Freshness basis (§5.4) |
+
+**DatasetDescriptor** at `/chd/dataset/&lt;send-id&gt;/&lt;dataset-id&gt;`:
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `dataset_id` | string | `ds-YYYYMMDD-HHMM-&lt;rand&gt;` | Identity |
+| `report_id` | string | existing report id; exactly one report per dataset | Immutable dataset/report linkage |
+| `send_id` | string | existing send id; must equal report envelope | Ownership and correlation |
+| `schema_ref` | object | `{name, version, digest}` | Column contract |
+| `columns` | object[] | `{name, type: string\|integer\|number\|boolean\|timestamp\|json, nullable}` | Ordered column definitions; order is part of the contract |
+| `row_count` | int | ≥ 0, equals the rows actually committed | Completeness claim |
+| `state` | enum | `staging \| published \| failed` | `published` only after the last row write acks |
+| `query_hint` | object \| null | `{order_by, keyset_column}` | Stable pagination (§4.3) |
+| `retention_days` | int | ≥ 1 | Per-dataset override of §8 retention |
+| `published_ts` | string \| null | set at publish | Atomic publication time |
+
+**DatasetRow** at `/chd/dataset/&lt;send-id&gt;/&lt;dataset-id&gt;/r&lt;row:08d&gt;`:
+`{dataset_id, row_id: "r00000042", values: {&lt;column&gt;: &lt;typed value&gt;}, ts}`. Row ids
+are dense and assigned by the harness; a gap is a failed publish, never a valid
+dataset. Types validate against `columns`; a row that fails validation fails the
+whole publish (`422 dataset_row_invalid`; the report remains unpublished).
+
+**VOLB-050 (atomic publication).** A dataset becomes readable only when
+`state=published` and `row_count` equals the committed row count. A crash during
+row writes leaves `staging`; restart recovery marks it `failed` and the report
+that referenced it is `bad_report{reason: dataset_incomplete}` — a partial dataset
+can never be published as complete. Rows are immutable after publish; a correction
+is a new dataset and a new report.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#3-11-sessionpolicysnapshot-r31-027-d-033-d-038 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-3-11-SESSIONPOLICYSNAPSHOT-R31-S015" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.11 SessionPolicySnapshot (R31-027, D-033, D-038)
+
+The durable [snapshot](terminology.md#snapshot) record of the permissions a session actually holds. Written at session creation and at every fork; rewritten only by an explicit [resync](terminology.md#resync).
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `snapshot_id` | string | `sp-YYYYMMDD-HHMM-&lt;rand&gt;` | Identity |
+| `session_id` | string | Hermes session id | Subject |
+| `bond_id` | string | existing bond | CHD binding |
+| `parent_session_id` | string \| null | existing session | Set when created by fork |
+| `fork_mode` | enum | `preserve_parent_snapshot \| current_policy` | D-038 mode that produced it |
+| `agent` / `profile` | string | existing | Identity |
+| `policy_rev` | int | ≥ 1, monotone per session | Revision; resync increments |
+| `captured_at` | string | RFC 3339 UTC | When computed |
+| `grants` | object[] | `{capability, resource_scope, class, origin, grant_id?, authority_ref?, ancestors?, expires_at?}` | The effective set, flattened; provenance/lineage and expiry are copied at fork |
+| `snapshot_missing` | bool | default false | Set when a restore could not find this record |
+| `superseded_by` | string \| null | existing snapshot id | Revision chain |
+
+**D-038 fork snapshot copy.** At fork, the child records `parent_session_id`,
+`parent_bond_id`, `fork_mode`, and `fork_point_seq`, then copies the parent's grant
+set, effective `policy_rev`, `policy_snapshot_id`, each grant's provenance/lineage
+(`origin`, `grant_id`, `authority_ref`, `ancestors`) and `expires_at`. Under
+`current_policy`, the child instead stores the current resolver result and its
+current revision; independent `vp_configured` grants remain present in either mode.
+CHD31-06 owns the grant-lineage and GrantRecord definitions; this record references
+them and does not duplicate their issuance schema.
+
+**VOLB-051 (snapshot authority).** Enforcement reads the session's current
+`policy_rev` snapshot, not the live grant tables, for the duration of the session.
+`preserve_parent_snapshot` (default) copies the parent's grant set and
+`policy_rev` verbatim, including rights whose source has since been revoked;
+`current_policy` resolves against the current VP configuration and current grant
+records at fork time. A tool call never triggers a refresh. The `origin` field
+keeps `vp_configured` and `director_grant` distinguishable so a revocation can
+remove derived rights while leaving independent VP grants intact. Resync is
+authorized, audited and atomic (VOLC-069, VOL-D §1.11).
+
+**VOLB-052 (lineage query).** `GET /v1/sessions/{id}/policy` reads the effective
+snapshot; `lineage` returns the chain `parent_session_id → snapshot_id →
+policy_rev` so an auditor can prove which rights a session inherited and why.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#3-12-sessionarchive-exportmanifest-and-archivegaprecord-r31-016-the-archive-contract -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-3-12-SESSIONARCHIVE-EXPORTMANI-S016" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.12 SessionArchive, ExportManifest, and ArchiveGapRecord (R31-016, the archive contract)
+
+The central session archive lives in namespace `chd-archive` (§2), separate
+from the `chd` control namespace (D-018). Three records, all written ONLY by
+the archive ingestor (a harness-side principal with its own credential; no
+agent holds an archive credential, and no agent write path to this namespace
+exists). The export payload's internal shape is Hermes', not CHD's; CHD owns
+the manifests. The committed machine schema is
+`contracts/schemas/session-archive.schema.json` (entity view:
+DATA-MODEL §1.10/§1.11); the fixture it is validated against is
+`contracts/schemas/session-archive.fixture.json`.
+
+**SessionArchive** at `/sessions/&lt;agent&gt;/&lt;profile&gt;/&lt;session-id&gt;` — the
+per-session index a replacement queries for discovery:
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `archive_id` | string | `sa-YYYYMMDD-HHMM-&lt;rand&gt;` | Identity |
+| `agent` / `profile` | string | existing config identity | Subject |
+| `session_id` / `session_key` | string | Hermes identity | Archived session |
+| `bond_ids` / `work_uids` | string[] | existing bond ids / work items | Bonds that served this session over its life |
+| `rooms` / `subthread_roots` | string[] / int[] | existing | Thread lineage summary |
+| `latest_checkpoint_id` / `latest_checkpoint_seq` | string / int | committed manifest's | Newest committed coverage boundary |
+| `covered_through_ts` | string \| null | RFC 3339 UTC | Newest committed `coverage.through_ts` |
+| `manifest_count` | int | ≥ 0 | Committed ExportManifests for this session |
+| `open_gaps` | string[] | gap record keys | Unresolved declared gaps / failed exports |
+| `state` | enum | `active \| frozen \| expired` | Lifecycle |
+| `retention_until` | string \| null | RFC 3339 UTC | Retention bound |
+| `ts` | string | RFC 3339 UTC | Last index update |
+
+**ExportManifest** at
+`/sessions/&lt;agent&gt;/&lt;profile&gt;/&lt;session-id&gt;/&lt;checkpoint-id&gt;/manifest` — one per
+committed export checkpoint:
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `manifest_id` | string | `em-YYYYMMDD-HHMM-&lt;rand&gt;` | Identity; immutable |
+| `session_archive_id` | string | existing archive id | Owning SessionArchive |
+| `agent` / `profile` | string | existing config identity | Subject |
+| `session_id` / `session_key` | string | Hermes identity | Exported session |
+| `bond_id` / `work_uid` | string \| null | existing | Work linkage |
+| `room` / `subthread_root` | string / int \| null | existing | Thread lineage |
+| `export_schema` | object | `{name: "hermes.session.export", version: "&lt;probed&gt;"}` | Native format/version **probed**, never assumed (the archive schema `schemas/archive.schema.json`, OPEN-6) |
+| `checkpoint_id` | string | `ck-YYYYMMDD-HHMM-&lt;rand&gt;` | Identity of this coverage boundary |
+| `checkpoint_seq` | int | ≥ 1, monotone per session | Messages ≤ this seq are included |
+| `coverage` | object | `{from_ts, through_ts}` RFC 3339 UTC | The coverage window the payload claims |
+| `completeness` | enum | `complete \| partial \| declared_gap` | What the exporter claims; not `complete` ⇒ `gap_ref` set |
+| `gap_ref` | string \| null | `/gaps/…` key | **Gap marker**; a silent partial export is a defect |
+| `payload_ref` / `payload_digest` / `bytes` | string / string / int | `/…​/export.json` / sha256 / ≥ 0 | The bytes and their integrity check |
+| `incremental` | object \| null | `{base_checkpoint_id, dedupe: "content_digest"}` | Incremental export naming its base checkpoint; row dedupe by content digest against it |
+| `state` | enum | `staging \| committed \| superseded \| failed` | `committed` only after digest verification |
+| `failure_ref` | string \| null | `/gaps/…` key | Set when `state=failed` (failed-export visibility, VOLB-069) |
+| `retention_until` | string \| null | RFC 3339 UTC | Derived from §8 policy |
+
+**ArchiveGapRecord** at `/gaps/&lt;agent&gt;/&lt;profile&gt;/&lt;session-id&gt;/&lt;checkpoint-id&gt;`
+— the named record for declared gaps and failed exports:
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `gap_id` | string | `gap-YYYYMMDD-HHMM-&lt;rand&gt;` | Identity |
+| `session_archive_id` | string \| null | existing archive id | Owning index, when known |
+| `agent` / `profile` / `session_id` | string | existing | Subject |
+| `checkpoint_id` | string | `ck-…` | The boundary that failed or stopped short |
+| `kind` | enum | `export_failed \| partial_coverage` | Why the gap exists |
+| `last_good_checkpoint_seq` | int | ≥ 0 | Last known-complete coverage boundary |
+| `reason` / `detail` | string | non-empty / free text | Machine + human account |
+| `state` | enum | `open \| resolved` | `resolved` when a later checkpoint covers the window |
+| `ts` | string | RFC 3339 UTC | Recorded at |
+
+**VOLB-053.** An archive manifest is never evidence that a live session exists or
+can be resumed: `committed` means "readable export with known coverage", not
+"restorable session". Restore imports into a new session and records the
+imported checkpoint (§5.10, VOLB-070). An export with `completeness != complete`
+MUST carry a `gap_ref` naming the declared gap; a silent partial export is a
+defect.
+
+**VOLB-068 (trigger, cadence, and incremental dedupe).** The exporter runs
+when any configured trigger fires: `turn_end` (after the room write of the
+turn's report is durably acked), `checkpoint_interval` (no more often than
+`archive.checkpoint_cadence_s`), `bond_retire`, or `session_end` —
+`contracts/config.schema.json` `$defs.archive` is the config surface
+(namespace, triggers, cadence, retention, scope bounds). Export order is
+inviolable: the export for `checkpoint_seq N` is written only after the
+`seq ≤ N` room writes it covers are durable (VOLB-011), so an export can never
+claim coverage of unflushed messages. Consecutive checkpoints are incremental:
+an ExportManifest names `incremental.base_checkpoint_id` and dedupes unchanged
+rows by content digest against that base; the ingestor commits the payload and
+manifest in one transaction, then updates the SessionArchive index
+(`latest_checkpoint_*`, `manifest_count`, `open_gaps`). A superseded base
+manifest is marked `superseded`, never deleted, while any later manifest
+references it.
+
+**VOLB-069 (failed-export visibility).** An export that fails — ingestor
+write error, digest mismatch, payload truncation — leaves TWO durable traces
+in the archive namespace: the ExportManifest row with `state=failed` and
+`failure_ref` set, and an **ArchiveGapRecord** (`kind=export_failed`) at
+`/gaps/…`; the session's SessionArchive gains the gap key in `open_gaps`.
+Partial coverage is recorded the same way with `kind=partial_coverage`. The
+failure is then visible to every §5.10 query and to the operator recovery
+sweep (the archive contract §6); "the export silently stopped" is not a reachable state.
+Gap records are resolved (`state=resolved`) only by a later committed
+manifest whose coverage window subsumes theirs.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#3-13-grantrecord-and-meta-grant-r31-026-d-032 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-3-13-GRANTRECORD-AND-META-GRAN-S017" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.13 GrantRecord and meta-grant (R31-026, D-032)
+
+Every effective permission traces to exactly one grant record. The record is the
+unit of readback, revocation and audit.
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `grant_id` | string | `g-YYYYMMDD-HHMM-&lt;rand&gt;` | Identity |
+| `kind` | enum | `use \| grant_use \| meta_grant \| create` | Four independent classes (D-032); no kind implies another |
+| `grantor` / `grantee` | string | agent ids; `vp` allowed as grantor | Direction |
+| `capability` | object | `{name, class_hint?}` e.g. `telegram.send`, `room.read`, `archive.read` | What is conferred |
+| `resource_scope` | object | `{rooms?, agents?, tickets?, archive_scopes?, workdirs?, glob}` | Where it applies |
+| `recipient_scope` | object \| null | required for `meta_grant`: `{roles?, agents?, tiers?}` | Who the grantee may further delegate to |
+| `downstream_rights` | enum[] \| null | required for `meta_grant`: subset of `{use, grant_use, meta_grant}` | What the grantee may confer onward |
+| `origin` | enum | `vp_configured \| director_grant \| manager_grant` | Provenance |
+| `authority_ref` | string \| null | grant id of the grantor's own `meta_grant` | The authority that permitted this issuance (required when `kind ∈ {grant_use, meta_grant}` and origin ≠ `vp_configured`) |
+| `lineage` | string[] | grant ids from VP root to this record | Immutable chain; cycle-free |
+| `state` | enum | `active \| expired \| revoked` | Lifecycle |
+| `expires_at` / `revoked_at` | string \| null | RFC 3339 UTC | Times |
+| `ts` / `rev` | — | — | Envelope |
+
+**VOLB-054 (no self-expansion).** A grant's capability and scope MUST be a subset
+of what its `authority_ref` permits; a `meta_grant` can never confer a right its
+grantor does not hold as meta-authority, and nothing confers itself. Validation
+refuses `403 grant_outside_pool` / `403 meta_grant_exceeds_authority`. VP
+configuration remains the root: a VP-configured denial wins over any derived
+grant (VOL-A-010), and a grant whose lineage reaches a revoked ancestor is
+`revoked` for future sessions while remaining effective in existing snapshots
+(§3.11).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#3-14-ticketrecord-r31-017-r31-018-vol-e -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-3-14-TICKETRECORD-R31-017-R31-S018" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.14 TicketRecord (R31-017/R31-018, VOL-E)
+
+The controller's authoritative work item, represented durably in the `chd`
+namespace. Boardctl compatibility is an interface mapping (VOL-E §3), not a
+second store. The record is generic: `kind=decision` and `kind=incident` are
+first-class non-coding uses.
+
+| Field | Type | Constraint | Meaning |
+|---|---|---|---|
+| `ticket_id` | string | `&lt;family&gt;-&lt;nnn&gt;`, family registered | Stable identity; survives moves |
+| `title` | string | non-empty | Human summary |
+| `kind` | enum | `task \| bug \| review \| decision \| incident \| epic` | General purpose; coding is one application |
+| `workflow` | object | `{workflow_id, version, machine_ref, state_projection}` | Binding to `state-machines.json`; not a second machine |
+| `state` | string | projection of the bound objective/assignment machine | Controller-owned current state |
+| `parent_id` / `depends_on` | string[] / string[] | existing ticket ids; acyclic | Hierarchy and dependency edges |
+| `accountable_owner` | string | exactly one agent id | One owner per deliverable |
+| `assignees` / `watchers` | string[] | agent ids | Who acts / who is informed |
+| `criteria` | object[] | `{criterion_id, text, provenance, version, evidence_refs}` | Acceptance at ticket level |
+| `authorization` | object | `{required_grants, actor_scope, approval_ref?}` | Permission facts required for mutation/dispatch |
+| `links` | object | `{objective_id?, room?, thread_root?, send_ids?, report_ids?, artifact_refs?}` | Where the work lives |
+| `priority` | int | 0–9 | Ordering input |
+| `revision` | int | ≥ 1, monotone | Compare-and-set token (VOL-E §4.4) |
+| `created_ts` / `updated_ts` / `closed_ts` | string | RFC 3339 UTC | Times |
+| `meta` | object | optional, controller-defined | Correlation, source, and import metadata |
+
+**VOLB-055.** Every ticket transition is one atomic `revision` increment plus
+one immutable event record `{ticket_id, seq, from, to, actor, actor_class,
+reason, revision_before, revision_after, evidence_refs, ts}` at
+`/chd/ticket/&lt;ticket-id&gt;/event/m&lt;seq:012d&gt;`. A transition carrying a stale
+`expected_revision` is refused `409 ticket_revision_conflict` and changes
+nothing (VOLE-009). Ticket state is never mirrored into a repository file as
+authority; a local board is an import/export view (VOL-E §3.3). On restart,
+the controller reloads the TicketRecord and ordered events and retains the
+highest committed revision; unrelated sibling tickets remain independently
+dispatchable when one branch is blocked.
+
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#4-ordering-and-version-rules-f-019 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-4-ORDERING-AND-VERSION-RULES-F-S019" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 4. Ordering and version rules (F-019)
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#4-1-room-order -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-4-1-ROOM-ORDER-S020" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.1 Room order
+
+**VOLB-005 (restated as requirement).** The durable total order of a room is the
+sequence of allocated `seq` values (§5.1). DuckBrain's timestamp/UUID ordering is
+NEVER used as room order. Readers sort fetched messages by `seq` client-side; the
+zero-padded key (VOLB-012) makes key listings agree with the same order.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#4-2-version-selection-for-single-state-keys -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-4-2-VERSION-SELECTION-FOR-SING-S021" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.2 Version selection for single-state keys
+
+Manifests, bonds, objective/assignment/delegation/rule/criterion records are
+logically single-state but physically multi-version (D4). Rules:
+
+**VOLB-025.** Every state-carrying record content carries integer `rev`, monotone
+per key, incremented by the harness on every transition. The **effective version**
+of a key is the fetched version with the highest `rev`. If multiple records have
+that highest `rev`, they are effective only when their canonical content bytes are
+identical; otherwise recovery rejects the key with `integrity_equal_rev_conflict`,
+records an incident, and pages the operator. Readers MUST resolve effective state
+this way and MUST NOT trust `GET /api/memories/key/:key` "latest-by-timestamp"
+(same-millisecond order is not durable, D4). A random-id tie-break is permitted
+only after byte-identity has been established for all equal-rev records.
+
+**VOLB-026 (idempotent rewrites).** A writer retrying a transition MUST write the
+same `(rev, content)`; two versions with identical `(rev, content)` are tolerated
+and harmless. Writing different content at the same `rev` is refused by the
+harness's write gate.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#4-3-pagination-cursors -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-4-3-PAGINATION-CURSORS-S022" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.3 Pagination / cursors
+
+**VOLB-027.** All CHD list reads are **keyset-cursor reads, not offset pagination**:
+DuckBrain list ordering is `timestamp DESC, id ASC` (not write order), so offset
+windows shift under concurrent writes. Cursor = last observed `seq` (rooms) or
+last observed `rev`+ts (single-state keys). The harness over-fetches with
+`prefix` + `after` and filters client-side by the cursor.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#4-4-concurrency -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-4-4-CONCURRENCY-S023" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.4 Concurrency
+
+**VOLB-010 (restated).** Exactly one harness instance writes `/chd/*` keys; all
+agent writes arrive through the harness API (§5). Cross-process concurrency on one
+namespace is therefore out of scope for this revision; the version-selection rules
+above remain the safety net for retry-duplicated writes (VOLB-025). **OPEN DESIGN
+WORK (OPEN-1):** multi-instance harness (active/passive or sharded-by-room) requires
+either a released DuckBrain CAS/declared-table surface or an external lease; not
+designed here.
+
+**VOLB-066 (writer lease and restart exclusion).** The single writer is enforced by
+ a durable writer lease at `/chd/system/writer` = `{writer_id, instance_id,
+ boot_id, acquired_ts, heartbeat_ts, expires_ts}`. A starting harness takes the
+ lease only if it is absent or expired; renews every `writer.heartbeat_s`
+ (default 30); and refuses to serve (`503 writer_lease_held`) while another
+ unexpired lease exists. Clock-skewed expiries are detected by requiring two
+ consecutive failed heartbeats older than 2× the interval. Takeover requires a
+ fresh `boot_id`, an atomic compare-and-set on the observed lease version, and a
+ durable takeover incident; a stale owner may not write after losing that CAS.
+ **Partition + expiry walkthrough:** H1 holds the lease and dispatches a run; the
+ network partition prevents H1 heartbeats, so its lease appears expired to H2 while
+ H1 may still execute remotely. H2's startup is refused unless the external lease
+ authority confirms H1's lease is absent and the CAS succeeds; an expired timestamp
+ alone is not proof that H1 stopped. If H2 cannot obtain that authority, it remains
+ refused (`503 writer_lease_held_or_unknown`) and does not allocate a head, append a
+ message, or release a capacity slot. This makes "two harnesses after a partition"
+ a startup refusal rather than a silent double-write race.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#5-query-write-contracts-f-006 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-5-QUERY-WRITE-CONTRACTS-F-006-S024" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 5. Query / write contracts (F-006)
+
+DuckBrain stores JSON memories; the **query/write semantics** below are supplied by
+the harness's own API (the only surface agents and VPs touch). Each contract names
+the DuckBrain reads/writes that implement it. All examples use canonical keys (§2).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#5-1-sequence-allocation-atomic-crash-safe-f-007 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-5-1-SEQUENCE-ALLOCATION-ATOMIC-S025" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.1 Sequence allocation — atomic, crash-safe (F-007)
+
+**Mechanism (single-writer, write-ahead window):**
+
+1. The harness holds an in-process per-room allocator under a mutex.
+2. When its reserved window is exhausted, it reserves the next block by writing the
+   SeqHead record `/chd/room/&lt;room-id&gt;/_head` = `{ "next": base+BLOCK, "rev": r+1,
+   "ts": ... }` (BLOCK default 64) and waits for the fsync ack (VOLB-011).
+3. Each message allocation consumes one number from the window in memory — no
+   additional write per allocation; the message write itself (§6.2) is the durable
+   evidence of that seq.
+
+**SeqHead record:** `{ "room": "&lt;room-id&gt;", "next": int, "rev": int, "reserved_from": int,
+"reserved_to": int, "writer_id": string, "ts": string }` at key
+`/chd/room/&lt;room-id&gt;/_head`, harness-only.
+
+**Exact allocation and restart pseudocode (normative):**
+
+```text
+allocate(room, request_id, canonical_message):
+  assert writer_lease.owner == this_instance and writer_lease.not_expired
+  lock(room_mutex)
+  head = effective_record("/chd/room/" + room + "/_head")
+  assert_equal_rev_contents_or_reject(head)
+  if request_id is already indexed under /chd/room/&lt;room&gt;/dedupe/&lt;request_id&gt;:
+      return the retained {message_key, seq, response};
+  if allocator[room] absent or allocator[room].next &gt; allocator[room].reserved_to:
+      base = head.next
+      candidate = {next: base + BLOCK, reserved_from: base,
+                   reserved_to: base + BLOCK - 1, rev: head.rev + 1,
+                   writer_id: this_instance, ts: now}
+      fsync_write_same_key(candidate)       # retain old head as history
+      allocator[room] = candidate
+  seq = allocator[room].next; allocator[room].next += 1
+  message = canonical_message + {seq, request_id}
+  fsync_write_once(/chd/room/&lt;room&gt;/m&lt;seq&gt;, message)
+  fsync_write_once(/chd/room/&lt;room&gt;/dedupe/&lt;request_id&gt;,
+                   {message_key, seq, response})
+  return retained response
+
+recover(room):
+  require writer_lease_acquired_or_refuse_startup()
+  head = effective_record(/chd/room/&lt;room&gt;/_head)
+  messages = list_prefix(/chd/room/&lt;room&gt;/m*)
+  assert_equal_rev_contents_or_reject(head, messages)
+  max_seq = max(seq(message) for message in messages, default=-1)
+  next_seq = max(head.next, max_seq + 1)
+  candidate = {next: next_seq + BLOCK, reserved_from: next_seq,
+               reserved_to: next_seq + BLOCK - 1, rev: head.rev + 1,
+               writer_id: this_instance, ts: now}
+  fsync_write_same_key(candidate)
+  allocator[room] = candidate
+  # Never reclaim the reserved tail; every gap remains permanent.
+
+recover_send(send_id):
+  versions = list_prefix(/chd/send/&lt;send_id&gt;/manifest)
+  manifest = effective_record_or_reject_equal_rev(versions)
+  reports = list_reports(send_id, attempt_id=manifest.attempt_id)
+  attempts = list_prefix(/chd/send/&lt;send_id&gt;/attempt/)
+  return canonical_manifest_with_attempts_reports(manifest, attempts, reports)
+```
+
+Every `fsync_write_once` is keyed by the record's stable key plus its caller
+idempotency key; a retry with the same key and canonical bytes returns the retained
+record, while changed bytes are rejected. No recovery step is permitted to say
+only “re-derive”: it names its prefix/query and retained input above.
+
+**VOLB-028.** Seq MUST NOT be reused after a crash: restart recovery sets
+`next = max(max observed message seq in the family, last durable `_head`.next - 1)
++ 1`. Gaps are legal; duplicates are not. The in-process mutex + single writer
+guarantee no two allocations race (VOLB-010). This resolves DESIGN UQ-7/OQ-14 by
+selecting the falsifier's named fallback: the harness allocates seq through a single
+writer and agents POST through it (amending CT-05, VOLB-020).
+
+**VOLB-058 (retained head reservations, R31-007).** The `_head` record is never
+deleted and is never rolled back: it retains `next` (the end of the last reserved
+block), `rev`, `reserved_from`, `reserved_to`, `writer_id` and `ts`. A restarted
+harness:
+
+1. reads `_head` and the highest observed message key per room;
+2. sets `next = max(observed_max + 1, head.next)` — never below a previously
+   advertised reservation, so a number handed out before the crash cannot be
+   reissued;
+3. writes a new `_head` with `reserved_from = next`, `reserved_to = next + BLOCK - 1`
+   and `rev + 1` **before** consuming any number from the window;
+4. refuses to start if two live processes claim the same `writer_id`/lease (restart
+   exclusion, §4.4), because two windows would otherwise interleave.
+
+The reserved-but-unused tail is a legal gap forever; reclamation of that gap is
+forbidden (it would reuse numbers). The write gate rejects any message whose key
+falls inside a reserved window that the current writer did not allocate.
+
+**VOLB-059 (canonical message and manifest recovery, R31-007).** Recovery reads
+the *canonical* records, never a derived cache: room messages by key prefix sorted
+by `seq`; manifests by effective `rev` (§4.2); bonds by `(generation, rev)`. If two
+versions of one key carry the **same `rev` but different content**, the harness
+does not pick a winner: it refuses the room with `500 integrity_equal_rev_conflict`,
+records an incident and pages the operator. Random-UUID tie-breaks are legal only
+when content is byte-identical (VOLB-025/026); a content disagreement is data
+corruption, not a race to be arbitrated.
+
+**VOLB-020 (CT-05 amendment).** Agents do NOT hold DuckBrain write tokens for
+`/chd/*`. The sending "session" posts through harness endpoints (ENDPOINTS §4.2/§4.3
+with an *agent* credential — the §6 matrix is amended: room post/reply/report are
+allowed to internal agents for rooms they are members of; all other endpoints remain
+agent-denied). The harness validates membership (DESIGN.md §4.6 read/post scoping) and is the
+only DuckBrain writer.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#5-2-ordered-room-read -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-5-2-ORDERED-ROOM-READ-S026" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.2 Ordered room read
+
+`GET /v1/rooms/{room}/messages?since=&lt;seq&gt;&amp;thread=&lt;root_seq&gt;&amp;limit=&lt;n&gt;`
+(ENDPOINTS §4.7, contract notation). Implementation: DuckBrain
+`GET /api/memories?namespace=chd&amp;prefix=/chd/room/&lt;room-id&gt;/&amp;limit=500` (+ repeat
+pages by cursor per VOLB-027), filter `seq &gt; since` (and `thread_root == thread` if
+given), sort ascending by `seq`, truncate to `limit`, return `next_since`.
+
+Request/result example:
+
+```
+GET /v1/rooms/obj-fleet/messages?since=41&amp;limit=100
+→ 200 {
+  "room": "obj-fleet",
+  "messages": [ { "seq": 42, "from": "director", "to": "group", "kind": "directive",
+                  "thread_root": null, "reply_to": null, "body": "...", "ts": "..." } ],
+  "next_since": 42
+}
+```
+
+**VOLB-029.** Results are always ascending by `seq`; a reader resuming from
+`next_since` sees no gaps and no duplicates. Thread reads
+(`?thread=&lt;root_seq&gt;`) return the subtree in `seq` order regardless of nesting
+depth (walk `reply_to` client-side to reconstruct the tree — DuckBrain has no join).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#5-3-pending-sends -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-5-3-PENDING-SENDS-S027" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.3 Pending sends
+
+`GET /v1/sends?state=open&amp;gateway=&lt;gw&gt;` — implementation: DuckBrain
+`GET /api/memories?namespace=chd&amp;prefix=/chd/send/&amp;historical=false` filtered
+client-side by effective `rev` (VOLB-025) and `state ∈ {composed,
+queued, admitted, dispatched, await_report}`.
+
+```
+→ 200 { "sends": [ { "send_id": "s-20261108-1015-k4m8", "room": "task-crier-42",
+                     "target": "sup-crier", "mode": "REUSE", "state": "dispatched",
+                     "dispatch_ts": "...", "deadline_ts": "...", "lease_expires_at": "..." } ] }
+```
+
+**VOLB-030.** This query is the orchestrator's worklist AND the recovery input
+(§6.4); it MUST derive everything from manifest contents (no parallel counters —
+VOLB-018).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#5-4-fresh-report-lookup -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-5-4-FRESH-REPORT-LOOKUP-S028" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.4 Fresh-report lookup
+
+`GET /v1/sends/{send_id}/reports` and the verify loop's own read. Implementation:
+DuckBrain
+`GET /api/memories?namespace=chd&amp;prefix=/chd/room/&lt;room&gt;/&amp;attr.kind=report&amp;attr.send_id=&lt;send_id&gt;`
+— attribute filters narrow the candidate set; the harness then applies the
+single V3 precedence in VOL-D §3.3 using `ingest_ts` against the matching
+attempt's `dispatch_ts`. The query returns candidates plus `stale_seen`,
+`duplicate_seen`, and the chosen `report_ref`; no DuckBrain table API is assumed.
+
+The old CHD-3 `report.ts &gt; request.timestamp` and the prior `report.ts &gt;=
+dispatch_ts` wording are superseded. Agent timestamps and content timestamps are
+not query clocks; the service's persisted ingress timestamp is the trusted time.
+
+```
+→ 200 { "send_id": "s-20261108-1015-k4m8",
+        "fresh_reports": [ { "room": "task-crier-42", "seq": 87,
+                             "message_key": "/chd/room/task-crier-42/m000000000087",
+                             "status": "done", "ts": "..." } ],
+        "stale_seen": 1 }
+```
+
+**VOLB-031.** A report whose correlation matches but whose harness `ingest_ts`
+precedes `dispatch_ts` for its `attempt_id` is returned in `stale_seen` and never
+closes a send (R-031). A report for a different `send_id`, `attempt_id`, or
+`session_ref` — however fresh — cannot close this send; correlation mismatch is
+reported as `wrong_request` or `attempt_mismatch`.
+
+**VOLB-056 (freshness rule v3, R31-011; supersedes v2).** VOLD-025/VOLD-026 in VOL-D §3.2–§3.3
+are the single authority for freshness and duplicate/late precedence. The trusted
+basis is harness-recorded `ingest_ts` compared with `dispatch_ts` for the same
+`(send_id, attempt_id, session_ref)`; agent and attachment timestamps are evidence
+only. The exact first-match table is not repeated here, preventing a second rule
+from drifting. A stale attachment in a newly accepted envelope is handled only
+by director acceptance review, while mismatched attempt/session can never close
+work.
+
+**Stale attachment rule.** A report envelope posted now may carry content whose
+own timestamp is old (an attached log, an old artifact). Freshness is decided by
+the *envelope's* ingest time against the attempt's dispatch time; the content's
+own timestamps are evidence metadata evaluated by the director's acceptance review
+(VOLD-034), never by the send-closure test. This removes the "old attachment in a
+new envelope" ambiguity.
+
+**VOLB-057 (attempt identity, R31-004).** Four identities are distinct and never
+substituted:
+
+- **logical send** (`send_id`) — one owed piece of work; survives retries, fresh
+  sessions and wait-resumes;
+- **attempt** (`attempt_id`, `attempt`) — one dispatch episode against one target
+  session; a ladder rung that changes the session, and every wait-resume, mints a
+  new attempt;
+- **gateway request key** (`gateway_request_key`) — the `Idempotency-Key` of
+  exactly one POST.
+
+**Identity and rotation table (normative).** These identifiers are distinct; none may
+be substituted for another:
+
+| Identity | Scope and durability | Rotation rule | What it correlates |
+|---|---|---|---|
+| `send_id` (logical send) | One owed piece of work; durable for the obligation | Never rotates across retries, NEW/REUSE changes, deleted sessions, or wait-resumes | The request message, all attempts, reports, and the final send outcome |
+| `attempt_id` (attempt ordinal) | One dispatch episode against one session-target | Mint exactly once for each new target or wait-resume; never reopen or reuse a closed attempt | One report, one run reference, and one capacity hold |
+| `gateway_request_key` | One gateway POST idempotency key | Reuse only when `attempt_id` and the complete session-target are unchanged; rotate with every new attempt | One POST and its gateway admission/run result |
+| `session_target` | Immutable `{gateway_id, session_id, agent_id, mode, bond_generation}` snapshot | Never mutate in place; a new session, deleted session, new bond generation, or target conflict creates a new snapshot and therefore a new attempt | The exact external target to which the gateway request was sent |
+
+The gateway request key is derived from the canonical identity `(send_id, attempt_id, allocation_id, immutable_target_scope, profile, credential_scope, request_bytes)` using `chd-key-v1` serialization and is persisted with the canonical UTF-8 request bytes before the POST. The harness rejects a key whose stored target/profile/credential scope differs from the requested scope (`422 attempt_target_conflict`). A response loss or transport timeout is **unknown execution**, not proof that no work ran; the harness MUST reconcile the stored allocation/target and run/admission reference before any external-effect retry. Exact replay retains the same attempt and key; a new target, profile or credential scope requires an authorized successor attempt and new key.
+
+| Retry situation | Required action | External-effect authority |
+|---|---|---|
+| Response lost after POST | Query run status, then resolve unknown with `admission_id` + `execution_generation`; if still unknown, hold slot and page. Do not POST another attempt | Send orchestrator after reconciliation only |
+| Retry to the same target | Reuse the same `attempt_id`, target snapshot, and key; accept replay or conflict and reconcile the original run | Send orchestrator; no fresh effect until original outcome is known |
+| Ladder rung selects a fresh `NEW` session | Persist the new target snapshot and successor `attempt_id`/key; link `supersedes_attempt_id`; do not reuse the old key | Director/send orchestrator decision recorded with rung evidence |
+| Target session deleted | Record `target_deleted`; query session history/run status; mint a successor only when the old attempt is proven stopped or an authorized unknown-execution decision is recorded | Director or delegated send owner; never automatic blind replay |
+| Gateway returns unknown/ambiguous result | Classify `unknown`, keep capacity held, run bounded reconciliation; only an explicit authorized decision may retry an external effect | Director authority record plus send orchestrator execution |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#5-5-cap-read-update -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-5-5-CAP-READ-UPDATE-S029" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.5 Cap read / update
+
+Per VOLB-019: `GET /v1/status` reports `{caps, usage, queued}` per scope; usage is
+derived from manifests (VOLB-018); updates are config-path only.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#5-6-registry-read -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-5-6-REGISTRY-READ-S030" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.6 Registry read
+
+`GET /v1/registry/&lt;agent-id&gt;` → effective RegistryEntry (highest `rev`), plus
+`stale_mirror` marker per VOLB-016. Implementation: DuckBrain key read + version
+selection.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#5-7-standing-rule-lookup-applicability-query -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-5-7-STANDING-RULE-LOOKUP-APPLI-S031" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.7 Standing-rule lookup (applicability query)
+
+`GET /v1/rules?applies_to=room_kind=&lt;k&gt;,role=&lt;r&gt;,tag=&lt;t&gt;` — implementation: DuckBrain
+`GET /api/memories?namespace=chd&amp;prefix=/chd/rule/` filtered client-side to
+`state == "active"` and applicability match. Returns every matching rule's
+`rule_id`, `version/rev`, `statement`, `provenance`.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#5-8-acceptance-criteria-read -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-5-8-ACCEPTANCE-CRITERIA-READ-S032" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.8 Acceptance-criteria read
+
+`GET /v1/objectives/&lt;id&gt;/criteria?set_rev=&lt;n&gt;` — DuckBrain
+`prefix=/chd/acceptance/&lt;objective-id&gt;/` filtered to `version` in effect for
+`set_rev` (the harness stores the set composition in the ObjectiveRecord's
+`acceptance_set_rev` and the per-criterion versions).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#5-9-ticket-queries-and-restart-recovery-r31-017-r31-018 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-5-9-TICKET-QUERIES-AND-RESTART-S033" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.9 Ticket queries and restart recovery (R31-017/R31-018)
+
+The controller-backed ticket queries are the recovery and worklist surface; the
+same records are available through `chd_ticket_query` and `GET /v1/tickets`
+(ENDPOINTS §4.9). They read the effective TicketRecord revision plus immutable
+transition events and return keyset cursors, not offset pages.
+
+| Query | Controller request | Canonical CHD read | Result/use |
+|---|---|---|---|
+| One ticket | `GET /v1/tickets/{ticket_id}` | `/chd/ticket/&lt;id&gt;` + `/event/` sorted by `seq` | Record, allowed canonical transitions, latest event, link flags |
+| Open worklist | `GET /v1/tickets?state=open,in-progress,blocked&amp;cursor=...` | Ticket prefix scan, effective highest `revision` | Dispatchable/blocked tickets; blocked branches remain visible |
+| Children and dependencies | `GET /v1/tickets?parent_id=...` and `depends_on=...` | Ticket graph plus Objective/Assignment refs | Parent roll-up and dependency readiness; no terminality shortcut |
+| Reconciliation | `GET /v1/tickets?inconsistent=true` | Ticket links joined to room/send/report/artifact refs | Flags missing report, dead send, room missing; never silently repairs |
+| Boardctl export/import | `GET /v1/tickets/export`, `POST /v1/tickets/import` | Ticket records and source/import audit refs | Mirror view and conflict report; no delete-by-absence |
+
+**Restart rule.** On restart the controller first reacquires the single-writer
+lease, then reads each TicketRecord and its event prefix, verifies monotone
+`revision_after`, and rebuilds the dispatch worklist from ticket state plus
+linked SendManifest records. A committed revision and event survive a crash;
+an uncommitted mutation is not acknowledged and is retried by `request_id` or
+returned as a typed conflict. If `REL-412-AUDIT` is blocked, independent
+`REL-412-INFRA` and `REL-412-HTML` tickets remain queryable and dispatchable
+when their own dependencies/capacity permit. Recovery does not infer a new
+state from a board file or from a report message.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#5-10-archive-lookup-queries-and-restore-procedure-r31-016-the-archive-contract -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-5-10-ARCHIVE-LOOKUP-QUERIES-AN-S034" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.10 Archive lookup queries and restore procedure (R31-016, the archive contract)
+
+The three reads restart depends on (§6.4): **R1** pending-sends scan (§5.3);
+**R2** room-head scan: for each room with a `_head` record (found via
+`GET /api/keys/flat?namespace=chd&amp;prefix=/chd/room/&amp;depth=` + per-room max), recompute
+max seq; **R3** lease-expired dispatch scan: manifests in `dispatched` with
+`lease_expires_at &lt;= now` (client-side filter on R1's results).
+
+Archive reads are served from namespace `chd-archive`, paginated keyset
+(§4.3), re-authorized on every page (VOLC-070/071). The lookup queries a
+replacement (or an auditor) needs — "how do I find a lost host's sessions and
+their coverage" — are:
+
+| # | Query | Selector | Returns |
+|---|---|---|---|
+| QA-1 | Discover archived sessions of an agent | prefix `/sessions/&lt;agent&gt;/&lt;profile&gt;/` | SessionArchive records (§3.12), newest first |
+| QA-2 | Latest committed export of a session | `/sessions/&lt;agent&gt;/&lt;profile&gt;/&lt;session-id&gt;/&lt;checkpoint-id&gt;/manifest`, client-filter `state=committed`, max `checkpoint_seq` | the ExportManifest + its `coverage`, `completeness`, `gap_ref` |
+| QA-3 | Thread lineage lookup | manifests filtered by `room`/`subthread_root` (or the index's `bond_ids`/`rooms`) | every checkpoint covering a thread |
+| QA-4 | Failed-export / gap scan | `/gaps/&lt;agent&gt;/…` prefix, or `open_gaps` on the index | ArchiveGapRecords, `state=open` first |
+| QA-5 | Coverage window assembly | min `coverage.from_ts` .. max `coverage.through_ts` over committed manifests | the interval an audit can honestly claim, with per-gap exceptions (QA-4) |
+
+**VOLB-071 (grant-gated, no implicit read).** Every query above requires a
+live archive read grant (VOL-C §8.8 scopes `own_history` / `room_log` /
+`cross_agent_archive`); a read without a resolvable, unexpired grant is
+`404 not_found` and audited. The grant-record schema and selector grammar are
+owned by **CHD31-06** — archive read MUST NOT ship ahead of that record, and
+no scope is implied by role, membership, or config alone (VP configuration
+bounds the maximum scope; the grant is always a separate record, VOL-B §3.13).
+
+**VOLB-070 (restore procedure — ordered, validated, explicitly limited).**
+Restoring a session from the archive onto a replacement host is this
+procedure, in order; a step that fails stops the procedure with a recorded
+restore-incident (never a degraded "best effort" import):
+
+1. **Discover** — run QA-1 under a resolvable archive read grant; select the
+   SessionArchive of the target session.
+2. **Select** — run QA-2; take the latest `state=committed` ExportManifest.
+   If none exists (all failed/gaps), stop: `restore_failed{reason:
+   no_committed_manifest}` with the gap records attached.
+3. **Verify integrity** — fetch the payload; recompute sha256 and compare to
+   `payload_digest`. Mismatch stops: `restore_failed{reason:
+   digest_mismatch}`.
+4. **Compatibility check (mandatory gate)** — compare `export_schema` to the
+   importing harness's supported native export format: `name` must equal
+   `hermes.session.export` (the probed native name, OPEN-6) and `version`
+   must be one the importer supports. An unsupported name/version stops:
+   `restore_failed{reason: export_version_unsupported}` — blind database
+   copying is forbidden; the import maps records, it never copies files.
+5. **Import into a NEW session** — the harness imports the payload into a
+   freshly created local session store; the new session gets a NEW session id
+   minted by the local Hermes. The archived `session_id` is never reused as a
+   live id.
+6. **Import policy** — load the checkpoint's SessionPolicySnapshot copy
+   (§3.11) as the new session's snapshot; if the copy is absent, restore
+   fails closed to `current_policy` with a recorded `snapshot_missing`
+   decision (VOLC-069, VOLD-063).
+7. **Record the checkpoint** — the new bond (new `generation`, `parent_bond_id`
+   of the retired bond) records `imported_checkpoint_id/seq` and the archive
+   identity it came from; delayed messages for the old generation follow
+   VOLB-064 (`routed_to: retired_generation`).
+8. **Report** — the restore emits a report stating `completeness`, the
+   coverage window, every open gap (QA-4), and the new session/bond ids.
+
+**Limitation (normative):** this procedure CANNOT restore a live session. It
+populates a new local session store from committed exports; it does not
+resume the archived session, does not reuse its session id, and does not
+reconstruct conversation prompts (R-019). "Restore" always means "import into
+a new session", never "copy a live database" (VOLB-053, CHD-F04 callout).
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#5-12-dataset-query-contracts-r31-030 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-5-12-DATASET-QUERY-CONTRACTS-R-S035" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.12 Dataset query contracts (R31-030)
+
+CHD uses logical `ReportDataset` and `ReportRow` records persisted as JSON
+memories in DuckBrain; it does not require or imply DuckBrain's unreleased
+declared-table API. The service owns all reads and writes, enforces the report's
+authorization, and maps these records to the keys in §3.10.
+
+`GET /v1/reports/{report_id}/dataset` returns only a published dataset when the
+caller has report-read permission for the linked room/send and the dataset's
+retention window has not expired. A caller without permission receives the
+existing indistinguishable `404 not_found`; no row existence is disclosed.
+
+Query parameters are `filter` (a closed, typed expression over declared column
+names), `order_by` (declared column plus `ASC|DESC`), `page_size` (1..500), and
+`cursor` (opaque keyset cursor). The service validates filter names/types,
+orders deterministically by `order_by` plus `row_id`, returns `{dataset_id,
+columns, rows, next_cursor, has_more}`, and rejects unknown columns or invalid
+operators as `422 dataset_query_invalid`. Offset pagination is not supported.
+Rows are keyed by harness-assigned dense `row_id` (`r00000001` onward), unique
+within a dataset and immutable; `values` must match the declared typed columns.
+
+**VOLB-073 (atomic dataset publish and retry).** A report and its dataset are
+written through one harness transaction boundary: descriptor and rows remain
+`staging`, and neither the report nor any row is readable until every row has
+validated, the expected `row_count` matches, and the descriptor flips to
+`published`. Validation failure is named `422 schema_validation` (or
+`422 dataset_row_invalid` for a typed row); it leaves no readable report and
+records the audit failure. A retry with the same `(send_id, attempt_id,
+content_digest)` is the exact replay row in VOL-D §3.3; a different digest is
+the second-report row, never an in-place update. Corrections publish a new
+`dataset_id` and report. Retention/tombstoning follows §8 and preserves the
+report-to-dataset linkage in the audit record.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#6-crash-safe-sequences-f-007 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-6-CRASH-SAFE-SEQUENCES-F-007-S036" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 6. Crash-safe sequences (F-007)
+
+All writes are harness-mediated, `fsync`-durability acked (VOLB-011), and
+idempotent under the stated dedupe keys. Time origin for every comparison is the
+harness clock; DuckBrain's persisted write `timestamp` (201 body, DB-GAP-045) is
+audit evidence, never a clock source.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#6-1-the-canonical-sequence-happy-path -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-6-1-THE-CANONICAL-SEQUENCE-HAP-S037" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 6.1 The canonical sequence (happy path)
+
+**Actor/trigger/read/check/write/evidence.** The harness triggers S1 when the orchestrator decides to send. It reads the room message and current manifest, checks the dedupe key and cap, writes each durable manifest revision before the next external effect, and records the scheduler admission and gateway response. Evidence is the fsync acknowledgement plus matching `send_id`, `attempt_id`, and `run_ref`. Normal example: the manifest moves `composed → queued → admitted → dispatched`, then the correlated report moves it to `verified`. Failure example: the gateway response is lost after POST; the harness reads the stored attempt, does not assume failure, and uses [reconcile](terminology.md#reconcile) with the same identity; an unknown result holds capacity.
+
+**S1 compose.** Orchestrator decides to wake agent A in room R for message seq N:
+write SendManifest `state=composed` (dedupe: `send_id` minted once; a crash here
+leaves a composed manifest that restart recovery either dispatches or cancels —
+never loses the request, because the request message itself is already durable).
+
+**S2 admission reservation.** Check caps (VOLB-018/019). Under cap: transition
+`composed → queued` (manifest write), then request scheduler admission
+(bump, FACT-14 / CT-03). Scheduler-granted: `→ admitted` (+ `lease_expires_at = now +
+lease`, lease default 2× `stale_after_s`). Over cap: manifest stays `queued`-preceded
+(`composed`) and the send queues (RL-15 — scheduling never refused). **OPEN DESIGN WORK (OPEN-2):**
+bump semantics admit-once vs frequency (DESIGN UQ-3/Q-6); S2 is written against the
+wake_once resolution and needs no change if bump proves admit-once.
+
+**S3 gateway delivery.** `admitted → dispatched`: the harness POSTs to the Hermes
+gateway per §7 (mode NEW or REUSE), records `dispatch_ts`, `run_ref` (from the
+response — Chat Completions echoes the explicit session id; Runs API returns
+`run_id`), `deadline_ts`. Write ack before the harness reports the send as
+dispatched anywhere.
+
+**S4 agent work + report.** The agent session posts `kind=report` with
+`send_id` through the harness (§5.1/VOLB-020); the message write acks (fsync), then
+the harness may wake the parent (CT-07).
+
+**S5 report linking.** Verify loop finds the report (§5.4), validates (CT-06:
+schema, freshness, artifacts), writes `report_ref` + `state=await_report` (report
+received, verification pending).
+
+**S6 ack/verify close.** Verdict `verified` → manifest `state=verified` (terminal);
+cap release is implicit (usage re-derivation, VOLB-018). Verdict paths follow §5.1
+DESIGN ladder, each rung appended to `rung_history`.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#6-2-idempotent-message-acceptance -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-6-2-IDEMPOTENT-MESSAGE-ACCEPTA-S038" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 6.2 Idempotent message acceptance
+
+**Actor/trigger/read/check/write/evidence.** The harness triggers acceptance on each room-message, report, or manifest write. It reads the target prefix by `dedupe_key`, checks whether the retained body is byte-identical, writes only on a miss, and returns the retained record on a replay. Evidence is `200` with the original key/sequence for an exact replay. Normal example: retrying the same report returns the original response and creates no second message. Failure example: the same key carries different bytes; the harness writes no new record, returns `409 duplicate`, and records the conflict for audit.
+
+**VOLB-032.** Every accepting write (room message, report, manifest transition)
+carries a caller-supplied `dedupe_key`. Acceptance algorithm: (1) attribute-filtered
+read for `attr.dedupe_key=&lt;k&gt;` under the target prefix (§5.4-style); (2) hit →
+return the original response (`200`, not `201`), write nothing; (3) miss → allocate,
+write, ack; the dedupe fields live in the record itself (no second write). A replay
+with the same `dedupe_key` and a *different* body is `409 duplicate` (ENDPOINTS §5).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#6-3-duplicate-and-late-delivery -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-6-3-DUPLICATE-AND-LATE-DELIVER-S039" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 6.3 Duplicate and late delivery
+
+**Actor/trigger/read/check/write/evidence.** The harness triggers this check when a gateway retry or late report arrives. It reads the stored idempotency key, target snapshot, dispatch timestamp, and report correlation, checks identity before freshness, and writes either a retained replay or a late/stale annotation. Evidence is the original run reference and a durable `late_report` or `bad_report` record. Normal example: a fresh report for the original attempt links once and closes only the current open outcome. Failure example: a stale or wrong-request report is rejected even when its envelope timestamp is fresh; the harness writes the reason and does not reopen an escalated send.
+
+**VOLB-033 (duplicates).** A duplicated gateway POST (network retry after Hermes
+admitted the first) is absorbed by the Hermes Idempotency-Key (§7.2 — canonical
+mode replays the original answer; a changed identity is `409 admission_conflict`
+and nothing runs). CHD never re-POSTs with a changed identity under the same key;
+the send's `run_ref` correlates retries.
+
+**VOLB-034 (late delivery).** A report arriving after `deadline_ts` but fresh and
+valid is still linked (`report_ref`) and the manifest records
+`late_report: true`, but the ladder outcome already taken (escalated) stands; the
+incident is annotated, not auto-reverted. A *stale* report (`ts &lt; dispatch_ts`) is
+never linked (VOLB-031).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#6-4-restart-recovery -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-6-4-RESTART-RECOVERY-S040" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 6.4 Restart recovery
+
+**Actor/trigger/read/check/write/evidence.** On startup the harness triggers recovery before accepting new sends. It reads room heads, open manifests, run references, leases, datasets, and bonds; checks each state against its allowed recovery operation; writes repaired projections and audit revisions; and then admits new work. Normal example: an open `queued` manifest is [re-drive](terminology.md#re-drive)d with its persisted admission key and no duplicate charge. Failure example: an expired lease has no terminal remote evidence; the harness [reconcile](terminology.md#reconcile)s, records `uncertain`, keeps the slot held, and pages at the bound rather than releasing it.
+
+**VOLB-035.** On startup the harness MUST run, before accepting new sends: (a) R2
+head re-derivation for every room (VOLB-028/058); (b) R1 pending-sends scan; for each
+open manifest: `composed/queued/admitted` → re-drive S2/S3 using the
+persisted transition/admission keys and the unchanged target; `dispatched` with
+`run_ref` → query the run status (§6.7); (c) R3 lease-expiry scan → reconcile,
+never "release because time passed"
+(VOLB-061); (d) dataset recovery: any `staging` dataset is marked `failed`
+(VOLB-050); (e) bond recovery: bonds whose `hermes_session_id` no longer exists are
+marked `lost` and their open sends re-attempt as a new attempt (§6.7).
+
+**VOLB-060 (run-status reconciliation, R31-006).** For every dispatched attempt the
+harness asks, in this order, until it gets a definitive answer or exhausts the
+bound:
+
+1. `GET /v1/runs/{run_id}` (or the session-history equivalent) → `running`,
+   `completed`, `failed`, `cancelled`, `interrupted`;
+2. `POST /v1/runs/{run_id}/resolve-unknown` with the stored `admission_id` +
+   `execution_generation` → definitive outcome or `unknown`;
+3. session history `GET /api/sessions/{id}/messages` — the presence of the agent's
+   report turn is positive evidence the attempt executed.
+
+**Run-status decision table (the owner and probe are normative):**
+
+| Observed status | Reconciliation owner | Check method | Slot may release? |
+|---|---|---|---|
+| `running` / `proven-running` | send orchestrator | run GET says running, or an execution heartbeat is newer than the probe start | **No**; renew/hold the lease |
+| `stopped` / `completed` / `failed` / `cancelled` / `interrupted` / terminal report | send orchestrator | terminal run GET or correlated terminal report, with `run_id` + `attempt_id` match | **Yes**, after durable terminal manifest write |
+| `unreachable` | recovery operator on behalf of service writer | bounded retries of run GET, resolve-unknown, then session history; transport remains unavailable | **No**; unreachable is not proof of stop |
+| `unknown` | service writer, then director at the bound | resolve-unknown returns unknown or identities cannot be reconciled | **No**; explicitly forbidden without stop confirmation |
+
+Outcomes are classified **proven-stopped**, **proven-running**, **uncertain**, or
+**unreachable**. `proven-stopped` (terminal run status, or a terminal report) is
+the only outcome that releases the slot. `uncertain` keeps `paused:uncertain` with
+the slot held, retries the probe with bounded backoff, and pages the operator at
+the bound. `unreachable` keeps `paused:unreachable` and holds the slot; it is
+**not** a release trigger. If the harness itself stays unavailable past
+`capacity.unresolved_hold_s` (EXPLICIT-DEFAULT 7200), the recovery operator owns the
+reconciliation and may only release after a run-status probe proves termination (or
+an explicit operator attestation is recorded as an audit decision that is the
+configured emergency authority); lease expiry alone never qualifies. The service
+writer resumes the held scan when it returns. This separates bounded detection
+from proven slot reclamation.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#6-5-crash-windows-exhaustive -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-6-5-CRASH-WINDOWS-EXHAUSTIVE-S041" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 6.5 Crash windows (exhaustive)
+
+**Actor/trigger/read/check/write/evidence.** The harness triggers the named recovery action for the crash window that the durable boundary identifies. It reads the retained records and dedupe identity, checks whether the preceding write or external effect is proven, writes the next idempotent revision only when safe, and preserves the window row as evidence. Normal example: W8 finds the fsynced report and reruns the report-link operation once. Failure/unknown example: W6 has an admitted manifest but no run reference after a lost response; the harness queries run status and history, records `unknown` when identities cannot be reconciled, and does not issue a fresh POST.
+
+| Window | Write/effect boundary | Durable records retained | Recovery query and action | Idempotency key | Guarantee |
+|---|---|---|---|---|---|
+| W1 before sequence reservation | no write | none; caller retains canonical request | `GET /v1/messages?dedupe_key=k`; miss allocates, hit returns original | caller `message_dedupe_key` | no duplicate accepted message |
+| W2 after `_head` reservation fsync, before message write | SeqHead write acked | `_head` history with `reserved_from/to`, `rev`, `writer_id`; no message yet | `GET /api/keys/flat?prefix=/chd/room/&lt;room&gt;/`; effective head + max message seq; reserve a new non-overlapping block | `head:&lt;room&gt;:&lt;rev&gt;:&lt;reserved_from&gt;` | reserved tail remains a permanent gap |
+| W3 message fsync acked, dedupe/response not returned | message write acked | canonical message `/chd/room/&lt;room&gt;/m&lt;seq&gt;` plus its `request_id` | query `prefix=/chd/room/&lt;room&gt;/m*` and `attr.request_id=k`; return retained `{message_key,seq,response}` | `message_dedupe_key` | no duplicate message |
+| W4 manifest `composed` fsync, before queued/admission write | SendManifest write acked | `/chd/send/&lt;send_id&gt;/manifest` at `rev`, `send_id`, `attempt_id` | pending-send scan `prefix=/chd/send/`, effective rev; write `queued` with same send/attempt | `send_id:transition:composed→queued` | request remains owed |
+| W5 queued/admission request sent, scheduler response lost | queued manifest + admission request ledger | manifest and `/chd/admission/&lt;send_id&gt;` with scheduler `dedupe_key` | query admission ledger and scheduler result by key; retry only same request; reconcile `admitted|queued|refused` | `admission:&lt;send_id&gt;:&lt;attempt_id&gt;` | no double admission charge |
+| W6 gateway POST in flight / response lost | admitted manifest; target snapshot and gateway key retained, `run_ref` may be null | manifest plus `/chd/attempt/&lt;attempt_id&gt;` request record | query `GET /v1/runs/{run_id}`, resolve-unknown, then session history; do not fresh-POST while unknown | `gateway_request_key` | no blind duplicate external effect |
+| W7 dispatch acked, report absent | dispatched manifest, run_ref, lease and target snapshot | all attempt fields plus wait/reconciliation audit | pending scan + run-status table + report query `attr.send_id,attr.attempt_id` | `report:&lt;send_id&gt;:&lt;attempt_id&gt;:&lt;content_digest&gt;` | slot released only on proven stop |
+| W8 report fsync acked, manifest link not written | canonical report message with send/attempt ids | report record and message dedupe record | `GET /v1/sends/&lt;send_id&gt;/reports?attempt_id=&lt;attempt_id&gt;`; re-run link/verification idempotently | `report_dedupe_key` | report never lost or re-verified twice |
+| W9 verdict computed, close write lost | report + computed verdict/audit record | report, verdict record, manifest at prior rev | effective manifest + verdict query by `(send_id,attempt_id,report_digest)`; replay close only if equal content | `verdict:&lt;send_id&gt;:&lt;attempt_id&gt;:&lt;report_digest&gt;` | no lost verdict or double count |
+
+**VOLB-036.** Every window above MUST have a failure-injection test at M3/M4
+acceptance (F-007 completion evidence: crashes neither lose an accepted request nor
+double-execute work nor leak admission capacity).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#6-6-report-linking-ack-ordering -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-6-6-REPORT-LINKING-ACK-ORDERIN-S042" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 6.6 Report linking + ack ordering
+
+**VOLB-037.** Order is always: DuckBrain write ack (fsync) → then any wake,
+notification, or 2xx to an external caller. No harness response may promise a state
+that is not yet durably acked; the reverse (durably acked, response lost) is safe by
+dedupe. This is the "append acknowledgement" answer to F-019's durability question:
+**the ack IS the fsync'd DuckBrain append**; git history (~30 s debounce) and
+optional S3 push are downstream transports with their own RPO, never the ack
+(VOLB-007). The harness additionally verifies `X-Durability == fsync` on every ack
+and treats a `buffered`-achieved ack on `chd` as a hard error (VOLB-011).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#6-7-cap-release -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-6-7-CAP-RELEASE-S043" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 6.7 Cap release
+
+**VOLB-038.** Usage counts derive from manifest states (VOLB-018); release happens
+on a terminal transition or on a *proven* stop (VOLB-060). A crashed harness
+releases nothing until restart reconciliation runs.
+
+**VOLB-061 (expiry is detection, not proof — R31-006).** `lease_expires_at` is a
+**detection deadline**, not a reclamation licence. Policy:
+
+1. A lease reaching expiry moves the attempt to `paused:uncertain` and emits
+   `capacity_lease_expired{send_id}` — the slot stays charged.
+2. The harness runs run-status reconciliation (VOLB-060). Only
+   `proven-stopped` transitions the attempt terminal and frees the slot.
+3. `uncertain` holds the slot and retries the probe at bounded backoff
+   (`capacity.probe_backoff_s`, default 60 s, jittered, capped at 15 min) until
+   `capacity.unresolved_hold_s`.
+4. `unreachable` also holds the slot; a gateway outage therefore reduces available
+   capacity instead of admitting a second run above the cap.
+5. After the hold bound the operator path is the ONLY release (VOLB-060 last
+   paragraph). The system prefers refusing new work to admitting a run it cannot
+   prove stopped.
+
+Consequence, stated plainly: partition + expired lease NEVER admits a second run
+above `max_inflight`/`max_sessions` while the first may still be executing.
+Availability is sacrificed before the cap is. A queued send whose blocking cap
+frees is dispatched by the next cycle or by the wake-on-reply path; queuing never
+expires the underlying request message, only the send (`stale_after` →
+`deferred`, counted, superseded next cycle).
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#7-session-identity-f-010 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-7-SESSION-IDENTITY-F-010-S044" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 7. Session identity (F-010)
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#7-1-the-two-identities -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-7-1-THE-TWO-IDENTITIES-S045" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.1 The two identities
+
+**VOLB-039.** Thread identity = (room, seq/thread tree) in DuckBrain. Hermes
+session identity = the session id minted by Hermes' API server, referenced by the
+bond (§3.3). CHD NEVER synthesizes conversation content into a prompt (RL-3/R-019):
+the only conversation carriers are (a) a NEW session's first-turn message and (b) a
+REUSE session's next turn. All shared context lives in rooms, which agents read
+themselves via the room-read tool (§5.2) — an agent tool action, never harness
+prompt-reconstruction (§4.1 DESIGN).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#7-2-mapping-new-reuse-onto-existing-hermes-apis -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-7-2-MAPPING-NEW-REUSE-ONTO-EXI-S046" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.2 Mapping NEW/REUSE onto existing Hermes APIs
+
+Hermes API server (OpenAI-compatible; bearer auth) exposes:
+`POST /v1/chat/completions` (session continuity via explicit `X-Hermes-Session-Id`
+header; without it the session is derived from system prompt + first user message),
+`POST /api/sessions/{session_id}/chat[.stream]` (continue an existing session by
+id), `POST /v1/runs` + run controls (`/status`, `/stop`, `/approval`,
+`/resolve-unknown`), `Idempotency-Key` support with durable admission identity in
+canonical mode, `GET /v1/capabilities` for feature discovery, and `GET
+/api/sessions/{id}/messages`. Session ids of deleted sessions are never remapped
+(`not_found`), and compressed sessions keep their id. Three further verified
+`hermes_gateway_check` facts are load-bearing here (review-log, official docs,
+fetched 2026-11-08):
+
+- **REST session lifecycle**: creation, continuation, metadata/history, and
+  **forks** are all provided by Hermes. CHD uses create + continue + history for
+  **delivery** (NEW/REUSE), and uses **fork** for **session provisioning** of a
+  task subthread: a manager's task assignment may fork the manager's session so the
+  worker session starts with the parent context that the fork captures (D-025,
+  the archive contract §5). Fork is never a delivery mode: the wake that delivers the assignment
+  still runs as NEW on the forked session (VOL-C §4.1). An agent also MAY fork its
+  own session inside Hermes-owned session semantics; that remains platform
+  behavior outside CHD's contracts.
+- **Named profile routing binds authentication to the routed profile**: a
+  bond's gateway calls therefore run under the agent's bound profile
+  (`hermes_profile`, §3.3; VOLD-014 requires one profile per agent), which is
+  what makes per-agent tool policy and credentials attributable at the
+  gateway.
+- **CHD policy snapshots and Hermes prompt/recall lifetime are separate.** A
+  SessionPolicySnapshot governs CHD authorization for the bond; it does not freeze
+  Hermes prompt composition, automatic recall, learning, or compaction. Those remain
+  Hermes-owned and follow the native session's lifetime. A policy snapshot change is
+  not a transcript rewrite, and creating a native session does not confer CHD authority
+  until the controller binds a new SessionBond. Any claimed recall/rule behavior must
+  be read back from the serving Hermes capability and session, not inferred from CHD
+  policy records.
+
+**VOLB-040 (NEW).** `NEW` is a CHD delivery label, not a headerless freshness
+promise. The adapter first allocates `send_id`, `attempt_id`, `allocation_id` and
+an immutable target id, then persists the allocation and bond. For fresh work it
+calls `POST /api/sessions` with `{id: target_session_id, source: "api_server"}`
+(or the equivalent explicit create route advertised by the capability probe),
+persists the returned `session.id`, and only then sends the first turn. That turn
+uses `POST /v1/chat/completions` with `X-Hermes-Session-Id: &lt;returned id&gt;`,
+`X-Hermes-Session-Key: &lt;bond key&gt;`, the profile credential and the persisted
+attempt key. A lost create response is reconciled by `target_session_id` and
+`allocation_id`; an exact create retry keeps the same bytes/key. A NEW rung of the
+ladder uses a new authorized allocation/attempt/key.
+
+**VOLB-041 (REUSE).** Mode REUSE = `POST /v1/chat/completions` **with**
+`X-Hermes-Session-Id: &lt;bond.hermes_session_id&gt;` and `X-Hermes-Session-Key:
+&lt;bond.session_key&gt;`, using the same immutable target/profile/credential/key rule.
+Equivalently `POST /api/sessions/{id}/chat` when that endpoint was selected and
+recorded for the bond; a retry never silently changes endpoint form. Detached
+results (if the harness uses runs) are read back via `GET
+/api/sessions/{id}/messages` — read, never replayed into a prompt.
+
+**VOLB-042 (bond identity + endpoint/header/response contract).** The bond record
+(§3.3) is the durable join between thread identity and session identity. The
+response chain the harness MUST persist per send: session id (echoed), run_id /
+admission_id (Runs mode) → `run_ref`. Two simultaneous objectives for one agent
+hold two bonds (different rooms, different `hermes_session_id`s, both within
+`max_sessions`) — conversations cannot mix because Hermes scopes history by
+session id and CHD scopes wakes by bond.
+
+**VOLB-043 (supported runtime version).** The serving Hermes gateway MUST present,
+at `GET /v1/capabilities`, `auth.required == true`, session continuity (explicit
+`X-Hermes-Session-Id` echo), and the `Idempotency-Key` canonical-mode behavior.
+The harness checks this at gateway onboarding and on every bond creation; a gateway
+failing the check gets `mode = always-new` bonds and a loud operator warning —
+REUSE is refused, not degraded silently. **OPEN DESIGN WORK (OPEN-3):** the minimum
+Hermes release number pinning the canonical-session-authority behaviors cited here;
+until verified, the capability probe (not a version number) is the gate.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#7-3-new-vs-reuse-selection-single-authority-vol-c-4 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-7-3-NEW-VS-REUSE-SELECTION-SIN-S047" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.3 NEW vs REUSE selection (single authority: VOL-C §4)
+
+Per D-014 and the handoff ("map exactly which events choose NEW versus
+REUSE"), the **single normative decision table is VOL-C §4 (W1–W11,
+VOLC-021)** — session mapping is part of VOL-C's tool/delivery surface, and
+its table is the more complete one (it adds scheduler fire, reassignment,
+and temporary-agent rows). This volume does not duplicate it.
+
+Binding notes for the VOL-B record contracts:
+
+- **VOLB-044.** VOL-C's table is the single NEW/REUSE authority;
+  `reuse_policy` can only force REUSE→NEW, never NEW→REUSE. The chosen mode
+  is recorded on the send manifest (`mode`), and the session identity it
+  produces is written to the bond (§3.3). Rev-1.0 of this volume carried its
+  own eight-row table; it was superseded in integration by VOL-C §4 — the
+  one behavioral difference (scheduled trigger fire: this volume's draft
+  said "REUSE if active bond", VOL-C pins **NEW** per D-014's user
+  description "scheduler invocations start new sessions") is resolved in
+  VOL-C's favor (Q-007 anchor: user description governs; replies/follow-ups
+  continue bonded sessions).
+- The REUSE mechanics (headers, session key, idempotency) are VOLB-041 and
+  VOLC-022 — identical contracts, two views.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#7-4-lost-retired-sessions-and-conflicts -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-7-4-LOST-RETIRED-SESSIONS-AND-S048" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.4 Lost / retired sessions and conflicts
+
+**VOLB-045 (retired session).** A Hermes session id, once its session is deleted,
+is never remapped and answers `not_found`. On any REUSE delivery answered
+`404 not_found` (or a definitive session-missing error), the harness: marks the bond
+`retired` (write, fsync), posts a `kind=status` room message recording the loss,
+allocates a fresh bond, and delivers the pending message in NEW mode. The thread
+log (not the session) carries continuity — this is why lost sessions cost a context
+read, not a reconstruction.
+
+**VOLB-045a (existing-versus-future classification, D-038).** The following table
+is normative and is the shared classification CHD31-06 MUST cite for its snapshot
+records; it does not duplicate CHD31-06's GrantRecord schema:
+
+| Event | Session classification | Policy/snapshot outcome |
+|---|---|---|
+| Fork | **Future child session** at the fork boundary | `preserve_parent_snapshot` copies the parent snapshot; `current_policy` resolves current policy |
+| Restart / REUSE | **Existing session** (same Hermes session id and bond generation) | Retains its snapshot; in-flight operations keep the revision at their authorization boundary |
+| Replacement after loss/wedge | **Future replacement session** (new generation and session id) | Imports the archived snapshot when present; otherwise fails closed to `current_policy` with recorded `snapshot_missing` |
+| Restore from archive | **Future imported session** (fresh local id; archived session is not resumed) | Imports the checkpoint snapshot; absent snapshot uses the same recorded fail-closed `current_policy` path |
+
+A retired or lost session remains readable for audit but cannot authorize new work.
+A replacement or restore never silently inherits a live session id. See VOL-C §8.9
+and VOL-D §1.11 for operation timing and resync authorization; CHD31-06 owns the
+lineage record details.
+
+**VOLB-046 (conflicts).** `409 admission_conflict` on an Idempotency-Key retry means
+the key already names other work: treat as in-flight — poll `GET /v1/runs/{run_id}`
+instead of re-POSTing; never mint a new key for the same send (that would risk
+double execution). `409 unknown_execution` (Responses path) or run status `unknown`
+after an authority restart → `POST /v1/runs/{run_id}/resolve-unknown` with the
+stored `admission_id` + `execution_generation` from `run_ref`, reconcile outcome
+`interrupted`, re-enter the ladder at rung 0.
+
+**VOLB-047 (runtime version skew).** Bond `runtime_caps` records the capabilities
+snapshot at bind time; on capability regression (gateway returns different
+features), existing REUSE bonds continue if the probe still passes, else follow
+VOLB-045's retired path. Hermes owns compaction/lifecycle (session ids survive
+compression — keep sending the same id); CHD stores no session content and runs no
+session store.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#7-5-fork-provisioning-subthread-routing-and-roll-up-r31-022-d-025-d-038 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-7-5-FORK-PROVISIONING-SUBTHREA-S049" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.5 Fork provisioning, subthread routing, and roll-up (R31-022, D-025, D-038)
+
+**VOLB-062 (task subthread provisioning).** A `kind=task` message that assigns a
+work unit creates a subthread (the message is `thread_root` for its replies) and a
+**provisioning decision**:
+
+| Situation | Provisioning | Delivery |
+|---|---|---|
+| new work unit, no useful parent context | explicit create (`POST /api/sessions`) then targeted first turn | NEW |
+| new work unit that must inherit the assigner's working context | **fork** of the assigner's session at a named `fork_point_seq` | NEW (on the forked session) |
+| same work unit, further turn | existing bond | REUSE |
+
+`fork_point_seq` is the last room message the parent session had observed when the
+assignment was composed; it is recorded on the bond so the child's context is
+auditable. Hermes accepts only the native fork body (`id` and optional `title`);
+`fork_point_seq` and D-038 policy mode are CHD records, not Hermes request fields.
+The fork request is `POST /api/sessions/{parent_session_id}/fork`; the response's
+new session id is written to the child bond with `parent_bond_id`, `fork_mode`,
+`generation=1` and a fresh `SessionPolicySnapshot` (§3.11), before the first turn.
+
+**VOLB-063 (which session owns a reply).** A reply or report posted into a thread
+is attributed to the bond whose `(room, subthread_root, work_uid)` matches the
+message's thread root. If no bond matches and the poster is a member, the message
+is still stored (audit) but it wakes no one and the poster receives
+`409 thread_not_owned` in the tool result, so a delayed response cannot silently
+attach itself to the wrong branch. A report whose `send_id` names an attempt of a
+different bond is `bad_report{reason: send_mismatch}` (VOL-D §3.3).
+
+**VOLB-064 (generation and replacement).** When a session is lost, wedged or
+restored, the bond is superseded: `generation` increments, the old bond keeps
+`state=retired|lost`, and the new bond records `parent_bond_id` (null for a
+replacement, not a fork) plus the restore checkpoint if any (the archive contract §6). Delayed
+replies arriving for the retired generation are stored and flagged
+`routed_to: retired_generation`, never delivered into the new session; the
+harness's roll-up reads them from the room log.
+
+**VOLB-065 (roll-up).** A manager's review of a child subthread produces one
+report in the parent thread whose `artifacts` include `child_report_refs[]` and
+whose `summary` states the aggregation result. Roll-up is a summary with cited
+child evidence; it never re-reads or re-injects the child transcript (D-017). The
+aggregation record (VOL-C §5.6) and the parent report are linked by `send_id` of
+the parent, so a reader can walk parent → aggregate → children without parsing
+prose.
+
+**VOLB-072 (roll-up fixture — exact record ids; R31-022 acceptance).** The
+fixture traces one child result from its subthread report through the
+manager's review record to the parent-thread report attachment, using only
+ids whose grammars are defined in DATA-MODEL §1.4/§1.5 and VOL-B §3. The
+child report is `r-20261109-0941-a9c1`; its aggregation is
+`s-20261109-1002-p3d8`; and the parent attachment is
+`r-20261109-1015-b2e4`, linked by the CHD31-05 parent/child record ids:
+
+| Step | Record | Key / id (exact) | Ownership proof |
+|---|---|---|---|
+| 1 | task assignment opens subthread | RoomMessage `task-auth-14/m000000000042`, `kind=task`, `from=mgr-dana`, `thread_root=42` | opens bond `/chd/bond/sup-nova/b-20261109-0914-q4x7` (`subthread_root=42`, `work_uid=T-101`) — fixture VOLB-067 row 1 |
+| 2 | child session does the work | SendManifest `/chd/send/s-20261109-0930-7f2k/manifest`, `mode=REUSE`, `bond_id=b-20261109-0914-q4x7` | send owned by that bond: `work_uid=T-101` names exactly one identity tuple |
+| 3 | child report in its own subthread | RoomMessage `task-auth-14/m000000000063`, `kind=report`, `thread_root=42`; ReportEnvelope `/chd/report/s-20261109-0930-7f2k/r-20261109-0941-a9c1`, `produced_by=sup-nova`, `status=done` | owned by bond 1 because the message's `thread_root=42` matches the bond's `subthread_root` (VOLB-063); it can never attach to root 57 (bond 2, fixture VOLB-067 row 2) |
+| 4 | manager review record | AggregationRecord `/chd/aggregation/s-20261109-1002-p3d8`, children=`[s-20261109-0930-7f2k]`, child state `verified` | each child `send_id` resolves to exactly ONE child thread: send → bond `b-…-q4x7` → `subthread_root=42`; a child send that resolved to two threads (or zero) is refused `409 thread_not_owned` (VOLB-063) |
+| 5 | parent-thread report attachment | RoomMessage `obj-atlas/m000000000071`, `kind=report`, `thread_root=null`; ReportEnvelope `/chd/report/s-20261109-1002-p3d8/r-20261109-1015-b2e4`, `from=mgr-dana`, `artifacts=["r-20261109-0941-a9c1", …]`, `up_ref={room: task-auth-14, seq: 63}` (VOLC-031) | the parent report cites the child report id in `artifacts`; the aggregation record and the parent report share `send_id=s-20261109-1002-p3d8` (VOLB-065) |
+
+Walking parent → aggregate → child reads: `r-20261109-1015-b2e4` (step 5) →
+`/chd/aggregation/s-20261109-1002-p3d8` (step 4) → `s-20261109-0930-7f2k`
+(step 2) → `r-20261109-0941-a9c1` at `task-auth-14/m000000000063` (step 3) →
+bond `b-20261109-0914-q4x7`, thread root 42 (step 1). Every hop is a record
+join, never prose. The same walk for the second fixture bond
+(`b-20261109-0917-m8k3`, root 57) is disjoint end to end — that is the
+multi-subthread guarantee R31-022 requires.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#8-migration-and-retention -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-8-MIGRATION-AND-RETENTION-S050" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 8. Migration and retention
+
+**VOLB-048 (schema migration).** Every record carries `schema_version` (this
+document = **3**; rev-1.1 records = 2; DATA-MODEL rev 1.0 records = 1). Version 3
+adds: `attempt_id`/`attempt`/`gateway_request_key` on manifests, the bond
+subthread fields, `ReportEnvelope`/`DatasetDescriptor`/`DatasetRow`,
+`SessionPolicySnapshot`, `SessionArchive`/`ExportManifest`/`ArchiveGapRecord`
+(§3.12), `GrantRecord`, `TicketRecord`, and the
+`question` message kind. Migration is lazy: on read, an older record is upgraded in
+memory; on the record's next write it is persisted at the current version. A
+startup operator command (`chd migrate --namespace chd`) performs eager migration
+by read-highest-rev → write-bumped-rev per key. No in-place mutation of history:
+old versions remain (D4), so migration is always reversible from namespace git
+history. A record whose `schema_version` is greater than the running harness
+supports fails closed on read (`schema_version_unsupported`) rather than being
+partially interpreted.
+
+**VOLB-049 (retention).** Terminal manifests and closed objective/assignment records
+are retained ≥ `retention.closed_days` (default 90), then tombstoned by the
+operator-run compaction (`duckbrain squash` / `forget`), which is also the
+Parquet-compaction path. Room messages are retained ≥ `retention.room_days`
+(default 180); standing rules and acceptance criteria are **never auto-retained
+out** — they are superseded/withdrawn explicitly (state transitions), because they
+are authority records. Tombstoning (D8) is the only delete mechanism CHD uses, and
+only for whole-record expiry, never for state transitions.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#9-open-design-work-register -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-9-OPEN-DESIGN-WORK-REGISTER-S051" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 9. OPEN DESIGN WORK register
+
+| id | Item | Blocked on | Status (rev 2.0) |
+|---|---|---|---|
+| OPEN-1 | Multi-instance harness writer election / CAS | DuckBrain declared-table/CAS release evidence, or external lease | Open; single writer + lease (VOLB-066) is the rev-2.0 model |
+| OPEN-2 | bump admit-once vs frequency (DESIGN UQ-3/Q-6) | scheduler probe; wake_once owner decision | Open; written to ride either |
+| OPEN-3 | Minimum Hermes release pinning canonical-session-authority behavior | version probe against the deployed gateway fleet | Open; capability probe is the gate |
+| OPEN-4 | Exact retention defaults (VOLB-049) as operator policy | owner ruling (cost vs audit depth) | Open; code defaults stated |
+| OPEN-5 | Whether `kind=status` taxonomy grows waiting subtypes | VOL-A waiting-state spec | Open; follows the wait record |
+| OPEN-6 (N-2) | Native Hermes session-export schema/version and import mechanism | capability probe of the deployed Hermes; vendor contract | Open; `schemas/archive.schema.json` pins the probe boundary, not a format guess |
+| OPEN-7 (N-4) | Supported native table/dataset API for reports | DuckBrain declared-table release status | Open; CHD logical records + adapter are the rev-2.0 answer |
+| OPEN-8 | Archive retention default (raw exports are large) | owner ruling; the archive contract §7 | Open; default stated, policy open |
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-B-records-storage-recovery.md#10-traceability-finding-requirement-section-rev-2-0 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-48C870-10-TRACEABILITY-FINDING-REQUIR-S052" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 10. Traceability — finding → requirement → section (rev 2.0)
+
+| Finding | Requirement(s) | Section(s) |
+|---|---|---|
+| F-006 (record schemas, query/write contracts, standing rules &amp; acceptance criteria separation) | VOLB-003, VOLB-012..019, VOLB-021..024, VOLB-029..031, VOLB-044 | §2, §3, §5 |
+| F-007 (crash-safe persistence) | VOLB-028, VOLB-032..038, VOLB-050, VOLB-056..061, VOLB-066 | §5.1, §5.3, §5.4, §5.9, §6 |
+| F-010 (session identity) | VOLB-017, VOLB-039..047, VOLB-062..065, VOLB-067, VOLB-072 | §3.3, §7 |
+| F-019 (real DuckBrain contract) | VOLB-001..012, VOLB-020, VOLB-025..027, VOLB-058, VOLB-059 | §1, §2, §4 |
+| **R31-003** (one message-kind enum) | VOLB-014 + §3.1 kind row | §3.1 (legality: VOL-C §3.6) |
+| **R31-004** (send/attempt/gateway-request identity) | VOLB-057 (+ manifest fields) | §3.5, §5.4 |
+| **R31-005** (wait closes attempt, successor on resume) | VOLB-057 + §3.5 state machine | §3.5, §5.4 |
+| **R31-006** (expiry is detection, not proof) | VOLB-060, VOLB-061 | §6.4, §6.7 |
+| **R31-007** (retained heads, equal-rev conflict) | VOLB-058, VOLB-059 | §4.2, §5.1, §6.4 |
+| **R31-011** (freshness v2 + duplicate precedence) | VOLB-056 | §5.4 |
+| **R31-016** (archive records + separate namespace) | VOLB-053, VOLB-068..071, D11, archive key table | §1, §2, §3.12, §5.10 |
+| **R31-022** (bond identity per subthread; fork provision; roll-up) | VOLB-017, VOLB-062..065, VOLB-067, VOLB-072 | §3.3, §7.5 |
+| **R31-026** (meta-grant record) | VOLB-054 | §3.13 |
+| **R31-027** (session policy snapshots) | VOLB-051, VOLB-052 | §3.11 |
+| **R31-028** (data classes) | D11, VOLB-050 | §1 |
+| **R31-030** (dataset/report storage) | VOLB-050, VOLB-073 | §3.10, §5.12 |
+
+Requirement count: **73** ids, `VOLB-001..VOLB-073`, contiguous, unique.
+Rev-2.0 additions: 050–066. Rev-2.1 additions: 067–073.
+  </section>
+</spec>

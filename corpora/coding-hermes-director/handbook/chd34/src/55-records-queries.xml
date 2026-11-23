@@ -1,0 +1,320 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd34/src/55-records-queries.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD34-SRC-55-RE-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd34/src/55-records-queries.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-55-RE-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# §G — Persistence, namespaces, query contracts, and recovery boundaries
+
+**CHD-3.4 · SPEC V3.4. REVISION NOTICE — supersedes CHD-3.3.** This section specifies required storage safety properties. It does not select a complete deployable writer protocol. G-12 remains OPEN for versioned LeaseAuthority/FencedStore/SnapshotToken transport, persistence, wrapper/key migration and historical membership. §21 prints the actual pinned memory-HTTP mapping and its reference-only variant catalog. Neither an external pre-write lease check nor a local SQLite transaction supplies atomic storage-boundary fencing. All algorithms below are requirements conditional on that binding, not capabilities demonstrated by DuckBrain.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/55-records-queries.md#g-1-namespaces-and-the-substrate-boundary -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-55-RE-G-1-NAMESPACES-AND-THE-SUBSTRA-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## G.1 Namespaces and the substrate boundary
+
+The controller is the only `/chd/*` writer. Agents use authorized controller operations and
+never receive a DuckBrain write token. The archive ingestor alone writes `/sessions/*` and
+`/gaps/*`. Project/code memory is a separate, eventual namespace and is never evidence that a
+control-plane write committed.
+
+DuckBrain is an append-only, multi-version key/value surface. It provides per-write durability
+when the response says `X-Durability: fsync`; it does **not** provide a transaction spanning two
+keys, a compare-and-set on an append-only key, a room order, or an authoritative latest version.
+The controller therefore uses two required adapters:
+
+* **`LeaseAuthority`** requires linearizable acquire/renew/takeover and a monotone `fence_epoch`. No backend is selected here. A DuckBrain read-then-write or an independent lease service checked before an unfenced append is not an implementation. The lease and storage-boundary authority must be coupled atomically by the versioned G-12 binding.
+* **`FencedStore`** is the only write adapter. Every append carries `(owner_id, boot_id,
+  fence_epoch, write_id)` and the adapter atomically checks that the lease authority still owns
+  that fence before accepting the append. If the deployment cannot make that check part of the
+  authoritative write path, readiness fails `fencing_unavailable`; the controller refuses all
+  writes rather than relying on a best-effort pre-check.
+
+A successful constituent append means: request accepted by the adapter, `X-Durability: fsync`,
+and an exact readback matching the canonical bytes and `write_id`. A response without all three
+is `unknown`, not success. Git debounce, S3, replication, and wake delivery are downstream
+outputs with separate status; none is a commit point.
+
+| Class | Namespace | Examples | Visible only when |
+|---|---|---|---|
+| control/coordination | `chd` | requests, journal, rooms, heads, manifests, grants, tickets, reports, datasets, audit | a valid commit marker covers the record and every constituent readback passes |
+| session archive | `chd-archive` | export payload, manifests, gaps, indexes | archive commit marker covers payload and manifest/index |
+| project memory | deployment-defined | observations and code knowledge | its own eventual checkpoint; never a control acknowledgement |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/55-records-queries.md#g-2-record-envelope-and-authoritative-state -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-55-RE-G-2-RECORD-ENVELOPE-AND-AUTHOR-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## G.2 Record envelope and authoritative state
+
+Every append is a canonical JSON envelope with `schema_version`, `record_id`, `key`, `rev`,
+`commit_seq`, `written_by`, `request_id`, `write_id`, `tx_id`, `fence_epoch`, `state`, and a
+canonical `payload`. `canonical_bytes` means UTF-8 JSON with sorted object keys, no insignificant
+whitespace, and deterministic number/string encoding. The digest is SHA-256 over those bytes.
+Timestamps are descriptive audit fields only.
+
+The following records are authoritative; local boards, response prose, logs, and caches are
+mirrors:
+
+* `RequestClaim` records the logical request and immutable request digest. It is the idempotency
+  authority and is written before any business record.
+* `JournalIntent` records the ordered constituent list, expected keys, expected digests, and
+  operation preconditions. It is the recovery authority for an in-flight compound operation.
+* `CommitMarker` is the visibility gate. It lists every constituent `(key, write_id, digest)` and
+  is written last. A marker is valid only if it is durable, has the current fence, has a matching
+  intent, and every listed constituent is read back byte-identically with `state=prepared`.
+* `ResponseRecord` contains the exact response envelope and outcome. It is written after the
+  marker. Replaying a request returns this record; absence of a response never makes a committed
+  marker invisible.
+* Business records include RoomMessage, SeqHead, SendManifest, Attempt, GrantRecord,
+  ApprovalRecord, WaitRecord, TicketRecord, immutable ticket events, DatasetDescriptor,
+  DatasetRow, ReportEnvelope, and AuditRecord.
+* `TombstoneRecord` is a committed version with `state=tombstone`; it suppresses older versions
+  but is itself retained until the configured retention boundary.
+
+A business record is **committed** only through a valid marker. Readers must ignore an otherwise
+well-formed append with no marker, a marker whose intent/constituent list does not match, a marker
+with a missing or mismatching constituent, a marker from a stale fence, and any record whose
+schema version is unsupported. No reader may expose a prepared record or an uncommitted marker.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/55-records-queries.md#g-3-key-grammar-and-namespaces -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-55-RE-G-3-KEY-GRAMMAR-AND-NAMESPACES-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## G.3 Key grammar and namespaces
+
+All canonical keys have a leading slash. IDs match `[A-Za-z][A-Za-z0-9._-]*`; room IDs are
+`(obj|task|space)-[a-z0-9-]+`; decimal sequence components are zero-padded. These are keys, not
+filesystem paths, and are validated before allocation.
+
+| Family | Canonical key |
+|---|---|
+| request claim | `/chd/request/&lt;request-id&gt;` |
+| journal intent | `/chd/journal/&lt;tx-id&gt;/intent` |
+| journal constituent receipt | `/chd/journal/&lt;tx-id&gt;/step/&lt;step:03d&gt;` |
+| commit marker | `/chd/journal/&lt;tx-id&gt;/commit` |
+| response | `/chd/response/&lt;request-id&gt;` |
+| writer lease mirror | `/chd/system/writer` |
+| room/head/message | `/chd/room/&lt;room-id&gt;/_head`, `/chd/room/&lt;room-id&gt;/m&lt;seq:012d&gt;` |
+| send/attempt/manifest | `/chd/send/&lt;send-id&gt;/manifest`, `/chd/send/&lt;send-id&gt;/attempt/&lt;attempt-id&gt;` |
+| ticket/event | `/chd/ticket/&lt;ticket-id&gt;`, `/chd/ticket/&lt;ticket-id&gt;/event/m&lt;seq:012d&gt;` |
+| grant/audit | `/chd/grant/&lt;grant-id&gt;`, `/chd/audit/&lt;audit-seq:012d&gt;` |
+| dataset/row/publication | `/chd/dataset/&lt;send-id&gt;/&lt;dataset-id&gt;`, `/chd/dataset/&lt;send-id&gt;/&lt;dataset-id&gt;/r&lt;row:08d&gt;`, `/chd/dataset/&lt;send-id&gt;/&lt;dataset-id&gt;/publication` |
+| archive | `/sessions/&lt;agent&gt;/&lt;profile&gt;/&lt;session-id&gt;/&lt;checkpoint-id&gt;/manifest`, `/gaps/&lt;agent&gt;/&lt;profile&gt;/&lt;session-id&gt;/&lt;checkpoint-id&gt;` |
+
+The complete regexes live in `schemas/keys.yaml`. Reserved segments are `_head`, `intent`,
+`step`, `commit`, `publication`, and `manifest`; user IDs may not equal a reserved segment.
+A malformed key, namespace mismatch, or sequence-width mismatch returns `invalid_key` before
+`RequestClaim` is written.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/55-records-queries.md#g-4-durable-compound-write-protocol -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-55-RE-G-4-DURABLE-COMPOUND-WRITE-PRO-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## G.4 Durable compound-write protocol
+
+There is no claim that multiple DuckBrain appends are atomic. The following protocol gives an
+observable commit boundary using only individually durable writes and a last-written marker.
+`step` numbers are fixed by the operation contract, not allocated from wall time.
+
+1. **Claim.** Validate identity, authorization, schema, CAS, and the request digest. Append
+   `RequestClaim(state=claimed, request_digest, operation, tx_id)`. If the claim already exists,
+   compare bytes: equal returns the existing transaction; different bytes return
+   `duplicate_identity_conflict`. A claim is not business visibility.
+2. **Intent.** Append `JournalIntent(state=prepared, tx_id, request_id, fence_epoch,
+   constituent list, expected digests, preconditions)`. The list is complete before step 2 ends.
+   Every retry uses the same `tx_id` and list.
+3. **Constituents.** For each step in declared order, append the canonical business record with
+   `state=prepared`, `tx_id`, and `write_id=tx_id/step`. Read it back. A retry of the same
+   `(tx_id, step, digest)` returns the original receipt; a different digest refuses with
+   `idempotency_conflict`. The controller never advances to the next step after an uncertain
+   readback.
+4. **Commit marker.** After all constituent readbacks match the intent, append exactly one
+   `CommitMarker(state=committed)` last, then fsync and read it back. This is the only transition
+   that makes the listed constituents visible. The marker's digest covers the ordered list and
+   all constituent digests.
+5. **Response.** Append `ResponseRecord(state=returned)` containing the exact response and all
+   committed record references. Read it back, then return it. If response append/readback is
+   uncertain, the committed marker remains authoritative and a retry returns the same response
+   reconstructed from the marker.
+6. **Wake/external effect.** Only after marker and response readback may the controller wake a
+   scheduler, gateway, Crier, or client. External calls carry `request_id`, `tx_id`, and their
+   own dedupe key. Their response is never folded into the store commit.
+
+For a single-key operation the intent, business record, marker, and response still exist. This
+uniformity makes restart repair and idempotency testable. A failed constituent leaves the
+transaction `pending` or `aborted`; it never produces a partial success. If a marker is not
+provably committed, readers hide every prepared constituent.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/55-records-queries.md#g-4-1-operation-specific-constituent-order -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-55-RE-G-4-1-OPERATION-SPECIFIC-CONST-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### G.4.1 Operation-specific constituent order
+
+* **Room append:** request claim → intent → head reservation → message → request/dedupe receipt →
+  audit → marker → response. The head reservation is durable before the message; an unused
+  reserved tail is a permanent gap and is never reused.
+* **Manifest/admission:** request claim → intent → manifest/attempt → reservation/grant receipt →
+  audit → marker → response. No wake or external POST precedes the marker.
+* **Grant/approval:** request claim → intent → grant or approval → audit → marker → response.
+  Denial writes a denial audit in its own committed transaction; it is not a successful revision.
+* **Ticket mutation:** request claim → intent → TicketRecord revision → ticket event → required
+  link/index records → audit → marker → response. A stale CAS stops before any constituent.
+* **Report/message:** request claim → intent → ReportEnvelope → room message → freshness/dedupe
+  receipt → audit → marker → response.
+* **Dataset publish:** request claim → intent → DatasetDescriptor(staging) → all typed dense
+  DatasetRow records → count/digest receipt → publication marker → audit → commit marker →
+  response. The publication marker is itself a constituent and is unreadable until the outer
+  commit marker validates; `published` is never inferred from row presence.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/55-records-queries.md#g-5-explicit-failure-and-unknown-outcome-table -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-55-RE-G-5-EXPLICIT-FAILURE-AND-UNKNO-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## G.5 Explicit failure and unknown-outcome table
+
+The normative fault-injection register is `tables/crash-windows.csv`. It covers each constituent,
+including request claim, message, head, manifest, grant, audit, ticket event, dataset row, and
+publication marker. The common rule after a fault is: stop, reacquire or verify the fence, read
+claim/intent/steps/marker, and classify `committed`, `pending`, `aborted`, or `unknown`.
+
+| Fault after write attempt | Required result and next action |
+|---|---|
+| Request claim | If exact claim readback exists, reuse `tx_id`; if absent, retry claim; if authority cannot distinguish, return `request_outcome_unknown` and do not allocate a second transaction. |
+| Journal intent | Read the intent by `tx_id`; mismatching list/digest is `integrity_journal_conflict`; no constituent or wake is allowed. |
+| Head | If exact head reservation exists, retain its range and never reuse it; if uncertain, scan the head and messages, then refuse allocation until the range is resolved. |
+| Message | Exact `(room, seq, request_id, digest)` replays; missing message may be appended at the same reserved key; different bytes are `duplicate_identity_conflict`. |
+| Manifest | Read the effective manifest by `send_id/attempt_id`; retry the same revision only; unknown external execution remains held and no second POST occurs. |
+| Grant | Read lineage and grant digest; equal retry replays; an unknown authority write blocks the protected action and never implies approval. |
+| Audit | Rebuild the expected audit digest from intent. Missing audit prevents marker completion; a committed marker with missing audit is corruption and stops the affected scope. |
+| Ticket event | Check record/event sequence and `tx_id`; equal retry replays; a record without its event is not visible as the transition and is repaired by a new revision, never by editing history. |
+| Dataset row | Leave descriptor staging; retry the same row key/digest or mark staging failed. No row is queryable until publication and outer marker. |
+| Publication marker | Read descriptor, rows, and marker. If marker absent, dataset remains staging/failed; if present but outer marker absent, hide it; only matching committed markers publish. |
+| Commit marker | A marker readback miss is `unknown`; reconcile all listed steps. If every step is durable and no conflicting marker exists, retry the same marker bytes; otherwise leave pending and refuse response/wake. |
+| Response | Reconstruct from the valid marker and write/replay the same response; never create another business transaction. |
+
+An error after any constituent is returned with a stable code and `retryable` flag. `retryable`
+means retry the same `request_id`, `tx_id`, step, and digest, never generate new IDs. Errors
+include `fence_lost`, `durability_unconfirmed`, `readback_mismatch`, `journal_incomplete`,
+`integrity_equal_rev_conflict`, `request_outcome_unknown`, and `external_outcome_unknown`.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/55-records-queries.md#g-6-writer-exclusion-and-fencing -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-55-RE-G-6-WRITER-EXCLUSION-AND-FENCI-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## G.6 Writer exclusion and fencing
+
+The controller has one logical writer at a time. `LeaseAuthority` owns lease name
+`chd/controller`; the durable `WriterLease` mirror is descriptive and cannot itself grant a
+lease. `owner_id` is a stable deployment/controller identity; `boot_id` is a fresh cryptographic
+random value per process start; `fence_epoch` is a strictly increasing lease-service value.
+
+* **Acquire/startup race:** call linearizable `AcquireOrRenew(name, owner_id, boot_id, ttl)`.
+  Acquisition succeeds only if no unexpired owner exists, or the service's conditional takeover
+  increments `fence_epoch`. Two simultaneous starters can receive at most one success. The loser
+  enters `writer_lease_held` and writes no business state.
+* **Renewal:** renew before `ttl/3`, with a monotonic local deadline and a bounded clock-skew
+  margin. Wall-clock time is not authority. A failed or late renewal immediately sets the process
+  `uncertain`, stops allocations, external calls, and all writes, and attempts a read-only
+  reconciliation.
+* **Takeover:** a replacement may take over only after the lease authority proves expiry and
+  atomically installs a new `boot_id` and `fence_epoch`. It writes a committed takeover incident,
+  then runs recovery before readiness. Lease expiry by itself never proves the old process stopped.
+* **Stale-writer refusal:** `FencedStore` rejects every append whose owner/boot/epoch is not the
+  current lease tuple. A paused old process therefore cannot write after takeover, even if it
+  wakes before noticing its local timer. The old process must exit or remain read-only.
+* **Uncertain authority:** if LeaseAuthority or FencedStore cannot answer whether the tuple is
+  current, the controller refuses startup/continuation with `writer_lease_held_or_unknown` or
+  `fencing_unavailable`; it does not guess from a timestamp, process list, or expired local TTL.
+* **Release:** voluntary release is a conditional compare-and-set on the exact tuple and is
+  followed by readback. A lost release response is unknown; the owner does not retry with a new
+  boot identity and a successor waits for authority resolution/expiry.
+
+Every append, marker, and response carries the fence tuple. Recovery verifies that no record was
+accepted with a stale fence. A store implementation that cannot enforce this at the write
+boundary is unsupported for CHD single-controller mode.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/55-records-queries.md#g-7-version-resolution-tombstones-and-visibility -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-55-RE-G-7-VERSION-RESOLUTION-TOMBSTO-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## G.7 Version resolution, tombstones, and visibility
+
+A logical state key may have many append-only versions. The reader fetches all candidate versions
+within the scan boundary, discards unsupported schema and records not covered by a valid commit
+marker, then groups by canonical key. It selects the greatest `(rev, commit_seq, record_id)`
+only after checking all records at the greatest `rev`:
+
+1. If equal-revision canonical bytes are identical, retain one deterministic copy (lowest
+   `record_id`) and record duplicate count.
+2. If equal-revision bytes differ, return `integrity_equal_rev_conflict`, create a corruption
+   incident if the writer is available, and expose no value.
+3. A highest valid tombstone hides the logical key and all older values. An older live value may
+   not be resurrected because a tombstone was compacted or omitted.
+4. A prepared/staged version without a valid commit marker is invisible. For datasets, only a
+   descriptor with committed publication marker and complete row count/digest is queryable.
+5. A record newer than the running schema is `schema_version_unsupported`, not silently skipped
+   to an older version.
+
+Room reads use `(seq, message_key)` ascending; duplicate sequence values with different canonical
+messages are an integrity conflict. Ticket events use sequence ascending and require contiguous
+committed event prefixes; reserved room sequence gaps are legal only when represented by a head
+reservation. All other scans use declared `(order_column, record_id)` ascending. Timestamps never
+break ties or determine freshness.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/55-records-queries.md#g-8-complete-scans-and-restart-safe-cursors -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-55-RE-G-8-COMPLETE-SCANS-AND-RESTART-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## G.8 Complete scans and restart-safe cursors
+
+A query starts with an authoritative `SnapshotToken` containing namespace, prefix, selected
+fields/order, `high_water_commit_seq`, schema epoch, and expiry. `high_water_commit_seq` is
+captured before the first page; records committed later are excluded and belong to a later query.
+If the substrate cannot return a snapshot token and high-water in one authoritative read, the
+query fails `snapshot_unavailable` rather than claiming completeness.
+
+The controller then loops each backing call until its continuation is null:
+
+1. Request `page_size &lt;= backing_page_limit` with prefix, snapshot token, and opaque continuation.
+2. Reject a malformed page, a repeated cursor, a cursor that moves backwards, or a page whose
+   item count exceeds the requested limit as `scan_incomplete`; do not return partial success.
+3. Append items to the accumulator, verify each item is within prefix and `commit_seq &lt;= high_water`,
+   and advance only with the server continuation token. Never emulate continuation with offsets.
+4. When continuation is null, resolve versions/tombstones and deduplicate. For a query spanning
+   multiple prefixes, complete each prefix and merge by the declared order plus stable tie-breaker.
+5. Emit `next_cursor` containing snapshot hash, high-water, order, and the last emitted tuple.
+   A resumed query reuses the same snapshot until expiry; an expired/invalid cursor returns
+   `cursor_expired` and restarts a new snapshot. It never silently changes the window.
+6. If a page is lost after the caller received it, resuming from its cursor is safe because the
+   tuple is exclusive. If the caller has no cursor, restart from the beginning and deduplicate by
+   canonical key/record identity; never skip based on a guessed offset.
+
+The result is complete only when every backing prefix returned `continuation=null` and all eligible
+records through the high-water were resolved. A scan over more than one backing page must prove
+this loop in evidence; one successful page is not a complete query.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/55-records-queries.md#g-9-recovery-and-repair -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-55-RE-G-9-RECOVERY-AND-REPAIR-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## G.9 Recovery and repair
+
+Startup state is `recovering`, never `ready`. After acquiring a fresh fence, recovery scans
+requests/intents/steps/markers/responses, then heads/messages, manifests/attempts, tickets/events,
+grants/audits, datasets/publications, bonds/waits, and archive gaps. It verifies marker coverage,
+canonical digests, equal-revision integrity, monotone revisions, event prefixes, and fence
+validity. It rebuilds worklists only from valid committed records.
+
+* A valid marker with a missing response is replayed/repaired with the original response.
+* An intent with all steps durable but no marker retries the same marker only after current-fence
+  verification; if any step conflicts, the transaction is quarantined.
+* An intent with incomplete steps is resumed at the first missing step only when no external effect
+  could have occurred; otherwise it is `unknown` and held for reconciliation.
+* A marker/constituent mismatch, equal-revision conflict, stale-fence append, or impossible event
+  sequence stops the affected scope, writes an incident if possible, and pages. Recovery never
+  deletes history, rewinds revisions, fills a room gap, or chooses a conflict winner.
+* Unknown gateway/scheduler/Crier outcomes retain capacity and do not trigger a second external
+  action. Release requires verified, correlated provider/runtime terminal evidence committed with readback and audit. An operator statement, ordinary report or process absence is not a substitute; the concrete producer/schema remains G-06.
+
+Readiness is published only after lease/fencing, store fsync/readback, recovery scans, and all
+mandatory gates pass. A controller with uncertain authority may provide read-only status but must
+refuse mutation and dispatch.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd34/src/55-records-queries.md#g-10-query-contracts -->
+  <section id="CHD-HANDBOOK-CHD34-SRC-55-RE-G-10-QUERY-CONTRACTS-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## G.10 Query contracts
+
+The required internal SnapshotToken adapter returns `{snapshot, items, next_cursor, complete}`; this is not the native DuckBrain HTTP list shape and not a replacement for operation-specific controller response envelopes in `contracts/openapi.yaml`. `complete` is true only after the continuation loop and version resolution finish. Exact reads return the
+highest valid committed version or a named integrity/schema error. Q1–Q9 in
+`queries/cookbook.md` are executable-shaped examples; Q6 and Q8 specifically demonstrate typed
+published dataset scans and equal-revision refusal.
+
+The acceptance suite must inject faults at every row in `tables/crash-windows.csv`, race two
+startup acquisitions, pause an owner through expiry and attempt a stale append, scan more than
+one backing page for every family, inject a tombstone and equal-revision conflict, and assert that
+no uncommitted marker or prepared record is returned.
+  </section>
+</spec>

@@ -1,0 +1,313 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd35/src/210-maintenance.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD35-SRC-210-M-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd35/src/210-maintenance.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-210-M-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# §U — Maintenance, upgrade, backup, retention and reconciliation
+
+**Status:** normative CHD-3.5 maintenance contract.
+
+This section defines the operator procedures that keep a deployment safe after
+initial provisioning. A maintenance action is not complete because a command
+returned success, a process exited, a scheduler acknowledged a request, or a
+report was received. Each procedure has a durable intent, a guarded effect,
+correlated readback, and evidence. Unknown external execution remains held and
+is reconciled before a second effect is permitted.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/210-maintenance.md#u-1-maintenance-invariants -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-210-M-U-1-MAINTENANCE-INVARIANTS-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## U.1 Maintenance invariants
+
+1. The controller's authoritative attempt/run reservation owns execution
+   capacity. A manifest, report, board, scheduler counter, process table, or
+   local project-memory record cannot release it.
+2. A report, waiting state, timeout, cancellation request, process absence,
+   network response, or elapsed lease is not stop proof. Release requires a
+   correlated authoritative attempt/run terminal status or trusted runtime stop
+   attestation from the authoritative producer, followed by durable release
+   readback.
+3. Every mutating maintenance request carries `operation_id`, `request_id`,
+   `dedupe_key`, actor, target, expected revision, request digest, and a
+   `maintenance_intent` record before an external effect. Replaying identical
+   bytes returns the original result. Changed bytes under the same dedupe key
+   fail with `request_conflict`.
+4. Maintenance runs under the storage-boundary fencing contract. A lease
+   acquired before an unfenced write is insufficient. If the selected
+   LeaseAuthority/FencedStore/SnapshotToken adapter is unavailable, stale-writer
+   rejection is not proven, or snapshot consistency is unknown, mutating
+   maintenance is blocked except for read-only inspection and incident recording.
+5. Defaults are not invented during maintenance. A missing model, provider,
+   lifetime, privilege, retention period, archive revision, native API version,
+   or transport is an explicit configuration or capability error. Temporary
+   workers are accepted only when all required inputs are present.
+6. Native Hermes export/import is required for session archive maintenance.
+   Until the adapter reports a supported `hermes.session.export` name/version,
+   typed request/response/errors, response-loss reconciliation, and an
+   export-to-import-to-first-turn trace, archive restore is a visible
+   `native_adapter_unresolved` release gate. Raw SQLite copying, profile-directory
+   copying, and transcript substitution are prohibited.
+
+Every completed action stores: intent key, actor/authority, fence tuple,
+configuration and artifact digests, source and target revisions (nullable with a
+reason where genuinely unknown), exact reads, effect receipts, failure branch,
+capacity decision, and post-action readback. Secrets are represented only by
+credential references and redacted fingerprints.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/210-maintenance.md#u-2-install-and-enroll-a-maintenance-target -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-210-M-U-2-INSTALL-AND-ENROLL-A-MAINT-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## U.2 Install and enroll a maintenance target
+
+Installation is a staged operation. It does not register a target as dispatchable
+until all required readbacks pass.
+
+1. **Preflight.** Validate schema v4, closed fields, explicit runtime/provider,
+   non-default profile, gateway binding, credential references, allowed workdirs,
+   archive policy, capacity class, and requested maintenance scope. Verify that
+   the target is not already owned by another operation. Read-only readiness may
+   be used to inspect a target; it does not authorize installation.
+2. **Acquire ownership.** Acquire the fenced writer lease and write
+   `/chd/maintenance/&lt;operation_id&gt;` with `state=planned`. Record the exact
+   config digest and expected registry revision. If the lease or fence is
+   uncertain, stop before profile, credential, scheduler, or gateway effects.
+3. **Enroll infrastructure.** Probe the configured gateway/host and capability
+   endpoint. Read back gateway identity, transport, profile binding, limits and
+   durability. A mismatched identity, missing credential, unverified transport,
+   or unavailable storage gate produces `install_blocked` and no registration.
+4. **Stage target state.** Create or stage the unique non-default profile,
+   credential reference, state roots, assets and settings. Read back every
+   profile identity, asset digest and effective revision. Do not create a second
+   profile after a lost response; reconcile the request ledger and exact profile
+   identity first.
+5. **Probe execution.** Run the profile-bound smoke/readiness probes and store
+   their responses. A successful health probe is not a first wake. If a real
+   first wake is required by the requested capability, reserve the correlated
+   attempt/run and capture its authoritative terminal proof.
+6. **Commit.** Write the registry and capability-specific readiness result only
+   after the staged reads agree. `read_only_ready` may be true without scheduler
+   registration. `immediate_ready` requires reservation, fence/snapshot and
+   gateway gates. `scheduled_ready` additionally requires scheduler
+   registration/readback. Scheduler outage leaves scheduled work unarmed; it
+   does not globally block a controller-local immediate path whose gates pass.
+7. **Verify.** Read back the registry, effective config, capability vector,
+   credential status, gateway binding, archive gate, and maintenance intent. A
+   failed commit retains staged evidence and leaves the prior active revision.
+
+Failure guards: never install from an incomplete temporary-worker request; never
+use a default profile or guessed credential; never route around controller
+admission; never publish a green result without the named readback; and never
+release an unknown execution slot.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/210-maintenance.md#u-3-upgrade-with-staged-activation -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-210-M-U-3-UPGRADE-WITH-STAGED-ACTIVA-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## U.3 Upgrade with staged activation
+
+An upgrade changes only the explicitly selected managed binary, configuration,
+assets, runtime, or adapter revision. It preserves control records, policy
+lineage, learned state, work artifacts, archives, grants, open attempts, and
+retention evidence.
+
+1. Read the current registry, effective config, active artifact manifest,
+   policy revision, archive index, open attempt/run reservations, and readiness
+   vector. Capture their digests in the maintenance intent.
+2. Validate the candidate artifact manifest and compatibility rules before any
+   target write. Reject unsupported schema/native adapter versions, missing
+   migration steps, unknown dependencies, or incomplete temporary-worker fields.
+3. Acquire the fenced writer lease. Quiesce new admission for the target and
+   stop trigger registration through the validated scheduler API. Existing
+   attempts remain under their original identity and reservation.
+4. Create a staged revision and apply the candidate to an isolated staging
+   location. Verify file digests, runtime/profile binding, settings, and
+   capability probes. Keep the prior active revision as `rollback_target`.
+5. Drain or cancel only according to policy. For each open attempt/run, query
+   the authoritative run source. A report or cancellation acknowledgement is
+   insufficient. Hold capacity until terminal proof is correlated and read back.
+6. Activate the staged revision atomically at the controlled pointer. Read back
+   active revision, effective digest, profile identity, artifact inventory,
+   storage/fence capability, and capability-specific readiness.
+7. Recover queued and unknown work using the original request/dedupe identity.
+   Re-register scheduler lanes only after the scheduler readback succeeds.
+   Restore traffic only for the capability that is ready.
+
+If any staged probe or readback fails, leave the old revision active, record
+`upgrade_failed`, preserve the staged artifacts and exact failure, and do not
+claim a partial upgrade. A scheduler outage blocks re-registration and scheduled
+traffic only; it does not erase the staged or active revision.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/210-maintenance.md#u-4-rollback-and-failed-activation-recovery -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-210-M-U-4-ROLLBACK-AND-FAILED-ACTIVA-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## U.4 Rollback and failed-activation recovery
+
+Rollback is a new monotone maintenance revision, not a deletion or sequence
+rewind.
+
+1. Read the failed upgrade intent, active pointer, rollback target, open
+   reservations, migration lineage, and artifact digests. If the target cannot
+   be resolved exactly, return `rollback_refused_target_unknown` and change
+   nothing.
+2. Acquire the fenced lease and quiesce new target admission. Do not retry an
+   unknown external activation until the active pointer and profile readback
+   establish what actually ran.
+3. Reapply the recorded rollback artifact/config through the same staging path.
+   Verify compatibility against the current records; a newer incompatible
+   schema is refused rather than partially interpreted.
+4. Activate the prior compatible revision as a new effective revision. Read back
+   the pointer, artifact digests, profile/settings, policy snapshot bindings,
+   storage fence, and open attempt/run reservations.
+5. Reconcile every open attempt/run. Preserve an unknown execution and its
+   reservation. Replay only a proven pre-effect step with the original request
+   identity; never create a second target merely because a response was lost.
+6. Record both failed and restored digests, operator authority, exact readbacks,
+   and resulting readiness. Re-register only those scheduler lanes whose
+   registration/readback passes.
+
+Rollback failure leaves the last known active revision in place, marks the target
+`rollback_pending`, pages the operator, and retains all evidence. It never
+silently falls back to a guessed binary, provider, profile, or storage ledger.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/210-maintenance.md#u-5-backup-and-restore-drill -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-210-M-U-5-BACKUP-AND-RESTORE-DRILL-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## U.5 Backup and restore drill
+
+Controller backup and session export are separate products. A session archive
+cannot restore controller rooms, tickets, manifests, attempts, reservations,
+grants, configuration, assets, or archive indexes.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/210-maintenance.md#u-5-1-controller-backup -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-210-M-U-5-1-CONTROLLER-BACKUP-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### U.5.1 Controller backup
+
+1. Acquire the fenced writer lease and write a backup intent with source
+   namespace, source revision/high-water, config digest, schema versions,
+   retention policy and target storage reference. If the source revision is not
+   available, record `source_revision: null` and a verified reason; do not infer
+   it from a timestamp or file name.
+2. Quiesce new mutations, or use the selected consistent-snapshot primitive.
+   Read back the snapshot token and high-water boundaries. A local filesystem
+   copy without a consistency token is not a backup claim.
+3. Capture the canonical `chd` namespace, archive indexes and immutable
+   references, registry, bonds, attempts/runs, manifests, reservations, policy
+   snapshots, grants, tickets, audits, configuration digests and migration
+   lineage. Record omissions explicitly as gaps.
+4. Write a versioned backup manifest containing source identity, schema versions,
+   source revision (nullable with reason), snapshot token, object/key counts,
+   per-object digests, retention class, created time, fence tuple and target
+   reference. Do not write secrets.
+5. Verify all hashes and independently read a sample of registry, manifest,
+   attempt/run reservation, audit, policy, ticket and archive-index records from
+   the target failure domain. A copied file that cannot be independently read is
+   `backup_unverified`.
+6. Commit the manifest and read it back. Publish `backup_verified` only when the
+   manifest, samples and target durability acknowledgement agree.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/210-maintenance.md#u-5-2-isolated-restore-drill -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-210-M-U-5-2-ISOLATED-RESTORE-DRILL-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### U.5.2 Isolated restore drill
+
+Restore is tested into an isolated target, never over the active controller.
+Verify the backup manifest, digests, schema compatibility, snapshot boundaries,
+source identity and target durability first. Restore records in dependency order:
+configuration/schema metadata, registry and policy lineage, control keys,
+attempt/run reservations, manifests/tickets/audits, then archive indexes and
+immutable references. Read back every high-water boundary and compare digests.
+Unknown or conflicting records remain blocked and are not chosen by recency.
+
+After restore, run the capability-specific readiness probes, stale-writer/fence
+negative control, multi-page snapshot check, and an unknown-run reconciliation
+check. Keep scheduler registration disabled until the isolated checks pass. The
+drill's evidence is not live-service acceptance; it proves only the tested backup
+and restore inputs and observed readbacks.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/210-maintenance.md#u-6-retention-and-archive-cleanup -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-210-M-U-6-RETENTION-AND-ARCHIVE-CLEA-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## U.6 Retention and archive cleanup
+
+Retention is policy-controlled and never deletes authority needed by an open
+incident, audit, unresolved execution, policy lineage, gap record, migration
+lineage, or legal hold.
+
+1. Read the active retention policy, archive index, open gaps, audit holds,
+   unresolved attempt/run reservations, source/target revisions, and selected
+   archive keys. The selector is explicit; no oldest-file heuristic is allowed.
+2. Compute a proposed set with reason per key: expired, held, gap-bearing,
+   referenced-by-open-run, referenced-by-audit, or retained. Write the proposal
+   and require the configured policy authority/approval before effect.
+3. Acquire the fenced lease and re-read the policy revision and selected keys.
+   A changed policy, selector, digest, or hold causes `retention_conflict` and
+   no deletion.
+4. For eligible payloads, write a tombstone containing key, digest, manifest
+   revision, policy revision, actor, reason and retention boundary. Preserve the
+   manifest, audit, lineage and gap needed to explain the tombstone. Never turn
+   a missing payload into a successful read.
+5. Commit tombstones, read them back, and verify that held/open/uncertain keys
+   remain readable as metadata. A cleanup timeout leaves the operation pending;
+   it is not proof of deletion.
+
+Native archive payload cleanup remains blocked when native adapter capability is
+unresolved. Archive coverage is stated as committed checkpoint windows with
+explicit gaps, never as continuous backup.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/210-maintenance.md#u-7-stop-retire-and-reconcile -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-210-M-U-7-STOP-RETIRE-AND-RECONCILE-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## U.7 Stop, retire and reconcile
+
+Stop is a controlled state transition, not process termination.
+
+1. Mark the target non-dispatchable and stop new admission. Persist the stop
+   intent and target registry revision before contacting a gateway or scheduler.
+2. Unregister triggers through the validated scheduler API. Scheduler failure
+   leaves scheduled readiness false and the stop intent pending; it does not
+   imply that an already-running attempt stopped.
+3. Enumerate authoritative attempt/run reservations. For each, query status,
+   resolve unknown, and obtain a correlated terminal status or trusted runtime
+   stop attestation. Hold capacity on unreachable, identity mismatch, live,
+   or uncertain results.
+4. Request cancellation only with the recorded attempt/run identity and
+   execution generation. Reconcile the result; a cancellation request or
+   report is not terminal proof.
+5. Capture required native archive checkpoints. If export is unavailable,
+   retain `archive_pending` and the live/control evidence; do not claim a
+   complete retirement or invent an import format.
+6. Revoke credentials, grants and triggers after active work is drained or
+   explicitly held unknown. Remove live profile state only after archive and
+   stop gates pass. Never reuse the profile, credential generation, session id,
+   or bond generation while an unknown execution remains.
+7. Commit `retired` and read back registry, terminal attempt/run ledger,
+   capacity releases, archive manifests/gaps, revocations and retained control
+   records. The final report lists stopped, running, unreachable, uncertain,
+   archived, blocked and intentionally retained items separately.
+
+Reconciliation after restart or lost response reads the maintenance intent,
+request ledger, profile, gateway, scheduler, registry, attempt/run, archive and
+policy records in that order. It resumes only the named idempotent pre-effect
+step. If any read cannot distinguish absent effect from lost response, state is
+`unknown`, capacity remains held, and the operator receives an evidence-backed
+choice. No report-only stop proof, timeout, process absence, or stale mirror can
+close the operation.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/210-maintenance.md#u-8-maintenance-evidence-and-release-gates -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-210-M-U-8-MAINTENANCE-EVIDENCE-AND-R-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## U.8 Maintenance evidence and release gates
+
+Each procedure emits a durable evidence bundle with:
+
+* operation and dedupe identities, actor and authority;
+* fence tuple and storage adapter capability result;
+* exact source/target revisions, with nullable unknown values and reasons;
+* config, artifact, archive and manifest digests;
+* preflight, effect, failure-branch and post-effect reads;
+* attempt/run identity, execution generation, terminal stop proof and capacity
+  decision;
+* scheduler registration state separately from read-only/immediate readiness;
+* native archive adapter capability/version result without guessed values;
+* retained gaps, tombstones, rollback lineage and operator decisions.
+
+A maintenance report is **specified** evidence when it describes this contract,
+**run** evidence only when these records were observed from a real target, and
+**acceptance** evidence only when an authorized owner accepts the run. A generated
+report or successful command cannot be promoted between classes. The release is
+blocked while storage fencing/snapshot binding or native export/import capability
+is unresolved, while any attempt/run lacks authoritative stop proof, or while
+retention/backup evidence cannot be independently read back.
+  </section>
+</spec>

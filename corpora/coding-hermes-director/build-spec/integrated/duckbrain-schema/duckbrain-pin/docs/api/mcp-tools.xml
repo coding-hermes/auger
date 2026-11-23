@@ -1,0 +1,1182 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-BUILD-SPEC-INTEGR-FD3938-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#preamble -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# MCP Tools Reference
+
+DuckBrain exposes Model Context Protocol (MCP) tools that AI agents can use to store, query, and manage memories.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#available-tools -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-AVAILABLE-TOOLS-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Available Tools
+
+| Tool                                            | Description                                                                                                      |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| [`remember`](#remember)                         | Store a new memory                                                                                               |
+| [`recall`](#recall)                             | Query memories by key, domain, or similarity                                                                     |
+| [`list_keys`](#list_keys)                       | List available memory keys (guard against hallucinations)                                                        |
+| [`forget`](#forget)                             | Mark a memory as tombstoned                                                                                      |
+| [`squash`](#squash)                             | Compact old memory partitions                                                                                    |
+| [`get_compaction_stats`](#get_compaction_stats) | Repository compaction statistics                                                                                 |
+| [`create_namespace`](#create_namespace)         | Create a new namespace                                                                                           |
+| [`list_namespaces`](#list_namespaces)           | List all available namespaces                                                                                    |
+| [`switch_namespace`](#switch_namespace)         | Switch the active namespace                                                                                      |
+| [`delete_namespace`](#delete_namespace)         | Delete a namespace (requires confirmation)                                                                       |
+| [`server_status`](#server_status)               | Check whether the HTTP server is listening (TCP port and/or Unix socket), report PID and MCP-over-HTTP endpoints |
+| [`server_http_start`](#server_http_start)       | Trigger the HTTP server to start as a detached background process (port, socket, permissions, auth, rate-limit)  |
+| [`list_profiles`](#list_profiles)               | Inspect available connection profiles (tool-visibility presets) and the active selection                         |
+| [`create_profile`](#create_profile)             | Create a named profile of tool-visibility directives                                                             |
+| [`update_profile`](#update_profile)             | Update a profile you own (full directive replacement)                                                            |
+| [`select_profiles`](#select_profiles)           | Activate profiles for this connection/session                                                                    |
+| [`table_list`](#table_list)                     | List the tables declared in a namespace                                                                          |
+| [`tables_declare`](#tables_declare)             | Declare a table (SUPA-6 schema.json, or `--legacy` .table.json) — same core as `duckbrain tables declare`        |
+| [`table_insert`](#table_insert)                 | Insert rows into a declared table (all rows validated before any write)                                          |
+| [`table_select`](#table_select)                 | Read rows with PostgREST-style filters/order/limit and an optional exact count                                   |
+| [`table_update`](#table_update)                 | Update the row matched by its primary key                                                                        |
+| [`table_delete`](#table_delete)                 | Delete the row matched by its primary key (tombstone change record)                                              |
+| [`search`](#search)                             | Offline keyword (full-text) search over memories — the `duckbrain search` core                                   |
+| [`query`](#query)                               | Run one read-only SELECT over a namespace's `memories` view — the `duckbrain query` core                         |
+
+&gt; **Profiles are visibility presets, not security boundaries.** Selecting
+&gt; profiles changes `tools/list` advertising only — every `tools/call` remains
+&gt; subject to authentication, namespace grants, and tool/runtime safeguards.
+&gt; See [Connection Profiles](../guide/connection-profiles.md).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#data-plane-tools-surface-mcp-data-001 -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-DATA-PLANE-TOOLS-SURFACE-MCP-D-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Data-plane tools (SURFACE-MCP-DATA-001)
+
+Before this surface existed, MCP reached only the memory primitives above: an
+agent could not declare a table, write or read a row, keyword-search, or run a
+SELECT. The data-plane tools close that gap **without a second implementation**
+— each one calls the same module the CLI/HTTP surface calls:
+
+| Tool | Shared implementation | REST equivalent |
+| --- | --- | --- |
+| `tables_declare` | `src/tables/declare.ts` (`declareTable`) | `duckbrain tables declare` |
+| `table_list` | `src/tables/operations.ts` (`listNamespaceTables`) | `GET /api/ns/:ns/tables` |
+| `table_insert` | `src/tables/operations.ts` (`insertTableRows`) | `POST /api/ns/:ns/tables/:table` |
+| `table_select` | `src/tables/operations.ts` (`selectTableRows`) | `GET /api/ns/:ns/tables/:table` |
+| `table_update` | `src/tables/operations.ts` (`updateTableRows`) | `PATCH /api/ns/:ns/tables/:table?pk=eq.&lt;v&gt;` |
+| `table_delete` | `src/tables/operations.ts` (`deleteTableRows`) | `DELETE /api/ns/:ns/tables/:table?pk=eq.&lt;v&gt;` |
+| `search` | `src/search/query.ts` (`keywordSearch`) | `duckbrain search` / `GET /api/memories?contains=` |
+| `query` | `src/duckdb/query-surface.ts` (`runReadOnlyQuery`) | `duckbrain query` |
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#authorization -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-AUTHORIZATION-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### Authorization
+
+Same order as the REST routers: the namespace grant first
+(`requireNamespaceGrant`), then the per-table grant on every data verb
+(`requireTableGrant`: `read` for `table_select`, `write` for
+`table_insert`/`table_update`/`table_delete`/`tables_declare`), then the SQL
+policy for `query` (`requireRawSqlGrant`, read direction). A refusal returns
+the same message and machine-readable code the REST path returns (for example
+`code: "NOT_FOUND"` with `Table '&lt;t&gt;' not found in namespace '&lt;ns&gt;'`) and is
+appended to the namespace audit ledger with the same reason token
+(`table_grant`, `role`, `namespace_scope`, `sql_flag`).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#tables-declare -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-TABLES-DECLARE-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### `tables_declare`
+
+```json
+{
+  "namespace": "my-app",
+  "table": "widgets",
+  "columns": [
+    { "name": "id", "type": "integer" },
+    { "name": "name", "type": "varchar" }
+  ],
+  "primary": "id"
+}
+```
+
+Column types: `varchar|integer|bigint|double|boolean|timestamp|json`.
+`format` selects `jsonl-objects` (default) or `jsonl-positional`; `legacy: true`
+writes `tables/&lt;table&gt;.table.json`; `force: true` replaces a conflicting
+declaration.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#table-insert -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-TABLE-INSERT-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### `table_insert`
+
+`{ "namespace": "my-app", "table": "widgets", "rows": [{ "id": 1, "name": "alpha" }] }`
+→ `{ "success": true, "inserted": 1, "durability": { "configured": "...", "achieved": "..." } }`
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#table-select -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-TABLE-SELECT-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### `table_select`
+
+`filters` takes the PostgREST vocabulary (`eq`, `ne`/`neq`, `gt`, `gte`, `lt`,
+`lte`, `like`, `ilike`, `in`, `is`, `isdistinct`, `fts`, `plfts`) — every one
+of them also accepts the `not.` prefix — plus `order`, `limit` (hard cap
+1000), `offset` and `count: "exact"` for a total. The full operator coverage
+table (including the PostgREST operators that are deliberately absent and
+why) is in [the HTTP API reference](http-api.md#get-apinsnstablestable--filtered-row-read). Response: `{ success, rows, count, totalCount? }`.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#table-update-table-delete -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-TABLE-UPDATE-TABLE-DELETE-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### `table_update` / `table_delete`
+
+Both address exactly the row named by `pk`: `{ "namespace": "…", "table": "…",
+"pk": 2, "values": { "name": "beta" } }` → `{ "updated": 1 }`; `pk` alone →
+`{ "deleted": 1 }`. Accepting mutations are recorded as DB-SUPA-5 change
+records (delete as a tombstone) before the acknowledgement.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#search -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-SEARCH-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### `search`
+
+`{ "namespace": "…", "query": "zebra", "limit": 10 }` — offline keyword search.
+Requires the rebuilt keyword sidecar for the namespace (`duckbrain search-index
+rebuild`); unlike `recall`, it never silently falls back to semantic ranking.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#query -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-QUERY-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### `query`
+
+`{ "namespace": "…", "sql": "SELECT count(*) AS n FROM memories" }` — read-only:
+mutating statements are rejected (`code: "READ_ONLY_QUERY"`) and results are
+capped at 1000 rows. Refusals by policy are audited as `op: "sql.read"`.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#tool-details -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-TOOL-DETAILS-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Tool Details
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#remember -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-REMEMBER-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### `remember`
+
+Store a new memory in DuckBrain.
+
+**Parameters:**
+
+```typescript
+{
+  key: string;           // Hierarchical path (e.g., "/projects/mcp/schema")
+  domain: string;        // Domain: person | event | concept | message | config | raw_note
+  embedding_text: string; // Memory content — text used for vector embedding
+  attributes: {          // REQUIRED: object of arbitrary key/value metadata (pass {} if none)
+    [key: string]: any;
+  };
+  namespace?: string;    // Optional: namespace to write to (default: current active namespace)
+}
+```
+
+&gt; **Note:** `attributes` is **required** by the remember schema — it is NOT optional, even though it may be an empty object `{}`. Omitting it fails validation with an `attributes is required` error.
+
+&gt; **Note:** The content field is `embedding_text`, not `content`. It is stored and used for vector similarity search. The HTTP API accepts the same text under the name `content` (see [HTTP API Reference](http-api.md#post-apimemories)) — both surfaces store and return the same underlying field, so a memory written via MCP with `embedding_text` is retrievable via HTTP `GET /api/memories` as `content`, and vice versa.
+
+**Example:**
+
+```json
+{
+  "key": "/projects/myapp/architecture/database",
+  "domain": "concept",
+  "embedding_text": "Using PostgreSQL with connection pooling via PgBouncer",
+  "attributes": {
+    "decision_date": "2026-01-15",
+    "author": "alice",
+    "confidence": "high"
+  }
+}
+```
+
+**Returns:**
+
+```typescript
+{
+  success: boolean;
+  id?: string;          // Memory UUID
+  key?: string;
+  partition?: string;   // Partition the memory was written to (e.g. "concept/time/2026-07")
+  author?: string;      // Author email from git config
+  namespace?: string;   // Namespace ACTUALLY written — resolved from the arg,
+                        // or the active namespace when omitted (DOGFOOD-017)
+  warning?: string;     // Present when the write landed outside the 'default'
+                        // namespace (DOGFOOD-017)
+  error?: string;
+}
+```
+
+**Usage:**
+
+```typescript
+AI: "Remember that we're using PostgreSQL for the database"
+→ Calls remember({key: "/projects/myapp/database", domain: "concept",
+                  embedding_text: "Using PostgreSQL...", attributes: {...}})
+→ Returns { success: true, id: "...", key: "/projects/myapp/database",
+            namespace: "default" }
+```
+
+&gt; ⚠️ **The active namespace is sticky across processes (DOGFOOD-017).** When
+&gt; the `namespace` arg is omitted, the write goes to `config.defaultNamespace`
+&gt; — which `switch_namespace` persists into `duckbrain.config.json`, so it
+&gt; affects ALL later processes, not just the current session. The response
+&gt; always echoes the namespace actually written. When the arg is omitted and the
+&gt; write lands somewhere other than the `'default'` namespace, the response
+&gt; carries a `warning` (DF-0919-06: an explicit `namespace` argument never
+&gt; warns — you named the destination, so there is nothing surprising about it).
+&gt; Pass `namespace` explicitly if the destination matters.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#recall -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-RECALL-S012" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### `recall`
+
+Query memories with flexible filtering.
+
+**Read-side telemetry (DF-2026-19):** Every MCP recall call appends one JSONL observation to the configured metrics directory. The default counter is `&lt;directory containing namespaces&gt;/metrics/recall-counter.jsonl`; set `DUCKBRAIN_RECALL_METRICS_PATH` to override it. The event records calls, calls answered, non-empty packs, distinct namespaces, and records returned. `duckbrain recall-metrics rollup --from=YYYY-MM-DD --to=YYYY-MM-DD` prints a daily series with numerator/denominator rates. `recall-metrics check` compares the series with the daemon health signal file (`health.jsonl` by default, or `DUCKBRAIN_RECALL_HEALTH_FILE`) and appends alerts to `recall-alerts.jsonl` when a day had recall calls, zero non-empty packs, and `GET /health` was healthy. A non-zero exit and `ALERT zero_non_empty_packs` identify the day, counter file, health file, and health check.
+
+**Parameters:**
+
+```typescript
+{
+  // Lookup — at most ONE of these applies (precedence: key → id → keyPrefix → domain)
+  key?: string;            // Exact key lookup
+  id?: string;             // Exact memory UUID lookup
+  keyPrefix?: string;      // Prefix glob query (e.g., "/projects/")
+  domain?: string;         // Domain filter: person | event | concept | message | config | raw_note
+  author?: string;         // Exact author filter (e.g. "agent-alpha@duckbrain.local")
+
+  // Search — query and contains are mutually exclusive
+  query?: string;          // Semantic search (hybrid semantic + keyword fusion, RETR-002)
+  contains?: string;       // Keyword-only filter (offline FTS over content/key/attributes, RETR-001)
+
+  // Paging
+  limit?: number;          // Max results to return (default: 10; 0 = count-only empty page)
+  offset?: number;         // Row offset for paging (default: 0, non-negative integer)
+
+  // Namespace scope — namespace and allNamespaces are mutually exclusive
+  namespace?: string;      // Namespace to query (default: the ACTIVE namespace)
+  allNamespaces?: boolean; // With contains=: union keyword hits over EVERY namespace
+
+  // Time range — one inclusive window; between is shorthand for after + before
+  after?: string;          // ISO-8601: only rows at or after this instant
+  before?: string;         // ISO-8601: only rows at or before this instant
+  between?: string;        // ISO-8601 "START,END" — shorthand for after=START &amp; before=END
+  asOf?: string;           // ISO-8601 date or git ref: read the namespace state at that point in git history
+
+  // Attribute and validity-view filters
+  attr?: Record&lt;string, string&gt;; // Attribute filters: only rows matching EVERY name → value pair
+  historical?: boolean;    // false (default) = current view (validity-filtered); true = all rows
+}
+```
+
+**Field reference:**
+
+| Field                   | Type                      | Default           | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ----------------------- | ------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `key`                   | `string`                  | —                 | Exact key lookup. Highest-precedence lookup filter: when combined with `id`/`keyPrefix`/`domain`, only `key` is applied and the others are silently ignored.                                                                                                                                                                                                                                                                                                                 |
+| `id`                    | `string`                  | —                 | Exact memory UUID lookup. Applied only when `key` is absent.                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `keyPrefix`             | `string`                  | —                 | Prefix glob (e.g. `/projects/myapp/`). Applied only when neither `key` nor `id` is present.                                                                                                                                                                                                                                                                                                                                                                                  |
+| `domain`                | `string`                  | —                 | Domain filter: `person`, `event`, `concept`, `message`, `config`, `raw_note`. Applied only when none of `key`/`id`/`keyPrefix` is present.                                                                                                                                                                                                                                                                                                                                    |
+| `author`                | `string`                  | —                 | Exact author filter (the author email recorded on the row). ANDed with the lookup filter — it does not compete with `key`/`id`/`keyPrefix`/`domain`.                                                                                                                                                                                                                                                                                                                         |
+| `query`                 | `string`                  | —                 | Semantic search over content embeddings — **hybrid** since RETR-002: the keyword leg (FTS sidecar) runs alongside the semantic leg and both are fused (Reciprocal Rank Fusion), degrading to keyword-only or semantic-only when one leg is unavailable. Requires a reachable embedding provider. Mutually exclusive with `contains`.                                                                                            |
+| `contains`              | `string`                  | —                 | Keyword-only full-text filter over content/key/attributes — offline, no embedding provider needed (exact-token matches rank first). Mutually exclusive with `query`.                                                                                                                                                                                                                                                                                                           |
+| `limit`                 | `number`                  | `10`              | Max results to return. `limit: 0` is a valid request for an empty page that still reports the true `total` (count-only).                                                                                                                                                                                                                                                                                                                                                       |
+| `offset`                | `number`                  | `0`               | Row offset for paging (non-negative integer). Applied to the ORDERED result set as `[offset, offset+limit)`. On the ranked paths (semantic / hybrid / keyword) the page is taken from a bounded candidate pool (cap 1000) — an offset beyond the pool returns an empty page, never an out-of-order row. `total` is never affected by `limit`/`offset`.                                                                                                                            |
+| `namespace`             | `string`                  | active namespace  | Namespace to query. Omitting it queries the ACTIVE namespace (the sticky `config.defaultNamespace` that `switch_namespace` persists) — the response echoes the namespace actually queried. Mutually exclusive with `allNamespaces`.                                                                                                                                                                                                            |
+| `allNamespaces`         | `boolean`                 | `false`           | RETR-007 cross-namespace keyword search: with `contains=`, searches EVERY manifest namespace and unions the keyword hits, each carrying its own `namespace` facet. Meaningless without `contains` — that combination is refused. Mutually exclusive with `namespace`. Requires an unrestricted token (a namespace-scoped token is refused).                                                                                                                                    |
+| `after`                 | `string`                  | —                 | ISO-8601 date/datetime: only rows at or after this instant (inclusive). A date-only value means the START of that day (UTC). Mutually exclusive with `between`.                                                                                                                                                                                                                                                                                                               |
+| `before`                | `string`                  | —                 | ISO-8601 date/datetime: only rows at or before this instant (inclusive). A date-only value means the END of that day (UTC), so `before: "2026-08-12"` includes all of 2026-08-12. Mutually exclusive with `between`.                                                                                                                                                                                                                                                          |
+| `between`               | `string`                  | —                 | ISO-8601 range as `"START,END"` (two comma-separated values) — shorthand for `after: "START"` + `before: "END"`. Mutually exclusive with `after`/`before`.                                                                                                                                                                                                                                                                                                                     |
+| `asOf`                  | `string`                  | —                 | RETR-004 memory-as-of: an ISO-8601 date (resolved to the nearest commit at-or-before it) or a git ref (commit hash, branch, tag). Reads rows straight from the namespace git history — never a checkout or a write. Mutually exclusive with `query`/`contains`.                                                                                                                                                                                                                |
+| `attr`                  | `Record&lt;string, string&gt;`  | —                 | RETR-006 attribute filters: only rows whose `attributes` JSON matches EVERY `name → value` pair (exact match, ANDed with each other and with every other filter). Values must be STRINGS (`{"tick": "403"}`, not `{"tick": 403}`); numeric/boolean attributes match by their string form, so `{"tick": "403"}` matches both `403` and `"403"`. A row lacking the attribute does not match. An empty record is a no-op.                                                       |
+| `historical`            | `boolean`                 | `false`           | RETR-011 view selector. `false`/absent = CURRENT view: rows whose validity window does not contain "now" are excluded (`valid_until` in the past = expired; `valid_from` in the future = not yet valid). `true` = HISTORICAL view: every row regardless of validity — expired facts stay visible. Has no effect on `asOf` reads (those are inherently historical git-state reads).                                                                                               |
+
+**Time-range semantics (RETR-003):**
+
+- All bounds are **inclusive** (`after` = "since", `before` = "until").
+- Accepted ISO-8601 shapes: `YYYY-MM-DD` or a datetime `YYYY-MM-DDTHH:MM[:SS[.fff]]` with an optional `Z` / `±HH:MM` offset. Naive datetimes (no `Z`, no offset) are treated as **UTC**, not host-local.
+- Date-only bounds are widened to the whole day: `after: "2026-08-10"` → `2026-08-10T00:00:00.000Z`, `before: "2026-08-12"` → `2026-08-12T23:59:59.999Z`.
+- The window matches both the row `timestamp` and the chat-archive key date facet (`/chats/&lt;view&gt;/&lt;YYYY-MM-DD&gt;`) — those rows' timestamps are ingestion time while the message date lives in the key.
+- Invalid values (bad ISO date, a malformed `between`, or `after` later than `before`) never crash the tool: they come back as `{ memories: [], count: 0, error: "Invalid time filter: …" }` **before** any namespace work.
+- The three time params are ANDed with every other filter and they **do** combine with `asOf` (they window the historical row set read at that ref).
+
+**Mutual exclusions and precedence:**
+
+| Combination                              | Behaviour                                                                                                                                                                          |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `between` + `after`/`before`             | Refused — `Invalid time filter: Use either 'between' or 'after'/'before' — combining them is not supported`.                                                                       |
+| `asOf` + `query`/`contains`              | Refused — `as_of cannot be combined with 'query' or 'contains' — memory-as-of reads the git state at that ref and does not run semantic or keyword search`.                        |
+| `query` + `contains`                     | Refused — `Use either 'query' (hybrid semantic+keyword fusion, RETR-002) or 'contains' (keyword-only) — combining both filters is not supported`.                                   |
+| `allNamespaces` without `contains`       | Refused — `allNamespaces only applies to keyword search — combine it with 'contains' (plain recall is single-namespace)`.                                                          |
+| `allNamespaces` + `namespace`            | Refused — `allNamespaces cannot be combined with a specific namespace — omit namespace for a cross-namespace search`.                                                              |
+| `key` + `id` + `keyPrefix` + `domain`    | Not an error: the first one present wins, in the order `key` → `id` → `keyPrefix` → `domain`. The others are ignored — pass only the one you mean.                                  |
+| `after` later than `before`              | Refused — `Invalid time filter: after (&lt;instant&gt;) must not be later than before (&lt;instant&gt;)`.                                                                                       |
+
+Refusals are returned in the tool result's `error` field (not as a transport error), matching the [Error Handling](#error-handling) contract — see the note there on MCP in-band errors.
+
+**Examples:**
+
+**By key prefix:**
+
+```json
+{
+  "keyPrefix": "/projects/myapp/"
+}
+```
+
+**By domain:**
+
+```json
+{
+  "domain": "concept"
+}
+```
+
+**By exact key (`key`), by UUID (`id`), or by author:**
+
+```json
+{ "key": "/projects/myapp/database" }
+```
+
+```json
+{ "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890" }
+```
+
+```json
+{ "author": "agent-alpha@duckbrain.local", "domain": "concept", "limit": 50 }
+```
+
+**Targeting a namespace (`namespace`):**
+
+```json
+{
+  "keyPrefix": "/projects/myapp/",
+  "namespace": "my-project"
+}
+```
+
+Omitting `namespace` queries the ACTIVE namespace instead of `default` — the response always echoes the namespace actually queried.
+
+**Semantic search:**
+
+```json
+{
+  "query": "database connection pooling",
+  "limit": 5
+}
+```
+
+**Keyword search (offline, no embedding provider):**
+
+```json
+{
+  "contains": "connection pooling",
+  "domain": "concept"
+}
+```
+
+**Cross-namespace keyword search (RETR-007):**
+
+```json
+{
+  "contains": "PgBouncer",
+  "allNamespaces": true
+}
+```
+
+Unions keyword hits over every namespace and tags each hit with its own `namespace`. Do not pass `namespace` alongside `allNamespaces`.
+
+**Combined:**
+
+```json
+{
+  "keyPrefix": "/projects/myapp/architecture/",
+  "domain": "concept",
+  "limit": 20
+}
+```
+
+`domain` is ignored here — `keyPrefix` takes precedence.
+
+**Time-scoped (RETR-003):**
+
+```json
+{
+  "domain": "message",
+  "after": "2026-08-10",
+  "before": "2026-08-12"
+}
+```
+
+```json
+{
+  "domain": "message",
+  "between": "2026-08-10,2026-08-12"
+}
+```
+
+Both forms return the same rows (2026-08-10 through 2026-08-12 inclusive). Never combine `between` with `after`/`before`.
+
+**Paging:**
+
+```json
+{
+  "domain": "concept",
+  "limit": 20,
+  "offset": 40
+}
+```
+
+Returns the third page of 20 (`[40, 60)` of the ordered match set) with the unlimited `total` alongside.
+
+**Count-only (empty page):**
+
+```json
+{
+  "domain": "concept",
+  "limit": 0
+}
+```
+
+Returns `{ "memories": [], "count": 0, "total": 137 }` — the true match count without fetching rows.
+
+**Attribute filter (RETR-006):**
+
+```json
+{
+  "domain": "config",
+  "attr": { "tick": "403" }
+}
+```
+
+Matches rows whose `attributes.tick` is `403` or `"403"`.
+
+**Historical view (RETR-011):**
+
+```json
+{
+  "keyPrefix": "/projects/myapp/",
+  "historical": true
+}
+```
+
+Includes rows whose validity window has passed (`valid_until` in the past) or has not started yet (`valid_from` in the future) — the default current view hides those.
+
+**Time travel (RETR-004):**
+
+```json
+{
+  "keyPrefix": "/projects/myapp/",
+  "asOf": "2026-08-10"
+}
+```
+
+Reads the namespace state as it existed at the nearest commit at-or-before 2026-08-10. Accepts ISO dates or git refs (commit hashes, branch names, tags). Cannot combine with `query` or `contains` — semantic/keyword search indexes have no historical state. `asOf` **does** combine with `key`/`id`/`keyPrefix`/`domain`/`author`/`after`/`before`/`between`/`attr`/`limit`/`offset`, which filter the historical row set.
+
+**Returns:**
+
+```typescript
+{
+  memories: Array&lt;{
+    id: string;
+    key: string;
+    domain: string;
+    embedding_text: string;   // Memory content
+    attributes: object;
+    timestamp: string;
+    author: string;
+    action: "add" | "update" | "tombstone";
+  }&gt;;
+  count: number;        // Rows in THIS response (= memories.length, bounded by limit)
+  total?: number;       // True match count, unlimited by limit/offset (GAP-024) — the
+                        // number to page against. Present on every successful result
+                        // (list, keyword contains=, semantic/hybrid query, as-of,
+                        // count-only limit=0); on the ranked (query/contains) paths it
+                        // is the ranked candidate-pool size, not the namespace row count
+  error?: string;
+  namespace?: string;   // Namespace ACTUALLY queried — resolved from the arg,
+                        // or the active namespace when omitted (DOGFOOD-017);
+                        // "all" for an allNamespaces union
+}
+```
+
+**Usage:**
+
+```
+AI: "What database are we using?"
+→ Calls recall({query: "database"})
+→ Returns matching memories with PostgreSQL info
+
+AI: "List all architecture decisions"
+→ Calls recall({domain: "concept", keyPrefix: "/projects/myapp/architecture/"})
+→ Returns all memories under that prefix
+```
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#list-keys -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-LIST-KEYS-S013" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### `list_keys`
+
+List available memory keys to prevent hallucinations.
+
+**Parameters:**
+
+```typescript
+{
+  prefix?: string;      // Key prefix filter (default: "/")
+  maxDepth?: number;    // Max hierarchy depth to return (default: 3)
+  limit?: number;       // Max keys to return (default: 50)
+  offset?: number;      // Pagination offset (default: 0)
+  namespace?: string;   // Namespace to query
+}
+```
+
+**Examples:**
+
+```json
+{
+  "prefix": "/projects/myapp/",
+  "maxDepth": 3,
+  "limit": 50
+}
+```
+
+**Returns:**
+
+```typescript
+{
+  keys: string[];
+  prefixes?: string[];   // Intermediate prefixes (folders)
+  hasMore: boolean;
+  error?: string;
+}
+```
+
+**Usage:**
+
+```
+AI: "What keys exist in this project?"
+→ Calls list_keys({prefix: "/projects/myapp/"})
+→ Returns ["/projects/myapp/database", "/projects/myapp/auth", ...]
+```
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#forget -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-FORGET-S014" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### `forget`
+
+Mark a memory as tombstoned (soft delete).
+
+**Parameters:**
+
+```typescript
+{
+  id: string;           // UUID of the memory to forget
+  reason?: string;      // Optional reason for deletion
+  namespace?: string;   // Namespace to search
+  domain?: string;      // Domain to search (optimization)
+}
+```
+
+**Example:**
+
+```json
+{
+  "id": "a1b2c3d4-0000-4000-8000-000000000001",
+  "reason": "Task completed and no longer relevant"
+}
+```
+
+**Returns:**
+
+```typescript
+{
+  success: boolean;
+  error?: string;
+}
+```
+
+**Usage:**
+
+```
+AI: "Remove that old TODO about fixing the login bug"
+→ Calls forget({id: "a1b2c3d4-..."})
+→ Memory is marked as tombstoned (full history preserved in git)
+```
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#squash -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-SQUASH-S015" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### `squash`
+
+Compact old memory partitions to reduce repository size. Converts JSONL to Parquet, removes tombstones, and optionally squashes git history.
+
+**Parameters:**
+
+```typescript
+{
+  partition?: string;    // Specific partition to squash (optional — defaults to all old partitions)
+  dryRun?: boolean;      // Preview without making changes (default: false)
+  aggressive?: boolean;  // Squash git history aggressively (default: false)
+  namespace?: string;    // Namespace to compact
+}
+```
+
+**Examples:**
+
+**Preview what would be compacted:**
+
+```json
+{
+  "dryRun": true
+}
+```
+
+**Compact one partition with history rewrite:**
+
+```json
+{
+  "partition": "concept/time/2025-01",
+  "aggressive": true
+}
+```
+
+**Returns:**
+
+```typescript
+{
+  success: boolean;
+  message: string;      // Human-readable summary
+  stats?: {
+    partitionsCompacted?: number;
+    totalRecordsKept?: number;
+    totalRecordsRemoved?: number;
+    tombstonesRemoved?: number;
+  };
+  errors?: string[];
+}
+```
+
+**Usage:**
+
+```
+AI: "Compact old memory partitions"
+→ Calls squash({dryRun: true}) to preview first
+→ Then squash({}) to compact partitions older than 30 days with &gt; 1000 records
+```
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#get-compaction-stats -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-GET-COMPACTION-STATS-S016" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### `get_compaction_stats`
+
+Get repository compaction statistics. No input parameters.
+
+**Parameters:** none (`{}`)
+
+**Returns:**
+
+```typescript
+{
+  success: boolean;
+  stats?: {
+    totalSize: number;          // Total repo size in bytes
+    totalPartitions: number;
+    parquetPartitions: number;
+    jsonlPartitions: number;
+    totalRecords: number;
+    tombstoneRecords: number;
+    tombstonePercent: number;   // Percentage of records that are tombstones
+    parquetRatio: number;       // Ratio of Parquet to total partitions
+    oldPartitions: string[];    // Partitions eligible for compaction
+    largePartitions: Array&lt;{ path: string; size: number; records: number }&gt;;
+  };
+  error?: string;
+}
+```
+
+**Usage:**
+
+```
+AI: "How healthy is the memory repo?"
+→ Calls get_compaction_stats({})
+→ Returns tombstone percentage, Parquet ratio, and partition health
+```
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#create-namespace -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-CREATE-NAMESPACE-S017" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### `create_namespace`
+
+Create a new memory namespace (a separate git repository).
+
+**Parameters:**
+
+```typescript
+{
+  name: string;         // Namespace name (lowercase alphanumeric, hyphens/underscores)
+  setDefault?: boolean; // Set as the default namespace (default: false)
+}
+```
+
+**Example:**
+
+```json
+{
+  "name": "my-new-project",
+  "setDefault": true
+}
+```
+
+**Returns:**
+
+```typescript
+{
+  success: boolean;
+  path?: string;        // Filesystem path of the new namespace
+  error?: string;
+}
+```
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#list-namespaces -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-LIST-NAMESPACES-S018" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### `list_namespaces`
+
+List all available namespaces. No input parameters.
+
+**Parameters:** none (`{}`)
+
+**Returns:**
+
+```typescript
+{
+  success: boolean;
+  namespaces: Array&lt;{
+    name: string;
+    path: string;
+    isDefault: boolean;
+  }&gt;;
+  currentNamespace?: string;
+  error?: string;
+}
+```
+
+**Usage:**
+
+```
+AI: "What namespaces do I have?"
+→ Calls list_namespaces({})
+→ Returns [{name: "default", path: "./namespaces/default", isDefault: true}, ...]
+```
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#switch-namespace -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-SWITCH-NAMESPACE-S019" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### `switch_namespace`
+
+Switch the active (default) namespace.
+
+&gt; ⚠️ **The active namespace is STICKY ACROSS PROCESSES (DOGFOOD-017).** The
+&gt; switch persists `defaultNamespace` into `duckbrain.config.json`
+&gt; (`updateConfig`), so it applies to every LATER separate process too — any
+&gt; namespace-less `remember`/`recall`/`forget` call in a new session resolves
+&gt; to this namespace, not to `'default'`. Responses to `remember`/`recall`
+&gt; echo the resolved namespace so you can see where data actually landed
+&gt; (and `remember` warns when the write goes outside `'default'`). To switch
+&gt; back, call `switch_namespace({name: "default"})` — or pass `namespace`
+&gt; explicitly on every call and never rely on the active default.
+
+**Parameters:**
+
+```typescript
+{
+  name: string; // Namespace name to switch to
+}
+```
+
+**Returns:**
+
+```typescript
+{
+  success: boolean;
+  previous?: string;    // Previously active namespace
+  current?: string;     // Newly active namespace (persisted to duckbrain.config.json)
+  error?: string;
+}
+```
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#delete-namespace -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-DELETE-NAMESPACE-S020" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### `delete_namespace`
+
+Delete a namespace. Requires explicit confirmation. The `default` namespace and the currently active namespace cannot be deleted.
+
+**Parameters:**
+
+```typescript
+{
+  name: string; // Namespace name to delete
+  confirm: boolean; // Must be true to confirm deletion (required)
+}
+```
+
+**Example:**
+
+```json
+{
+  "name": "old-project",
+  "confirm": true
+}
+```
+
+**Returns:**
+
+```typescript
+{
+  success: boolean;
+  error?: string;
+}
+```
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#server-status -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-SERVER-STATUS-S021" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### `server_status`
+
+Check whether the DuckBrain HTTP server is listening. Reports TCP port and/or Unix socket status, the PID from the sidecar PID file, and the MCP-over-HTTP endpoints that are currently reachable.
+
+**Parameters:**
+
+```typescript
+{
+  port?: number;    // TCP port to check (default: 3000)
+  socket?: string;  // Unix socket path to check (e.g. /tmp/duckbrain.sock)
+}
+```
+
+**Example:**
+
+```json
+{
+  "port": 3000,
+  "socket": "/tmp/duckbrain.sock"
+}
+```
+
+**Returns:**
+
+```typescript
+{
+  success: boolean;          // true if port and/or socket is listening
+  port?: number;             // the port that was checked
+  portListening?: boolean;   // whether the TCP port is reachable
+  socket?: string;           // the socket path that was checked
+  socketListening?: boolean; // whether the Unix socket file exists and is a socket
+  pid?: number | null;       // PID read from the sidecar PID file, if present
+  pidFile?: string;          // path of the sidecar PID file
+  endpoints?: string[];      // reachable MCP endpoints (http://127.0.0.1:&lt;port&gt;/mcp, unix:&lt;socket&gt; -&gt; POST /mcp)
+}
+```
+
+**Example response:**
+
+```json
+{
+  "success": true,
+  "port": 3000,
+  "portListening": true,
+  "socket": "/tmp/duckbrain.sock",
+  "socketListening": true,
+  "pid": 4719,
+  "pidFile": "/tmp/duckbrain-http-3000.pid",
+  "endpoints": [
+    "http://127.0.0.1:3000/mcp",
+    "unix:/tmp/duckbrain.sock -&gt; POST /mcp"
+  ]
+}
+```
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#server-http-start -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-SERVER-HTTP-START-S022" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### `server_http_start`
+
+Start the DuckBrain HTTP server as a detached background process if it is not already listening on the requested port. Mirrors the `duckbrain http` CLI options (port, bind-all, auth, rate-limit, Unix socket, socket permissions/group). Use this to enable MCP-over-HTTP from an MCP client.
+
+**Parameters:**
+
+```typescript
+{
+  port?: number;        // TCP port (default: 3000)
+  bindAll?: boolean;    // Bind to 0.0.0.0 instead of 127.0.0.1 (default: false)
+  authType?: "none" | "basic" | "apikey";  // Authentication type (default: apikey; use none only for explicit local mode)
+  rateLimit?: number;   // Requests per minute per IP (default: 100)
+  socket?: string;      // Also listen on a Unix domain socket at this path
+  socketMode?: string;  // Socket file permissions as octal string (default: 0660)
+  socketGroup?: string; // Group name or numeric GID to chown the socket to
+  force?: boolean;      // Start even if the port is already listening (default: false)
+}
+```
+
+**Example:**
+
+```json
+{
+  "port": 3000,
+  "socket": "/tmp/duckbrain.sock",
+  "authType": "apikey"
+}
+```
+
+**Returns:**
+
+```typescript
+{
+  success: boolean;          // true if the server is listening after the call
+  alreadyRunning?: boolean;  // true if the port was already listening (and force was false)
+  spawned?: boolean;         // true if a new process was spawned
+  pid?: number | null;       // PID of the spawned process
+  message: string;           // human-readable status (e.g. "HTTP server already listening on port 3000")
+}
+```
+
+**Example response:**
+
+```json
+{
+  "success": true,
+  "alreadyRunning": true,
+  "message": "HTTP server already listening on port 3000"
+}
+```
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#list-profiles -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-LIST-PROFILES-S023" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### `list_profiles`
+
+Inspect available connection profiles and the active selection for this
+connection. Profiles are tool-visibility presets (see
+[Connection Profiles](../guide/connection-profiles.md) for the full model).
+
+**Parameters:** none (empty object).
+
+**Returns:**
+
+```typescript
+{
+  success: boolean;
+  profiles: Array&lt;{
+    name: string;
+    owner: string;
+    description?: string;
+    directives: Array&lt;{ tool: string; visibility: "hidden" | "exclusive" | "default" }&gt;;
+    createdAt: string;
+    updatedAt: string;
+  }&gt;;
+  builtInTools: string[];          // every built-in tool name
+  registeredCustomTools: string[]; // custom tools registered on THIS server (when present)
+  activeSelection: string[] | undefined;
+  note: string;                    // the visibility-not-authorization contract
+}
+```
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#create-profile -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-CREATE-PROFILE-S024" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### `create_profile`
+
+Create a named profile of tool-visibility directives. Any connection may
+create profiles — profiles do not control authorization, so creation
+requires no privilege. Creates never overwrite: use `update_profile`.
+
+**Parameters:**
+
+```typescript
+{
+  name: string;          // unique profile name
+  owner: string;         // owner label (only the owner can update later)
+  description?: string;  // human-readable purpose
+  directives: Array&lt;{ tool: string; visibility: "hidden" | "exclusive" | "default" }&gt;;
+}
+```
+
+**Returns:** `{ success, profile, preview, note }` where `preview` shows
+`visibleTools`, `hiddenTools`, and `unknownProfiles` as they would apply to
+the new profile alone.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#update-profile -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-UPDATE-PROFILE-S025" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### `update_profile`
+
+Update a profile you own — a FULL replacement of its directives (not a
+merge). Overwriting another owner's profile is refused: profiles are
+per-agent connection state, and one agent must not mutate another's.
+
+**Parameters:**
+
+```typescript
+{
+  name: string;          // profile to update
+  owner: string;         // must match the stored owner
+  description?: string;
+  directives: Array&lt;{ tool: string; visibility: "hidden" | "exclusive" | "default" }&gt;;
+}
+```
+
+**Returns:** `{ success, profile, preview, note }` or
+`{ success: false, error }` (missing profile / foreign owner).
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#select-profiles -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-SELECT-PROFILES-S026" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### `select_profiles`
+
+Activate one or more profiles for THIS connection/session. Selection is
+session state: it filters `tools/list` for this connection only and never
+touches another connection's state. Never grants or restricts authority.
+
+**Parameters:**
+
+```typescript
+{
+  profiles: string[];    // profile names; empty array clears the selection
+}
+```
+
+**Returns:** `{ success, selected, scope: "connection", preview, note }`.
+
+Over MCP-over-HTTP, a client can also pass the selection per request with
+the `X-DuckBrain-Profiles` header (comma-separated profile names), which
+takes precedence over the connection slot for that single request — see
+[Connection Profiles](../guide/connection-profiles.md).
+
+---
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#memory-key-conventions -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-MEMORY-KEY-CONVENTIONS-S027" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Memory Key Conventions
+
+Use consistent hierarchical keys for better organization:
+
+```
+/projects/[PROJECT_NAME]/
+  ├── architecture/     # Design decisions and patterns
+  ├── code/             # Implementation details
+  ├── decisions/        # Decision logs with reasoning
+  ├── todos/            # Task lists and checklists
+  ├── errors/           # Known issues and solutions
+  ├── context/          # Session context and state
+  └── docs/             # Documentation
+```
+
+**Examples:**
+
+- `/projects/webapp/architecture/database-choice`
+- `/projects/webapp/code/auth-middleware`
+- `/projects/webapp/todos/sprint-5`
+- `/projects/webapp/errors/database-timeout`
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#domain-categories -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-DOMAIN-CATEGORIES-S028" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Domain Categories
+
+The `domain` field is an enum with six values:
+
+| Domain     | Use For                                         |
+| ---------- | ----------------------------------------------- |
+| `person`   | People, contacts, team members                  |
+| `event`    | Meetings, incidents, milestones                 |
+| `concept`  | Ideas, architecture, design decisions           |
+| `message`  | Communication records, notes from conversations |
+| `config`   | Configuration values and settings               |
+| `raw_note` | Unstructured notes and observations             |
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#error-handling -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-ERROR-HANDLING-S029" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Error Handling
+
+Tools return consistent error responses. Most tools use:
+
+```typescript
+{
+  success: false;
+  error: "Description of what went wrong";
+}
+```
+
+The `recall` and `list_keys` tools return an `error` field alongside (possibly empty) result arrays instead.
+
+**Common errors:**
+
+- `Namespace not found` — Create it with `create_namespace` or `duckbrain init`
+- `Key not found` — Use `list_keys` to check valid keys
+- `Permission denied` — Check file permissions on the namespaces directory
+- `Invalid key format` — Keys must start with `/` and use only alphanumeric characters, hyphens, underscores, and slashes
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#best-practices -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-BEST-PRACTICES-S030" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Best Practices
+
+1. **Use hierarchical keys** — `/projects/myapp/feature/component`
+2. **Include reasoning** — Store not just what but why in `embedding_text`
+3. **Use attributes** — Add metadata like author, date, confidence
+4. **Organize by domain** — Makes searching easier
+5. **Update rather than overwrite** — Use new keys for new versions
+6. **Clean up old memories** — Use `forget` for obsolete information
+7. **Compact periodically** — Use `squash` (with `dryRun: true` first) to keep the repo small
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#examples -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-EXAMPLES-S031" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Examples
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#storing-architecture-decisions -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-STORING-ARCHITECTURE-DECISIONS-S032" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### Storing Architecture Decisions
+
+```
+AI: "Remember we chose PostgreSQL over MongoDB because we need ACID transactions for financial data"
+
+→ remember({
+    key: "/projects/myapp/decisions/database",
+    domain: "concept",
+    embedding_text: "Chose PostgreSQL over MongoDB. Reason: need ACID transactions for financial data.",
+    attributes: {
+      "decision_date": "2026-07-19",
+      "alternatives": ["MongoDB"],
+      "confidence": "high"
+    }
+  })
+```
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/duckbrain-schema/duckbrain-pin/docs/api/mcp-tools.md#namespace-workflow -->
+  <section id="CHD-BUILD-SPEC-INTEGR-FD3938-NAMESPACE-WORKFLOW-S033" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### Namespace Workflow
+
+```
+AI: "Create a namespace for the new mobile app project and switch to it"
+
+→ create_namespace({name: "mobile-app", setDefault: true})
+→ Returns { success: true, path: "./namespaces/mobile-app" }
+
+Later:
+→ list_namespaces({})
+→ switch_namespace({name: "default"})
+```
+  </section>
+</spec>

@@ -1,0 +1,126 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd35/src/140-acceptance-suite.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD35-SRC-140-A-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd35/src/140-acceptance-suite.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-140-A-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# §P — CHD-3.5 falsifying acceptance suite and handover
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/140-acceptance-suite.md#p-1-evidence-classes-and-boundary -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-140-A-P-1-EVIDENCE-CLASSES-AND-BOUND-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## P.1 Evidence classes and boundary
+
+This suite is a contract specification with falsifying cases. It is not a claim that a CHD runtime, native Hermes adapter, storage substrate, MCP adapter or external connector is deployed. Evidence is classified separately:
+
+- **Fixture acceptance:** validates fixture shape, generated schemas, deterministic adapter behavior and expected negative outcomes. A fixture pass is not full conformance.
+- **Runtime acceptance:** executes the same request/response contracts against the real controller, gateway, scheduler, storage, archive adapter and MCP/CLI projections. It requires captured requests, responses, durable readbacks, exact versions/digests and negative traces.
+- **Owner acceptance:** the configured owner reviews criterion-by-criterion evidence and records an explicit acceptance decision. A green build, static parity, counter, status label, fixture pass or runtime pass alone is not owner acceptance.
+
+The old ten-workflow fixture suite remains reference evidence only. Its historic passes do not certify this CHD-3.5 conformance suite and cannot override current policy or unresolved integration boundaries.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/140-acceptance-suite.md#p-2-falsifying-contract -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-140-A-P-2-FALSIFYING-CONTRACT-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## P.2 Falsifying contract
+
+A conformance run fails if any falsifying case produces the forbidden effect, accepts an unknown correlation, releases uncertain capacity, invents an archived revision, treats a timer as approval, or reaches success without the required composition guard. Every case must assert response status/body, durable records, audit outcome, reservation state and absence of forbidden side effects. A label or test id without those readbacks is not evidence.
+
+Common preconditions: a complete v4 configuration; distinct non-default profiles; a known request/send/attempt/run chain; policy revisions; an isolated room and work item; a reservation ledger; and a recorder capable of reading the exact controller records. Where native/storage/MCP capabilities are unavailable, the result is `blocked` or `OPEN`, not a synthetic PASS.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/140-acceptance-suite.md#p-2-1-timer-resume-must-not-confer-approval -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-140-A-P-2-1-TIMER-RESUME-MUST-NOT-CO-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### P.2.1 Timer resume must not confer approval
+
+**Setup:** create a logical send whose attempt enters human wait with an unresolved approval requirement. Advance the scheduler clock past `verify.wait_timeout_s`, including repeated follow-up/reminder boundaries.
+
+**Forbidden result:** a new attempt is dispatched, the timer changes approval, or capacity is released solely because time elapsed. A scheduler callback may create a durable visibility/escalation record only.
+
+**Required result:** the wait remains open or moves to the declared visibility escalation state; no approval, grant, wake, dispatch or reservation release occurs. A separately authorized approval and successor selection are required. Runtime evidence must show scheduler callback identity and controller readback; fixture evidence may only validate the contract model.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/140-acceptance-suite.md#p-2-2-wrong-correlation-must-be-rejected-and-retained-safely -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-140-A-P-2-2-WRONG-CORRELATION-MUST-B-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### P.2.2 Wrong correlation must be rejected and retained safely
+
+**Setup:** submit a report, cancel, wake or runtime terminal event with a valid shape but a wrong request/send/attempt/run/session correlation, then submit a duplicate wrong event.
+
+**Forbidden result:** the event verifies, closes an obligation, releases capacity, mutates another target, or becomes a valid replay.
+
+**Required result:** typed `not_found`, correlation or conflict outcome according to the operation; no business mutation; audit denial/readback without existence leakage. The valid obligation remains in its prior state and any reservation remains held. Exact duplicate handling applies only to the original identity and bytes.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/140-acceptance-suite.md#p-2-3-restore-always-resolves-current-policy -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-140-A-P-2-3-RESTORE-ALWAYS-RESOLVES-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### P.2.3 Restore always resolves current policy
+
+**Setup:** archive a source checkpoint with policy revision 7 and a derived grant that is revoked before restore; current policy is revision 8 with an independent VP grant. Repeat with the archived source policy revision present and absent.
+
+**Forbidden result:** the archived snapshot becomes activation authority, a missing archived revision is guessed, a live session identity is resumed, or a database is blindly copied.
+
+**Required result:** restore creates fresh identity/bond state and resolves current policy before activation. The readback records `restore_decision=current_policy`, source manifest/checkpoint, source policy revision as `7` or `null`/unknown, effective revision `8`, revoked derived grant absent, independent current grant retained, and historical-policy audit reference. This does not change same-profile fork behavior: preserve-parent remains the default and current-policy remains an explicit alternate.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/140-acceptance-suite.md#p-2-4-report-before-stop-must-not-release-capacity -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-140-A-P-2-4-REPORT-BEFORE-STOP-MUST-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### P.2.4 Report-before-stop must not release capacity
+
+**Setup:** a worker posts a correlated waiting/terminal-looking report while the provider run remains live or stop has not been positively attested. Also test a report followed by lease expiry and process disappearance.
+
+**Forbidden result:** report receipt, waiting state, timeout, lease expiry, process absence, or a `202` acknowledgement releases the attempt/run reservation or marks runtime complete.
+
+**Required result:** report is stored and verified as report content, but capacity remains held in `stop_unproven`/equivalent state until correlated positive provider/runtime terminal readback is committed. A later positive stop proof releases exactly the matching reservation. A wrong or late proof cannot release another run.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/140-acceptance-suite.md#p-2-5-missing-selectors-must-fail-before-effects -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-140-A-P-2-5-MISSING-SELECTORS-MUST-F-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### P.2.5 Missing selectors must fail before effects
+
+**Setup:** remove each operation-specific selector in turn: archive source/destination, target profile, room/thread, run/attempt identity, ticket/assignee, attachment digest, required query selector, or required v4 config path. Also add one unknown field.
+
+**Forbidden result:** a default target, profile, archive source, current sender, cached desired config, or generic body is substituted; any business write, wake, reservation or trigger registration occurs.
+
+**Required result:** named schema/required-path failure (`required_missing`, `unknown_field`, `schema_validation` or operation-specific equivalent) before business state. The raw Muster schema remains strict and the generated operation card identifies the exact missing location.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/140-acceptance-suite.md#p-2-6-non-composition-success-must-have-a-canonical-path -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-140-A-P-2-6-NON-COMPOSITION-SUCCESS-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### P.2.6 Non-composition success must have a canonical path
+
+**Setup:** submit an objective whose assignments are all accepted and whose completion does **not** require cross-manager composition. Repeat with composition required, with a human gate, and with an outstanding blocking send.
+
+**Forbidden result:** the non-composition case is left permanently in `in-acceptance`, reaches success by inventing composition, receives implicit approval, or closes while a blocking send remains. Composition-required work may not bypass its composition transition.
+
+**Required result:** the canonical lifecycle transition explicitly marks the non-composition objective accepted when all non-composition acceptance guards hold; composition-required work reaches accepted only through its composition/delivery path; human approval and outstanding-send guards remain conjunctive. The transition record names the objective, assignments, guard evaluation and resulting state.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/140-acceptance-suite.md#p-3-execution-matrix -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-140-A-P-3-EXECUTION-MATRIX-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## P.3 Execution matrix
+
+| Case | Fixture assertion | Runtime assertion | Owner acceptance |
+|---|---|---|---|
+| Timer resume | deterministic timer does not dispatch/approve/release | real scheduler/controller readback and reservation hold | owner signs timer/approval boundary |
+| Wrong correlation | negative response and no fixture mutation | real API rejection, audit and unchanged valid chain | owner signs non-leakage and safety |
+| Current-policy restore | present/absent source revision fixtures preserve nullability | native export/import, fresh identity and policy readback | owner signs D-039 result |
+| Report-before-stop | report record plus held reservation | provider stop attestation and exact release | owner signs capacity safety |
+| Missing selectors | each required field and unknown key fails closed | all 59 generated operation contracts exercised | owner signs no-default behavior |
+| Non-composition success | guarded state transition in fixture model | live lifecycle transition with no invented composition | owner signs acceptance semantics |
+
+Each runtime row is `blocked` when its dependency is not available. Native archive restore, storage fencing/snapshot binding, and IF-06/IF-07 MCP fidelity remain **OPEN** and cannot be promoted by fixture results.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/140-acceptance-suite.md#p-4-generator-and-falsification-commands -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-140-A-P-4-GENERATOR-AND-FALSIFICATIO-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## P.4 Generator and falsification commands
+
+From `chd34/`:
+
+```sh
+python3 scripts/project_wire.py generate
+python3 scripts/project_wire.py check
+python3 scripts/project_wire.py negative
+```
+
+The generator reads canonical `contracts/openapi.yaml`, resolves component references, and writes full operation-specific request/response/path/query/header projections for all generated HTTP operations. The semantic parity check compares operation/method/path inventory and source digest; its negative mutation proves a changed selector is detected. It is a source projection gate, not runtime conformance.
+
+A handover package must retain: canonical source digest; generated table; per-operation schemas/cards; request/response traces; durable readbacks; negative controls; fixture/runtime/owner evidence labels; and a record of unresolved capabilities. No page render is required for this acceptance artifact.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/140-acceptance-suite.md#p-5-current-status-vocabulary -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-140-A-P-5-CURRENT-STATUS-VOCABULARY-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## P.5 Current status vocabulary
+
+`specified` means contracts and falsifying cases exist. `fixture-observed` means the deterministic adapter or fixture check ran. `runtime-observed` requires a dated real-system trace with exact readbacks. `owner-accepted` requires an explicit owner record. `blocked` names a missing runtime prerequisite. `OPEN` means the integration choice is unresolved; it is not a pass, fail, or invented implementation.
+  </section>
+</spec>

@@ -1,0 +1,165 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd35/src/10-story-master-flows.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD35-SRC-10-ST-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd35/src/10-story-master-flows.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-10-ST-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# §B — Story, master workflows, and role-to-role contracts
+
+&lt;div class="chg"&gt;
+**Edition:** CHD-3.5 · **Revision notice:** This revision supersedes CHD-3.3/3.2 lifecycle claims for logical sends, attempts, runs, waits, assignments, objectives, acceptance guards, visibility escalation, and capacity release. The typed source `tables/lifecycle-35.json` is the sole lifecycle authority; generated schemas, tables, and the declarative figure model are projections. Native allocation/stop-attestation and storage transport remain specified as OPEN integration boundaries.
+&lt;/div&gt;
+
+**Authority:** `tables/lifecycle-35.json` and its generated projections own the lifecycle machines. This section is the readable flow and records operation ordering, guards, and ownership; it does not create a competing transition table.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/10-story-master-flows.md#b-1-one-goal-two-domains -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-10-ST-B-1-ONE-GOAL-TWO-DOMAINS-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## B.1 One goal, two domains
+
+The same control path handles a coding goal and a non-coding goal. In both cases the VP supplies an outcome, the director creates criteria and tickets, managers own slices, supervisors enforce written rules, foremen own worker execution, reports roll upward, and the director accepts only after evidence satisfies the criteria.
+
+**Coding trace — `REL-412`.** The VP requests a release-readiness pack. The director creates parent ticket `REL-412` and child tickets `REL-412-INFRA`, `REL-412-AUDIT`, and `REL-412-HTML`; the HTML ticket depends on the two evidence tickets. `mgr-infra` and `mgr-fleet-ops` assign supervisors. Each supervisor calls `chd_assign` with `enqueue_only` or `run_now`; the controller writes the `SendManifest`, dispatches the foreman's selected profile, and the foreman calls `chd_worker_dispatch` for existing workers. Worker commits, board row ids, CI ids, and reports are artifact references. Supervisors verify against their rules; managers roll up; the director reviews criteria, composes the HTML artifact, delegates delivery if needed, and records `accepted` only after delivery evidence and configured approval.
+
+**Non-coding trace — `BILL-77`.** The VP requests invoice reconciliation. The director creates tickets for extraction, exception review, and owner delivery. Managers coordinate supervisors who check required fields and totals. A foreman manages a bounded data-processing unit; no repository or coding assumption enters the flow. The report v3 dataset is published only after every row and its publication marker are covered by the §G outer journal commit marker and read back; the composition ticket links source rows and exception evidence, and the director accepts the reconciliation before an authorized delivery actor sends it. Payment is not part of the generic path.
+
+The ticket is the shared work identity in both traces. The room is the evidence narrative; the send is the obligation; the report answers one send; the artifact is referenced, not copied into control state.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/10-story-master-flows.md#b-2-uncluttered-master-flow -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-10-ST-B-2-UNCLUTTERED-MASTER-FLOW-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## B.2 Uncluttered master flow
+
+Read the flow from top to bottom. Every arrow names its producer and consumer. The controller is shown where it admits and dispatches, not as a substitute for a role's decision. Protected writes go through the controller; the store never calls the gateway. The master figure and every role-pair view are generated from `tables/master-edge-ledger.csv`; its `source_actor` and `receiver_actor` are authoritative for arrow endpoints, while `edge_class` distinguishes a logical hand-off from a physical API call. Each ledger row also names the credential/principal, request, durable effect, and record reference, so the path is actor → operation → credential → request → persisted record.
+
+![FIGURE 2.1-1](../figures/fig-2.1-1.svg)
+
+FIGURE 2.1-1 — MASTER GOAL TO EVIDENCE. Snapshot: 2026-11-15.
+
+The numbered arrows distinguish the role decision from the controller transport. The return path is durable evidence, not an implied success.
+
+**Functional explanation.** The VP starts the objective; the director reads it and writes criteria and decomposition through the controller. The controller persists records before it admits work. The manager and supervisor read the ticket, room, criteria, and effective policy, then send only the actions allowed by their roles. The foreman decides worker organization and verifies worker results; the supervisor checks the result against assigned rules and does not reorganize the workers. The controller correlates reports to send, ticket, attempt, and request before writing the event. A worker report travels **worker → foreman → controller**; the worker and foreman never write `/chd/*` directly. The controller is the only coordination/report writer. The foreman owns worker organization and execution verification; the supervisor owns rule compliance and verdict, while the foreman does not become the supervisor. The director alone decides acceptance. If a report is rejected, the director writes a named rework scope and the ticket returns to the relevant queue; the old report remains evidence. If the gateway result is unknown, the controller reconciles status before retrying or releasing capacity.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/10-story-master-flows.md#b-3-objective-and-assignment-are-separate-machines -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-10-ST-B-3-OBJECTIVE-AND-ASSIGNMENT-A-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## B.3 Objective and assignment are separate machines
+
+&lt;div class="chg"&gt;
+The objective aggregate and each assignment are separate controller-owned machines. Their typed states, transitions, guards, writes, and owners are generated from `tables/lifecycle-35.json`; `schemas/lifecycle-35-*.schema.json`, `tables/lifecycle-35-transitions.csv`, and `tables/lifecycle-35-acceptance.csv` are checked projections. A transition is legal only when both source and destination belong to the machine enum.
+
+Assignment acceptance is guarded by `AS-03`: the report must be verified, every assignment criterion must pass with non-empty evidence references, no required send may be open/uncertain/waiting without resolution, no human gate may remain unresolved, and trusted correlated runtime terminal/stop proof must be committed. A manager or supervisor can supply a scoped verdict, but the controller owns the record transition and write ordering. Failure writes a named rework or blocked scope; it does not imply acceptance.
+
+Objective acceptance has an explicit non-composition path `OB-03`: from `in_acceptance` to `accepted` only when `composition_required=false`, all required assignments are accepted, no blocking send remains, and each configured delivery and approval guard is satisfied. This edge is not routed through `composing`, and “all assignments exist” or “all assignments were accepted” alone is insufficient. When composition is required, `OB-04` is the only entry to `composing`; a composition artifact must be accepted before delivery, approval, or direct composed acceptance. Human approval is a guard, not runtime verification, stop proof, assignment acceptance, or objective acceptance by itself.
+
+The controller writes acceptance evidence and the state transition only after reading the current assignment/send projections, validating guards, appending the audit event, and reading back the committed record. A dependency is satisfied only by an accepted producing assignment with the required artifact. Cancelled, failed, expired, withdrawn, superseded, deferred, blocked, and unknown outcomes are not successful outcomes; direct dependents become blocked with a named reason. An accepted replacement releases a dependent only after the dependency edge records `replaces` and the required artifact is present.
+&lt;/div&gt;
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/10-story-master-flows.md#b-4-normal-alternate-failed-and-waiting-branches -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-10-ST-B-4-NORMAL-ALTERNATE-FAILED-AN-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## B.4 Normal, alternate, failed, and waiting branches
+
+| Branch | Producer/consumer | Durable action and record | Next result |
+|---|---|---|---|
+| Normal capacity | Supervisor → controller → foreman | `chd_assign` reserves one ledger entry; controller writes `SendManifest`, then gateway dispatches | Foreman reports; supervisor verifies; manager rolls up |
+| Queue without wake | Supervisor → controller | `admission=enqueue_only`; message and manifest are durable, no gateway POST is made yet | `queued`; later trigger drains the same send |
+| Immediate request | Supervisor → controller → gateway | `admission=run_now`; controller checks permissions, profile, gateway and shared caps atomically | `admitted` or durable `queued`; no cap bypass |
+| Rejection / rework | Director → controller → owning manager | Criterion verdict rejects named evidence; controller appends a ticket event and rework assignment | Work returns to the relevant queue with original lineage; rejection is not acceptance |
+| Cancelled prerequisite | Director/controller → dependent owner | Producer becomes `cancelled`; controller writes dependent `blocked{prerequisite_cancelled}` and preserves evidence | No dependent dispatch until replacement/re-scope; cancellation is not success |
+| Failed or expired producer | Controller → director/manager | Failure/expiry report and outcome remain terminal; dependent remains blocked | Director re-dispatches producer, records replacement, or cancels dependent |
+| Human wait | Supervisor → manager → director | `WaitRecord` with `gate_ref`, question, requester, and policy revision; current attempt may close as waiting | Objective/assignment remains open; timeout grants nothing; explicit resolution starts successor work |
+| Gateway unknown | Controller → gateway / status owner | Keep admission lease and send open; record `unknown_execution`; query status or prove stop | Reconcile to one known run/report, then release or create a new attempt |
+| Worker failure | Worker → foreman → supervisor | `WorkerRun` failed/blocked; foreman verifies and may reallocate existing worker | New run/attempt only after the foreman's execution decision; no silent relaunch |
+| Delivery failure | Delivery actor → controller | Same content, new delivery attempt with same idempotency key; acceptance remains separate | Retry delivery; do not reopen accepted content or treat channel ACK as approval |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/10-story-master-flows.md#b-5-role-pair-contract-vp-director -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-10-ST-B-5-ROLE-PAIR-CONTRACT-VP-DIRE-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## B.5 Role-pair contract: VP ↔ director
+
+**Inputs:** objective text, constraints, VP criteria, approval policy, grant ceiling. **Trigger:** `W1` directive accepted by the controller. **Actions:** VP opens, revises, or cancels; director reads, acknowledges, derives criteria where necessary, and records a revision rather than editing history. The director cannot change VP intent silently. **Stores:** `ObjectiveRecord`, opening `RoomMessage`, `AcceptanceCriterion`, `TicketRecord`, revision and audit records in `chd`. **Calls:** `chd_post` / `POST /v1/signals`, `chd_ticket_create`, `chd_ticket_transition`. **Outputs:** `created → decomposing`, status readback, or accepted result with per-criterion evidence. **Recipient:** VP receives acknowledgement, status, escalation, and final delivery. **Failure/rework:** invalid or conflicting direction is rejected and audited; a valid change creates a new revision and rework scope; VP cancellation writes `cancelled` and downstream sends close `deferred{objective-cancelled}`. Cancellation does not satisfy a dependent ticket.
+
+![FIGURE 2.2-1](../figures/fig-2.2-1.svg)
+
+FIGURE 2.2-1 — VP AND DIRECTOR. Snapshot: 2026-11-15.
+
+The numbered arrows distinguish the role decision from the controller transport. The return path is durable evidence, not an implied success.
+
+The director is the decision owner after intake, but cannot invent approval or authority outside the VP configuration. A fresh timestamp or a delivery ACK does not satisfy acceptance.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/10-story-master-flows.md#b-6-role-pair-contract-director-manager -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-10-ST-B-6-ROLE-PAIR-CONTRACT-DIRECTO-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## B.6 Role-pair contract: director ↔ manager
+
+**Inputs:** objective slice, one-owner assignment, ticket and parent links, criteria version, dependencies, delegated decision scope. **Trigger:** decomposition ready (`W3`), reassignment, or rework. **Actions:** director creates or updates the ticket, assigns exactly one accountable manager, grants only within the VP-authorized pool, and cancels/reassigns when required; manager accepts, decomposes within scope, or reports blocked. **Stores:** `TicketRecord` and `TicketEvent`, `AssignmentRecord`, `DelegationRecord`/`GrantRecord`, task-room message. **Calls:** `chd_ticket_create/update/transition`, `chd_assign`, `chd_post`. **Outputs:** manager-owned pending/active ticket, verified manager report, or structured blocked report. **Recipients:** manager receives the slice; director receives status and evidence. **Failure/rework:** missing capability keeps ownership with the manager until director grant, reassignment, human wait, or escalation. A stale ticket revision returns `ticket_revision_conflict`; a cancelled/failed/expired dependency blocks dependents. The manager cannot self-reassign or widen authority.
+
+![FIGURE 2.3-1](../figures/fig-2.3-1.svg)
+
+FIGURE 2.3-1 — DIRECTOR AND MANAGER. Snapshot: 2026-11-15.
+
+The numbered arrows distinguish the role decision from the controller transport. The return path is durable evidence, not an implied success.
+
+The controller owns CAS and protected writes. The manager decides only inside its recorded delegated scope; an out-of-scope commitment is void and produces an incident path.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/10-story-master-flows.md#b-7-role-pair-contract-manager-supervisor -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-10-ST-B-7-ROLE-PAIR-CONTRACT-MANAGER-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## B.7 Role-pair contract: manager ↔ supervisor
+
+**Inputs:** manager slice, child ticket, task/thread refs, written rules, criteria, workspace and deadline. **Trigger:** manager task split or a report requiring rework. **Actions:** manager assigns; supervisor reads the rules, performs bounded checks, gathers evidence, compares thresholds, coordinates the foreman, and reports. The supervisor does not author policy, create agents, grant permissions, change criteria, or dictate worker organization. **Stores:** child `TicketRecord`, `AssignmentRecord`, task `RoomMessage` thread, `SessionBond`, verification report and incident record. **Calls:** `chd_assign`, `chd_post`, `chd_read_room`, `chd_ticket_transition`, `chd_report`. **Outputs:** checked result, blocked/waiting report, escalation, or rework request in the same lineage. **Recipients:** supervisor receives the task; manager receives status, evidence, and escalation. **Failure/rework:** ambiguous conditions escalate with evidence; failed checks return named rework to the same ticket/thread; unauthorized transitions are refused and audited.
+
+![FIGURE 2.4-1](../figures/fig-2.4-1.svg)
+
+FIGURE 2.4-1 — MANAGER AND SUPERVISOR. Snapshot: 2026-11-15.
+
+The numbered arrows distinguish the role decision from the controller transport. The return path is durable evidence, not an implied success.
+
+The supervisor enforces the assigned rules. It may choose the permitted check order and coordinate the assigned foreman, but it does not become the manager and does not organize the foreman's workers.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/10-story-master-flows.md#b-8-role-pair-contract-supervisor-foreman -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-10-ST-B-8-ROLE-PAIR-CONTRACT-SUPERVI-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## B.8 Role-pair contract: supervisor ↔ foreman
+
+**Inputs:** bounded task, ticket and thread, unchanged criteria, artifact expectations, workspace, deadline, and admission mode. **Trigger:** supervisor selects an existing assigned foreman and calls `chd_assign`. **Actions:** supervisor requests `enqueue_only` or `run_now`; the controller checks membership, authority, profile readiness, gateway/agent caps, and writes one reservation. The foreman reads the task and owns the execution plan, worker selection, splitting, reallocation, verification, and report. **Stores:** `AssignmentRecord`, `TicketRecord`, `SendManifest`, `SessionBond`, admission audit. **Calls:** `chd_assign` / `POST /v1/assignments`; controller gateway dispatch; later `chd_report`. **Outputs:** queued/admitted foreman send and one final report with lineage. **Recipients:** foreman receives the work; supervisor and manager receive status. **Failure/rework:** capacity produces durable `queued`; duplicate request returns the existing send; denied authority is audited; an unknown gateway result retains the lease; failed criteria creates rework without changing worker organization.
+
+![FIGURE 2.5-1](../figures/fig-2.5-1.svg)
+
+FIGURE 2.5-1 — SUPERVISOR AND FOREMAN. Snapshot: 2026-11-15.
+
+The numbered arrows distinguish the role decision from the controller transport. The return path is durable evidence, not an implied success.
+
+The controller admits and dispatches; it does not choose the foreman's work plan. `enqueue_only` persists work without a gateway wake. `run_now` attempts immediate execution but cannot exceed the shared ledger.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/10-story-master-flows.md#b-9-role-pair-contract-foreman-worker -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-10-ST-B-9-ROLE-PAIR-CONTRACT-FOREMAN-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## B.9 Role-pair contract: foreman ↔ worker
+
+**Inputs:** one work unit, instruction reference, criteria, workspace, runtime settings, and a distinct non-default worker profile. **Trigger:** foreman calls managed `chd_worker_dispatch`. **Actions:** controller validates authority, profile distinctness, workspace scope, and capacity; it creates `WorkerRun` and invokes the gateway. The foreman observes progress, verifies artifacts and gates, and may reallocate a stalled worker. The worker executes the unit and reports to the foreman; it cannot alter ticket authority or acceptance. **Stores:** `WorkerRun`, child ticket link, worker report message, artifact refs, audit. **Calls:** `chd_worker_dispatch`, `chd_run_status`, `chd_run_cancel`, `chd_report`. **Outputs:** verified result, blocked/failed result, or a proven stop before capacity release. **Recipients:** foreman receives the run; supervisor receives the final roll-up through the foreman. **Failure/rework:** timeout/cancel requires stop confirmation; uncertain execution remains leased; retry uses a new attempt/run identity; wrong, stale, or duplicate reports remain visible and do not close the send.
+
+![FIGURE 2.6-1](../figures/fig-2.6-1.svg)
+
+FIGURE 2.6-1 — FOREMAN AND WORKER. Snapshot: 2026-11-15.
+
+The numbered arrows distinguish the role decision from the controller transport. The return path is durable evidence, not an implied success.
+
+The foreman owns worker execution. A supervisor can require a check or reject a result against criteria, but it cannot dictate the foreman's worker organization. A worker failure may lead the foreman to reallocate an existing worker; the controller never silently relaunches it.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/10-story-master-flows.md#b-10-acceptance-and-delivery -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-10-ST-B-10-ACCEPTANCE-AND-DELIVERY-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## B.10 Acceptance and delivery
+
+&lt;div class="chg"&gt;
+The director starts acceptance only after every accountable assignment has a guarded verdict and no required blocking send remains. It checks VP-supplied, director-derived, and standing-rule criteria with provenance and evidence refs. `OB-03` is the direct non-composition path: when composition is not required, all required assignments are accepted, no blocking send remains, and configured delivery/approval guards pass, the controller may commit objective acceptance without entering `composing`. When composition is required, `OB-04` enters composing and an accepted composition artifact is required before delivery, approval, or composed acceptance. Human approval, when configured, is a separate guard; waiting, timeout, channel acknowledgement, or assignment existence never substitutes for verified work or approval.
+
+A normal acceptance writes assignment verdicts, objective criterion evidence, composition lineage when required, delivery evidence when required, approval evidence when required, and the terminal objective transition in one controller-owned ordering with readback. A rejection writes reasons and rework scope, leaves prior evidence intact, and returns work to the owning queue. A cancellation writes `cancelled`, closes downstream work as `deferred{objective-cancelled}`, and never releases a dependent as if its prerequisite succeeded.
+&lt;/div&gt;
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/src/10-story-master-flows.md#b-11-traceability-and-one-authority-rule -->
+  <section id="CHD-HANDBOOK-CHD35-SRC-10-ST-B-11-TRACEABILITY-AND-ONE-AUTH-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## B.11 Traceability and one-authority rule
+
+- Objective, assignment, send, attempt, run and wait transitions: `tables/lifecycle-35.json`; generated projections in §25. Old `build-spec/state-machines.json` is a superseded reference, not a second canon.
+- Assignment fields and control records: VOL-B and `contracts/DATA-MODEL.md`; ticket authority and CAS: VOL-E.
+- Tool/endpoint names and authorization: VOL-C and `contracts/ENDPOINTS.md`.
+- Report content, criteria and delivery: VOL-D and report v3 schema.
+- Operation IDs and complete operation cards: VOL-E operation reference and `register/operations.csv`.
+- Figure geometry is generated from `handbook/chd32/scripts/gen_figures.py`; each required figure has one Mermaid source and one SVG. The diagrams are views of the prose contracts above, not alternate state machines.
+
+The package never treats a green build, a fresh timestamp, a queued wake, a manager completion, a delivery ACK, or a cancelled producer as acceptance. The stored records and named guards are the evidence.
+  </section>
+</spec>

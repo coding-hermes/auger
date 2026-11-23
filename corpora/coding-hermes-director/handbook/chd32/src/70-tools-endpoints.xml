@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd32/src/70-tools-endpoints.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD32-SRC-70-TO-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd32/src/70-tools-endpoints.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-70-TO-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# §H — Tools, endpoints, attachments, and errors
+
+**Contract:** `chd.operation.v1`; error catalog `chd.errors.v1` (150 rows); keys and stored records are authoritative in `schemas/keys.yaml` and §G. This section is the single public inventory. Detailed behavior occurs exactly once in the linked operation card; schemas are machine-readable companions, not a second operation definition.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/70-tools-endpoints.md#h-1-four-doors-and-common-rules -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-70-TO-H-1-FOUR-DOORS-AND-COMMON-RULE-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## H.1 Four doors and common rules
+
+Every operation below is available through API, MCP, and CLI with identical request validation, authorization, idempotency, audit, and error mapping. API is the listed HTTP route; MCP is the listed tool; CLI is `chd &lt;verb&gt;` using the same envelope. Webhook is supported only by `signal_ingress` via `POST /v1/signals`; every other webhook attempt is explicitly unsupported and returns `400 bad_request`. Door identity is audit metadata, never authority. Credentials are references, never request secrets.
+
+Validation order is fixed: authenticate principal → identity consistency → non-leaking target lookup → schema/version/enum/limits → use/grant-use/meta-grant/create and approval → idempotency/CAS → durable primary write and required companions → wake/admission/runtime routing → response/readback. A failed validation writes no business state; an authorized audit denial may be durable. `202` means queued, pending approval, or asynchronous—not completed.
+
+The controller is the only `/chd/*` writer. The archive ingestor is the only writer of the separate session archive namespace. A wake target is routing output, never a DuckBrain write; a durable record is not a wake. No agent receives a direct DuckBrain write token, scheduler credential, gateway credential, or implicit grant. Binary image/PDF upload is unsupported; use an authorized external reference. Dataset staging is unreadable until every typed row validates and publication is atomic.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/70-tools-endpoints.md#h-2-complete-operation-inventory -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-70-TO-H-2-COMPLETE-OPERATION-INVENTO-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## H.2 Complete operation inventory
+
+| ID | Operation | Principal | API | MCP | Card |
+|---|---|---|---|---|---|
+| `OP-001` | `bootstrap_install` | `operator` | `POST /v1/admin/bootstrap` | `bootstrap_install` | `op-bootstrap-install-001.md` |
+| `OP-002` | `director_provision` | `operator` | `POST /v1/admin/agents` | `director_provision` | `op-director-provision-002.md` |
+| `OP-003` | `manager_provision` | `director` | `POST /v1/admin/agents` | `manager_provision` | `op-manager-provision-003.md` |
+| `OP-004` | `supervisor_provision` | `manager` | `POST /v1/admin/agents` | `supervisor_provision` | `op-supervisor-provision-004.md` |
+| `OP-005` | `foreman_provision` | `supervisor` | `POST /v1/admin/agents` | `foreman_provision` | `op-foreman-provision-005.md` |
+| `OP-006` | `worker_provision` | `foreman` | `POST /v1/workers/provision` | `worker_provision` | `op-worker-provision-006.md` |
+| `OP-007` | `host_onboard` | `operator` | `POST /v1/admin/gateways` | `host_onboard` | `op-host-onboard-007.md` |
+| `OP-008` | `profile_sync` | `operator` | `POST /v1/admin/profiles/{agent}/sync` | `profile_sync` | `op-profile-sync-008.md` |
+| `OP-009` | `profile_readback` | `operator` | `GET /v1/admin/profiles/{agent}` | `profile_readback` | `op-profile-readback-009.md` |
+| `OP-010` | `chd_create_room` | `controller` | `POST /v1/rooms` | `chd_create_room` | `op-chd-create-room-010.md` |
+| `OP-011` | `chd_post_message` | `role-owner-via-controller` | `POST /v1/rooms/{room}/messages` | `chd_post_message` | `op-chd-post-message-011.md` |
+| `OP-012` | `chd_reply` | `role-owner-via-controller` | `POST /v1/rooms/{room}/replies` | `chd_reply` | `op-chd-reply-012.md` |
+| `OP-013` | `chd_read_room` | `authorized-role-via-controller` | `GET /v1/rooms/{room}/messages` | `chd_read_room` | `op-chd-read-room-013.md` |
+| `OP-014` | `chd_read_worklog` | `authorized-role-via-controller` | `GET /v1/worklog` | `chd_read_worklog` | `op-chd-read-worklog-014.md` |
+| `OP-015` | `chd_wake` | `controller` | `POST /v1/wakes` | `chd_wake` | `op-chd-wake-015.md` |
+| `OP-016` | `chd_request_wake` | `supervisor-or-director` | `POST /v1/wakes/requests` | `chd_request_wake` | `op-chd-request-wake-016.md` |
+| `OP-017` | `session_fork` | `authorized-role-via-controller` | `POST /v1/sessions/{session}/fork` | `session_fork` | `op-session-fork-017.md` |
+| `OP-018` | `chd_report` | `worker-or-foreman-or-supervisor` | `POST /v1/reports` | `chd_report` | `op-chd-report-018.md` |
+| `OP-019` | `chd_verify_report` | `controller` | `POST /v1/reports/{report}/verify` | `chd_verify_report` | `op-chd-verify-report-019.md` |
+| `OP-020` | `worker_dispatch` | `foreman` | `POST /v1/worker-runs` | `worker_dispatch` | `op-worker-dispatch-020.md` |
+| `OP-021` | `worker_run_status` | `foreman` | `GET /v1/worker-runs/{run}` | `worker_run_status` | `op-worker-run-status-021.md` |
+| `OP-022` | `worker_run_cancel` | `foreman` | `POST /v1/worker-runs/{run}/cancel` | `worker_run_cancel` | `op-worker-run-cancel-022.md` |
+| `OP-023` | `ticket_create` | `controller-ticket-service` | `POST /v1/tickets` | `ticket_create` | `op-ticket-create-023.md` |
+| `OP-024` | `ticket_get` | `authorized-role-via-controller` | `GET /v1/tickets/{ticket}` | `ticket_get` | `op-ticket-get-024.md` |
+| `OP-025` | `ticket_update` | `authorized-owner-via-controller` | `PATCH /v1/tickets/{ticket}` | `ticket_update` | `op-ticket-update-025.md` |
+| `OP-026` | `ticket_transition` | `canonical-transition-writer` | `POST /v1/tickets/{ticket}/transitions` | `ticket_transition` | `op-ticket-transition-026.md` |
+| `OP-027` | `ticket_query` | `authorized-role-via-controller` | `GET /v1/tickets` | `ticket_query` | `op-ticket-query-027.md` |
+| `OP-028` | `ticket_import_export` | `controller-ticket-service` | `POST /v1/tickets/import or GET /v1/tickets/export` | `ticket_import_export` | `op-ticket-import-export-028.md` |
+| `OP-029` | `grant_issue` | `grant-authority` | `POST /v1/grants` | `grant_issue` | `op-grant-issue-029.md` |
+| `OP-030` | `grant_revoke` | `grant-authority` | `POST /v1/grants/{grant}/revoke` | `grant_revoke` | `op-grant-revoke-030.md` |
+| `OP-031` | `approval_resolve` | `configured-approver` | `POST /v1/approvals/{approval}/resolve` | `approval_resolve` | `op-approval-resolve-031.md` |
+| `OP-032` | `audit_read` | `authorized-auditor` | `GET /v1/audit` | `audit_read` | `op-audit-read-032.md` |
+| `OP-033` | `admission_enqueue` | `supervisor-or-director` | `POST /v1/assignments` | `admission_enqueue` | `op-admission-enqueue-033.md` |
+| `OP-034` | `admission_run_now` | `supervisor-or-director` | `POST /v1/assignments` | `admission_run_now` | `op-admission-run-now-034.md` |
+| `OP-035` | `room_bump` | `controller` | `POST /v1/rooms/{room}/bump` | `room_bump` | `op-room-bump-035.md` |
+| `OP-036` | `capacity_read` | `controller-or-operator` | `GET /v1/status` | `capacity_read` | `op-capacity-read-036.md` |
+| `OP-037` | `archive_export` | `archive-ingestor` | `POST /v1/archive/export` | `archive_export` | `op-archive-export-037.md` |
+| `OP-038` | `archive_read` | `authorized-owner-or-delegated-auditor` | `GET /v1/archive/sessions` | `archive_read` | `op-archive-read-038.md` |
+| `OP-039` | `archive_restore` | `authorized-replacement-operator` | `POST /v1/archive/restore` | `archive_restore` | `op-archive-restore-039.md` |
+| `OP-040` | `agent_update` | `operator-or-authorized-owner` | `POST /v1/admin/agents/{agent}/update` | `agent_update` | `op-agent-update-040.md` |
+| `OP-041` | `agent_offboard` | `operator` | `POST /v1/admin/agents/{agent}/offboard` | `agent_offboard` | `op-agent-offboard-041.md` |
+| `OP-042` | `chd_status` | `authorized-role-via-controller` | `POST /v1/status` | `chd_status` | `op-chd-status-042.md` |
+| `OP-043` | `signal_ingress` | `VP-or-peer` | `POST /v1/signals` | `signal_ingress` | `op-signal-ingress-043.md` |
+| `OP-044` | `cycle_callback` | `scheduler` | `POST /v1/cycle` | `cycle_callback` | `op-cycle-callback-044.md` |
+| `OP-045` | `missing_reply_notify` | `controller` | `POST /v1/replies/missing` | `missing_reply_notify` | `op-missing-reply-notify-045.md` |
+| `OP-046` | `attachment_upload` | `authorized-caller-via-controller` | `POST /v1/attachments` | `attachment_upload` | `op-attachment-upload-046.md` |
+| `OP-047` | `attachment_finalize` | `authorized-caller-via-controller` | `POST /v1/attachments/{attachment}/finalize` | `attachment_finalize` | `op-attachment-finalize-047.md` |
+| `OP-048` | `attachment_cleanup` | `controller` | `POST /v1/attachments/cleanup` | `attachment_cleanup` | `op-attachment-cleanup-048.md` |
+
+Each row appears once in this inventory and once in one `opcards/op-*.md` file. The register is the upstream traceability index; it is not another operation catalogue. Unsupported actions are listed in each card: direct store writes, shell worker launches, implicit wake, credential substitution, blind archive SQLite copy, and unlisted webhook routes are not supported.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/70-tools-endpoints.md#h-3-message-kinds-and-attachments -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-70-TO-H-3-MESSAGE-KINDS-AND-ATTACHME-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## H.3 Message kinds and attachments
+
+The only message-kind enum is `msg | question | status | directive | task | report | incident`, as required by R31-003. `schemas/tools/message-kind.schema.json` contains one positive example for each value; `schemas/message.schema.json` is the stored RoomMessage shape. The legality authority remains VOL-C §3.6: illegal role/room combinations return `403 kind_not_allowed`, while unknown or unreadable rooms and targets return indistinguishable `404 not_found` before kind evaluation. `incident` is service-written; agents cannot compose it.
+
+Supported direct bytes are UTF-8 text (1 MiB), JSON (1 MiB), CSV/dataset data (10 MiB), and octet-stream (25 MiB). Upload creates an unreadable staging Attachment; finalize verifies size, digest, and content type, then publishes once and links only an authorized reference. Retries reuse attachment id and digest; a changed digest conflicts. Image/PDF binary upload is unsupported and must be an external reference (URL max 2048); CHD does not process that reference. Abandoned staging is cleaned only after retention and remains in audit evidence.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/70-tools-endpoints.md#h-4-responses-effects-and-idempotency -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-70-TO-H-4-RESPONSES-EFFECTS-AND-IDEM-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## H.4 Responses, effects, and idempotency
+
+Every success uses `{ok, operation, request_id, result, events, records}`. Every error uses `{ok:false, operation, request_id, error:{code,message,detail}}` and the status in `errors/catalog.yaml`. Exact duplicate bytes replay the original response without another business write. Changed bytes under the same key return `duplicate` or `admission_conflict`. Unknown external outcomes require status/reconciliation before retry; lease expiry never proves a run stopped or releases capacity. Approval, report verification, wake routing, bridge ACK, archive checkpoint, and runtime completion are separate outcomes with separate readbacks.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/70-tools-endpoints.md#h-5-machine-readable-surface -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-70-TO-H-5-MACHINE-READABLE-SURFACE-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## H.5 Machine-readable surface
+
+`schemas/tools/interface.schema.json` enumerates all 48 operation names and four doors. Each `schemas/tools/&lt;operation&gt;.json` pins its operation id, transport, records, errors, common envelope, async read/cancel metadata, and additional-properties refusal. `errors/catalog.yaml` is the single 150-row registry: each row supplies HTTP status, the identical MCP/CLI/webhook mapping rule, retryability, persistence/queue state, audit behavior, and the `not_found` equivalence flag for unknown or unreadable resources. The registry includes errors emitted by §H operations and named cross-section failures from provisioning, persistence, authorization, reports, archives, federation, diagnostics, and migration; it does not create an undocumented operation. The check commands are:
+
+```sh
+python3 handbook/chd32/scripts/verify_error_registry.py
+```
+
+`not_found`, `unknown_resource`, `room_not_found`, `session_not_found`, `ticket_not_found`, `grant_not_found`, and `not_member` are non-oracle 404 rows; an authenticated caller receives the same resource outcome whether the target is absent or unreadable. `scope_denied` remains an explicit 403 only where the contract has already established a readable resource and scope evaluation is therefore non-leaking. `202` rows (`waiting_human`, `pending_approval`) are pending states, never completion; queue/readback rules are carried in the registry fields.
+
+The check command is:
+
+```sh
+python3 handbook/chd32/scripts/check_tool_catalog.py
+```
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/src/70-tools-endpoints.md#h-6-explicitly-unsupported-in-this-revision -->
+  <section id="CHD-HANDBOOK-CHD32-SRC-70-TO-H-6-EXPLICITLY-UNSUPPORTED-IN-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## H.6 Explicitly unsupported in this revision
+
+- agent or peer direct writes to `/chd/*`, `/sessions/*`, or `/gaps/*`;
+- shell/CLI worker launch as authority (worker dispatch is HTTP and profile/runtime-bound);
+- webhook use for operations other than `signal_ingress`;
+- CHD binary image/PDF upload or content processing;
+- blind SQLite copying into a replacement Hermes session database;
+- implicit human approval, implicit permission resync, automatic policy widening, or connectivity-as-VP;
+- undocumented operation names, unregistered workflow versions, and unversioned payloads.
+  </section>
+</spec>

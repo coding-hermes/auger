@@ -1,0 +1,173 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd35/evidence/reader-qa-report.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD35-EV-B5CB11-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd35/evidence/reader-qa-report.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD35-EV-B5CB11-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# CHD-3.5 Reader-Artifact QA Report
+
+Delivered artifact: `CHD-3.5-complete-navigable.pdf`
+SHA-256: `5c8de61683cfa25cfccd49b9c1e0cc169c45bc7814c604770e7f86b46522f743`
+Pages: 3247 (A4) · bookmarks 1067 · internal links 1214 · PDF page labels Arabic 1..3247.
+Print variant: `CHD-3.5-complete-print.pdf`, SHA-256
+`2806344e020c5b878c5eca9811a801e36c9a49a21702c604c2732f46ef0df2ab`, 3247 pages (94 % scale, 3 % margins).
+Superseded this round: V05-round artifact `2c2badf1…` (1378 pp); section 21 and 24 were recomposed,
+the other twenty-five sections are byte-for-byte the same sheet set as that build.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/evidence/reader-qa-report.md#r35-round-2-v01-v02-v06-closed-v19-gate-extended -->
+  <section id="CHD-HANDBOOK-CHD35-EV-B5CB11-R35-ROUND-2-V01-V02-V06-CLOSED-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## R35 round 2 — V01 / V02 / V06 closed, V19 gate extended
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/evidence/reader-qa-report.md#r35-v01-blocking-schema-tables-no-longer-lose-visible-rows -->
+  <section id="CHD-HANDBOOK-CHD35-EV-B5CB11-R35-V01-BLOCKING-SCHEMA-TABLES-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### R35-V01 (BLOCKING) — schema tables no longer lose visible rows
+Root causes, all fixed in the generator rather than in the pictured samples:
+
+1. **Character-budget table pagination.** Section 21 tables were split by byte count, which cannot see
+   wrapped row height; sheets therefore promised `ROWS 7–12` and printed three rows before the fixed
+   page box clipped the rest. The packer now paginates section-21 tables by *measured row height*
+   (`render_book._t21_row_mm`: per-column character budget × wrapped-line height + row padding,
+   `BAND_BUDGET_MM = 190`). Continuation placards are computed from the rows actually emitted.
+2. **Escaped pipes inside regex cells.** `\|` inside a canonical pattern cell split the markdown row
+   into phantom columns; `table-layout: fixed` then squeezed the real Storage column to one glyph
+   width — the observed vertical single-letter strip. Cells are now split on unescaped pipes only,
+   and the canonical `\|` bytes are printed unchanged.
+3. **Angle-bracket identifiers eaten as HTML.** `/chd/acceptance/&lt;objective-id&gt;/&lt;crit-id&gt;` printed as
+   `/chd/acceptance//` because `&lt;objective-id&gt;` parsed as an unknown element. `inline()` now escapes
+   HTML metacharacters before rendering inline code.
+4. **Table CSS.** Section 21 has its own fixed column shares for 2–6 column families, `overflow-wrap:
+   anywhere` on cells and code spans, 7.0 pt type, and pre-wrap for fenced excerpts.
+
+Evidence (all measured on the delivered SHA):
+
+| Check | Result |
+|---|---|
+| Cell round-trip vs `manuscript/21-01.md` (de-whitespaced substring, literal `*` preserved) | 3933/3933 cell values visible, 0 missing (`scripts/reader_qa_r35.py`) |
+| Body words outside the content box / under the footer, all 321 section-21 sheets | 0 |
+| Vertical single-letter columns (≥4 tight alnum single-letter stack in one x-column) | 0 |
+| Continuation families tiling `1..N` with truthful ranges | 50/50 families, 0 gaps or inversions |
+| Whole-artifact sweep, every page | 0 clipped or overlapping words in sections 21 and 24 |
+
+Spot-proofs (vision, this round): `SECTION 21 · SHEET 94` — six columns inside the frame,
+Storage column wrapped and readable, no footer collision, ten rows 11–20 of 64 visible.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/evidence/reader-qa-report.md#r35-v02-blocking-operation-contracts-flow-never-clip -->
+  <section id="CHD-HANDBOOK-CHD35-EV-B5CB11-R35-V02-BLOCKING-OPERATION-CON-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### R35-V02 (BLOCKING) — operation contracts flow, never clip
+`render_book.split_opcard_fences` now splits any contract fence taller than a sheet at raw line
+boundaries into measured units of 52 source lines, each printed with the operation ID, the source
+identifier (`&lt;op&gt; resolved contract (contracts/openapi.yaml via scripts/project_wire.py)`) and an
+exact line range — `LINES 53–104 OF 1843 · CONTINUED ON NEXT UNIT`, ending `END OF EXCERPT`.
+Fixed-height clipping is impossible: no unit exceeds the body band, and no `pre` container has a
+height limit. Provenance is unchanged (the fence bytes are copied, not re-serialised).
+
+| Check | Result |
+|---|---|
+| Section-24 sheets rendered | 2112 |
+| Contracts round-tripped from the printed monospaced spans vs canonical opcard fences | 59/59 byte-identical (de-whitespaced) |
+| Canonical fences parsing as the same JSON | 59/59 |
+| `END OF EXCERPT` tail units | 59 (one per contract) |
+| Body words outside the content box / under the footer | 0 of 2112 sheets |
+
+Spot-proof: `SECTION 24 · SHEET 3` — placard `OP-033, OP-034 · … · LINES 53–104 OF 1843 ·
+CONTINUED ON NEXT UNIT`; coherent middle fragment, ends far above the footer.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/evidence/reader-qa-report.md#r35-v06-blocking-lifecycle-model-complete-and-reconciled-with-its-projections -->
+  <section id="CHD-HANDBOOK-CHD35-EV-B5CB11-R35-V06-BLOCKING-LIFECYCLE-MOD-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### R35-V06 (BLOCKING) — lifecycle model complete and reconciled with its projections
+The canonical model (`tables/lifecycle-35.json`) is complete: AS-09 `rework→active`, AS-10
+`blocked→active`, AS-11 `proposed→withdrawn`, OB-13 `rework→decomposing`, OB-14
+`blocked→decomposing`, OB-15/OB-16 `decomposing→cancelled|withdrawn`. All six machines pass
+reachability, terminal reachability and no-dead-end checks; figures 25.1-1 … 25.6-1 carry exactly the
+canonical transition IDs (SVG label parity), and tables 25.1-1 … 25.1-6 print all 50 transitions with
+guards and ordered writes. The recovery law (same-record recovery with explicit `SuccessorLink`,
+authorized cancellation/withdrawal, original-goal accounting) is published in §25 and §B.
+This round added the missing **acceptance fixtures** — `tables/lifecycle-35-acceptance.csv` now
+carries `rework_recovery`, `blocked_release`, `cancellation`, `withdrawn_reachability` and
+`original_goal_accounting` — plus a restored validator (`scripts/lifecycle-35-validate.py`).
+
+Owner-required traces, each verified legal edge-by-edge against the published model:
+
+| Trace | Legal chain |
+|---|---|
+| Rejected work corrected and accepted | active —AS-06→ rework —AS-09→ active —AS-03→ accepted |
+| Blocked released by a valid replacement | active —AS-07→ blocked —AS-10→ active —AS-03→ accepted |
+| Objective rework recovery | in_acceptance —OB-11→ rework —OB-13→ decomposing —OB-02→ in_acceptance —OB-03→ accepted |
+| Objective blocked recovery | decomposing —OB-12→ blocked —OB-14→ decomposing —OB-02→ in_acceptance —OB-03→ accepted |
+| Authorized cancellation | assigned —AS-08→ cancelled |
+| Authorized withdrawal | proposed —AS-11→ withdrawn |
+| Objective cancellation / withdrawal | decomposing —OB-15→ cancelled · decomposing —OB-16→ withdrawn |
+
+Unresolved outcomes remain explicit release gates (`OPEN G-04` native allocation, `G-06` trusted
+stop-proof producer, `G-12` storage binding); nothing here claims runtime implementation.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/evidence/reader-qa-report.md#r35-v19-blocking-the-delivery-gate-now-reads-the-artifact -->
+  <section id="CHD-HANDBOOK-CHD35-EV-B5CB11-R35-V19-BLOCKING-THE-DELIVERY-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### R35-V19 (BLOCKING) — the delivery gate now reads the artifact
+`scripts/reader_qa_r35.py` is a separate rendered-artifact gate keyed to the delivered PDF hash. It
+checks source cell values, per-contract tails, placard range continuity, reachability/traces and the
+`SPEC V3.5` + doc-id stamp on every page; it fails closed and writes `evidence/reader-qa-r35.json`.
+`scripts/render_audit_all_pages.py` sweeps all 3247 pages for text outside the content box, under the
+footer, or overlapping. `scripts/qa_final.py` no longer asserts a frozen page count (reference
+continuation changes the total by design); stamps, doc id, folios, Mermaid and index are still gated.
+Stale hard-coded section-25 figure page numbers in `reader_qa_deterministic.py` /
+`reader_qa_span_overlap.py` now resolve captions, so they keep pointing at the right plates after
+repagination.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/evidence/reader-qa-report.md#residual-limitations-not-claimed-fixed-or-out-of-this-round-s-scope -->
+  <section id="CHD-HANDBOOK-CHD35-EV-B5CB11-RESIDUAL-LIMITATIONS-NOT-CLAIM-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Residual limitations (not claimed fixed or out of this round's scope)
+
+- Whole-artifact sweep finds **13 pre-existing clipped pages outside sections 21/24**
+  (folios 4-19, 10-15, 10-17 … 10-19, 13-6, 17-32, 17-37, 17-61, 17-62, 18-25, 22-18, 23-8). The
+  severe ones are section-17 tables with the same single-letter-column class of defect (17-37,
+  17-61, 17-62). They belong to their sections' owners; this round was scoped to the R35 V01/V02/V06
+  surfaces and instructed not to alter other sections' content.
+- Block-level overlap on section-25 figure plates is the known stroke+fill doubled glyph rendering;
+  the span-level dedupe check (`reader_qa_span_overlap.py`) reports **none** on all seven plates.
+- `scripts/check_authoring.py` now passes its edition and manuscript checks, then stops at
+  `table-caption: TABLE 26.1-1`: `BOOK.yaml`'s `tables` array predates the current caption
+  regeneration (`register/table-register.json` is the current registry). The offline authoring gate
+  therefore remains red on stale registry data, not on content; its previous PASS receipt was removed
+  from `evidence/gate-receipts.json` because it cannot be reproduced against this tree. The
+  rendered-artifact gates (`reader_qa_r35.py`, `qa_final.py`, `render_audit_all_pages.py`) and the
+  lifecycle validator all pass standalone.
+- `README.md` and `evidence/lifecycle-author.md` still reference `scripts/lifecycle-35-generate.py`,
+  which does not exist in the tree; the projection generator actually used is
+  `scripts/lifecycle_publish.py` (figures + §25 tables) plus `build_author_manifest.py` (manuscript).
+  The validator command is restored, the generator reference is stale.
+- `CHD-3.5-complete-print.pdf` is a 94 % scaled copy; it inherits navigation but its text is vector-
+  scaled, so the reader-artifact text checks are keyed to the navigable artifact.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/evidence/reader-qa-report.md#prior-round-chd-3-5-v05-round-superseded-artifact-2c2badf1-1378-pp -->
+  <section id="CHD-HANDBOOK-CHD35-EV-B5CB11-PRIOR-ROUND-CHD-3-5-V05-ROUND-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Prior round (CHD-3.5 V05 round, superseded artifact `2c2badf1…`, 1378 pp)
+
+Blocker closed first: `scripts/lifecycle_publish.py` build error `figure caption for logical_send not
+matched (0)` — the dead agent's partial run had left TWO figcaption lines per figure, and the caption
+regex expected an alt-text it no longer matched. The replacement is now idempotent (consumes N
+existing figcaptions + optional old paragraph, emits exactly one) and runs clean twice consecutively.
+
+Structural rebuild: layout switched from horizontal (layer → x) to vertical top-to-bottom flow,
+matching state-graph semantics; backward edges no longer run through intermediate state boxes; edge
+labels placed by rectangle-collision rejection (candidates: t along edge × dy × side; must not touch
+node boxes or placed labels). Result: zero span-level glyph-box overlaps on all seven section-25
+figure pages (was 13 block overlaps, incl. label-on-label collisions such as AS-04/AS-05 and
+OB-12/OB-14). Entry arrow enters the initial state from above; self-loop clearance widened.
+
+QA method note (honest limitation, prior round): the vision route was unavailable for that whole
+session (provider transport 503 / 429 quota), so visual adjudication was performed with deterministic
+geometry checks instead of a human-eye pass. This round vision worked for two spot-proofs (21-94,
+24-03) and deterministic checks carry the rest.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/evidence/reader-qa-report.md#status -->
+  <section id="CHD-HANDBOOK-CHD35-EV-B5CB11-STATUS-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Status
+
+- NOT YET BUILDABLE stamp retained. Specified ≠ fixture-validated ≠ runtime-verified ≠
+  owner-accepted; native allocation, stop-proof and storage capabilities stay OPEN.
+- R35-V01, R35-V02 and R35-V06 are closed with the evidence above, keyed to SHA
+  `5c8de616…`; R35-V05 / V04 items from the prior round remain as recorded there, and the other R35
+  findings are untouched by this rebuild.
+  </section>
+</spec>

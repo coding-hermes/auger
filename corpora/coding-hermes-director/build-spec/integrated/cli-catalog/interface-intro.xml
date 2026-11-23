@@ -1,0 +1,216 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/build-spec/integrated/cli-catalog/interface-intro.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-BUILD-SPEC-INTEGRATED-CL-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/build-spec/integrated/cli-catalog/interface-intro.md#preamble -->
+  <section id="CHD-BUILD-SPEC-INTEGRATED-CL-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# CLI / interface contract — Muster, not a bespoke CHD CLI
+
+**Decision:** use Muster, not a bespoke CHD CLI. Adopt `openapi-cli` generated scalar/read commands and its native `request -b` full-JSON transport. Select `openapi-mcp` as the intended agent adapter, but **do not release its full generated tool catalog until the schema-fidelity defects below are fixed and re-tested upstream**. Standard `curl` handles opaque bytes; that is not a second CHD command framework. CHD owns API validation, authorization and lifecycle semantics. This is a tested interface design, not a claim that a live CHD implementation exists or that every generated convenience flag is usable.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/cli-catalog/interface-intro.md#1-problem-scope-and-authority -->
+  <section id="CHD-BUILD-SPEC-INTEGRATED-CL-1-PROBLEM-SCOPE-AND-AUTHORITY-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 1. Problem, scope and authority
+
+Operators and agents need the same typed operations without another independently maintained command vocabulary. The operation-specific OpenAPI document is the contract source; the CLI and MCP catalogs are projections. This deliverable supersedes the proposed bespoke command tree and unverified exit-code scheme in `../cli-commands.md` for integration purposes. It does not itself amend the normative manifest. The integration child must promote the accepted OpenAPI to `contracts/openapi.yaml`, replace contradictory citations, and update the release manifest.
+
+Input during audit: `openapi.yaml` alongside this document (wire/API card). Publication target: `contracts/openapi.yaml`. Operation identifiers, path spellings, input requirements, HTTP errors and result types come from that input, not from guessed aliases. Existing handbook OP-001…OP-048 labels remain traceability identifiers, not a competing wire grammar. Where one handbook operation has multiple HTTP operations, all are listed. A scheduled callback is not an agent permission merely because a client can name it.
+
+**Supported product surface:** the generated HTTP operations below; Muster's `discover`, `generate`, `request`, `help`, `version`, credential management and configuration-profile support; MCP stdio adapter. Remaining native Muster commands are documented for discovery, not new CHD functionality. In particular Muster `daemon`, `webhook`, `tenant`, `inventory`, `dsl`, `grpc` and `protocol` do not provision CHD, register CHD scheduler triggers, change CHD tenancy or bypass CHD policy.
+
+**Non-goals:** a new CLI framework; client-side policy authority; a second retry/admission scheduler; pretending a report proves executor stop; implementing native Hermes import/export in the client; network-dependent config validation; automatically executing work when a read/help command runs. Local installation/service startup and offline config validation remain deployment/build tools, not fictional HTTP-generated commands. Use the config deliverable's validator rather than inventing `chd config validate`.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/cli-catalog/interface-intro.md#2-fresh-muster-evaluation -->
+  <section id="CHD-BUILD-SPEC-INTEGRATED-CL-2-FRESH-MUSTER-EVALUATION-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 2. Fresh Muster evaluation
+
+Read the `muster-authenticated-api-integration`, `muster-validation-suite` and project sync skills, then verified source rather than inheriting their old examples. Scheduler discovery resolves the repository to `/home/kara/wojons/muster`, remote `git@github.com:wojons/muster.git`. Evaluated immutable source commit **3b6de28153f7726a81ebc1b10fa70d382d48c410** in a scratch archive. The checkout's README/go.mod require Go 1.26.10 and a C compiler for CGO. The binaries were built from source, not a possibly stale `bin/` directory; an unversioned build reports `dev (unknown)`, so release packaging must inject version metadata and retain commit/build hashes.
+
+| Question | Evidence / decision |
+|---|---|
+| Can it remove the bespoke CLI? | Yes: runtime `generate` creates and persists operation commands; a fresh process reloads and executes them. No CHD Cobra wrapper needed. |
+| Can it serve real MCP calls? | Yes: current `cmd/mcp-server` wires `pkg/mcp.ToolExecutor`; a real stdio `tools/call` hit the expected HTTP path/query with process-level Bearer auth. The historical blanket “GET / stub” blocker is stale for this binary. |
+| Does generation prove spec validity? | No: old `audit/openapi.yaml` generated CLI commands but MCP rejected OAS 3.0 `const` and missing response descriptions. Both loaders must be tested. |
+| Does it preserve all input semantics? | **Not on every surface.** Persisted nested object/array and nullable scalar flags become strings. MCP loses nested constraints and rejects valid integer/null union inputs. Native `request -b` preserves JSON; generated `--body` is safe only when metadata marks it `raw-body`; explicit `-H` preserves header names. See §9 for reproduced defects and release gates. |
+| Is it a policy/security layer? | No. Server authentication, principal binding, operation scopes, revision checks, current-policy restore and runtime enforcement remain mandatory. Hiding a tool is defense in depth, not authorization. |
+| Is it a complete streaming/binary frontend? | No such claim. One invocation is one HTTP request; raw stdin/follow/upload streaming are not inferred from OpenAPI. Use documented standard HTTP tooling for octet streams and file streaming. |
+
+Source anchors at the pinned commit: `README.md` (binary/toolchain contract), `internal/builtin/generate.go` (runtime persistence), `pkg/cmdstore/loader.go` (fresh-process args/body/header/output handling), `pkg/generator/generator.go` (names/flags), `cmd/openapi-cli/main.go` (exit 1 on errors), `cmd/mcp-server/main.go` and `pkg/mcp/registry.go` (real routing/auth).
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/cli-catalog/interface-intro.md#3-installation-isolation-and-activation -->
+  <section id="CHD-BUILD-SPEC-INTEGRATED-CL-3-INSTALLATION-ISOLATION-AND-A-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 3. Installation, isolation and activation
+
+Use a pinned checkout, not floating `go install ...@latest`. Example build recipe (MUSTER_SRC is a clean checkout of the pinned commit; CHD_TOOLS is a local output directory):
+
+```sh
+mkdir -p "$CHD_TOOLS"
+go -C "$MUSTER_SRC" build -o "$CHD_TOOLS/openapi-cli" ./cmd/openapi-cli
+go -C "$MUSTER_SRC" build -o "$CHD_TOOLS/openapi-mcp" ./cmd/mcp-server
+export PATH="$CHD_TOOLS:$PATH"
+# Separate CHD state from every other API's generated command store.
+export XDG_CONFIG_HOME="$CHD_STATE/config"
+export XDG_DATA_HOME="$CHD_STATE/data"
+export XDG_CACHE_HOME="$CHD_STATE/cache"
+openapi-cli discover "$CHD_SPEC"
+openapi-cli generate "$CHD_SPEC" --base-url "$CHD_API"
+openapi-cli generate --list
+openapi-cli --help
+```
+
+`CHD_STATE`, `CHD_SPEC`, `CHD_API`, `CHD_TOOLS` and `MUSTER_SRC` above are shell variables for these examples, **not** invented variables consumed by Muster. Set CHD_STATE to an absolute private directory (mode 0700), CHD_API to the authorized controller origin, and CHD_SPEC to the installed pinned OpenAPI file. Install from an authenticated release package; do not fetch mutable remote specs with production credentials as a convenience. No credential belongs in the OpenAPI, command cache, generated documentation or source tree.
+
+`generate` writes `$XDG_DATA_HOME/openapi-cli/commands.json`; without isolation the default is `$HOME/.local/share/openapi-cli/commands.json`, shared with other APIs. It replaces the command store, not an independently versioned per-CHD install. `generate --clear` removes this store; it must only run with the explicit CHD isolation above. `--profile` changes Muster configuration, **not** a Hermes profile, CHD agent identity or policy scope; do not rely on it alone to isolate persisted commands.
+
+Runtime origin precedence for generated commands: explicit `--base-url` &gt; `MUSTER_BASE_URL` &gt; per-command stored URL. **Set `--base-url` on every generated invocation or export `MUSTER_BASE_URL`:** the tested document's absolute `servers` URL remains in per-command metadata even when generation uses a different `--base-url`. An origin override does not authorize credential disclosure to arbitrary hosts: deployments must constrain credential-bearing destinations. Keep credentials scoped per service/environment. CLI `--auth NAME` uses a stored credential; `MUSTER_AUTH_TOKEN` supplies Bearer auth to generated commands, **not to native `request`**. A manual `-H` can override CLI credentials; never expose that override to an untrusted agent as a way to choose another principal. MCP uses a process-bound credential applied after tool args.
+
+Credential setup (the secret is read as one line from stdin rather than placed in argv; this pin uses a plain buffered reader, **not a verified no-echo password prompt**):
+
+```sh
+openapi-cli auth add --name chd-operator --type bearer
+# Then append --auth chd-operator to each authorized request.
+```
+
+Headless generated-command deployments may inject `MUSTER_AUTH_TOKEN` through the protected service environment. Native `request` must use `--auth NAME` or explicit protected headers; it does not inherit that environment token. For keychain setup, feed the credential over a protected stdin stream outside logged sessions; do not assume `auth add` disables terminal echo. Environment secrets still require process isolation. MCP prefers `-auth-token-file` with a 0600 file. A profile's arbitrary headers are not the supported auth path. Never treat the `api-key` auth type as equivalent to Bearer.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/cli-catalog/interface-intro.md#4-uniform-argument-stream-and-exit-contract -->
+  <section id="CHD-BUILD-SPEC-INTEGRATED-CL-4-UNIFORM-ARGUMENT-STREAM-AND-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 4. Uniform argument, stream and exit contract
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/cli-catalog/interface-intro.md#4-1-generated-operations -->
+  <section id="CHD-BUILD-SPEC-INTEGRATED-CL-4-1-GENERATED-OPERATIONS-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.1 Generated operations
+
+Syntax: `openapi-cli COMMAND PATH_ARGS [OPERATION_FLAGS] [COMMON_FLAGS]`. Path args are positional, in exact generated `Usage` order. **This wire profile uses snake_case operationIds, which Muster preserves:** `read_room`, not `read-room`; a camelCase input normalizes differently. Query/body flags retain their generated spelling. Quote whitespace. Actual bool flags use `--flag=true|false`; actual int flags use base-10. Do **not** trust the generated “JSON object/array” help on persisted string flags: those strings are not decoded. Use whole JSON for objects, arrays, null, unions, constants emitted with the wrong CLI type, and nested documents. Explicit false/zero/empty values differ from omission; unchanged flags are not sent, even when help shows a default. The server applies wire defaults and all schema validation; persisted Required metadata does not preserve all OpenAPI requirements.
+
+Common generated flags (unless a schema-name collision makes the generation gate fail):
+
+| Flag | Meaning / default |
+|---|---|
+| `-h, --help` | Print usage without an HTTP request. |
+| `--profile STRING` | Muster config profile; overrides MUSTER_PROFILE/persisted default. |
+| `--base-url STRING` | Override API origin; absent uses env then stored origin. |
+| `--auth STRING` | Stored credential name; absent does not imply authorization. |
+| `-H, --header STRINGS` | HTTP `Name: Value`; repeat carefully (pflag string-slice parsing applies). Use this for exact idempotency/correlation header names. |
+| `-o, --output json|yaml|table` | Presentation; default **table**, not JSON. Set `--raw` for machine consumption. |
+| `-r, --raw` | Response body without table conversion (text output adds a newline). Not a byte-exact binary download API. |
+
+There is no global CHD `--json`, `--quiet`, `--token-file`, `--follow`, `--wait`, `--dry-run`, `--yes`, `--force`, `--body-file`, `--stdin` or generated-operation `--timeout` unless explicitly present in that operation's generated help. Do not invent these conveniences. `--body` means the request's **body property** when such a property exists; elsewhere it may be the whole raw JSON override. The catalog distinguishes these using persisted flag kind. For an entire document always-safe escape hatch, use the native generic request command.
+
+**stdin:** generated operation commands do not read JSON from stdin; piping a document does not submit it. Ordinary query/mutation responses are finite; no implicit pagination, follow loop, auto-retry, blocking wait or NDJSON import/export is promised. Continue pages using the response cursor and the next explicit invocation. A CLI interruption is not a server cancellation; query canonical status before retrying or requesting cancellation.
+
+**stdout:** with `--raw`, response body (success or HTTP error), newline-terminated for nonempty text; 204 yields no body. Without it, formatted JSON/YAML/table as requested. Formatting masks credential-shaped values and can round integers above 2^53; `--raw` avoids both transformations and therefore may expose sensitive data. Treat raw output as protected. No structured response exists on a local parse/transport failure. Generation/discovery/help/version produce human diagnostics/text, not the API result envelope. **stderr:** diagnostics and `Error: ...`; do not parse stderr for business outcomes. Never merge stderr into a JSON pipeline. A 2xx response may describe queued/pending work; inspect its typed result and status rather than equating process exit with task completion.
+
+| CLI exit | Exact interpretation |
+|---|---|
+| 0 | Command completed; for HTTP operations this includes 200/201/202/204. Queued is not complete. |
+| 1 | Cobra usage/argument failure, malformed JSON, local config/credential failure, transport failure or HTTP &gt;=400. Inspect body/code when present. There are **not** distinct 401/403/404/409/429 exit values. |
+| signal-derived | Shell/OS termination (often 128+signal); no universal product-specific mapping, and no inference about committed remote effects. |
+
+Authentication failure 401, authorization denial 403, indistinguishable missing/unreadable 404, conflict 409, validation 400/422, capacity/rate 429 and dependency 5xx remain **HTTP/body** distinctions. Do not automatically retry non-idempotent mutations. Persist request identity and reuse the exact request/dedupe identity after ambiguous transport failure; changed payload under the same identity is a conflict, not a fresh action. A queue response is not a 429 by definition: use the wire contract's actual response.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/cli-catalog/interface-intro.md#4-2-exact-full-json-fallback-native-muster-not-a-new-client -->
+  <section id="CHD-BUILD-SPEC-INTEGRATED-CL-4-2-EXACT-FULL-JSON-FALLBACK-N-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.2 Exact full-JSON fallback (native Muster, not a new client)
+
+```text
+openapi-cli request &lt;method&gt; &lt;url&gt;
+  [--auth NAME] [-b|--body STRING] [-H|--header STRINGS]
+  [-p|--param STRINGS] [-o|--output json|yaml|table]
+  [--timeout DURATION=30s] [-v|--verbose]
+  [--http-version auto|1.1|2|3=auto] [--wasm-plugin PATH]
+  [--profile NAME] [-h|--help]
+```
+
+Exactly two positional args, explicit HTTP method and complete URL. **Use `-p 'name=value'` for each query parameter:** this pin drops query text embedded in the URL. `-b` is a literal string, not `@file` expansion and not automatic stdin. For a finite JSON file use `payload=$(&lt;request.json)` in Bash then `-b "$payload"`; for a pipeline use `payload=$(cat)` then the same invocation. This buffering places payloads in argv and is not appropriate for secrets, large files or opaque binary content. Use `curl --data-binary @file` or a generated Go client for those cases. Pass `Content-Type: application/json` explicitly. Generic request does not validate JSON or operation schemas locally; malformed JSON may be sent and must be rejected server-side. Use output JSON for ordinary JSON responses; inspect process status separately. There is no generic `--raw`; use standard HTTP tooling when exact response bytes or large integer fidelity are required. WASM transformations are disabled by CHD packaging policy because they can obscure unmodified evidence.
+
+For attachment bytes, use the wire/API endpoint's exact content type, length/digest and upload/finalize sequence with standard HTTP transport. Never base64-wrap bytes unless the schema specifically says to, never use text `--raw` for an opaque byte archive, and never claim an uploaded attachment is finalized from an upload response alone.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/cli-catalog/interface-intro.md#5-mcp-and-exposure-boundaries -->
+  <section id="CHD-BUILD-SPEC-INTEGRATED-CL-5-MCP-AND-EXPOSURE-BOUNDARIES-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 5. MCP and exposure boundaries
+
+```sh
+openapi-mcp -spec "$CHD_AGENT_SPEC" -base-url "$CHD_API" \
+  -auth-type bearer -auth-token-file "$CHD_TOKEN_FILE" \
+  -log-level info -log-output stderr
+```
+
+There are no MCP subcommands or positional args. All native flags: `-spec PATH_OR_URL`, `-base-url URL`, `-auth-token-file PATH`, `-auth-type bearer|api-key` (bearer default), `-log-level` (info default), `-log-output` (stderr default), `-audit`, `-openrpc-doc PATH_OR_URL`, `-wasm-plugin PATH`, `-version`, and Go flag help `-h`/`-help`. The CHD profile does not enable OpenRPC or WASM. Use an explicit auth type; do not depend on environment/default precedence quirks. Credential files are read at startup; restart on rotation. Authenticated spec URLs are not fetched with arbitrary CLI `--header` by this binary: ship a local verified spec instead.
+
+stdin/stdout are MCP JSON-RPC transport, not user document streams; logs stay on stderr. Use the MCP initialize handshake, `notifications/initialized`, `tools/list` and `tools/call`; clients must inspect protocol errors and tool `isError`, not just server process liveness. HTTP errors are tool failures, not daemon exit codes. Startup/fatal failure exits 1, invalid Go flags exit 2, help/version exit 0; bounded shutdown must close stdin as well as signal the process. MCP tool names preserve exact OpenAPI operationIds; they are not CLI kebab names.
+
+Generate separate operation-filtered OpenAPI views from the canonical full document: agent, operator and internal. Do not maintain independent schema copies. Default unclassified operations to excluded; generate an explicit exposure manifest per operation using `x-allowed-principals` plus the compatibility gates in §9. A role scope and a schema-compatible tool are two separate requirements. Until upstream fixes pass, exclude incompatible tools rather than coercing integer/null inputs to strings or weakening OpenAPI. Scheduler cycle callbacks, internal verification/cleanup/reconciliation and peer ingress are not ordinary agent tools. Operator actions need separate scoped credentials/processes. Keep the full wire surface available for controlled conformance testing only. Even if someone constructs an HTTP call or loads the full spec, the controller must deny unauthorized operations; list filtering alone proves nothing about authorization.
+
+D-038/D-039 are server invariants through every client: fork defaults preserve-parent with an explicitly authorized current-policy alternative; restore always resolves current permissions; archived grants remain history; no automatic live-session resync. Run cancellation requests do not release capacity without positive stop proof. No CLI mode changes those rules.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/cli-catalog/interface-intro.md#6-autogeneration-requirements-and-release-gates -->
+  <section id="CHD-BUILD-SPEC-INTEGRATED-CL-6-AUTOGENERATION-REQUIREMENTS-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 6. Autogeneration requirements and release gates
+
+Coordinate with `autogen.md`; do not duplicate schema ownership. The authoritative inputs are the canonical OpenAPI and its referenced schemas plus an explicit exposure policy. Generate CLI metadata/help/reference, MCP tool catalog, operation-to-OP traceability, filtered spec views, and acceptance fixtures from them. Muster does **runtime generation**, not committed per-command Go source. Server/client Go types and validation belong to the separate autogen pipeline.
+
+Required deterministic procedure:
+
+1. Pin Muster commit and Go/dependency lock; validate the complete OpenAPI (including references), unique operationIds, normalized command-name collisions, reserved flag names, parameter/body name collisions and supported media types.
+2. Generate from a **local** file in clean isolated XDG roots using the invocation in §3; start a fresh process and enumerate every command's `--help`.
+3. Capture `commands.json`; sort commands by HTTP method/path/name, recursively sort flags/keys, replace only volatile `generated_at` and local `spec_path`, and fix generation base URL to a release-test constant. Store the full SHA-256 of source separately; Muster's abbreviated spec hash is not the release integrity proof. Never normalize meaningful default/required/type changes away.
+4. Start `openapi-mcp` with the same approved spec view; capture `tools/list`, sort by name and schema keys. Compare exact schemas and operation count to the exposure manifest. Assert excluded operations are absent and denied server-side.
+5. Re-run in a second empty XDG root. Canonical catalogs must match byte-for-byte; modified operation schema/name must make comparison fail. `git diff --exit-code -- generated/` is the publication gate after regeneration; untracked generated additions also fail (`git status --porcelain -- generated/` must be empty). No source repository is available for this spec directory, so this card cannot claim a committed parity check.
+6. Exercise a real loopback capture server with persisted CLI commands and MCP calls: exact method/path/query/body/header, required fields, nested arrays/objects, false/zero, non-ASCII, 202, 401/403/409/429/503, ambiguous transport failure and unauthorized internal action. A list/help-only check is insufficient. Bind production CHD tests separately to the actual controller and storage/runtime adapters.
+
+The full concrete generator commands are above; the sibling autogen deliverable owns integration into the build entrypoint. This card does not quietly fix shared OpenAPI or manifest files.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/cli-catalog/interface-intro.md#7-acceptance-criteria-test-plan -->
+  <section id="CHD-BUILD-SPEC-INTEGRATED-CL-7-ACCEPTANCE-CRITERIA-TEST-PLA-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 7. Acceptance criteria / test plan
+
+- **CLI-AC-01 (C):** Given the pinned Muster source, both binaries build and report help; a fresh process loads generated commands. Proof: recorded build and `generate`, then captured per-command help.
+- **CLI-AC-02 (T):** Given each OpenAPI operation, exactly one documented generated method/path mapping exists, with no name collisions or silently omitted operation. Proof: mechanical inventory comparison against persisted metadata and operation register.
+- **CLI-AC-03 (T):** Given a path containing spaces and query filters, persisted CLI invocation sends the encoded intended route and query, not GET `/`. Proof: local server request capture; falsifies the old executor-stub assumption.
+- **CLI-AC-04 (T):** Given a POST document and exact idempotency header, capture proves body/header fidelity; nested raw body and body-property `body` take their documented routes. Proof: server capture assertions, including normalized-header negative control.
+- **CLI-AC-05 (T):** Given 202 and 409 replies, exit is 0 and 1 respectively; raw error body stays on stdout; missing positional arg makes no HTTP request; stdin is not silently consumed. Proof: subprocess return/stdout/stderr plus request count.
+- **CLI-AC-06 (T):** Given MCP tools/list and tools/call, the exact operationId routes to the intended endpoint with process credential; initialization/list alone is insufficient. Proof: real stdio session and HTTP capture.
+- **CLI-AC-07 (T, integration gate):** Given unapproved internal operations, agent spec omits them and the controller denies direct attempts. Proof: filtered catalog diff plus authenticated negative server call. Not proven by this spec-authoring run.
+- **CLI-AC-08 (T, integration gate):** Given identical canonical sources in two clean generation roots, normalized catalogs match; a changed required field causes nonzero drift check. Proof: autogen sibling pipeline plus final release CI. No fake committed-tree claim.
+- **CLI-AC-09 (T, integration gate):** Given present obsolete archive policy, restore resolves current policy; report-before-stop retains capacity; repeated identical request does not duplicate effects. Proof: CHD system-under-test traces, not Muster's fixture server.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/cli-catalog/interface-intro.md#edge-cases-and-dependencies -->
+  <section id="CHD-BUILD-SPEC-INTEGRATED-CL-EDGE-CASES-AND-DEPENDENCIES-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### Edge cases and dependencies
+
+Unknown command/flag and wrong path arg count fail locally. Malformed generated raw-body JSON fails locally, but native `request -b` can send it; server schema rejection before effects remains mandatory. Empty paged result is successful, missing result after transport loss is uncertain, not empty. Keep stdout separate from stderr, do not truncate identifiers, retain exact request ids, and never retry with guessed replacements. Expired/revoked credentials must fail closed at the server. Response formatting is not response-schema validation; the server and generated validation tests must provide that gate.
+
+Dependencies: final operation-specific OpenAPI; pinned Muster and compiler; isolated local state; protected credentials and reachable CHD origin for real use; explicit exposure policy; the config/autogen/wire deliverables and final integration authority. No inherited optional library feature is claimed as implemented CHD behavior.
+  </section>
+  <!-- source: coding-hermes-director/build-spec/integrated/cli-catalog/interface-intro.md#8-examples-contract-usage-not-evidence-of-live-chd-effects -->
+  <section id="CHD-BUILD-SPEC-INTEGRATED-CL-8-EXAMPLES-CONTRACT-USAGE-NOT-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 8. Examples (contract usage, not evidence of live CHD effects)
+
+The exact command/argument inventory follows. Use `--help` before constructing a call; names are not translated from the old bespoke CLI.
+
+```sh
+# Discovery and full help need no controller or credential.
+openapi-cli discover "$CHD_SPEC"
+openapi-cli generate "$CHD_SPEC" --base-url "$CHD_API"
+openapi-cli help
+
+# Whole JSON, including nested arrays/objects, through native Muster.
+# request.json must be a valid operation-specific wire request, not a generic envelope.
+payload=$(&lt;request.json)
+openapi-cli request POST "$CHD_API/v1/signals" \
+  --auth chd-operator -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: example-stable-request-1' -b "$payload" -o json
+
+# Inspect the return status before consuming data; a nonzero error can have JSON stdout.
+if openapi-cli request GET "$CHD_API/v1/status" --auth chd-operator -o json \
+     &gt;response.json 2&gt;diagnostic.txt; then
+  jq . response.json
+else
+  printf '%s\n' 'Request failed; inspect response.json and diagnostic.txt' &gt;&amp;2
+fi
+```
+
+No example here authorizes an action merely because it is syntactically expressible. Use the command-specific help/schema below for every mutation and the wire deliverable's valid example payloads.
+  </section>
+</spec>

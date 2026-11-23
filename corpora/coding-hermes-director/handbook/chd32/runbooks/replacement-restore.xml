@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd32/runbooks/replacement-restore.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD32-RU-49C044-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/replacement-restore.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD32-RU-49C044-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# Runbook: replacement restore
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/replacement-restore.md#preconditions-and-authorization -->
+  <section id="CHD-HANDBOOK-CHD32-RU-49C044-PRECONDITIONS-AND-AUTHORIZATIO-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Preconditions and authorization
+
+The original host may be absent. Obtain a live `own_history` or explicitly scoped
+`cross_agent_archive` grant. Prepare a supported Hermes native importer, a fresh
+non-default profile, an initialized local session store, controller access, and a
+recording destination for the restore incident/report.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/replacement-restore.md#procedure -->
+  <section id="CHD-HANDBOOK-CHD32-RU-49C044-PROCEDURE-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Procedure
+
+1. QA-1 discovers `/sessions/&lt;agent&gt;/&lt;profile&gt;/` under the grant.
+2. QA-2 selects the newest `state=committed` manifest; QA-4 lists gaps and QA-5 computes coverage.
+3. Fetch the exact immutable payload and verify its SHA-256 against the manifest.
+4. Validate `export_schema.name=hermes.session.export` and a supported version.
+5. Import through the native importer into a **new** local session/profile. Never copy SQLite or reuse the old session id.
+6. Preserve the archived policy snapshot as immutable audit evidence, but never activate it. Resolve a replacement snapshot from current VP configuration and valid lineage (`restore_decision: current_policy`), record `source_checkpoint`, `source_policy_rev`, and new `effective_policy_rev`, exclude revoked/expired derived grants, and retain independent current VP grants. If the historical snapshot is absent, record `snapshot_missing`; this changes history coverage, not the current-policy decision.
+7. Persist old→new agent/profile/session/bond/thread identity mappings and a new bond generation before the first replacement turn.
+8. Reconcile controller tickets and send manifests. Map pending work, preserve unknown execution, and route old-generation replies to `retired_generation`.
+9. Read back profile readiness, new ids, imported checkpoint, coverage/gaps, policy and pending-work decisions.
+10. Publish a restore report only after those reads succeed.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/runbooks/replacement-restore.md#expected-failures -->
+  <section id="CHD-HANDBOOK-CHD32-RU-49C044-EXPECTED-FAILURES-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Expected failures
+
+`404 not_found` is used for missing or unauthorized archives without an existence oracle;
+`503 archive_unavailable` is not an empty result; digest mismatch, no committed manifest,
+unsupported version, blind SQLite copy, and live-session restore stop with a recorded
+incident and no partial readiness.
+  </section>
+</spec>

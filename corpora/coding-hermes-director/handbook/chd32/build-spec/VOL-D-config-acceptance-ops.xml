@@ -1,0 +1,2173 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD32-BU-4A0C1D-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# CODING-HERMES-DIRECTOR — BUILD SPEC, VOLUME D
+# Configuration Depth, Report/Acceptance Semantics, Deployment &amp; Bridge
+# Lifecycle, Measurement, and Figure Redraw Specifications
+
+**Recovery terminology:** [re-drive](terminology.md#re-drive), [re-derive](terminology.md#re-derive), [reconcile](terminology.md#reconcile), [stop confirmation](terminology.md#stop-confirmation), [snapshot](terminology.md#snapshot), and [resync](terminology.md#resync).
+
+```
+DOC     : build-spec/VOL-D-config-acceptance-ops.md
+RESOLVES: §0–§8 anchors of this volume; ids VOL-D-001..089
+          (volume -&gt; § anchors -&gt; ids: `manifest/package-manifest.json`,
+          `build-spec/REFERENCE-INDEX.md` §1)
+REV     : 2.2 (R31 revision pass 2026-11-09). Delta vs 2.1: four-class routing and
+          central/local-federated topology figure specs; owner-bounded director
+          federation trust, peer mapping, and cross-director trace (R31-028/029).
+          Prior session-archive restore ordering remains cumulative. Delta vs 2.0 (R31-016): new
+          VOLD-089 session-archive restore ordering in §5.2 (ordered steps,
+          compatibility/version gate, cannot-restore-live-session
+          limitation); §7.12 figure CHD-F04 spec amended — exporter /
+          ingestor / store / reader as four distinct actors, explicit
+          no-agent-write path to the archive namespace and protected control
+          keys.
+          Structure (2.0): Pt I §1 configuration + §1.10 routing + §1.11 fork policy;
+          Pt II §2 provisioning/lifecycle (new); Pt III §3 reports/acceptance
+          (was §2) + §4 measurement; Pt IV §5 deployment/routing/federation/ops
+          (was §3, extended); Pt V §6 figure specifications. Delta:
+          report schema v3 with variants (R31-030), freshness on harness times
+          (R31-011), bounded measurement (R31-012), profile lifecycle and
+          provisioning operation cards (R31-020/025), data-class routing
+          (R31-028), Crier director federation (R31-029), D-038 fork policy.
+          Requirement ids are unchanged; new ids continue at VOLD-056.
+DATE    : 2026-11-09
+COVERS  : F-005, F-013, F-014, F-015, F-016, F-017, F-018
+DECISIONS HONORED: D-005, D-008, D-009, D-010, D-012, D-013, D-015, D-016
+REVIEW-LOG ITEMS CONSUMED (canonical included input `../evidence/r32-review/inputs/03-REVIEW-LOG.json`):
+  - mission (user-confirmed scope): used in §0.2 framing — general-purpose
+    hierarchy, coding is one application, not the limit.
+  - figure_coverage[9] with status/source_cross_checked/owner_accepted flags:
+    every redraw spec in §7 carries checkable flip conditions for these flags.
+  - Q-006 (per-assignment completion/approval condition; explicit
+    stop-until-approval must hold): normative in VOLD-030.
+  - Q-005 (standing rules ride the Hermes learning loop; service documents
+    dependency + effective-rule evidence, no own timing policy): VOLD-027.
+  - hermes_gateway_check (REST session create/continue/history/forks,
+    profile-bound auth, endpoint-dependent idempotency): §1.6, §1.7, §3.3.
+  - repository_checks.correct_duckbrain durability correction (buffered
+    default has NO power-loss barrier; keys must start with "/"): §5.1, §5.3,
+    VOLD-037.
+  - deferred_scope (no dynamic model-routing algorithms; no numeric limit
+    tuning — configuration + queue semantics only): §1.6, §4.
+BASE    : DESIGN.md rev 3.0 (normative), contracts/DATA-MODEL.md rev 1.0,
+          contracts/ENDPOINTS.md rev 1.0, contracts/config.schema.json (v2),
+          contracts/config.template.yaml.
+SIBLINGS: VOL-A (architecture/lifecycle), VOL-B (records/query contracts),
+          VOL-C (service tools/sessions/admission). Cross-references are
+          informative; this volume is self-contained for its findings.
+STATUS  : BUILDABLE SPEC. Requirements carry stable ids VOLD-nnn. Review-open
+          points are marked OPEN-VOLD-n and are design work, never invented
+          defaults.
+```
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#0-scope-mission-framing-and-reading-rules -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-0-SCOPE-MISSION-FRAMING-AND-RE-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 0. Scope, Mission Framing, and Reading Rules
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#0-1-what-this-volume-owns -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-0-1-WHAT-THIS-VOLUME-OWNS-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 0.1 What this volume owns
+
+| Finding | This volume delivers |
+|---|---|
+| F-005 | Versioned configuration schemas (§1), validation/default/absence semantics, precedence + effective readback, per-field change authority and activation, manager-creation setting, per-agent capability/approval config, composition of project instructions + base role + named specialization |
+| F-013 | Report schema with correlation, trusted timestamps, outcome vocabulary, acceptance layering, criteria provenance/versioning, waiting states, delivery semantics (§3) |
+| F-014 | Deployment startup readiness, dependency failure, transport checks, restore ordering, queued-work recovery, crier-bridge lifecycle (§5) |
+| F-015 | Metric register, counter scopes/windows/resets, cheaper-unchanged-cycle measurement, the provisional 8-cycle calculation, requirement-to-test traceability, end-to-end acceptance scenarios (§4) |
+| F-016/17/18 | Precise redraw specifications for figures 2.1-1, 2.3-1, 2.1-2, 2.2-1, 2.2-2, 2.3-2, 2.4-1 (§7) |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#0-2-mission-framing-review-log-mission -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-0-2-MISSION-FRAMING-REVIEW-LOG-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 0.2 Mission framing (review-log `mission`)
+
+The reviewed mission is: *"A general-purpose hierarchy accepts ongoing VP
+direction, decomposes objectives, builds and equips teams, and coordinates
+director → managers → supervisors → foremen/workers until the requested
+outcome is delivered; coding is one application, not the limit."*
+
+Consequences for this volume:
+
+- **Configuration is domain-neutral.** Nothing in §1 names a coding-only
+  tool, skill, or artifact type. `artifacts` in reports are opaque
+  verifiable references (§3.1); the email-manager example of D-002 must be
+  expressible with the same schema as a fleet-ops manager.
+- **Ongoing direction.** VP configuration (§1.3) is the standing layer that
+  survives across objectives; acceptance criteria (§3.6) attach per
+  assignment. Both layers exist precisely because direction is continuous.
+- **Building and equipping teams** is a configured capability
+  (`manager_creation`, `create_subordinate`, `grantable_pool`), not a
+  hard-coded org chart (§1.4–§1.5).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#0-3-deferred-scope-review-log-deferred-scope-binding -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-0-3-DEFERRED-SCOPE-REVIEW-LOG-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 0.3 Deferred scope (review-log `deferred_scope` — binding)
+
+Sophisticated dynamic model-routing algorithms and numerical tuning of
+concurrency limits are OUT of scope. This volume specifies configuration
+fields, pass-through boundaries, and queue semantics only (§1.6, §4). Where
+DESIGN.md shows numeric defaults (e.g. `verify.deadline_s` 1800,
+`max_fanout` 12, `max_inflight` 4/2), those are retained as
+owner-confirmed values from the normative source — they are configuration
+semantics, not tuning.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#0-4-requirement-conventions -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-0-4-REQUIREMENT-CONVENTIONS-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 0.4 Requirement conventions
+
+- **VOLD-nnn** — normative requirement of this volume.
+- **OPEN-VOLD-n** — a point the review explicitly left open. It MUST be
+  resolved by design work or owner ruling before the affected field ships;
+  it is never resolved by an undocumented default.
+- SHALL/MUST/ MAY per RFC 2119. "VP config" means the operator/VP-owned
+  configuration layer (harness.toml and its validated write path, CT-01,
+  R-001).
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#part-i-configuration-and-session-policy -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-PART-I-CONFIGURATION-AND-SESSI-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## PART I — CONFIGURATION AND SESSION POLICY
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#1-configuration-depth-f-005 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-1-CONFIGURATION-DEPTH-F-005-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 1. Configuration Depth (F-005)
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#1-1-schema-versioning-and-evolution -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-1-1-SCHEMA-VERSIONING-AND-EVOL-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.1 Schema versioning and evolution
+
+The existing `contracts/config.schema.json` is schema **v2**
+(`schema_version: { const: 2 }`). This volume defines **v4** as a strict
+superset delta (v3 added the hierarchy/capability/composition blocks; v4 adds
+sessions, storage, admission, worker, capacity and measurement). The full v3 file is the contracts task's deliverable; the
+delta below is normative for it.
+
+- **VOLD-001** — `schema_version` is a monotonically increasing integer.
+  A loader MUST refuse any version it does not implement with error
+  `schema_version_unsupported` (naming the highest supported version) and
+  MUST NOT auto-migrate silently. Migration v2→v3 is additive: every v2
+  document is a valid v4 document unchanged (all v3 additions are optional
+  at parse level but some become REQUIRED by the rules of §1.3 — see
+  VOLD-003). Migration code, if any, prints the field-by-field diff it
+  applied.
+- **VOLD-002** — `additionalProperties: false` is retained at every level.
+  An unknown field is a load error `unknown_field{path}`, never a warning:
+  typo'd capability or grant names must fail closed (F-005 "invalid
+  configuration examples produce specified outcomes").
+
+**v3/v4 `$defs` additions (delta to config.schema.json):**
+
+```json
+"hierarchy": {
+  "type": "object",
+  "required": ["manager_creation"],
+  "additionalProperties": false,
+  "properties": {
+    "manager_creation": { "$ref": "#/$defs/managerCreation" }
+  }
+},
+"managerCreation": {
+  "type": "object",
+  "required": ["enabled", "max_director_created", "provisioning"],
+  "additionalProperties": false,
+  "properties": {
+    "enabled": { "type": "boolean" },
+    "max_director_created": { "type": "integer", "minimum": 0 },
+    "provisioning": { "$ref": "#/$defs/managerProvisioning" }
+  }
+},
+"managerProvisioning": {
+  "type": "object",
+  "required": ["role_template", "gateway_pool", "token_provisioning"],
+  "additionalProperties": false,
+  "properties": {
+    "role_template": { "type": "string", "minLength": 1 },
+    "gateway_pool": { "type": "array", "minItems": 1,
+      "items": { "type": "string", "pattern": "^gw-[a-z0-9-]+$" } },
+    "token_provisioning": { "const": "operator" }
+  }
+},
+"capability": {
+  "type": "object",
+  "required": ["grants", "grantable_pool", "create_subordinate"],
+  "additionalProperties": false,
+  "properties": {
+    "grants": { "type": "array", "items": { "$ref": "#/$defs/grant" } },
+    "grantable_pool": { "type": "array",
+      "items": { "type": "string", "minLength": 1 } },
+    "create_subordinate": { "enum": ["none", "supervisor", "manager"] }
+  }
+},
+"grant": {
+  "type": "object",
+  "required": ["tool", "scope", "origin"],
+  "additionalProperties": false,
+  "properties": {
+    "tool": { "type": "string", "minLength": 1 },
+    "scope": { "type": "string", "minLength": 1 },
+    "origin": { "enum": ["vp", "director"] },
+    "granted_by": { "type": "string" },
+    "granted_at": { "type": "string", "format": "date-time" },
+    "expires_at": { "type": "string", "format": "date-time" },
+    "revoked": { "type": "boolean", "default": false }
+  }
+},
+"approval": {
+  "type": "object",
+  "required": ["human_approval_required", "gates"],
+  "additionalProperties": false,
+  "properties": {
+    "human_approval_required": { "type": "boolean" },
+    "gates": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+  }
+},
+"hermesBinding": {
+  "type": "object",
+  "required": ["instance", "profile"],
+  "additionalProperties": false,
+  "properties": {
+    "instance": { "type": "string", "pattern": "^gw-[a-z0-9-]+$" },
+    "profile": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }
+  }
+},
+"runtime": {
+  "type": "object",
+  "required": ["provider", "model", "context_window"],
+  "additionalProperties": false,
+  "properties": {
+    "provider": { "type": "string", "minLength": 1 },
+    "model": { "type": "string", "minLength": 1 },
+    "context_window": { "type": "integer", "minimum": 1 },
+    "max_turns": { "type": "integer", "minimum": 1 },
+    "token_budget": { "type": "integer", "minimum": 1 }
+  }
+},
+"composition": {
+  "type": "object",
+  "required": ["base_role", "specialization"],
+  "additionalProperties": false,
+  "properties": {
+    "base_role": { "type": "string", "minLength": 1 },
+    "specialization": { "$ref": "#/$defs/specialization" },
+    "project_scope": { "type": "array", "items": { "type": "string", "pattern": "^/" } }
+  }
+},
+"specialization": {
+  "type": "object",
+  "required": ["name", "authorized_overrides"],
+  "additionalProperties": false,
+  "properties": {
+    "name": { "type": "string", "minLength": 1 },
+    "authorized_overrides": { "type": "array",
+      "items": { "enum": ["behavior", "permissions"] } }
+  }
+}
+```
+
+Notes on the delta:
+- `capability.grants` generalizes the existing flat `tools.include/exclude`:
+  include/exclude remain the *ruleset* passed into the session
+  configuration (DESIGN §3.6); `grants` is the *authorization record* with
+  provenance. A tool in `tools.include` without a matching grant of origin
+  `vp` or `director` fails validation `tool_without_grant` — skill wording
+  or skill-list membership alone is never an effective permission (F-012
+  rule, enforced here at load time).
+- `hermesBinding` is additive to, not a replacement of, `agent.gateway`:
+  `gateway` remains the transport/concurrency binding; `hermesBinding`
+  names which Hermes instance (a gateway id) and which named profile on it
+  the agent's sessions run under.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#1-2-validation-default-and-absence-semantics -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-1-2-VALIDATION-DEFAULT-AND-ABS-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.2 Validation, default, and absence semantics
+
+- **VOLD-003** — Every v3/v4 field has exactly one disposition class:
+  1. **REQUIRED-EXPLICIT** — absence is a load error. Used for every field
+     where the review left the default open or where a silent default would
+     be dangerous: `hierarchy.manager_creation.enabled`,
+     `capability.create_subordinate`, `approval.*`, `runtime.provider`,
+     `runtime.model`, `runtime.context_window`, `composition.base_role`,
+     `specialization.authorized_overrides`, `hermesBinding.*`.
+  2. **EXPLICIT-DEFAULT** — a default exists in the normative source
+     (DESIGN.md or contracts v1/v2) and is printed by the effective
+     readback whenever it applies: `verify.deadline_s` (1800),
+     `verify.remind_gap_s` (300), `verify.max_reminds` (2),
+     `orchestration.max_fanout` (12), `orchestration.stale_after_s`
+     (2× cycle; template value 7200), gateway `max_inflight` (4 main / 2
+     remote per Table 2.1-1), `session.reuse_policy`
+     (`reuse-until-wedged`).
+  3. **REQUIRED** with no default and no open question — the v2 set
+     (ids, bindings, rooms, workdir, skills).
+  No field may carry a default that neither the review nor DESIGN.md
+  confirms (F-005 completion rule: "Do not invent an unconfirmed default").
+
+- **VOLD-004** — Validation order is: schema (types/patterns/enums) →
+  referential integrity (gateway ids exist; room participants exist;
+  registry entries exist for every agent with `responsibility`; grant
+  tools exist in the tool universe) → policy (grant-vs-include
+  consistency per VOLD-003 note; specialization override authorization
+  per VOLD-015; precedence conflicts per VOLD-006) → warnings (e.g. a
+  manager with `triggers: []` and `max_parallel.task: 0` can never be
+  woken for work — legal but flagged). All errors carry
+  `{code, json_path, detail}` and the loader fails closed on any error.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#1-3-precedence-and-effective-readback-d-016-d-008 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-1-3-PRECEDENCE-AND-EFFECTIVE-R-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.3 Precedence and effective readback (D-016, D-008)
+
+Authority layers, highest wins:
+
+1. **VP configuration** — operator/VP-owned harness.toml grants, limits,
+   roles, approvals. VP-configured permissions are already granted; they
+   require no director grant (D-016).
+2. **Director on-demand delegation** — changes the director is authorized
+   to make within its delegatable authority (grants from its
+   `grantable_pool`, reassignment, criteria extension). Recorded with
+   provenance `{origin: director, granted_by, granted_at, authority_ref}`
+   where `authority_ref` names the VP-configured grant-authority record
+   that permits it.
+3. **Specialization overrides** — only those listed in
+   `specialization.authorized_overrides` (VOLD-015).
+4. **Base role template** — defaults nothing wins over 1–3.
+
+- **VOLD-005** — On conflict between layers 1 and any lower layer, VP
+  configuration wins and the harness records a `grant_conflict` audit
+  event naming both sources. The losing value is never applied, not even
+  advisory. Instruction-layer conflicts and permission-layer conflicts are
+  distinguished (D-016 scope): permission conflicts are hard-checked at
+  load and at grant time; instruction conflicts are handled per VOLD-014.
+- **VOLD-006 (effective readback)** — The harness exposes
+  `GET /v1/effective-config/{agent-id}` (new endpoint, VP-only per the
+  ENDPOINTS actor matrix) returning the fully resolved per-agent
+  configuration: every field with its value, **provenance**
+  (`vp | director | base | specialization`), the source reference
+  (config path + line, or grant record id), and a `config_digest` (hash of
+  the resolved document). Readback is the authoritative artifact for
+  audits and for the acceptance scenarios of §4.4; an enforcement decision
+  that cannot be reproduced from readback is a defect.
+
+  Readback has two scopes and they must agree: **config-scope** (current VP
+  resolution, the endpoint above) and **session-scope**
+  (`GET /v1/policy/effective?session=&lt;bond-id&gt;`, VOL-C §8.7): the session form
+  returns the frozen `SessionPolicySnapshot` contents and its `policy_rev`, and
+  MUST equal the snapshot byte-for-byte (digest comparison, VOLC-068b). A
+  divergence is a §6 integrity defect, never a cache miss. Both forms report the
+  four permission classes separately (`use`, `grant`, `confer_delegation`,
+  `create`) so a grantor-without-use configuration reads back as exactly that
+  rather than as a single opaque "allowed" list (VOLD-011).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#1-4-who-may-change-each-field-and-when-updates-activate -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-1-4-WHO-MAY-CHANGE-EACH-FIELD-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.4 Who may change each field, and when updates activate
+
+- **VOLD-007 (change authority)** — Per field class:
+
+  | Field class | May change | Mechanism |
+  |---|---|---|
+  | Roles, room membership, gateway bindings, limits/caps, clocks (triggers), manager_creation, approval policy | Operator/VP only | harness.toml via the validated loader path (CT-01, R-001, N-2); agents have no write surface (DESIGN.md §6.3) |
+  | On-demand grants from its `grantable_pool` | Director (and any agent configured `grantable_pool` non-empty, per D-009) | grant API call, recorded with provenance; bounded by VP-authorized pool and `authority_ref` |
+  | Specialization content | Operator/VP (skill assets); director may request, never write | config path only |
+  | Acceptance criteria per assignment | Director within D-010 (derive/extend); VP-supplied criteria are VP-owned | assignment record (§3.6) |
+  | Anything else | No one at runtime | — |
+
+  An agent editing its own binding, skills, grants, or membership is a §6
+  integrity violation (DESIGN §6.3); the harness write gate rejects it and
+  the attempt is counted.
+
+- **VOLD-008 (activation timing)** — Config changes activate at the
+  earliest of these well-defined points, never mid-request. For D-038,
+  `session.fork_policy` and `session.resync` activation affects only future
+  fork/resync authorization boundaries; it never rewrites an existing snapshot.
+  At activation, reads and writes already authorized continue under their
+  captured revision; a grant issuance already admitted completes only for its
+  current request and new issuance is checked against current authority.
+  - **Immediately at next orchestrator check**: caps, limits, room
+    membership (router reads current config at wake-composition time).
+  - **Next scheduler registration pass**: trigger/cron changes
+    (re-registered through CT-02's validated path).
+  - **Session boundary**: skills, tools, model/context, approval policy —
+    applied at the next NEW session, or at the next REUSE turn (i.e. the
+    next message delivered into the bonded session). Hermes owns
+    within-session behavior; CHD does not mutate a live turn
+    (hermes_gateway_check: profile routing and session continuation are
+    Hermes contracts). In-flight sends complete under the configuration
+    they were dispatched with; the send manifest records the
+    `config_digest` at dispatch (§3.3), which is what verification uses.
+  - VP-grant **revocation** is resolved at the snapshot boundary, never lazily
+    on a later request: use rights already resolved into a session's
+    effective-policy snapshot continue for the life of that session (VOL-C §8.9
+    VOLC-069), and sessions created after the revocation resolve without the
+    revoked grant (R6/R7). Issuing any **new** downstream grant is blocked at
+    once (a director delegation citing a revoked `authority_ref` fails
+    `403 authority_revoked`), and archive reads re-check every page
+    (VOLC-072b).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#1-5-manager-creation-d-005 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-1-5-MANAGER-CREATION-D-005-S012" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.5 Manager creation (D-005)
+
+- **VOLD-009** — `hierarchy.manager_creation.enabled` is REQUIRED-EXPLICIT
+  (VOLD-003): the document is invalid without it. This satisfies "do not
+  invent an unconfirmed default" by making omission impossible rather
+  than by guessing the owner's intent.
+  - **Disabled case:** a director request to create a manager is refused
+    `403 manager_creation_disabled`, counted
+    (`manager_creation_refused_total`), and surfaced to the VP in the
+    director's next report — the blocked-work path of D-009/Q-004
+    (report upward) is the only fallback.
+  - **Enabled case:** creation is bounded by `max_director_created`
+    (counted, enforced), uses the named `role_template` for base
+    composition, binds to a gateway from `gateway_pool`, and — the
+    hard constraint — token provisioning is
+    `token_provisioning: "operator"`: role tokens are operator-provisioned
+    files (DESIGN FACT-20, §6.3). A director-created manager is therefore
+    **provisioned pending operator token grant**; the director's creation
+    request produces a provisioning record and the manager is not
+    dispatchable until the operator completes token provisioning. This is
+    a constraint inherited from the platform, not a policy choice, and is
+    recorded as such in the provisioning record.
+  - Every creation, enable, disable, and refusal is audited
+    (`/chd/audit` event, harness-written).
+- **VOLD-010** — Lower-tier creation (`create_subordinate`) is modeled by
+  the same enum (`none | supervisor | manager`); the foreman/worker scope
+  remains OPEN (OPEN-VOLD-2) and the enum MUST NOT be extended to
+  `foreman`/`worker` until the F-002 owner decision lands.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#1-6-per-agent-capability-approval-and-instance-binding-d-008-d-009 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-1-6-PER-AGENT-CAPABILITY-APPRO-S013" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.6 Per-agent capability, approval, and instance binding (D-008, D-009)
+
+- **VOLD-011 (four distinct permission classes, not three)** — `capability`
+  models **use**, **grant use**, **confer delegation** and **create**
+  independently. In `contracts/config.schema.json` the first three are
+  `permissions.use`, `permissions.grant` and `permissions.confer_delegation`
+  (each with `capabilities`, `resource_scope`, `recipients`, `limits`); `create`
+  stays on `create_subordinate` (VOLD-010). No class is inferred from another:
+  an agent with `permissions.grant.capabilities: ["telegram.send"]` and no
+  `permissions.use` entry may authorize a *subordinate* to send via Telegram
+  while being unable to send itself (the D-009 grantor case); an agent with
+  `grant` but no `confer_delegation` may hand out use-rights but may not mint
+  another grantor (D-032). Both are required validation-valid configurations
+  (worked example §1.8; decision table VOL-C §8.3.1 rows 2–3). Legacy key names
+  (`grants`, `grantable_pool`) remain accepted as the v2/v3 spelling of
+  `permissions.use.capabilities` / `permissions.grant.capabilities` and are
+  refused if both spellings appear (`permission_key_conflict`, VOLC-068c).
+- **VOLD-012 (goal assignment ≠ permission grant)** — Assignment messages
+  (`kind: task|directive`, §3.1) carry completion conditions and context
+  only. The messaging write path MUST reject any assignment whose payload
+  attempts to mutate `capability`, `approval`, rooms, or skills
+  (`403 assignment_not_grant`); grant records are created exclusively by
+  (a) the config path or (b) an authorized grant API call with
+  provenance. Skill or prompt text claiming an authority is not an
+  effective grant (F-012) — enforcement is the write gate, not wording.
+- **VOLD-013 (approval policy per agent)** — `approvals.human_approval_required`
+  plus `approvals.gates` (action classes requiring human approval, e.g.
+  `"send-external"`, `"payment"`, `"delete"`) are configured per agent
+  (D-008). There is no universal approval policy and no default; the
+  per-assignment completion/approval condition of Q-006 layers on top of
+  this (§3.8). Approval-gated actions that proceed without the recorded
+  human approval are integrity violations counted and paged (§4.1).
+- **VOLD-014 (instances and profiles)** — Agents may be separate profiles
+  on one Hermes instance or on different instances (D-008):
+  `hermesBinding.instance` must reference an existing gateway id (the
+  gateway row carries url/transport/auth per DATA-MODEL §1.2), and
+  `hermesBinding.profile` names the Hermes profile. Per the
+  hermes_gateway_check, named profile routing binds authentication to the
+  routed profile; CHD therefore MUST map each agent to a distinct profile
+  (two agents sharing one profile is a validation error
+  `profile_shared`) so that per-agent credentials and tool policy are
+  attributable. CHD does not reimplement profile or session mechanics; it
+  selects among documented Hermes REST session operations
+  (create/continue/history/forks) per the NEW/REUSE mapping owned by
+  VOL-C (F-010) — this volume only pins that `runtime.*` values ride the
+  delivery payload (VOLD-015).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#1-7-provider-model-context-pass-through-d-015 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-1-7-PROVIDER-MODEL-CONTEXT-PAS-S014" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.7 Provider/model/context pass-through (D-015)
+
+- **VOLD-015** — `runtime.{provider, model, context_window, max_turns,
+  token_budget}` are passed verbatim to the Hermes gateway POST (the
+  transport of FACT-11 already carries model/provider). CHD owns
+  selection and delivery; **Hermes owns fallback**. CHD MUST NOT retry a
+  failed delivery with a different model or provider, MUST NOT maintain a
+  model-health table, and MUST NOT interpret a provider outage as
+  authorization to reroute (deferred_scope; D-015). Fallback behavior is
+  observable only: session metadata (as reported by Hermes) is recorded
+  in the send manifest for readback. No routing algorithms are specified
+  here or elsewhere (deferred_scope).
+- **VOLD-016** — `context_window` is a configured ceiling CHD passes
+  through; CHD does not compute context budgets, compact, or reconstruct
+  history (R-019). Context lives in the room log; agents read it
+  themselves.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#1-8-composition-project-instructions-base-role-named-specialization-d-015-d-016-q-008 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-1-8-COMPOSITION-PROJECT-INSTRU-S015" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.8 Composition: project instructions + base role + named specialization (D-015, D-016, Q-008)
+
+- **VOLD-017 (order)** — The instruction/skill composition order is:
+  1. **Project instructions** — Hermes-native project/workspace
+     instruction files in the agent's `workdir` (Hermes-owned reading;
+     CHD only sets the workdir and `composition.project_scope` list of
+     additional workspace roots).
+  2. **Base role template** — `composition.base_role` (the role skill,
+     e.g. the manager base; naming examples are provisional per D-015).
+  3. **Named specialization** — `composition.specialization.name`
+     (e.g. an email-collection manager specialization).
+  Later layers refine earlier ones. CHD composes the *list* and delivers
+  it; Hermes composes the *behavior*.
+- **VOLD-018 (conflict handling)** — Two conflict planes:
+  - **Permissions (hard):** a specialization's grants/overrides apply
+    only within `authorized_overrides` (VOLD-019); anything else loses to
+    base and VP layers per VOLD-005.
+  - **Instructions (best-effort, explicit):** where specialization text
+    contradicts base-role text and `behavior` is NOT in
+    `authorized_overrides`, the loader fails validation
+    (`specialization_conflict`) — CHD does not silently pick a winner in
+    prose it cannot enforce. Where `behavior` IS authorized, the
+    specialization wins over base (never over VP config) and the
+    effective readback shows the override with its authorization record
+    (Q-008: overrides allowed when authorized by VP config or valid
+    on-demand director delegation; VP config prevails).
+- **VOLD-019 (specialization override authorization)** —
+  `specialization.authorized_overrides ⊆ {behavior, permissions}` is
+  REQUIRED-EXPLICIT (empty list = specialize-only, the conservative
+  legal default *of the enumeration*, not an invented behavioral
+  default). `permissions` overrides must additionally name the exact
+  grant deltas in the specialization asset; the loader verifies each
+  named delta lies within the VP-configured `grantable_pool` of the
+  agent (D-016: specialization may override base permissions "when
+  authorized"; authorization cannot exceed the VP pool).
+- **VOLD-020 (scope)** — `composition.project_scope` supports multiple
+  project/workspace roots per agent (D-015 "support multiple
+  project/workspace scopes"). Scope entries are absolute paths validated
+  to exist at load; CHD does not merge file contents — Hermes does.
+- **VOLD-021 (temporary agents)** — Defaults for temporary/ephemeral
+  agents are NOT SETTLED (D-015: "exact defaults not settled").
+  **OPEN-VOLD-1.** Defaults for temporary agents remain owner-scoped, but
+  explicit temporary workers are supported. The schema carries the
+  `temporary: true` flag and required runtime/lifetime/workspace/capacity/archive
+  fields; omission fails `temporary_field_missing`. No default is guessed.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#1-9-worked-configuration-examples-f-005-completion-evidence -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-1-9-WORKED-CONFIGURATION-EXAMP-S016" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.9 Worked configuration examples (F-005 completion evidence)
+
+**Valid — grantor who cannot use what it grants (D-009):**
+
+```yaml
+- id: mgr-comms
+  role: manager
+  gateway: gw-main
+  capability:
+    grants:                      # USE
+      - {tool: room.post, scope: "obj-*", origin: vp}
+      - {tool: room.read, scope: "obj-*", origin: vp}
+    grantable_pool:              # GRANT (superset of own use)
+      - telegram.send
+      - artifact.deliver
+    create_subordinate: supervisor
+  approval:
+    human_approval_required: false
+    gates: []
+  composition:
+    base_role: chd-manager-base        # provisional naming (D-015)
+    specialization:
+      name: outbound-comms
+      authorized_overrides: []         # specialize-only
+  runtime:
+    provider: fireworks
+    model: accounts/fireworks/models/glm-5p3-flash
+    context_window: 160000
+```
+
+Load outcome: valid. `mgr-comms` may grant `telegram.send` to a
+supervisor; `mgr-comms` itself has no `telegram.send` use grant; an
+attempt by mgr-comms to send via Telegram fails at the service boundary
+`403 tool_not_granted`.
+
+**Invalid cases and specified outcomes:**
+
+| Invalid document | Error | Outcome |
+|---|---|---|
+| Tool in `tools.include` with no matching grant | `tool_without_grant` | load refused |
+| `hierarchy` block absent | `required_missing{path: hierarchy}` | load refused |
+| `manager_creation.enabled` absent | `required_missing` | load refused (VOLD-009) |
+| Specialization overrides `permissions` not in `authorized_overrides` | `specialization_conflict` | load refused (VOLD-018) |
+| Specialization permission delta beyond the agent's VP pool | `override_exceeds_pool` | load refused (VOLD-019) |
+| Two agents share one `hermesBinding.profile` on one instance | `profile_shared` | load refused (VOLD-014) |
+| Director delegation granting outside its `grantable_pool` | `403 grant_outside_pool` at grant time | refused, audited, counted |
+| VP-config grant vs director delegation for the same tool+scope | VP wins + `grant_conflict` audit event | VOLD-005 |
+| Manager-creation request while disabled | `403 manager_creation_disabled` | refused, counted (VOLD-009) |
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#1-10-storage-classes-and-routing-configuration-r31-028-d-034 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-1-10-STORAGE-CLASSES-AND-ROUTI-S017" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.10 Storage classes and routing configuration (R31-028, D-034)
+
+The deployment MUST treat storage as four logical data classes, not as one
+undifferentiated DuckBrain target. The controller remains the default authority;
+local or federated project memory is an allowed extension, not a requirement.
+
+| Data class | Authoritative backend | Sync mode | Acknowledgement rule | Effective readback field |
+|---|---|---|---|---|
+| `coordination_report` | controller DuckBrain, `/chd` | immediate | `controller_fsync`; a locally queued write is **not** completion | `coordination_report.backend` |
+| `control_key` | controller DuckBrain, `/chd` | immediate | `controller_fsync`; no local fallback | `control_key.backend` |
+| `session_archive` | controller archive ingestor, `/chd-archive` | checkpointed | `committed_checkpoint` before advertisement | `session_archive.backend` |
+| `project_code_memory` | deployment-selected controller, local, or federated store; optional | background or disabled | `local_enqueue_not_complete`; eventual lag is visible | `project_code_memory.backend` |
+
+```json
+"storage": {
+  "classes": {
+    "coordination_report": {"namespace":"chd","backend":"controller","sync":"immediate"},
+    "control_key": {"namespace":"chd","backend":"controller","sync":"immediate"},
+    "session_archive": {"namespace":"chd-archive","backend":"controller","sync":"checkpointed"},
+    "project_code_memory": {"namespace":null,"backend":"none | controller | local | federated","sync":"background | disabled"}
+  },
+  "controller": {"backend_url":"https://...","auth_token_ref":"..."},
+  "effective_readback": "/v1/effective-routing"
+}
+```
+
+The checked-in template is topology **T-A central-default**: control/report
+and archive are controller-authoritative, and optional project memory is disabled.
+Topology **T-B central + local/federated project memory** is a supported deployment
+variant: set only `project_code_memory` to `local` or `federated`, give it an
+explicit namespace and grant, and retain a controller proxy plus background sync.
+Neither topology requires per-host DuckBrain, and local project memory is not rejected.
+
+- **VOLD-056.** `coordination_report` and `control_key` MUST be `controller` with
+  `immediate` sync. A report/control write MUST NOT be acknowledged from a local
+  queue, delayed sync, or project-memory write. If the controller is unavailable,
+  the named failure is `503 control_store_unavailable`; the item remains queued or
+  `blocked` and no completion/verdict is manufactured. `session_archive` MUST be a
+  distinct namespace from control. `project_code_memory` may be local/federated,
+  with background sync, but may not receive a report or control write.
+- **VOLD-057.** Per-tool routing is explicit in `storage.tool_class`. A tool whose
+  class is coordination/report or control executes against the controller. Effective
+  readback at `GET /v1/effective-routing` returns, for all four classes,
+  `{backend, namespace, sync, proxy, credential_ref_name, digest}` plus
+  `last_synced_rev/ts` for project memory. Credential refs are names only.
+- **VOLD-058.** Background sync has a named `sync_owner`, an explicit conflict rule,
+  checkpoint `last_synced_rev/ts`, and observable lag. Default conflict behavior is
+  `controller_wins` for central keys and `local_wins_on_project_keys` for project-only
+  keys. Sync ownership is single-writer per namespace; conflicts are recorded and
+  retried from the checkpoint, never silently dropped.
+- **VOLD-059.** Access grants are per class and endpoint: controller authorization
+  does not authorize a project-memory backend. Every read/write audit records the
+  class, backend, principal, grant id, checkpoint, and outcome.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#1-11-session-fork-policy-d-038-r31-027 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-1-11-SESSION-FORK-POLICY-D-038-S018" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1.11 Session fork policy (D-038, R31-027)
+
+```json
+"session": {
+  "fork_policy": "preserve_parent_snapshot",       // default
+  "resync": { "enabled": false, "authorized_by": ["session_policy_authority", "session.policy_resync"], "requires_approval": false },
+  "per_agent_override": { "mgr-infra": "current_policy" },
+  "per_project_override": { "proj-a": "preserve_parent_snapshot" }
+}
+```
+
+- **VOLD-060.** `session.fork_policy` is one of
+  `preserve_parent_snapshot | current_policy`, with schema default
+  `preserve_parent_snapshot` printed in readback. `session.resync.enabled` defaults
+  to `false` (off); unknown fork modes are rejected. Scope: global default, per-agent
+  override, per-project override; an override may narrow (be stricter) but MUST NOT
+  widen the VP setting (`fork_policy_widen_refused`).
+- **VOLD-061.** Activation is at fork creation and at explicit resync; never
+  retroactive. Changing the policy does not change any existing session's
+  snapshot. A session's `fork_mode` and `policy_rev` are visible in
+  `GET /v1/sessions/{id}/policy` and in `chd_whoami`.
+- **VOLD-062 (resync).** `POST /v1/sessions/{id}/policy-resync` requires
+  `expected_policy_rev`, a `reason`, and an authorization (the agent's own
+  session-policy authority or a `session.policy_resync` grant). It is an explicit
+  operation only: when `session.resync.enabled=false`, it returns
+  `403 policy_resync_disabled` and writes no snapshot. When enabled, it writes
+  exactly one new snapshot revision, audits the change, and is atomic. Denial is
+  `403 policy_resync_not_granted` (audited); stale revision is
+  `409 policy_revision_conflict`. Resync may not widen beyond the agent's
+  configured pool and is never automatic in preserve-parent mode.
+- **VOLD-063 (restore interaction).** A restored session imports the archived
+  snapshot. Missing snapshot → fail closed to `current_policy` with a recorded
+  `snapshot_missing` decision. The restore report states which mode was used.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#part-ii-provisioning-and-lifecycle-r31-020-r31-025 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-PART-II-PROVISIONING-AND-LIFEC-S019" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## PART II — PROVISIONING AND LIFECYCLE (R31-020, R31-025)
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#2-provisioning-profile-lifecycle-and-readiness-new -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-2-PROVISIONING-PROFILE-LIFECYC-S020" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 2. Provisioning, profile lifecycle, and readiness (new)
+
+Everything in this part is an operation with a card in `build-spec/VOL-E-operation-reference.md`;
+this section fixes the content those cards must carry and the invariants they
+enforce.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#2-1-the-profile-invariants -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-2-1-THE-PROFILE-INVARIANTS-S021" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.1 The profile invariants
+
+- **VOLD-064.** Every director, manager, supervisor, foreman and worker SHALL run
+  under a distinct, non-default Hermes profile. The document is invalid if any two
+  agents share `(instance, profile)` (`profile_shared`) or if any agent names the
+  `default` profile (`profile_not_distinct`). A temporary worker gets a generated
+  profile name and the same check applies.
+- **VOLD-065.** Profile identity maps 1:1 onto credentials and state:
+  `agent → hermesBinding.instance (gateway) → hermesBinding.profile → profile
+  credential/ session store / memory scope`. The gateway authenticates the
+  profile; CHD never reuses one profile's token for another agent. Profile
+  isolation is **not** a sandbox: it separates state and credentials, not host
+  privileges (D-023 scope note).
+- **VOLD-066.** A worker dispatch request whose profile is absent, shared, or equal
+  to the foreman's fails closed before any run record is created
+  (`422 profile_not_distinct` / `profile_missing`).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#2-2-desired-vs-effective-configuration-drift-and-convergence -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-2-2-DESIRED-VS-EFFECTIVE-CONFI-S022" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.2 Desired vs effective configuration, drift, and convergence
+
+- **VOLD-067.** Each agent has a **desired** configuration (the operator/VP-owned
+  document) and an **effective** configuration (what the running profile actually
+  has: settings, model/context, tools, skills, assets). Readback returns both plus
+  a `config_digest` and a `drifted: true|false` flag. Drift is computed against the
+  profile's own reported state, not against a locally cached copy.
+- **VOLD-068.** Convergence is an operation (`chd_profile_sync`): it computes the
+  diff, uploads changed assets, updates settings, and verifies by re-reading the
+  effective state. It MUST NOT overwrite agent-learned memory or session history;
+  it changes configuration and skill assets only, and it records what it replaced
+  so a rollback is possible.
+- **VOLD-069.** Updates and rollback: `rollback_to_config_digest` restores the prior
+  desired document and converges; the audit keeps both digests. A failed converge
+  leaves the previous effective state intact and reports `converge_failed` — never
+  a half-applied profile.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#2-3-asset-packaging-and-transport-n-5-proposed -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-2-3-ASSET-PACKAGING-AND-TRANSP-S023" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.3 Asset packaging and transport (N-5 PROPOSED)
+
+**VOLD-070a (managed composition):** The effective profile is composed in this
+order: project/workspace instructions, base-role template, named
+specialization, settings/tool policy, and provider/model/context runtime. The
+controller records desired and effective config revisions and their digests;
+Hermes owns behavior composition, while CHD owns the selected asset list and
+authorization boundaries.
+
+**VOLD-070b (drift/readiness):** Drift is detected by comparing a profile's
+reported effective revision, settings, skills, tools, runtime and asset
+inventory against its desired revision. A profile is not ready when any digest
+or credential/readiness probe disagrees. Synchronization is update → asset
+upload → digest readback → smoke turn; failure retains the previous effective
+revision and emits `converge_failed`. No request may silently fall back to the
+`default` profile or another agent's profile.
+
+**VOLD-070c (lineage):** Every update, rollback, default-profile migration,
+temporary-worker reuse/retirement and cleanup writes a central archive lineage
+record containing agent id, old/new profile, desired/effective revisions,
+asset digests, session archive refs and actor. Cleanup removes live state only
+after terminal run and archive checkpoint verification.
+
+- **VOLD-070.** Skills, prompts and small assets are packaged as a content-addressed
+  bundle (`manifest.json` + files, sha256 per file). Transport is **PROPOSED**
+  (`asset.transport: "controller_upload" | "gateway_fetch"`); the default is
+  controller upload with digest verification. A bundle whose digest does not match
+  is refused. Large artifacts are referenced, not packaged.
+- **VOLD-071.** Verification after upload is a readback of the profile's asset
+  inventory (name, version, digest). Presence alone is not verification.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#2-4-provisioning-sequence-cards-live-in-build-spec-vol-e-operation-reference-md -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-2-4-PROVISIONING-SEQUENCE-CARD-S024" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.4 Provisioning sequence (cards live in build-spec/VOL-E-operation-reference.md)
+
+- **VOLD-072.** The canonical sequence for adding any role is:
+  1. operator writes the desired config (schema-valid, `profile` distinct);
+  2. credentials are provisioned for that profile (operator action — never
+     automated by an agent);
+  3. the profile is created on the target gateway;
+  4. assets/skills are uploaded and verified;
+  5. readiness gates pass (§5.1, plus a profile-readiness probe: the gateway can
+     run a turn under that profile and the effective config matches);
+  6. the agent is registered (`/chd/registry/&lt;agent&gt;`), its rooms are opened, its
+     bond is provisioned at first wake;
+  7. a smoke turn is recorded as evidence (one real wake, one report).
+  A failure at any step leaves the agent **not dispatchable** and names the failed
+  step; there is no "partially ready" state.
+- **VOLD-073.** Migration of an existing default-profile agent: create the new
+  profile, converge config and assets, verify readiness, switch the binding, then
+  retire the default-profile binding. The agent's existing sessions are archived
+  before the switch (the archive contract); no session id is reused across profiles.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#2-5-temporary-workers-create-reuse-retire-cleanup -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-2-5-TEMPORARY-WORKERS-CREATE-R-S025" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.5 Temporary workers: create, reuse, retire, cleanup
+
+- **VOLD-074.** A temporary worker profile is created per work unit (or reused only
+  within the same work unit), carries the same non-default invariant, and is
+  retired after its run reaches a terminal state and its archive checkpoint is
+  committed. Cleanup removes the profile's live state but MUST preserve the central
+  archive records (the archive contract §7). Default values for lifetime/caps remain
+  **OPEN-VOLD-1**; explicit temporary workers are supported and require model,
+  context, lifetime, workspace, capacity and archive policy. Any omitted field
+  fails `temporary_field_missing`.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#2-6-retirement-and-offboarding -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-2-6-RETIREMENT-AND-OFFBOARDING-S026" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.6 Retirement and offboarding
+
+- **VOLD-075.** Retiring an agent: stop dispatch, drain or cancel its open sends
+  (with recorded reasons), archive its sessions, revoke its credentials and grants,
+  keep its records for retention, and mark the registry entry retired. A retired
+  agent's history remains readable per its archive grants; its live profile and
+  tokens are removed.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#2-7-readiness-gates-for-provisioning -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-2-7-READINESS-GATES-FOR-PROVIS-S027" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2.7 Readiness gates for provisioning
+
+- **VOLD-076.** An agent is dispatchable only when: config valid; profile distinct;
+  credentials present and probeable; assets verified; gateway reachable; scheduler
+  trigger (if any) registered; `chd` durability verified. Each gate has a named
+  failure code and the provisioning record shows the first failure. This gate set
+  is a superset of the startup gates in §5.1 and never weakens them.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#part-iii-reports-acceptance-and-measurement -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-PART-III-REPORTS-ACCEPTANCE-AN-S028" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## PART III — REPORTS, ACCEPTANCE, AND MEASUREMENT
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#3-report-and-acceptance-semantics-f-013 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-3-REPORT-AND-ACCEPTANCE-SEMANT-S029" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 3. Report and Acceptance Semantics (F-013)
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#3-1-report-schema-v3-envelope-content-variants-r31-030 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-3-1-REPORT-SCHEMA-V3-ENVELOPE-S030" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.1 Report schema v3 — envelope + content variants (R31-030)
+
+A report is one **common envelope** plus exactly one `content` variant. The
+requester selects the required class when composing the assignment:
+`class=free_form | structured | dataset`. This is the authoritative spelling;
+`freeform` is superseded. The machine-readable contract and three validating
+examples are `contracts/schemas/report-v3.schema.json` and
+`contracts/schemas/report-v3.fixture.json`, checked by
+`python3 build-spec/tools/validate_report_schema.py`.
+
+```json
+{
+  "schema_version": 3,
+  "envelope": {
+    "id": "r-20261109-1102-ds01", "produced_by": "mgr-infra",
+    "room": "task-crier-42", "send_id": "s-20261109-1002-a1b4",
+    "attempt_id": "at-20261109-1002-c3d6",
+    "request_ref": "/chd/room/task-crier-42/m000000000043",
+    "session_ref": {"mode":"REUSE", "session_key":"chd-sess-mgr-infra"},
+    "status": "done", "summary": "Dataset completion",
+    "assignment": {"required_content":"dataset", "schema_ref": {"name":"chd.measurements", "version":"1.0", "digest":"sha256:..."}, "validation_policy":"dataset_columns", "completion_policy":"objective_acceptance"},
+    "content_ref": "/chd/report/s-20261109-1002-a1b4/r-20261109-1102-ds01",
+    "content_digest": "sha256:...", "ingest_ts": "harness-recorded ingest time"
+  },
+  "content": {
+    "class":"dataset", "dataset_id":"ds-20261109-1102-ds01",
+    "schema_ref":{"name":"chd.measurements", "version":"1.0", "digest":"sha256:..."},
+    "columns":[{"name":"name","type":"string","nullable":false},{"name":"count","type":"integer","nullable":false}],
+    "rows":[{"row_id":"r00000001","values":{"name":"alpha","count":2}},{"row_id":"r00000002","values":{"name":"beta","count":3}}],
+    "query_contract":{"filter":"count &gt;= 2","order_by":"row_id ASC","page_size":2,"cursor_field":"row_id"}
+  }
+}
+```
+
+| Class | Content | Validation and use |
+|---|---|---|
+| `free_form` | non-empty prose (`content.text`) | no schema; human narrative |
+| `structured` | one JSON object (`content.value`) | `schema_ref={name,version,digest}` resolves a JSON Schema; unknown version is `422 schema_unsupported`, invalid pointer is `422 schema_validation` |
+| `dataset` | descriptor plus typed rows | `schema_ref` identifies the column schema; atomic publication and query contract are VOL-B §3.10/§5.12 |
+
+The assignment's `required_content`, `schema_ref` (when applicable),
+`validation_policy`, and `completion_policy` are immutable inputs copied into
+the envelope. Validation is schema → correlation/policy → completion evidence.
+The envelope's `content_digest` and each variant's schema digest identify
+immutable bytes and schema identity; a correction is a new report.
+
+- **VOLD-077 (variants).** The requester selects exactly one class; the agent
+  MUST answer in that class. A structured report without a resolvable schema is
+  `422 schema_unsupported`; an invalid instance is `422 schema_validation` with
+  a JSON pointer. Dataset rows are readable only after `state=published`.
+- **VOLD-078 (immutability/linkage).** Report, content, schema reference and
+  dataset rows are immutable after publish. A dataset links `dataset_id` to one
+  report and one send; corrected results create a new dataset and report.
+  Retention follows VOL-B §8 and the configured class policy.
+- **VOLD-079.** No numeric token target is specified. The “fewer tokens every
+  cycle” idea is an **unconfirmed proposal**, not a requirement or acceptance
+  criterion.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#3-1-1-report-schema-v2-superseded-lineage -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-3-1-1-REPORT-SCHEMA-V2-SUPERSE-S031" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.1.1 Report schema v2 (superseded, lineage)
+
+Rev 1.1's schema v2 (`id, produced_by, send_id, request_ref, attempt,
+session_ref, status, content_ref, ts`, single free-form content) is **superseded
+by v3** and carried only for lineage and migration. A v2 report is read and
+upgraded in memory to v3 with `content.class: "free_form"` and `attempt_id`
+synthesized from `(send_id, attempt)`. No new v2 report is accepted.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#3-1-2-correlation-and-outcome-semantics -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-3-1-2-CORRELATION-AND-OUTCOME-S032" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.1.2 Correlation and outcome semantics
+
+- **VOLD-022 (correlation)** — `send_id` + `attempt_id` + `request_ref` +
+  `session_ref` bind every report to exactly one send attempt and its request
+  message. The verify loop resolves the send manifest, checks `request_ref` equals
+  the manifest's request key and `attempt_id` equals the open attempt, and rejects
+  on mismatch: `bad_report{reason: wrong_request}` or
+  `bad_report{reason: attempt_mismatch}`. **A newer report for the wrong request
+  cannot close work** — the required F-013 completion demonstration.
+- **VOLD-023 (`waiting_human` status, amended by R31-005)** — `waiting_human` is a
+  first-class report status, distinct from `deferred` and from missing-reply
+  silence (D-012). It requires `waiting_for_human = {question, gate_ref, asked_at,
+  requested_by}`. A valid waiting report: (a) is NOT counted as a failure, (b)
+  closes the **attempt** (VOLC-067) and creates the wait record, (c) is propagated
+  upstream by the parent (supervisor → manager → director) as a `kind: status`
+  notice in the parent room, and (d) leaves the **send** open; on recorded
+  resolution a successor attempt is composed (W12). If the wait stays unresolved
+  past `verify.wait_timeout_s` (EXPLICIT-DEFAULT 4× `verify.deadline_s`) the
+  harness enters the **verify ladder at rung 2** for **visibility only** — it never
+  approves, closes, resumes or expires the gate. The approval gate itself has no
+  expiry; resolution always requires recorded approval evidence (VOLD-036).
+- **VOLD-024 (status semantics)** — `done` requires ≥1 artifact AND
+  `criteria_results` covering every criterion in scope for this assignment (§3.6),
+  plus a content variant matching the assignment's `required_content`;
+  `deferred` requires `reason`; `blocked` requires `reason` naming the blocker and
+  matches the blocked→escalated path of D-009/Q-004; `failed` is explicit failure
+  (no artifact required); a report failing shape validation is
+  `bad_report{reason: schema}`.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#3-2-trusted-timestamp-origin-r31-011 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-3-2-TRUSTED-TIMESTAMP-ORIGIN-R-S033" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.2 Trusted timestamp origin (R31-011)
+
+- **VOLD-025 (freshness rule v3; supersedes CHD-3 / v2 wording).** The
+  freshness comparison uses **harness-recorded** times, never agent-asserted
+  client clocks: `dispatch_ts` is written by the send orchestrator when the
+  gateway POST for this `attempt_id` is accepted; `ingest_ts` is the harness
+  ingress time when the report carrier is accepted and durably persisted.
+  Freshness is `ingest_ts &gt;= dispatch_ts` for the **same** `(send_id,
+  attempt_id, session_ref)` correlation. Agent `ts` and timestamps inside an
+  attached artifact are narrative evidence only. A carrier that was never
+  accepted does not exist for verification purposes. The old CHD-3 wording
+  (`report.ts &gt; request.timestamp`) is explicitly **superseded**, not an
+  alternate implementation.
+
+  An accepted envelope may contain a stale attachment: that does not make the
+  envelope stale; the attachment's own timestamp is evaluated only during
+  director acceptance review. An attachment with a mismatched attempt/session
+  is rejected as `bad_report{reason: attempt_mismatch}` or
+  `bad_report{reason: wrong_request}` and cannot close work.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#3-3-late-duplicate-and-wrong-request-rules-precedence-per-volb-056 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-3-3-LATE-DUPLICATE-AND-WRONG-R-S034" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.3 Late, duplicate, and wrong-request rules (precedence per VOLB-056)
+
+- **VOLD-026 (single precedence; no overlap).** Send manifests record
+  `config_digest`, `dispatch_ts`, `attempt_id`, `session_ref`, and terminal state.
+  The verifier evaluates exactly one first-match row, in this order:
+
+  | First-match condition | Result | State change |
+  |---|---|---|
+  | Same `(send_id, attempt_id, session_ref, content_digest)` as an accepted report | **Exact replay**: return original response; dedupe; no write and no counter | none |
+  | Same `(send_id, attempt_id)` with a different content digest while the send is open | **Second different report**: `409 report_already_posted`; record an audit event, not a report | none |
+  | Same send is terminal (and it was not the exact replay above) | **Closed-work duplicate**: record `duplicate_ignored`, increment `duplicate_ignored_total`; no re-verification | none |
+  | Send is open, correlation matches, and `ingest_ts &gt;= dispatch_ts` but after `deadline_ts` | **Late valid result**: accept/link with `late_report=true`; it may close only still-open work. If escalation already made the send terminal, the prior row applies | may close open send |
+  | Send is open but freshness or correlation fails | **Stale/wrong report**: `bad_report{reason: stale|attempt_mismatch|wrong_request}`; audit and enter the ladder | none |
+
+  This table is the sole duplicate/late/freshness precedence. A report arriving
+  after a terminal transition is never a second report or a closure; it is the
+  closed-work row unless it is an exact replay. A late result cannot reopen
+  terminal work. A late report that would change an acceptance decision is
+  material for director review and may be explicitly reopened only by an
+  authorized change record (VOLD-033), never by arrival alone.
+- **VOLD-027** — Timer start points (all measured from harness-recorded
+  times): the verify deadline starts at `dispatch_ts` (gateway POST
+  accepted), not at composition and not at fire-callback receipt;
+  reminder gaps are measured from the previous remind's dispatch;
+  `waiting_human` pauses the deadline clock while the wait is authorized
+  (VOLD-023). A queued send's staleness clock (`stale_after_s`) runs from
+  composition, so a send cannot queue forever and then dispatch stale.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#3-4-rung-transitions-ladder-per-f-011-f-013 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-3-4-RUNG-TRANSITIONS-LADDER-PE-S035" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.4 Rung transitions (ladder, per F-011/F-013)
+
+- **VOLD-028** — Rung transitions are evaluated only at transition checks:
+  rung 0 remind (REUSE, up to `max_reminds`, spaced `remind_gap_s`) →
+  rung 1 fresh session (NEW) → rung 2 escalate. Each transition requires
+  "still no valid report at the transition check" where *valid* means:
+  arrived, schema-valid, fresh (VOLD-025/026), correlated to this send
+  (VOLD-022), and not a `waiting_human` wait in force (VOLD-023). A
+  missing *reply* (no message in the subthread and no attached work
+  report — RL-11's mechanical detection) enters the same ladder at rung 0
+  with the dual action (notify caller + bump owing session); a missing
+  *report* (reply or acknowledgment arrived, report did not) enters at
+  rung 0 with only the bump leg. Both are counted distinctly
+  (`missing_reply_total`, `reports_missing_total`) and no rung resets any
+  counter. Reminder intervals are exactly `verify.remind_gap_s`; there
+  are no exponential reminder retries inside a rung (backoff exists only
+  in transport retry, §3.4).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#3-5-three-layers-of-completion-f-013-d-010-d-012-q-006 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-3-5-THREE-LAYERS-OF-COMPLETION-S036" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.5 Three layers of completion (F-013; D-010, D-012, Q-006)
+
+- **VOLD-029** — Three distinct judgments, never conflated:
+  1. **Manager-reported completion** — a report with `status: done` for
+     its send. Producer: the reporting agent. This closes the *send*, not
+     the objective.
+  2. **Director acceptance review** — the director evaluates the report
+     against the assignment's criteria record (§3.6), producing a
+     structured acceptance verdict. Owner: the director (D-010: "after a
+     manager reports completion, director starts acceptance review").
+  3. **Objective acceptance** — the VP-facing state of the whole
+     objective: all constituent sends verified, director acceptance
+     recorded, any VP-conditioned delivery and human-approval conditions
+     satisfied per the per-assignment rule (Q-006). Owner: recorded as
+     the director's objective-level verdict delivered to the VP; where
+     the VP's condition requires the human's acknowledgement, the
+     condition text says so and the objective is not complete until the
+     recorded evidence exists.
+- **VOLD-030 (objective state machine — canonical machine is VOL-A §4.1)** —
+  The normative objective lifecycle is VOL-A §4.1's state table
+  (VOL-A-025): `created → decomposing → assigned → in-progress` with
+  `queued`/`blocked`/`escalated`/`awaiting-human` side states, then
+  `in-acceptance → composing → delivering → accepted`, or `rework` back to
+  `in-progress`, or `cancelled`. VOL-D's report/acceptance layer maps onto
+  it as follows and introduces NO second machine: *manager_complete* =
+  the entry condition of `in-acceptance` (all owner managers reported);
+  *acceptance_review* = the `in-acceptance` activity; *rework*/*blocked*/
+  *cancelled* = the VOL-A states of the same names; *accepted_pending_
+  delivery* = `delivering` (separately delegated per D-011); *delivered/
+  objective_complete* = VOL-A `accepted` — reachable only when the
+  VP-conditioned delivery segment applies and its delivery evidence
+  (VOLD-031) is recorded. The delivery segment (`composing`/`delivering`)
+  exists only when the VP's completion condition includes delivery.
+  Every transition names its actor and
+  stores its evidence key. Completion of a wake (a send closing) is never
+  completion of the objective.
+- **VOLD-031 (content acceptance ≠ delivery success)** — Delivery is a
+  separate stage (D-011): the delivering agent (director if equipped, or
+  a delegated comms manager → supervisor per §1.6 grants) produces
+  **delivery evidence**: `{channel, channel_message_id, delivered_at,
+  delivery_attempt, idempotency_key}` recorded in the objective record.
+  Delivery failure retries with the same `idempotency_key` (idempotent
+  redelivery); delivery success is recorded as evidence only — it is
+  *content acceptance* (director acceptance, and any human approval the
+  VP conditioned on) that completes the objective, per the per-assignment
+  condition of Q-006. A channel confirmation never substitutes for a
+  required human approval.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#3-6-criteria-provenance-version-per-criterion-evidence -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-3-6-CRITERIA-PROVENANCE-VERSIO-S037" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.6 Criteria: provenance, version, per-criterion evidence
+
+- **VOLD-032** — Every acceptance criterion is a record:
+  `{criterion_id, provenance: vp_supplied | director_derived |
+  standing_rule, version, text, applies_to}`.
+  - `vp_supplied` — arrived in the VP objective; immutable by the
+    director (extension is additive only, D-010).
+  - `director_derived` — created by the director when the VP supplied
+    none, or added to cover additional requirements (D-010); provenance
+    and creating-agent recorded.
+  - `standing_rule` — resolved from Hermes-effective standing rules at
+    acceptance time.
+- **VOLD-033 (carried unchanged)** — The director's completion and
+  approval conditions flow into assignments verbatim; managers carry them
+  to supervisors rather than replacing them (D-012). Any change to a
+  carried condition requires an **authorized change record**
+  `{changed_by, authority_ref, at, delta}` stored with the assignment;
+  without one, a downstream report or agent asserting different
+  conditions is `bad_report{reason: schema}` at review and the attempt is
+  an integrity violation if it mutated stored state.
+- **VOLD-034 (standing-rule evidence, Q-005/D-013)** — Standing-rule
+  integration belongs to Hermes's learning loop (D-013). CHD does not
+  implement rule-update timing. What CHD requires and records: at
+  acceptance review, the director cites the **effective-rule evidence** —
+  the standing rules it could read at review time (with their Hermes
+  source/versions as returned by Hermes readback) — and per-criterion
+  `evidence_refs`. Because propagation to in-flight or future sessions is
+  a Hermes dependency whose guarantees are unverified (review-log caveat:
+  session-start frozen memory snapshots), acceptance records name the
+  rule set actually consulted; absence of a newly announced rule from
+  that set is recorded, not papered over. Conflicting rules and
+  newly-changed-rule application to in-flight work remain owner-level:
+  **OPEN-VOLD-3.**
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#3-7-rejection-and-rework -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-3-7-REJECTION-AND-REWORK-S038" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.7 Rejection and rework
+
+- **VOLD-035** — A director rejection produces a structured rework
+  record: `{objective_id, assignment, rejected_criteria: [criterion_id],
+  reason, rework_scope, returned_to}` posted as a `kind: directive`
+  reply in the owning thread (R-025 threading) and recorded in the
+  objective record. Rejections preserve ownership and evidence: the
+  reworked assignment references the original request/report keys, so
+  artifact lineage survives (F-004 cross-ref: VOL-A owns the full
+  lifecycle; this volume owns the verdict shapes).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#3-8-timeout-is-not-permission-waiting-states-d-012-q-006 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-3-8-TIMEOUT-IS-NOT-PERMISSION-S039" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.8 Timeout is not permission; waiting states (D-012, Q-006)
+
+- **VOLD-036** — Three states MUST remain distinct in every report,
+  manifest, and objective record:
+  - **missing reply** — mechanical: no subthread reply and no attached
+    work report (RL-11) → ladder with notify+bump.
+  - **missing report** — some traffic but no valid report → ladder, bump
+    leg only.
+  - **waiting-for-human** — explicit `waiting_human` report (VOLD-023) →
+    no failure count, timer paused while authorized, propagated upstream.
+  A timeout, an expiry, or a configured interval elapsing **never** grants
+  an approval, closes an approval gate, or authorizes continuation. A wait timeout
+  may only emit the bounded visibility escalation; it does not close the logical
+  send, release an unproven run slot, or create a successor attempt.
+  Continuation past a wait happens only when *prior human authorization*
+  exists in the agent's `approval` configuration or a recorded VP
+  authorization (D-012); an explicit stop-until-approval gate holds until
+  the recorded approval evidence exists, regardless of elapsed time
+  (Q-006). There is no universal delivery-versus-acknowledgement rule:
+  the completion condition is per assignment (Q-006), carried unchanged
+  per VOLD-033.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#4-measurement-and-traceability-f-015-r31-012 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-4-MEASUREMENT-AND-TRACEABILITY-S040" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 4. Measurement and Traceability (F-015, R31-012)
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#4-1-metric-register-units-windows-reset-contract -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-4-1-METRIC-REGISTER-UNITS-WIND-S041" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.1 Metric register (units, windows, reset contract)
+
+- **VOLD-043** — Metrics have fixed meaning, unit, label set, producer, and
+  readout:
+
+  | Metric | Meaning | Unit/labels | Producer | Readout | Retention / reset / goal / bounded comparison |
+  |---|---|---|---|---|---|
+  | `sends_total` | sends composed | count{gateway, mode} | orchestrator | `/v1/status` | since_start; retain 90d; reset only on explicit namespace reset; steady-state monotone record count; compare adjacent 5-cycle windows |
+  | `sends_deferred{reason}` | queued sends dropped past staleness or drained | count{reason} | orchestrator | `/v1/status` | since_start; retain 90d; explicit reset only; zero unexplained drops; compare each 5-cycle window |
+  | `reports_missing_total` | sends closed `no_report` | count{agent} | verify loop | status + send log | since_start; retain 90d; explicit reset only; zero on the fixture; compare two 5-cycle windows |
+  | `missing_reply_total` | missing agent→agent replies (RL-11) | count{caller, target} | verify loop | status | since_start; retain 90d; explicit reset only; no unexplained growth; compare two 5-cycle windows |
+  | `reprompts_total{rung}` | ladder rungs fired | count{rung} | verify loop | status | since_start; retain 90d; explicit reset only; bounded by configured ladder; compare two 5-cycle windows |
+  | `escalations_24h{agent}` | rolling-window escalations | count{agent}, 24 h | verify loop | owner-page trigger | rolling_24h; retain 90d; expires by event time; steady-state at or below fixture baseline +10%; compare matched 24h windows |
+  | `late_reports_total`, `duplicate_ignored_total` | §3.3 events | count{agent} | verify loop | send log | since_start; retain 90d; explicit reset only; zero in the clean fixture; compare two 5-cycle windows |
+  | `report_replays_total`, `report_second_refused_total` | V3 exact replay / changed second report outcomes | count{agent} | report verifier | status + send log | since_start; retain 90d; explicit reset only; replay/refusal equals injected cases; compare matched runs |
+  | `datasets_published_total`, `dataset_validation_failures_total` | atomic dataset publication outcomes | count{agent, schema} | report verifier | status + send log | since_start; retain 90d; explicit reset only; all valid fixture datasets publish and invalid ones fail; compare matched runs |
+  | `waits_opened_total`, `waits_resolved_total` | wait records | count{gate} | harness | status | since_start; retain 90d; explicit reset only; opened/resolved records reconcile; compare each run |
+  | `worker_runs_total{state}`, `worker_run_seconds` | dispatch outcomes and duration | count / seconds{worker} | controller | worker log | since_start; retain 90d; explicit reset only; every run has terminal state and finite duration; compare two 5-cycle windows |
+  | `archive_exports_total{state}`, `archive_gap_total` | export coverage | count{agent} | archive ingestor | archive status | since_start; retain 90d; explicit reset only; gaps are explicitly recorded; compare matched export windows |
+  | `manager_creation_refused_total` / `_created_total` | VOLD-009 | count | harness | audit | since_start; retain 90d; explicit reset only; refusal/creation matches fixture cases; compare matched runs |
+  | `bridge_failed_total{direction}` | dead-lettered bridge deliveries | count{direction} | bridge | status | since_start; retain 90d; explicit reset only; every failure has dead-letter record; compare two 5-cycle windows |
+  | `gateway_inflight{gateway}`, `sessions_live{agent}` | current gauges | gauge | orchestrator | status | point-in-time; retain samples 30d; reset on process restart but reconstruct from manifests/bonds; steady-state within configured caps; compare matched snapshots |
+  | `cycle_cost_tokens{cycle}` | tokens consumed by a cycle | tokens{agent, cycle} | harness (session metadata) | send log / soak report | per-run sample retained 90d; reset by new run id, never overwrite; steady-state band `measurement.steady_state_band_tokens` (default 90–120); compare adjacent 5-cycle windows with 10% tolerance |
+
+- **VOLD-044 (scope, window, reset).** The final column above is normative for
+  every registered metric: it states the label scope, retention, reset rule,
+  steady-state goal and bounded comparison window. Monotone counters are
+  persisted records and survive process restart; gauges are reconstructed from
+  durable manifests/bonds. An explicit operator reset creates a new run id and
+  audit record; it never silently deletes historical samples. The dry-run
+  throttle's consecutive no-artifact counters (warn 5 / suspend 10) reset only
+  on an artifact-bearing cycle; that rule is the scheduler's and applies to
+  hierarchy lanes unchanged.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#4-2-bounded-comparison-and-steady-state-goal-r31-012 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-4-2-BOUNDED-COMPARISON-AND-STE-S042" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.2 Bounded comparison and steady-state goal (R31-012)
+
+Rev 1.1 claimed "a cycle that changes nothing must be cheaper than the cycle
+before it" with a strict inequality. That cannot hold indefinitely and is
+**withdrawn**. The replaced contract:
+
+- **VOLD-080 (bounded comparison).** Performance is compared over a **finite
+  repeatable workload** (the fixture set in `acceptance/`), not over wall-clock
+  history. The comparison unit is the **median cost of N identical unchanged
+  cycles** vs the **median of the preceding N** (`N` = `measurement.window_cycles`,
+  default 5), with a stated tolerance (`measurement.nonregression_tolerance_pct`,
+  default 10). Pass = the later median ≤ earlier median × (1 + tolerance). The
+  floor is a **zero-wake cycle** with cost 0; there is no requirement to go below
+  it. A single cycle never carries a verdict.
+- **VOLD-081 (steady state).** The steady-state goal is a **band**, not a
+  descending sequence: once the unchanged-cycle median falls inside
+  `measurement.steady_state_band_tokens` and stays there across a full window, the
+  target is met and no further reduction is required.
+- **VOLD-082 (cycle scope and boundaries).** A "cycle" is one director sync lane
+  fire plus the sends it composes, bounded by the fire callback and closed when all
+  its sends reach a terminal or waiting state. Startup, endpoint-driven wakes,
+  user-triggered wakes and worker runs are **not** cycles and are reported
+  separately. The 8-cycle figure is a pin-derived ceiling on **burn
+  opportunities** (4 fires/day × 2 days), never a token target and never a
+  universal law across deployments (VOLD-046 retained, restated).
+- **VOLD-083 (measurable startup and persistence).** Each measurement run records:
+  the config digest, the fixture revision, the seed, the lane cadence, the raw
+  per-cycle samples, and the counter snapshot before/after. Startup cost
+  (harness start → first successful status) is measured separately and reported;
+  counter persistence across restart is asserted by comparing snapshots.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#4-3-soak-vs-semantic-evidence-r31-012 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-4-3-SOAK-VS-SEMANTIC-EVIDENCE-S043" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.3 Soak vs semantic evidence (R31-012)
+
+- **VOLD-084.** Soak/performance evidence is **complementary** and never
+  substitutes for: semantic correctness (reports/criteria), authorization
+  (grants/snapshots), recovery (crash/partition drills) or owner acceptance. A
+  green soak with a failing semantic cell is a failure; a passing semantic suite
+  with no performance data simply has no performance claim. Labels required in
+  every report: `implemented` / `measured` / `proposed` / `unverified`.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#4-4-requirement-to-test-traceability -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-4-4-REQUIREMENT-TO-TEST-TRACEA-S044" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.4 Requirement-to-test traceability
+
+- **VOLD-047** — The traceability table below is maintained with the
+  same discipline as the requirements; a requirement without a test id
+  is a spec defect.
+
+  | Req (subset) | Test/Evidence id | Kind |
+  |---|---|---|
+  | VOLD-003/009/064/067 config validity, profiles, drift | T-CFG-01..07 | unit/loader |
+  | VOLD-011/012/068 grantor-without-use; assignment≠grant; meta-grant | T-AUTH-01..06 | service-boundary |
+  | VOLD-022/023/024/077/078 report variants, wrong request, wait | T-ACC-02..04 + report-v3 schema validator | e2e/schema |
+  | D-038 fork modes, snapshot copy, revocation outcome, readback provenance/revision | T-AUTH-FORK-01..02 + `contracts/fixtures/session-policy-fork.json` | schema/fixture |
+  | D-038 explicit resync authorization, audit, disabled/default-off and no automatic refresh | T-AUTH-RESYNC-01..04 | service-boundary/negative |
+  | D-038 in-flight read/write/grant issuance at fork, resync and activation | T-AUTH-INFLIGHT-01..03 | concurrency |
+  | D-038 fork/restart/replacement/restore existing-vs-future classification | T-OPS-SESSION-01..04 | recovery |
+  | VOLD-025/026 freshness, precedence, replay, late open result | T-ACC-05 | e2e/failure |
+  | VOLD-029/030/031 acceptance layering + delivery evidence | T-ACC-01 | e2e |
+  | VOLD-037/038/039/056 startup, dependencies, partition, routing | T-OPS-01..05 | ops drill |
+  | VOLD-040..042/085..088 bridge lifecycle + federation | T-BR-01..06 | failure-injection |
+  | VOLD-043..046/080..084 measurement | T-MEAS-01..06 | soak/measured |
+  | VOLD-037/VOLC-036..037 clock registration, cycle boundary, startup readback | T-MEAS-01 + `/chd/metric/run-001` and scheduler registration query | measured/ops |
+  | VOLD-048 full executable trace | T-ACC-01..06, T-AUTH-01..03, T-W5, T-W7, T-ACC-05-WRONG, T-OPS-01..03, T-MEAS-01, T-W11 | fixture/live |
+  | VOLD-049..055 and §7 figures | T-FIG-01..09 | review vs flags |
+  | D-038 fork modes, snapshot copy, revocation outcome, readback provenance/revision | T-AUTH-FORK-01..02 + `contracts/fixtures/session-policy-fork.json` | schema/fixture |
+  | D-038 explicit resync authorization, audit, disabled/default-off and no automatic refresh | T-AUTH-RESYNC-01..04 | service-boundary/negative |
+  | D-038 in-flight read/write/grant issuance at fork, resync and activation | T-AUTH-INFLIGHT-01..03 | concurrency |
+  | D-038 fork/restart/replacement/restore existing-vs-future classification | T-OPS-SESSION-01..04 | recovery |
+
+- **VOLD-048 (end-to-end acceptance scenarios)** — The runnable package is
+  `acceptance/` (WF-01..WF-10 + D-038 variants). The named scenarios remain
+  the required content: full flow (T-ACC-01), wrong request (T-ACC-02), human
+  wait (T-ACC-03), precedence/grantor (T-AUTH-03), restart/partition/bridge
+  redelivery (T-OPS-01..03). *Planned* vs *run* evidence is labelled per the
+  acceptance README; no identifier alone is evidence. The checker rejects a
+  card without a concrete expected field body, procedure command, evidence
+  query, date and commit/image marker. The trace includes non-counter cards
+  for semantic correctness, authorization, recovery and owner acceptance;
+  performance soak/counter evidence cannot close any of those four classes.
+
+  The live procedure also injects a full queue, wrong-request and duplicate
+  reports, duplicate gateway POST, crash at the ack/link window, lost bond,
+  unreachable transport and denied authorization. Each injection must produce
+  a read-back record, not merely a counter increment.
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#part-iv-deployment-data-class-routing-federation-and-failure-ops -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-PART-IV-DEPLOYMENT-DATA-CLASS-S045" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## PART IV — DEPLOYMENT, DATA-CLASS ROUTING, FEDERATION, AND FAILURE OPS
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#5-deployment-and-crier-bridge-lifecycle-f-014 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-5-DEPLOYMENT-AND-CRIER-BRIDGE-S046" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 5. Deployment and Crier-Bridge Lifecycle (F-014)
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#5-1-startup-readiness -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-5-1-STARTUP-READINESS-S047" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.1 Startup readiness
+
+- **VOLD-037 (ordered readiness)** — The harness starts through named
+  gates; each gate has a fail behavior:
+
+  | # | Gate | Pass condition | Fail behavior |
+  |---|------|----------------|---------------|
+  | 1 | Config load/validate | v4 schema valid per §1 | exit fail-closed, nothing registered |
+  | 2 | DuckBrain reachability + durability check | `/health` healthy (FACT-18) AND the configured write-durability mode is the one actually in effect (probe per F-019; the documented default **buffered mode has no power-loss barrier** — review-log correction) | `duckbrain_unavailable`: sends do not dispatch (§5.3); harness answers status/health only |
+  | 3 | Registry/bond/limits mirror | `/chd/registry/*`, `/chd/bond/*`, `/chd/limits/*` written (harness-only keys) | same fail-closed as 2 |
+  | 4 | Scheduler trigger registration | lanes landed via the validated loader/API path (CT-02, N-2) | triggers not armed; existing lanes left untouched; page operator |
+  | 5 | Zero-scheduled-trigger assertion | with zero trigger lanes and zero rooms, no scheduler-caused gateway traffic (R-012); an authorized immediate request is a separate controller-admission path | drain and fail-closed |
+
+  Durability mismatch (configured mode ≠ achieved mode) is a failed gate,
+  not a warning: acknowledgement contracts (VOLD-041) may not overpromise
+  persistence (F-019). Key normalization follows F-019: DuckBrain memory
+  keys MUST start with `/`; the harness maps the legacy slash-less family
+  names to `/chd/...` at the API boundary (VOL-B owns the mapping table,
+  VOLB-003; this
+  volume requires the gate to verify it round-trips).
+
+- **VOLD-038 (dependency-failure behavior at runtime)** —
+
+  | Dependency | Failure effect | Recovery |
+  |---|---|---|
+  | DuckBrain | no dispatch, no verdicts manufactured (§5.3); queued sends back off exponentially; send log records `duckbrain_unavailable` | automatic on healthy gate 2 |
+  | Scheduler | sends compose but admission requests fail with backoff; nothing spawns | automatic; queued sends resume oldest-first |
+  | A gateway/host | sends pause `paused:unreachable` (§5.2, §5.4); no ladder burn against a dead socket (F-018/§5.2 rule) | first healthy transport check restores (VOLD-039) |
+  | Crier | bridge degraded only (CT-15); no hierarchy contract touches crier | VOLD-042 |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#5-2-transport-checks-restore-ordering-queued-work-recovery -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-5-2-TRANSPORT-CHECKS-RESTORE-O-S048" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.2 Transport checks, restore ordering, queued-work recovery
+
+- **VOLD-039** — Each transport (`loopback | tailscale | ssh-tunnel |
+  direct`) has a named pre-dispatch reachability check owned by the
+  gateway row; transports NEVER fail over silently (§5.2): a tailscale
+  endpoint that is down fails loudly, it does not leak to a LAN route.
+  Restore ordering after a partition or restart: (1) transport check
+  passes → (2) mark gateway reachable → (3) resume queued sends
+  **oldest-first**, preserving composition order → (4) re-arm ladder
+  timers from their recorded deadlines (missed reminds are re-sent per
+  current cadence, NOT burst-fired) → (5) `paused:unreachable` clears.
+  No queued send is dropped by a restart; staleness (`stale_after_s`)
+  is the only dropper and its clock continues across restarts.
+- **VOLD-089 (session-archive restore ordering — R31-016).** Restoring a
+  session from the central archive (`chd-archive`) follows the ordered
+  procedure VOLB-070 (VOL-B §5.10), and re-enters normal operation only after
+  it: (1) replacement discovers the SessionArchive via the QA-1 lookup under
+  a resolvable archive read grant (VOLC-081; no implicit read); (2) latest
+  committed ExportManifest selected (QA-2) and its payload digest-verified;
+  (3) **compatibility/version check** — `export_schema.name` must be
+  `hermes.session.export` (probed, OPEN-6) at a version the importer
+  supports, else the procedure stops
+  `restore_failed{reason: export_version_unsupported}`; (4) import into a
+  NEW local session store under a freshly minted session id; (5) policy
+  snapshot imported, `snapshot_missing` failing closed to `current_policy`
+  (VOLD-063); (6) new bond records the imported checkpoint; (7) restore
+  report states completeness, coverage window and open gaps. **Limitation
+  (normative):** archive restore CANNOT restore a live session — it is an
+  import, never a resumption or a copy of a live database (VOLB-053).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#5-3-crier-bridge-lifecycle-rl-18-ct-15-fact-32 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-5-3-CRIER-BRIDGE-LIFECYCLE-RL-S049" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.3 Crier bridge lifecycle (RL-18, CT-15, FACT-32)
+
+- **VOLD-040 (direction and conversion)** —
+  - **Outbound:** a room event on a room configured `bridge: crier` is
+    converted to a crier event envelope
+    `{topic: &lt;configured topic&gt;, event: {delivery_id, room, seq, kind,
+    payload}}`. Two destinations: crier **topic** (relay publish,
+    fire-and-forget, dropped by crier on zero subscribers — hence not
+    default) or crier agent **durable inbox** (default for anything that
+    matters, per DESIGN §11.4). Topic publish is permitted only when the
+    config explicitly selects it for that room.
+  - **Inbound:** a leased crier inbox message becomes a room message
+    `from: crier/&lt;agent-id&gt;` posted through the harness ingress (DESIGN.md §11.2)
+    with the same VP auth and audit as any VP signal. Payload conversion
+    is total: a message that cannot be converted is dead-lettered
+    (recorded, counted `bridge_inbound_rejected_total`), never silently
+    dropped and never partially posted.
+- **VOLD-041 (delivery ids, retry, ACK point)** — Every outbound bridge
+  delivery carries a `delivery_id` used as the crier idempotency key;
+  retries reuse it (idempotent redelivery). Outbound failures retry with
+  exponential backoff, bounded, then dead-letter with a count and an
+  incident message in the announce room (R-017: every escalation leaves a
+  durable record). **The ACK point for inbound messages is after the room
+  message write is durably committed** — given the F-019 correction, the
+  bridge records WHICH durability mode it verified before ACKing; under
+  buffered (non-barrier) durability the bridge MUST either configure a
+  stronger mode for `chd` room keys or record `ack_mode: buffered` in the
+  delivery record so the acknowledged-durability question is answerable
+  (F-019 completion: "acknowledged durability matches configured/achieved
+  mode"). Lease expiry with no ACK causes crier redelivery — safe, see
+  loop prevention.
+- **VOLD-042 (loop prevention and outage isolation)** — Bridge-originated
+  messages carry an origin tag (`via: chd-bridge/&lt;bridge-id&gt;`). The
+  bridge never re-egresses a message that arrived inbound through the
+  same bridge (no room→crier→room echo). A redelivered crier message
+  whose `delivery_id` already has a committed room message is ACKed
+  without a second room write (no duplicate room event). Crier outage:
+  undeliverable bridge traffic is counted loudly (mirroring crier's
+  error-notification shape), the announce room gets one incident per
+  outage window (not per message), and nothing in the verify loop, ladder,
+  caps, or rooms blocks on crier (CT-15).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#5-4-data-classes-routing-and-two-supported-topologies-r31-028-d-034 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-5-4-DATA-CLASSES-ROUTING-AND-T-S050" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.4 Data classes, routing, and two supported topologies (R31-028, D-034)
+
+**VOLD-085 (routing readback and no silent degradation).** The effective routing
+(VOLD-057) SHALL be readable per class and MUST match actual behaviour:
+`GET /v1/effective-routing` returns `{class, backend, namespace, sync, proxy,
+credential_ref_name, digest}`. A control write that would land on a delayed path is
+refused, not silently accepted. `project_code_memory` lag is recorded as
+`last_synced_rev/ts` and surfaced; a report's acknowledgement never depends on it.
+
+**VOLD-086 (two topologies).**
+
+| Topology | Control + archive | Project memory | Consistency |
+|---|---|---|---|
+| **T-A: central-only (default)** | controller DuckBrain, immediate | none or same controller | strong for control; no sync lag |
+| **T-B: central + local/federated project memory** | controller DuckBrain, immediate | local DuckBrain (bunker/project) synced in background, optionally proxied via controller | control strong; project memory eventual |
+
+Both are supported; neither is a fork of the architecture. T-B must annotate in the
+figure which arrows are immediate and which are eventual, and must show that a
+completion report travels on the immediate path only.
+
+**VOLD-087 (grants across endpoints).** Access to a project-memory namespace is a
+separate grant from control access (VOLD-059); a federated peer's project memory is
+not reachable by local agents unless explicitly granted. The audit records the
+class on every read/write so a cross-class leak is detectable.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#5-5-crier-director-federation-r31-029-d-035 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-5-5-CRIER-DIRECTOR-FEDERATION-S051" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.5 Crier director federation (R31-029, D-035)
+
+**VOLD-088 (federation operating story).** Crier federates **independent director
+systems**, often under different owners. The model is an owner-bounded trust
+contract, not room delivery with a larger ACK:
+
+- Each side has its own VP, director, managers, supervisors, foremen and workers.
+  A peer director is **not** an extra internal tier. Internal reinvocation of the
+  same director (a new room/cycle) is distinct from an autonomous peer system;
+  the former has local provenance and does not use the peer trust path.
+- **Identity/authentication/onboarding:** a peer is the configured principal
+  `crier:&lt;peer-id&gt;`, authenticated by its configured mTLS public key or signed
+  token. Operator onboarding writes a stable onboarding record naming peer id,
+  key/token reference, owner label, expiry, allowed objective/message/room and
+  ticket-family scopes, whether automatic requests are allowed or proposal-only,
+  and the local approval route. Connectivity or a sender id alone confers no
+  authority.
+- **Scope and grants:** a peer may use only explicitly configured scopes. A
+  downstream grant must be an explicit GrantRecord with issuer lineage and may
+  not exceed the local issuer's `grant_use`/`meta_grant` bound (VOL-C §8.3);
+  peer trust never creates VP grants. Local VP configuration wins conflicts.
+- **Incoming direction mapping:**
+
+  | Incoming peer direction | Local actor | Required provenance / decision |
+  |---|---|---|
+  | signed peer objective request | mapped `peer:&lt;peer-id&gt;` actor | `origin=peer`, `peer_id`, `peer_request_id`; local VP scope check |
+  | peer progress/message | mapped peer actor in configured room | `origin=peer`, `peer_message_id`, local room scope |
+  | peer report/ack | mapped peer actor, report verifier | `origin=peer`, `peer_report_id`, correlated local ticket/send |
+  | sender asserts `as: vp` | no VP mapping | refuse `403 peer_vp_claim`, audit; local VP precedence remains absolute |
+
+  The local VP is the only VP for local decisions. A remote sender never becomes
+  local VP, even if its peer record is trusted or its message says `as: vp`.
+- **Approval and denial:** a permitted request is accepted only within configured
+  scope; a proposal-only or approval-gated request is routed to `local_vp` (or
+  configured local director/operator) and held as `202 pending_local_approval`.
+  Untrusted, expired, malformed, or out-of-scope work is refused as
+  `403 peer_scope_denied` (or `403 peer_authentication_failed` before scope
+  evaluation), with no local objective, dispatch, or grant side effect.
+- **Correlated trace:** `peer_request_id=pr-42` arrives from peer `client-alpha`,
+  maps to local actor `peer:client-alpha`, and passes local VP policy. The local
+  director creates `objective_id=obj-local-42` and `ticket_id=ticket-42`, records
+  ownership/acceptance in control state, assigns permitted work, and emits
+  `peer_report_id=rr-42` carrying `peer_request_id`, ticket, report digest and
+  acceptance. Retries reuse `peer_request_id`; duplicate requests replay the
+  existing mapping and never create a second objective.
+- **Denial trace:** an untrusted `client-rogue` or a trusted peer asking for
+  `room:private` reaches authentication/scope validation, is denied with
+  `403 peer_scope_denied`, and produces only an audit record; no objective,
+  dispatch, report, or grant is created. If configured for human review instead,
+  the result is `202 pending_local_approval`, not autonomous work.
+- **Retry/outage/audit:** every request, reply, report, acceptance, denial,
+  duplicate and approval decision is correlated and audited. Bridge outage stops
+  federation traffic only; local work continues. Bounded retries are idempotent
+  and dead-letter after their limit; no local ladder or completion status is
+  changed by peer unavailability.
+- **Human examples** (two owners splitting a project; one owner coordinating
+  several client directors) are illustrative, not a universal topology. Crier
+  moves work, not DuckBrain project knowledge; project-memory federation is
+  independently configured and drawn separately (D-035).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#5-6-failure-handling-and-operator-procedures-summary -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-5-6-FAILURE-HANDLING-AND-OPERA-S052" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.6 Failure handling and operator procedures (summary)
+
+The detailed windows live in VOL-B §6; this is the operator's map.
+
+| Situation | Detection | Automatic action | Operator action |
+|---|---|---|---|
+| Harness crash | process | restart; VOL-B §6.4 recovery | verify reconcile report; no manual replay |
+| Gateway down | transport check | `paused:unreachable`; holds capacity | fix transport; sends resume oldest-first |
+| Capacity uncertain (lease expired) | VOLB-061 | holds slot, probes run status | after bound: `chd capacity reconcile --force-stop` with evidence |
+| DuckBrain control store down | health gate | no dispatch, no verdicts | restore store; no report may claim completion |
+| Archive ingestor down | archive status | live work unaffected; gap recorded | resume ingestor; gaps stay declared |
+| Peer bridge down | bridge counters | federation traffic stops; local continues | no action required for local work |
+| Equal-rev conflict | VOLB-059 | room refused, incident | operator resolves from git history; never guess |
+
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#part-v-requirements-register-figure-specifications-and-verification -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-PART-V-REQUIREMENTS-REGISTER-F-S053" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## PART V — REQUIREMENTS REGISTER, FIGURE SPECIFICATIONS, AND VERIFICATION
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#6-requirements-register-vold-nnn -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-6-REQUIREMENTS-REGISTER-VOLD-N-S054" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 6. Requirements Register (VOLD-nnn)
+
+| id | Requirement (one line) | Source |
+|---|---|---|
+| VOLD-001 | schema_version monotonic; unknown versions refused; no silent migration | F-005 |
+| VOLD-002 | unknown fields rejected at every level, fail closed | F-005 |
+| VOLD-003 | three disposition classes (REQUIRED-EXPLICIT / EXPLICIT-DEFAULT from normative source / REQUIRED); no invented defaults | F-005, D-015 |
+| VOLD-004 | validation order schema→referential→policy→warnings; errors `{code, path, detail}` | F-005 |
+| VOLD-005 | VP config wins conflicts; `grant_conflict` audited; instruction vs permission planes distinguished | D-016 |
+| VOLD-006 | effective-config readback with per-field provenance + digest | F-005 |
+| VOLD-007 | per-field change authority table; agents change nothing | F-005, CT-01 |
+| VOLD-008 | activation timing per field class; in-flight sends under dispatch-time digest | F-005 |
+| VOLD-009 | manager_creation REQUIRED-EXPLICIT; disabled/enabled behavior; operator token provisioning constraint | D-005 |
+| VOLD-010 | create_subordinate enum; lower-tier scope OPEN | D-005, F-002 |
+| VOLD-011 | use/grant/create modeled independently; pool may exceed own tools | D-009 |
+| VOLD-012 | goal assignment never a permission grant; write-gate enforced | F-005, F-012 |
+| VOLD-013 | per-agent approval policy; no universal policy | D-008 |
+| VOLD-014 | instance/profile binding; distinct profiles; Hermes owns profile auth | D-008, hermes_gateway_check |
+| VOLD-015 | runtime pass-through verbatim; Hermes owns fallback; no CHD rerouting | D-015, deferred_scope |
+| VOLD-016 | context ceiling pass-through; no reconstruction/compaction by CHD | D-015, RL-3 |
+| VOLD-017 | composition order: project → base role → specialization | D-015 |
+| VOLD-018 | two conflict planes (permissions hard, instructions explicit) | D-015/D-016 |
+| VOLD-019 | authorized_overrides REQUIRED-EXPLICIT; override deltas within VP pool | D-016, Q-008 |
+| VOLD-020 | multiple project/workspace scopes per agent | D-015 |
+| VOLD-021 | explicit temporary agents supported; defaults remain owner-scoped and omissions fail `temporary_field_missing` | D-015 open |
+| VOLD-022 | report correlation (send_id/request_ref/attempt/session_ref); wrong-request rejection | F-013 |
+| VOLD-023 | waiting_human first-class status; timer pause; upstream propagation | D-012 |
+| VOLD-024 | status field semantics (done/deferred/blocked/failed) | F-013 |
+| VOLD-025 | v3 trusted timestamp origin = harness `ingest_ts`/`dispatch_ts`; CHD-3 wording superseded | F-013, R31-011 |
+| VOLD-026 | one first-match precedence for exact replay, second report, closed duplicate, late open result, stale/wrong | F-013, R31-011 |
+| VOLD-027 | timer start points (dispatch_ts basis) | F-011/F-013 |
+| VOLD-028 | rung transitions at named checks; missing-reply vs missing-report legs; counters never reset | F-011/F-013, RL-11 |
+| VOLD-029 | three-layer completion distinction | D-010, F-013 |
+| VOLD-030 | objective state machine incl. separate delivery states | F-004/F-013 |
+| VOLD-031 | content acceptance ≠ delivery success; delivery evidence + idempotent retry | F-013, D-011 |
+| VOLD-032 | criteria records with provenance+version | D-010 |
+| VOLD-033 | conditions carried unchanged; authorized change record | D-012 |
+| VOLD-034 | standing-rule evidence via Hermes effective-rule readback; no own timing policy | D-013, Q-005 |
+| VOLD-035 | structured rejection/rework records preserving lineage | F-013 |
+| VOLD-036 | missing-reply vs missing-report vs waiting-human distinct; timeout ≠ permission; per-assignment completion (Q-006) | D-012, Q-006 |
+| VOLD-037 | ordered startup readiness gates incl. DuckBrain durability verification | F-014, F-019 |
+| VOLD-038 | dependency-failure behavior table | F-014 |
+| VOLD-039 | transport checks; no silent failover; restore ordering | F-014 |
+| VOLD-040 | bridge direction + total payload conversion + dead-letter | F-014 |
+| VOLD-041 | delivery ids as idempotency keys; retry/backoff; ACK after durable commit with recorded durability mode | F-014, F-019 |
+| VOLD-042 | bridge loop prevention (origin tag) + outage isolation | F-014 |
+| VOLD-043 | metric register (meaning/unit/labels/producer/readout) | F-015 |
+| VOLD-044 | counter scopes/windows/reset rules | F-015 |
+| VOLD-045 | cheaper-unchanged-cycle operational definition | F-015, R-013 |
+| VOLD-046 | 8-cycle provisional derivation; operator report ≠ target evidence | F-015 |
+| VOLD-047 | requirement-to-test traceability maintained | F-015 |
+| VOLD-048 | end-to-end acceptance scenarios (T-ACC/T-AUTH/T-OPS) | F-013/F-015 |
+| VOLD-049..055 | figure redraw specs 2.1-1, 2.3-1, 2.1-2, 2.2-1(+2.2-2), 2.3-2, 2.4-1, agent→service→DuckBrain path | F-016/17/18 |
+| VOLD-056 | control/archive/project-memory classes; control must be central + immediate | R31-028 |
+| VOLD-057 | per-tool class routing; effective-routing readback; no control fallback | R31-028 |
+| VOLD-058 | background sync owner, conflict rule, checkpoint, lag visibility | R31-028 |
+| VOLD-059 | per-class access grants across endpoints | R31-028 |
+| VOLD-060 | `sessions.fork_policy` default/overrides; narrowing only | D-038, R31-027 |
+| VOLD-061 | fork policy activation; never retroactive; readback | D-038 |
+| VOLD-062 | authorized atomic resync; denial codes; no widening | D-038, R31-027 |
+| VOLD-063 | restore imports snapshot; `snapshot_missing` fails closed | D-038, R31-016 |
+| VOLD-064 | distinct non-default profile per agent/worker; fail closed | R31-020 |
+| VOLD-065 | profile→credential/state mapping; isolation ≠ sandbox | R31-020 |
+| VOLD-066 | worker dispatch rejects wrong/shared/missing profile | R31-020/021 |
+| VOLD-067 | desired vs effective config; drift flag; digest | R31-020 |
+| VOLD-068 | converge without overwriting learned state; recorded replacement | R31-020 |
+| VOLD-069 | update/rollback; failed converge leaves prior state | R31-020 |
+| VOLD-070 | managed composition, content-addressed asset bundles, transport PROPOSED, digest check, drift/readiness and lineage | R31-020 (N-5) |
+| VOLD-071 | asset verification by inventory readback | R31-020 |
+| VOLD-072 | 7-step provisioning sequence; no partial readiness | R31-025 |
+| VOLD-073 | default-profile migration with archive + no id reuse | R31-020 |
+| VOLD-074 | temporary worker create/reuse/retire; archive preserved | R31-020 (N-6) |
+| VOLD-075 | retirement/offboarding sequence | R31-020 |
+| VOLD-076 | provisioning readiness gate set | R31-020/025 |
+| VOLD-077 | report variants: `free_form`/structured/dataset; validation and requester-selected class | R31-030 |
+| VOLD-078 | content immutability, linkage, correction = new report | R31-030 |
+| VOLD-079 | no numeric token target | R31-030/D-036 |
+| VOLD-080 | bounded comparison over finite workload; median + tolerance | R31-012 |
+| VOLD-081 | steady-state band, not descending sequence | R31-012 |
+| VOLD-082 | cycle scope/boundaries; 8 cycles = burn ceiling | R31-012 |
+| VOLD-083 | measurement capture incl. startup + counter persistence | R31-012 |
+| VOLD-084 | soak ≠ semantic/authorization/recovery/acceptance evidence | R31-012 |
+| VOLD-085 | routing readback matches behaviour; no delayed control path | R31-028 |
+| VOLD-086 | two supported topologies with consistency annotations | R31-028 |
+| VOLD-087 | cross-endpoint grants; class recorded in audit | R31-028 |
+| VOLD-088 | peer identity/trust/scopes/correlation/isolation; no VP from connectivity | R31-029 |
+| VOLD-089 | session-archive restore ordering; compat/version gate; cannot restore a live session | R31-016, D-017 |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#open-design-work-explicit-no-invented-defaults -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-OPEN-DESIGN-WORK-EXPLICIT-NO-I-S055" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### Open design work (explicit, no invented defaults)
+
+| id | Open point | Blocked on |
+|---|---|---|
+| OPEN-VOLD-1 | Temporary-agent defaults (provider/model/context/caps for ephemeral agents) | owner ruling (D-015 open) |
+| OPEN-VOLD-2 | Foreman/worker creation scope and hierarchy-to-foreman contracts | owner decision on F-002 |
+| OPEN-VOLD-3 | Standing-rule conflicts and newly-changed-rule application to in-flight work | owner ruling (D-010 open scope) |
+| OPEN-VOLD-4 | DuckBrain pinned release + durability mode selection for `chd` keys | F-019 integration work (VOL-B) |
+| OPEN-VOLD-5 | Room seq allocation under concurrent writers (server-allocated vs harness single-writer) | OQ-14 probe |
+| OPEN-VOLD-6 | REUSE context strength (same-session continuation semantics) | OQ-1 probe (gates remind-rung semantics) |
+| OPEN-VOLD-7 | Hermes per-session tool-restriction knob (how `tools.include/exclude` is enforced) | UQ-5/OQ-5 |
+| OPEN-VOLD-8 (N-2) | Archive checkpoint cadence and native import mechanism | Hermes export capability probe; the archive contract §2.2 |
+| OPEN-VOLD-9 (N-5) | Asset transport (controller upload vs gateway fetch) — **PROPOSED** | deployment evidence; VOLD-070 |
+| OPEN-VOLD-10 (N-7) | Queue timers and performance budgets — **PROPOSED** | measured soak; VOLD-080..083 |
+| OPEN-VOLD-11 (N-8) | Peer trust onboarding and scope vocabulary — **PROPOSED** | first federation deployment; VOLD-088 |
+| OPEN-VOLD-12 | Temporary-worker defaults remain OPEN-VOLD-1 after rev 2.0 | owner ruling |
+
+---
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#7-figure-redraw-specifications-f-016-f-017-f-018 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-7-FIGURE-REDRAW-SPECIFICATIONS-S056" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 7. Figure Redraw Specifications (F-016, F-017, F-018)
+
+These are precise specifications for the handbook artist. Each spec names
+the current state (as visually inspected from `handbook/chd3-*.png`),
+its defects, the required redraw, and **flag-flip conditions** against the
+canonical review-log `figure_coverage` entries: a redraw may claim
+`source_cross_checked: true` only when every arrow/label it draws is
+traceable to DESIGN.md/contracts (each spec lists that trace), and
+`owner_accepted: true` only on explicit owner sign-off. Until both flags
+flip, the figures remain "design/contract gaps recorded".
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#7-1-figure-2-1-1-fire-round-trip-and-four-door-ingress-vold-049 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-7-1-FIGURE-2-1-1-FIRE-ROUND-TR-S057" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.1 Figure 2.1-1 — Fire round trip and four-door ingress (VOLD-049)
+
+**Current state (plate HAR-501A):** trigger lanes → HOP 1 → FIRE CALLBACK
+→ SEND ORCHESTRATOR → one labeled arrow "ADMISSION REQUEST (BUMP)" to
+Scheduler Daemon; an obsolete scheduler→gateway edge is drawn as
+"HOP 2 / ADMIT". Defects (F-016): (a) the admission *result* has no drawn
+return path — "ADMIT" visually makes the scheduler the gateway sender;
+(b) the harness→gateway dispatch (the actual HOP 2 gateway POST) is not
+drawn as the harness's own edge; (c) the 2xx callback ack is a "short
+return nub", nearly invisible. The corrected contract is controller-owned
+reservation and controller→gateway dispatch; the scheduler has no gateway edge.
+
+**Redraw spec:**
+- Actors: TRIGGER LANES (scheduler-owned) · DIRECTOR HARNESS (FIRE
+  CALLBACK `POST /v1/cycle`, SEND ORCHESTRATOR, SEND LOG) · SCHEDULER
+  DAEMON (admission, slots, cooldown pins, bump API) · HERMES GATEWAY ·
+  AGENT SESSION · DUCKBRAIN (cylinder, "NO WAKE TABLE" note retained).
+- Arrows, each labeled and numbered:
+  1. TRIGGER LANES → FIRE CALLBACK, label `HOP 1 — TICK FIRE (POST /v1/cycle)`.
+  2. FIRE CALLBACK ⇠ dashed return, label `2XX ACK (tick completes)`.
+  3. SEND ORCHESTRATOR → CONTROLLER RESERVATION LEDGER, label `SHARED ADMISSION (controller-owned; scheduled callback or immediate request)`.
+  4. CONTROLLER RESERVATION LEDGER ⇢ dashed return to SEND ORCHESTRATOR, label
+     `ADMISSION RESULT (admitted | queued | duplicate)`.
+  5. SEND ORCHESTRATOR → HERMES GATEWAY, label
+     `HOP 2 — GATEWAY DISPATCH (POST prompt + model/provider + session_key, FACT-11)`.
+     **This is the only edge touching the gateway.** The scheduler has NO
+     edge to the gateway.
+  6. HERMES GATEWAY → AGENT SESSION, label `SPAWN / CONTINUE (NEW | REUSE)`.
+  7. SEND ORCHESTRATOR → SEND LOG (as today); callers banner into FIRE
+     CALLBACK (as today).
+- Callout, verbatim: `THE SCHEDULER ADMITS; ONLY THE HARNESS SENDS. TWO
+  HOPS, ALWAYS (RL-10, R-023).`
+- Traceability: arrows 1–2 = ENDPOINTS §3.4; 3–4 = CT-03/FACT-14;
+  5 = CT-04/FACT-11 + RL-10; 6 = CT-04.
+
+**Render contract.** Render at 1600×1000 CSS px on a landscape continuation page when needed; keep 24 px outer margins and 14 px minimum label text. Labels stay inside their actor/arrow boxes, wrap at 42 characters, and never cross another arrow. The figure id and full caption must remain visible.
+
+**Arrow checklist (filled).**
+
+| # | From actor | To actor | Direction label | Payload | Checked |
+|---|---|---|---|---|---|
+| 1 | Trigger lanes | Director harness | request → | cycle, lane, namespace, timestamp, dedupe key | yes |
+| 2 | Director harness | Trigger lanes | acknowledgement ← | durable 2xx callback acknowledgement | yes |
+| 3 | Director harness / send orchestrator | Scheduler daemon | admission request → | bump, send id, admission dedupe key | yes |
+| 4 | Scheduler daemon | Director harness / send orchestrator | admission result ← | admitted, queued, or named refusal | yes |
+| 5 | Director harness / send orchestrator | Hermes gateway | gateway dispatch → | prompt, profile, model/provider, session key | yes |
+| 6 | Hermes gateway | Agent session | session delivery → | NEW or REUSE wake | yes |
+| 7 | Director harness | Send log | persistence → | send manifest and dispatch evidence | yes |
+
+**Explanation.** Normal example: the controller receives the scheduler callback, performs the shared reservation, posts the gateway request, and the session returns a correlated report. Failure example: the controller records `queued` and sends no gateway request when capacity is unavailable. The scheduler supplies the trigger/callback only; it never sends the gateway request, and DuckBrain never wakes the gateway.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#7-2-figure-2-3-1-host-topology-reconciled-vold-050 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-7-2-FIGURE-2-3-1-HOST-TOPOLOGY-S058" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.2 Figure 2.3-1 — Host topology, reconciled (VOLD-050)
+
+**Current state (plate TOP-501A):** inside HOST A, an unlabeled downward
+chain DIRECTOR HARNESS → SCHEDULER → GATEWAY A. Defect (F-016): the
+scheduler→Gateway A edge again draws the scheduler as gateway sender;
+harness→scheduler and scheduler→gateway are unlabeled.
+
+**Redraw spec:** keep the three-host layout and the two cross-host edges
+exactly as drawn (Gateway B → harness "MSG VIA HARNESS"; harness →
+Gateway C "HARNESS WAKES C"; plain session↔gateway lines inside hosts B/C;
+the NO-DIRECT-HOST-TO-HOST annotation). Replace the Host A interior with
+the same three labeled edges as §7.1 arrows 3, 5 (compressed):
+harness → scheduler labeled `ADMISSION REQUEST (BUMP)`; scheduler ⇢
+harness dashed `ADMISSION RESULT`; **harness → Gateway A** labeled
+`GATEWAY DISPATCH (HOP 2)`. Remove the scheduler→Gateway A edge
+entirely. Result: all call-path figures agree the harness sends the
+gateway request (F-016 completion).
+
+**Render contract.** Render at 1600×1000 CSS px, landscape, with one continuation page for cross-host notes; use 14 px minimum labels, 24 px margins, wrapped labels inside boxes, and no arrow-label overlap. Show the full figure id and caption on every page.
+
+**Arrow checklist (filled).**
+
+| # | From actor | To actor | Direction label | Payload | Checked |
+|---|---|---|---|---|---|
+| 1 | Director harness on Host A | Scheduler daemon | admission request → | bump and admission key | yes |
+| 2 | Scheduler daemon | Director harness on Host A | admission result ← | reservation outcome | yes |
+| 3 | Director harness on Host A | Hermes gateway A | gateway dispatch → | prompt and target session | yes |
+| 4 | Gateway B | Director harness | inbound message → | Crier/message envelope | yes |
+| 5 | Director harness | Gateway C | harness wake → | NEW/REUSE delivery request | yes |
+| 6 | Gateway B/C | Agent session | session delivery ↔ | session request and report | yes |
+
+**Explanation.** Normal example: Host A's harness obtains admission and then dispatches to Gateway A. Failure example: Gateway A is unreachable; the harness records `paused:unreachable` and does not draw or perform a scheduler-to-gateway call. The scheduler admits; only the harness dispatches.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#7-3-figure-2-1-2-send-states-with-verified-success-closure-vold-051 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-7-3-FIGURE-2-1-2-SEND-STATES-W-S059" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.3 Figure 2.1-2 — Send states with verified-success closure (VOLD-051)
+
+**Current state (plate HAR-502A):** COMPOSED →(CYCLE)→ QUEUED (GW AT
+LIMIT) →(BUMP)→ DISPATCHED NEW/REUSE →(GW POST)→ AWAITING REPORT; from
+AWAITING REPORT two terminals: FAILED (bad/no report) and ESCALATED
+(rung 2). Defects (F-018): no VERIFIED success state; no verified-success
+closure; the two drawn terminals are both failures; no waiting_human
+state; no unreachable pause; queue expiry/drop not a drawn transition.
+
+**Redraw spec:** states (boxes): COMPOSED · QUEUED (gw at limit or
+max_sessions) · DISPATCHED (NEW|REUSE) · AWAITING REPORT · WAITING
+HUMAN · VERIFIED (double-border terminal) · FAILED · ESCALATED ·
+DEFERRED (backpressure) · PAUSED:UNREACHABLE. Transitions (labeled):
+COMPOSED→QUEUED `CAP REACHED (SCHEDULING ALWAYS ALLOWED, RL-15)`;
+QUEUED→DISPATCHED `ADMITTED + CAP HEADROOM (BUMP OK)`; QUEUED→DEFERRED
+`OLDER THAN 2× CYCLE — COUNTED, DROPPED`;
+DISPATCHED→AWAITING `GW POST ACCEPTED — DEADLINE STARTS HERE (VOLD-027)`;
+AWAITING→VERIFIED `FRESH CORRELATED REPORT — SEND CLOSED (VOLD-022/026)`;
+AWAITING→WAITING HUMAN `VALID waiting_human REPORT (VOLD-023)`;
+WAITING HUMAN→AWAITING `WAIT RESOLVED / RESUMED`; WAITING
+HUMAN→ESCALATED `WAIT TIMEOUT, UNRESOLVED (VOLD-023)`;
+AWAITING→QUEUED `RUNG 0 REMIND (×2, GAP 300 S)` and `RUNG 1 NEW SESSION`
+(self or chained back through DISPATCHED); AWAITING→ESCALATED `RUNG 2`;
+AWAITING→FAILED `EXPLICIT failed REPORT OR DEADLINE`; DISPATCHED→PAUSED
+`TRANSPORT CHECK FAILS (VOLD-039)`; PAUSED→QUEUED `RESTORE ORDERING
+(OLDEST-FIRST)`. Footnotes: every state names owner + entry/exit +
+recovery (F-011 completion); send manifest records closing rung; no
+transition resets counters.
+
+**Render contract.** Render at 1600×1200 CSS px in landscape; use two continuation pages if the state graph cannot keep 14 px labels and 24 px margins. Wrap labels inside transition cards, keep arrows at least 12 px apart, and show the complete id/caption on each page.
+
+**Arrow checklist (filled).**
+
+| # | From actor | To actor | Direction label | Payload | Checked |
+|---|---|---|---|---|---|
+| 1 | Send orchestrator | Send manifest | composed → queued | cap result and manifest revision | yes |
+| 2 | Scheduler daemon | Send orchestrator | admission → | reservation and lease | yes |
+| 3 | Send orchestrator | Hermes gateway | dispatch → | target snapshot and gateway request key | yes |
+| 4 | Agent session | Send orchestrator | report → | correlated report and artifact refs | yes |
+| 5 | Send orchestrator | Parent room | waiting propagation → | gate id and question | yes |
+| 6 | Parent/VP human | Send orchestrator | resolution evidence → | approval or prior-authority ref | yes |
+| 7 | Send orchestrator | Success/failure state | verdict → | verified, failed, escalated, deferred, or paused | yes |
+
+**Explanation.** Normal example: a fresh correlated report reaches `verified`, then the manifest closes. Failure example: a deadline expires with no valid report; the orchestrator enters the ladder or `waiting` branch and does not draw approval as success.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#7-4-figure-2-2-1-session-reads-vs-router-membership-vold-052 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-7-4-FIGURE-2-2-1-SESSION-READS-S060" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.4 Figure 2.2-1 — Session reads vs router membership (VOLD-052)
+
+**Current state (plate CHC-501A):** the "READS ROOM LOG, ORDERED" arrow
+points from DuckBrain into the ROUTER's WAKE ROUTING box; the agent
+session has only the outbound "ROOM MSG + REPORT" arrow. Defects
+(F-018): the figure shows the *router* reading the room log for the
+agent, contradicting VOL-C §3.5's "agents read it themselves"; no
+agent→service→DuckBrain tool path; membership resolution is fine but
+conflated with reads.
+
+**Redraw spec:** keep the CHAT ROUTER container (membership → wake
+routing → registry check) for wake decisions ONLY. Add: AGENT SESSION →
+**CHD SERVICE TOOL** (new explicit box, "the service that invokes agents
+also supplies room messaging / work-log tools", D-006/D-015) →
+DUCKBRAIN, drawn as a three-segment path labeled
+`AGENT → SERVICE TOOL → DUCKBRAIN (POST/READ, ROLE TOKEN, FACT-19/20)`,
+with TWO parallel labeled arrows on it: `WRITE: ROOM MSG + REPORT` and
+`READ: ROOM LOG (AGENT'S OWN READ, AUTHORIZED ROOMS ONLY)`. The router
+keeps its own thin arrow to DuckBrain labeled `ROUTER: MEMBERSHIP
+RESOLUTION + WAKE COMPUTE (READS MEMBERSHIP CONFIG + REGISTRY, NOT ON
+BEHALF OF AGENTS)`. Keep the wake arrow DuckBrain-region → AGENT SESSION
+`WAKE: NEW OR REUSE ONLY`. Key-families legend retained, keys shown
+normalized `/chd/...` (F-019 note). This satisfies "show
+agent→service→DuckBrain messaging tool path" and separates reads from
+membership (F-018 completion for this figure).
+
+**Render contract.** Render at 1600×1000 CSS px with a separate continuation panel for the key legend; use 14 px minimum labels, 24 px margins, wrapped labels inside boxes, and no crossing read/write arrows. Keep the full id/caption visible.
+
+**Arrow checklist (filled).**
+
+| # | From actor | To actor | Direction label | Payload | Checked |
+|---|---|---|---|---|---|
+| 1 | Agent session | CHD service tool | tool request → | authorized room read or message/report write | yes |
+| 2 | CHD service tool | DuckBrain | persistence/read → | room message, report, or ordered room log query | yes |
+| 3 | DuckBrain | CHD service tool | read result ← | authorized records and revision | yes |
+| 4 | CHD service tool | Agent session | tool result ← | persisted acknowledgement or read result | yes |
+| 5 | Router | DuckBrain | membership read → | membership config and registry query | yes |
+| 6 | Router | Agent session | wake decision → | NEW or REUSE target, never a gateway wake | yes |
+
+**Explanation.** Normal example: the agent requests its room log through the service, which reads DuckBrain and returns ordered records. Failure example: membership does not authorize the room; the service returns the specified indistinguishable not-found result and writes an audit denial. No agent→DuckBrain direct write and no DuckBrain→gateway wake appear.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#7-5-figure-2-2-2-detail-a-actor-fix-vold-052-part-2 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-7-5-FIGURE-2-2-2-DETAIL-A-ACTO-S061" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.5 Figure 2.2-2 — Detail A actor fix (VOLD-052, part 2)
+
+**Current state:** Detail A is a two-lifeline sequence (SESSION,
+DUCKBRAIN) whose third arrow ("OWNER POSTS, NO SELF-ECHO") is ambiguous
+about which lifeline originates it. **Redraw:** three lifelines —
+SESSION, CHD SERVICE TOOL (between), DUCKBRAIN — every arrow segment
+names its hop (session→service→DuckBrain per VOLD-052); the owner-post
+arrow originates at a small OWNER actor entering via the service tool
+(never direct to DuckBrain), with return labeled `LOGGED, NOT ECHOED
+BACK`; keep "REPLY WAKES 1 OR GROUP" as a router annotation, since the
+wake decision is the router's (CT-07), not DuckBrain's — label it
+`ROUTER WAKES TARGET(S)` drawn from a ROUTER lifeline added as a fourth,
+thin, dashed actor.
+
+**Render contract.** Render at 1400×900 CSS px, with a continuation page for the router annotation if required; use 14 px minimum labels, 24 px margins, and place every label inside its lifeline/arrow card. No label may overlap a lifeline. The id and caption must be complete.
+
+**Arrow checklist (filled).**
+
+| # | From actor | To actor | Direction label | Payload | Checked |
+|---|---|---|---|---|---|
+| 1 | Owner actor | CHD service tool | post request → | room message and owner identity | yes |
+| 2 | Agent session | CHD service tool | tool request → | reply/report payload | yes |
+| 3 | CHD service tool | DuckBrain | write → | durable message/report record | yes |
+| 4 | DuckBrain | CHD service tool | fsync acknowledgement ← | record key and revision | yes |
+| 5 | Router | Agent session(s) | wake decision → | target snapshot and wake mode | yes |
+
+**Explanation.** Normal example: an owner posts through the service and receives a durable record acknowledgement without a self-echo. Failure example: the router finds no eligible target; it records no wake and the service still preserves the owner message. The owner and agent never write DuckBrain directly.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#7-6-figure-2-3-2-crier-bridge-directions-vold-053 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-7-6-FIGURE-2-3-2-CRIER-BRIDGE-S062" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.6 Figure 2.3-2 — Crier bridge directions (VOLD-053)
+
+**Current state (plate TOP-503A):** three arrows only — Rooms→Bridge
+(unlabeled), Bridge→TOPIC `OUT`, INBOX→Bridge `IN`. Defects (F-017): the
+durable inbox — the DEFAULT outbound destination — has no outbound
+arrow; it is drawn only as the inbound source, so a reader reverses the
+default path by inference; lease/ACK and ACK-vs-room-commit are not
+drawn; UI CHAT floats unconnected.
+
+**Redraw spec:**
+- Boxes: DIRECTOR ROOMS (`/chd/*` keys) · CRIER BRIDGE · CRIER TOPIC
+  (RELAY — `DROPPED ON 0 SUBSCRIBERS`) · CRIER DURABLE INBOX (LEASE/ACK
+  · TTL · IDEMPOTENCY KEY).
+- Outbound, two separately-labeled arrows from the bridge:
+  `OUT-DEFAULT → DURABLE INBOX (DELIVERY_ID = IDEMPOTENCY KEY; RETRY W/
+  BACKOFF; DEAD-LETTER AFTER BOUND)` and
+  `OUT-ALTERNATIVE → TOPIC (FIRE-AND-FORGET; ONLY IF ROOM CONFIG SELECTS
+  IT)`.
+- Inbound, separately labeled: `IN: LEASE → CONVERT → POST VIA INGRESS
+  (VP AUTH + AUDIT) → COMMIT ROOM MSG → ACK (AFTER DURABLE COMMIT;
+  ACK_MODE RECORDED, VOLD-041)`. Draw the ACK as a small return arrow
+  Bridge→INBOX labeled `ACK`, with a callout: `ACK PRECEDES NOTHING —
+  THE ROOM COMMIT HAPPENS FIRST; A CRASH BETWEEN THEM YIELDS CRIER
+  REDELIVERY, DEDUPED BY DELIVERY_ID (NO DUPLICATE ROOM EVENT, VOLD-042)`.
+- Loop-prevention callout on the bridge box: `ORIGIN TAG; NO RE-Egress
+  OF INBOUND (VOLD-042)`.
+- UI CHAT: connect with a READ-ONLY dashed edge to DIRECTOR ROOMS
+  labeled `FOLLOWER VIEW — READS /chd/* ONLY, WAKES NOTHING`, and a
+  separate dashed edge to the harness ingress labeled
+  `SEND BOX = VP SIGNAL (RL-17)`.
+
+**Render contract.** Render at 1600×1100 CSS px, landscape, using one continuation page for the crash callout; use 14 px minimum labels, 24 px margins, wrapped labels inside arrow cards, and at least 16 px separation between the inbound and ACK arrows. The complete id/caption stays visible.
+
+**Arrow checklist (filled).**
+
+| # | From actor | To actor | Direction label | Payload | Checked |
+|---|---|---|---|---|---|
+| 1 | Director rooms | Crier bridge | outbound room event → | room message and origin tag | yes |
+| 2 | Crier bridge | Durable inbox | default outbound → | delivery id, payload, retry metadata | yes |
+| 3 | Crier bridge | Crier topic | alternative outbound → | fire-and-forget event | yes |
+| 4 | Durable inbox | Crier bridge | inbound lease/data → | leased delivery id and payload | yes |
+| 5 | Crier bridge | Director ingress/rooms | converted inbound → | authenticated room message | yes |
+| 6 | Crier bridge | Durable inbox | ACK → | durable-commit acknowledgement for delivery id | yes |
+| 7 | UI chat | Director rooms | read-only view → | room records | yes |
+| 8 | UI chat | Director ingress | VP signal → | user-authenticated send request | yes |
+
+**Explanation.** Normal example: the bridge leases inbox data, commits the converted room message, and only then sends the distinct bridge→inbox ACK. Failure example: a crash occurs after the room commit and before ACK; the inbox redelivers the same delivery id and the bridge deduplicates it. The inbound arrow is inbox→bridge; the ACK arrow is bridge→inbox.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#7-7-figure-2-4-1-verify-ladder-with-actors-and-report-branches-vold-054 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-7-7-FIGURE-2-4-1-VERIFY-LADDER-S063" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.7 Figure 2.4-1 — Verify ladder with actors and report branches (VOLD-054)
+
+**Current state (plate DEF-501A):** a box-flowchart (SEND DISPATCHED,
+MISSING REPLY, RUNG 0/1/2, OWNER PAGE) with the notify/bump fork; no
+actors, no report-arrival branches (stale/bad/valid), no loop-back
+closure; the footnote summary numbers rungs 2/3/4 vs the figure's
+Rung 0/1/2.
+
+**Redraw spec:** redraw as a **swimlane sequence** with four actors —
+SEND ORCHESTRATOR (harness), TARGET AGENT, PARENT AGENT (caller/parent
+room), OWNER — plus a VERIFY LOOP lane inside the harness actor.
+Ladder:
+1. harness→agent: `WAKE (NEW|REUSE)`; deadline timer starts
+   (`DEADLINE 1800 S FROM DISPATCH, VOLD-027`).
+2. Agent reply arrives → VERIFY LOOP decision node `REPORT CHECK`
+   with four labeled exits:
+   - `VALID (FRESH + CORRELATED + SCHEMA)` → `CLOSE SEND — VERIFIED`
+     (loop-back closure to the caller lane: `SEND CLOSED, CALLER
+     NOTIFIED`, satisfying F-018's verified-success closure).
+   - `STALE (report.ts &lt; dispatch_ts)` → ladder, counted
+     `bad_report{reason: stale}` (RL-20).
+   - `WRONG REQUEST (request_ref mismatch)` → ladder, counted
+     (VOLD-022).
+   - `BAD SCHEMA / DONE-WITHOUT-ARTIFACTS` → ladder, counted.
+3. No reply and no report at deadline → MISSING REPLY fork as today:
+   `NOTIFY CALLER` (arrow to PARENT lane) + `BUMP OWING SESSION` (arrow
+   back to agent), both into RUNG 0.
+4. RUNG 0 REMIND (REUSE, ×2, gap 300 s) → RUNG 1 NEW SESSION (`reads the
+   room itself`) → RUNG 2 ESCALATE (`incident to parent room`) → OWNER
+   PAGE (`3 INCIDENTS / 24 H OR THROTTLE SUSPEND`).
+5. Add the WAITING HUMAN branch: agent→harness
+   `waiting_human REPORT (VOLD-023)` → harness→parent
+   `WAIT PROPAGATED UPSTREAM`; timer pauses; dashed return
+   `APPROVAL EVIDENCE RECORDED → RESUME` / solid `WAIT TIMEOUT,
+   UNRESOLVED → RUNG 2`.
+6. Renumber the summary box to Rung 0/1/2 (matching the figure); keep
+   "EVERY RUNG IS COUNTED; NO RUNG RESETS THE COUNTERS."
+Each arrow names producer→consumer, trigger, and stored result
+(F-018 completion: producer/consumer, trigger, stored result, success
+proof, recovery branches).
+
+**Render contract.** Render at 1600×1300 CSS px as a four-lane sequence; use continuation pages for ladder branches rather than shrinking below 14 px. Keep labels inside lane cards, maintain 24 px margins and 16 px branch spacing, and repeat the full id/caption on each continuation page.
+
+**Arrow checklist (filled).**
+
+| # | From actor | To actor | Direction label | Payload | Checked |
+|---|---|---|---|---|---|
+| 1 | Send orchestrator | Target agent | wake → | NEW/REUSE request and deadline | yes |
+| 2 | Target agent | Verify loop | report → | report, send/attempt ids, artifacts | yes |
+| 3 | Verify loop | Send orchestrator | valid verdict → | verified close evidence | yes |
+| 4 | Verify loop | Send orchestrator | stale/wrong/bad → | named bad_report reason and ladder count | yes |
+| 5 | Send orchestrator | Parent agent | missing reply notice → | send id and deadline evidence | yes |
+| 6 | Send orchestrator | Target agent | re-drive/bump → | unchanged identity or successor attempt | yes |
+| 7 | Target agent | Send orchestrator | waiting report → | gate id and question | yes |
+| 8 | Parent/VP human | Send orchestrator | approval evidence → | authority reference | yes |
+| 9 | Send orchestrator | Owner | escalation/page → | incident and rung history | yes |
+
+**Explanation.** Normal example: the verify loop checks freshness, correlation, schema, and artifacts, then closes the send as `verified` and notifies the caller. Failure example: a report names the wrong request; the loop writes `bad_report{reason: send_mismatch}` and enters the specified ladder. A waiting report propagates to the parent and pauses the timer; timeout escalates and never becomes approval.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#7-9-figure-chd-f01-master-goal-to-acceptance-flow-new -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-7-9-FIGURE-CHD-F01-MASTER-GOAL-S064" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.9 Figure CHD-F01 — Master goal-to-acceptance flow (new)
+
+Class: dataflow + sequence, one uncluttered master. Actors: VP · director ·
+managers (1..n) · supervisors · foremen · workers · controller ticket service ·
+admission ledger · ticket store · rooms · acceptance. The controller ticket
+service is the shared boundary: controller-routed MCP/API calls create, query,
+update and transition tickets; local boards, worktrees and artifacts remain
+work-plane references. Edges H1..H11 match VOL-A §5.1; each edge shows all
+producer→consumer data and the record written (`objective`, `ticket+assignment`,
+`task subthread`, `send/attempt`, `run`, `report`, `acceptance`). Branches
+(blocked, rework, cancel, wait, and the restart case where independent
+siblings remain dispatchable) are drawn on a separate panel, not hidden in the
+master. Callout: `EVERY HANDOFF HAS INPUT, TRIGGER, ACTION, STORE, CALL, OUTPUT,
+RECIPIENT, FAILURE PATH; TICKETS ARE CONTROLLER-AUTHORITATIVE.` Trace:
+VOL-A §1.4/§5, VOL-E §3–§4, VOL-B §3.14/§5.10, VOL-C §2.2/§5.4.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#7-10-figure-chd-f02-ticket-workflow-states-new -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-7-10-FIGURE-CHD-F02-TICKET-WOR-S065" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.10 Figure CHD-F02 — Ticket/workflow states (new)
+
+Class: state. States and edges come from `build-spec/state-machines.json`,
+the single transition canon: the objective and assignment machines are
+referenced by `machine_ref`, not recreated by the ticket service. Each ticket
+transition carries the canonical writer and `expected_revision` check. A side
+box shows the **import/export** relation to a local JSONL board: one-way view
+arrows, never an authority arrow. Callout: `NO GIT COMMIT/PULL SYNCHRONIZES
+SHARED STATE; THE CONTROLLER OWNS TICKET STATE.` Trace: VOL-E §2.2/§4,
+VOLB-055, state-machines.json.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#7-11-figure-chd-f03-crier-federation-new -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-7-11-FIGURE-CHD-F03-CRIER-FEDE-S066" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.11 Figure CHD-F03 — Crier federation (new)
+
+Class: architecture + sequence. This figure is a federation swimlane, not a
+room-delivery ACK diagram. Name every actor and arrow:
+
+- **Lanes/actors:** OWNER A / VP-A → DIRECTOR-A → MANAGERS/SUPERVISORS /
+  FOREMEN/WORKERS-A; CRIER PEER LINK; OWNER B / VP-B → LOCAL TRUST + APPROVAL
+  POLICY-B → DIRECTOR-B → MANAGERS/SUPERVISORS / FOREMEN/WORKERS-B; AUDIT STORE-B.
+  Add a second peer-director lane for `DIRECTOR-C` to show one owner coordinating
+  several client directors, and mark that example illustrative, not universal.
+- **Arrows:** DIRECTOR-A → CRIER `REQUEST pr-42 [peer identity + scope]`;
+  CRIER → TRUST POLICY-B `AUTHENTICATE + MAP ACTOR peer:client-alpha`;
+  TRUST POLICY-B → VP-B `APPROVAL REQUEST [scope/owner decision]`;
+  VP-B → POLICY-B `APPROVE or DENY`;
+  POLICY-B → DIRECTOR-B `PERMIT objective/ticket OR HOLD/DENY`;
+  DIRECTOR-B → MANAGERS-B `ASSIGN permitted work`;
+  WORKERS-B → DIRECTOR-B `REPORT rr-42 [ticket + digest]`;
+  DIRECTOR-B → CRIER `CORRELATED REPORT rr-42 [pr-42]`;
+  CRIER → DIRECTOR-A `REPLY/REPORT [pr-42, dedupe]`;
+  POLICY-B → AUDIT STORE-B `ACCEPT/DENY/GRANT/PROVENANCE AUDIT`;
+  CRIER → DIRECTOR-B `RETRY duplicate [same pr-42]` (no second objective).
+  Draw an explicit POLICY-B → CRIER `DENY 403 peer_scope_denied` and
+  `HOLD 202 pending_local_approval` path.
+- **Callouts:** `LOCAL VP PRECEDENCE`; `CONNECTIVITY OR SENDER ID NEVER GRANTS
+  VP`; `peer trust ≠ VP grant`; `OUTAGE ISOLATES FEDERATION, LOCAL WORK CONTINUES`.
+  Show the local-only reinvocation path DIRECTOR-B → DIRECTOR-B as a separate
+  dashed edge labeled `INTERNAL REINVOCATION (NOT AUTONOMOUS PEER)`.
+
+Trace: VOLD-088, VOLC §8.2/§8.3. The owner-A/owner-B and one-owner/many-client
+examples are illustrative topologies, not a universal deployment shape.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#7-12-figure-chd-f04-archive-restore-lineage-new -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-7-12-FIGURE-CHD-F04-ARCHIVE-RE-S067" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.12 Figure CHD-F04 — Archive/restore lineage (new)
+
+Class: dataflow. Actors: live session · exporter · archive ingestor · archive
+namespace (`chd-archive`, the STORE) · replacement host · new session (the
+READER side). Four SEPARATE actor roles with distinct arrows, none merged:
+the exporter (harness-side, reads the live session), the ingestor (harness-
+side, its own credential, the only writer), the store, and the reader
+(replacement host + new session, whose ONLY arrow into the figure is
+`AUTHORIZED READ (grant)`). Arrows:
+`EXPORT (checkpoint_seq, covered_through_ts)` → `COMMIT + DIGEST` →
+`MANIFEST (completeness/gap)`; then `AUTHORIZED READ (grant)` → `RESTORE IMPORT`
+→ `NEW SESSION + imported snapshot` with `snapshot_missing` branch.
+**Forbidden-path rule (drawn as absent, and stated in the callout): NO arrow
+from any agent or live session to the archive namespace, and NO agent-written
+path to protected CHD control keys (`/chd/*`) exists anywhere in the figure —
+writes to control state pass through the harness service only (VOLD-056).**
+Callout:
+`ARCHIVE ≠ LIVE SESSION; RESTORE IS AN IMPORT, NOT A COPY OF A LIVE DB.` Trace:
+the archive contract §2/§6, VOLB-053, VOLB-068..070, VOLC-070..081, VOLD-089.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#7-13-figure-chd-f05-central-default-data-class-topology -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-7-13-FIGURE-CHD-F05-CENTRAL-DE-S068" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.13 Figure CHD-F05 — Central-default data-class topology
+
+Class: architecture + consistency. Actors: VP/owner, director harness,
+controller DuckBrain (`/chd`), archive ingestor, archive namespace
+(`/chd-archive`), optional project-memory slot shown disabled, and the
+controller effective-routing endpoint. Name every directed edge:
+
+- VP/owner → director harness: `OBJECTIVE / DIRECTION` (control/report request).
+- director harness → controller DuckBrain: `IMMEDIATE CONTROL + REPORT WRITE
+  (fsync ACK; authoritative)`.
+- controller DuckBrain → director harness: `READBACK / ACCEPTED REVISION`.
+- archive ingestor → archive namespace: `COMMITTED CHECKPOINT + DIGEST`.
+- director harness → archive ingestor: `EXPORT REQUEST (checkpointed)`.
+- director harness → effective-routing endpoint: `READ EFFECTIVE ROUTING`.
+- effective-routing endpoint → director harness: `FOUR CLASS BACKENDS + DIGEST`.
+- optional project-memory slot → controller: **no edge in T-A**; label
+  `DISABLED / OPTIONAL, NEVER REPORT ACK`.
+
+Callouts: `CONTROL + COORDINATION/REPORT = CONTROLLER-AUTHORITATIVE,
+IMMEDIATE`; `LOCAL QUEUE ≠ COMPLETION`; `ARCHIVE ≠ CONTROL`; `NO SILENT
+FALLBACK`. Annotate each edge with authority and consistency, and include the
+failure branch controller → director harness `503 control_store_unavailable →
+BLOCKED/QUEUED, NO VERDICT`.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#7-14-figure-chd-f06-central-plus-local-federated-project-memory-topology -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-7-14-FIGURE-CHD-F06-CENTRAL-PL-S069" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.14 Figure CHD-F06 — Central plus local/federated project-memory topology
+
+Class: architecture + consistency. Use the same actors as CHD-F05, then add
+PROJECT MEMORY STORE (local or federated), SYNC WORKER, and a project-memory
+access-grant gate. Name every directed edge:
+
+- director harness → controller DuckBrain: `IMMEDIATE COORDINATION/REPORT +
+  CONTROL WRITE (fsync ACK)`.
+- controller DuckBrain → director harness: `AUTHORITATIVE READBACK`.
+- director harness → project-memory access-grant gate: `REQUEST PROJECT/CODE
+  MEMORY (EXPLICIT CLASS GRANT)`.
+- access-grant gate → project memory store: `AUTHORIZED READ/WRITE`.
+- project memory store → sync worker: `LOCAL/FEDERATED CHECKPOINT`.
+- sync worker → controller DuckBrain: `BACKGROUND SYNC (last_synced_rev/ts,
+  eventual)`.
+- controller DuckBrain → sync worker: `CONFLICT DECISION (controller_wins
+  central keys; local_wins_on_project_keys)`.
+- director harness → effective-routing endpoint: `READ FOUR-CLASS EFFECTIVE
+  ROUTING`; endpoint → harness: `BACKEND/NAMESPACE/SYNC/PROXY/DIGEST + LAG`.
+
+Callouts: `T-B DOES NOT REQUIRE PER-HOST DUCKBRAIN`; `PROJECT MEMORY LAG NEVER
+ACKNOWLEDGES A REPORT`; `CONTROL PATH NEVER USES THE BACKGROUND EDGE`;
+`GRANTS ARE PER ENDPOINT`. Mark immediate arrows solid and background arrows
+dashed; show sync owner, conflict rule, checkpoint, lag, and outage isolation.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#7-15-figure-correction-requirements-r31-014-015 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-7-15-FIGURE-CORRECTION-REQUIRE-S070" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.15 Figure correction requirements (R31-014/015)
+
+
+**Legibility checklist (applies to every figure above; every row is filled).**
+
+| Check | Required result | Status |
+|---|---|---|
+| Render size | Each figure declares intended CSS size and landscape/continuation policy | PASS |
+| Figure id and caption | Full id and caption visible on every page; no `TOKE`-style truncation | PASS |
+| Arrow actor/direction/payload | Every arrow has from-actor, to-actor, direction label, and payload in its local checklist | PASS |
+| Actor boundaries | No store→gateway wake and no agent→DuckBrain direct write; service boundary is explicit | PASS |
+| Bridge direction | Inbound lease/data and bridge→inbox ACK are separate arrows with opposite directions | PASS |
+| Label fit | Labels wrap inside their cards, do not overlap, and do not extend outside boxes | PASS |
+| Continuation | Overflow uses a continuation page rather than smaller unreadable text | PASS |
+| Reference resolution | Figure references use the post-CHD-01 section names and resolve through the package link checker | PASS |
+| Explanation | Each figure has one normal example and one failure/unknown example in active voice | PASS |
+
+The checklist is a presentation contract, not evidence that an artist has rendered the final handbook. Final PDF evidence remains a required verified artifact.
+
+Every figure in this volume and in the companion volumes MUST satisfy: (a) no
+store-shaped actor has an arrow to a gateway — only the harness does; (b) no agent
+has a direct write arrow to DuckBrain — writes pass through the service; (c) in the
+bridge figure, inbound data, outbound ACK, and topic vs inbox are four distinct
+labelled arrows; (d) every label renders at the intended reading scale (clipping or
+overlap fails); (e) every `§` reference in the figure resolves in rev 2.0's
+numbering; (f) the four diagram classes (architecture/trust, dataflow, sequence,
+state) are never merged into one chart.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#7-16-figure-2-4-2-annotation-only-correction-vold-055 -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-7-16-FIGURE-2-4-2-ANNOTATION-O-S071" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7.16 Figure 2.4-2 — annotation-only correction (VOLD-055)
+
+No structural redraw; retain the bar chart. Change the dotted-line label
+to `8 CYCLES (PROVISIONAL — SUMMED FROM 6 H PINS OVER 48 H; AN UPPER
+BOUND ON CYCLE COUNT, NOT A TOKEN FIGURE — VOLD-046)` and the legend's
+measured entry to `HISTORICAL OPERATOR REPORT (TOLD-BY-OPERATOR, NOT
+TARGET EVIDENCE)`. Add a reserved second series placeholder labeled
+`MEASURED SOAK (M6, 7-DAY) — REPLACES PROVISIONAL`.
+
+---
+
+**Render contract.** Render at 1400×800 CSS px with the complete id, caption, legend, and provisional annotation visible; use 14 px minimum labels, 24 px margins, and keep every annotation inside its chart or caption box. Use a continuation page instead of truncating the historical note.
+
+**Arrow checklist (filled).**
+
+| # | From actor | To actor | Direction label | Payload | Checked |
+|---|---|---|---|---|---|
+| — | No directed arrows in this annotation-only chart | No directed arrows | N/A — series annotations only | provisional 8-cycle line, historical operator report, reserved measured-soak series | yes |
+
+**Explanation.** Normal example: the reader sees the provisional line and its source label, then distinguishes it from measured soak evidence. Failure example: no measured series exists; the chart keeps the reserved placeholder and states that the operator report is not target evidence instead of implying a token guarantee.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/build-spec/VOL-D-config-acceptance-ops.md#8-verification-of-this-volume -->
+  <section id="CHD-HANDBOOK-CHD32-BU-4A0C1D-8-VERIFICATION-OF-THIS-VOLUME-S072" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## 8. Verification of this volume
+
+- **Structure:** five parts (Pt I §1, Pt II §2, Pt III §3–§4, Pt IV §5, Pt V §6–§8).
+  Sections may renumber, requirement ids may not; every in-volume `§` reference was
+  re-resolved after the move (old §2 → §3, old §3 → §5, figures §6 → §7).
+- **Requirements: 89** (`VOLD-001..VOLD-089`, contiguous and unique). Rev-2.0
+  additions are 056–088. Rev-2.1 added 089; Rev-2.2 adds no new ids. Open design points: 12 registered
+  (`OPEN-VOLD-1..12`; four marked **PROPOSED** and not user-confirmed).
+- No requirement rests on an invented default: every default is either present in
+  the normative source, REQUIRED-EXPLICIT, or OPEN-tagged. The withdrawn
+  "strictly decreasing token count" claim appears nowhere as a requirement
+  (VOLD-080/081 replace it).
+- **R31 findings served by this volume:** R31-011 (VOLD-025/026/056), R31-012
+  (VOLD-043..046/080..084), R31-014/015 (§7.13 + figure specs), R31-020
+  (VOLD-064..076), R31-025 (provisioning cards + `build-spec/VOL-E-operation-reference.md`),
+  R31-028 (VOLD-056..059/085..087), R31-029 (VOLD-088), R31-030
+  (VOLD-077..079), R31-027/D-038 (VOLD-060..063).
+- **D-038 coverage here:** config switch (§1.11), snapshot record (VOL-B §3.11),
+  operations and errors (VOL-C §8.9), restore interaction (VOLD-063), acceptance
+  variants (WF-08 fixture tree under `fixtures/wf-08/`, with D-038 variants and D-039 restore readback).
+- Figures in §7 were visually inspected from `handbook/chd3-*.png` on 2026-11-08;
+  current-state descriptions are grounded in that inspection. The new figures
+  (CHD-F01..F04) are specifications for the render pass and carry no claim of
+  having been drawn.
+  </section>
+</spec>

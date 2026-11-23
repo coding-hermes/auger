@@ -1,0 +1,371 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd35/manuscript/19-01.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD35-MA-015BA8-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/19-01.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD35-MA-015BA8-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+&lt;!-- CHD3.5A-03-BLOCK I; SPEC V3.5; section 19; source src/170-wire-api.md --&gt;
+
+&gt; **REVISION NOTICE — CHD-3.5 supersedes CHD-3.4.** This revised section integrates the audit disposition and selected contracts. All body blocks below carry change bars.
+
+&lt;div class="chg" markdown="1"&gt;
+
+# §19 — WIRE API, FRAMING AND ACKS
+
+**CHD-3.5 · SPEC V3.5 · source-integrated reference chapter.**
+
+&gt; **REVISION NOTICE — supersedes CHD-3.4.** Adds the complete wire api, framing and acks, including concrete definitions and catalogs. Revised blocks carry change bars.
+
+The selected integration source is reproduced as actual contract content below. Research evidence and historical source fingerprints are provenance, not proof of an implemented CHD runtime. This edition’s §A authority table and D-039 govern all projections.
+
+Source: `build-spec/integrated/wire-api.md`; SHA-256 `96642d286be6697fd1e1d12709096976193e8acdfef34b7ed8eeeea9ba9a7a55`. Source-relative citations below resolve within the upstream specification package, not an alternative edition.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/19-01.md#1-authority-scope-and-how-to-consume -->
+  <section id="CHD-HANDBOOK-CHD35-MA-015BA8-1-AUTHORITY-SCOPE-AND-HOW-TO-C-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 1. Authority, scope and how to consume
+
+Primary sources are `contracts/ENDPOINTS.md` §§3–8, `contracts/DATA-MODEL.md` §§1–2 and `DESIGN.md` §§3.3, 4.4, 11.4. The amendments needed to make them coherent are taken from `build-spec/VOL-B-records-storage-recovery.md` §§2–7, `VOL-C-tools-messaging-admission-authz.md` §§3–8, `VOL-E-operation-reference.md` and `handbook/chd32/src/120-deployment-federation.md` §§M.4–M.6. Their exact SHA-256 fingerprints are embedded in `x-source-sha256`; dependency evidence is under `x-dependency-protocol.crier.source`.
+
+This is a **controller** API. The placeholder server `https://chd.example.invalid` is not a usable deployment. The Crier dependency operations live under a separately configured Crier origin, not at this controller URL. Gateway operations likewise use a profile-bound gateway origin and credential. No caller credential is blindly forwarded between these three services.
+
+Interpret each operation's `x-operation-ids`, `x-allowed-principals`, `x-tool-exposure`, `x-idempotency` and error-response `x-error-codes` alongside its standard OpenAPI request, response and parameter definitions. These extensions are machine-readable conformance inputs, **not automatically enforced by generated Go handlers**. `WIRE-*` names are explicitly new transport bindings. `OP-*` names preserve the operation reference.
+
+All JSON object shapes are closed except expressly opaque application payloads and source-native Crier metadata extension points. Report/archive/policy schema bundles retain their source-specific constraints. Bundled `$defs` are hoisted into named components with rewritten references; this does not downgrade the 3.1 schema dialect. `if`/`then`, `const`, null unions, bounds and semantic variants remain in the validation document.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/19-01.md#2-reconciliation-decisions-requiring-integration -->
+  <section id="CHD-HANDBOOK-CHD35-MA-015BA8-2-RECONCILIATION-DECISIONS-REQ-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 2. Reconciliation decisions requiring integration
+
+The following design decisions are adopted by INTEGRATION.md except W-D11, whose exact replacement is shown below. Historical source snapshots are not revised retroactively.
+
+TABLE 19.1-1 — 2. Reconciliation decisions requiring integration
+
+| ID | Conflict or omission | Selected wire rule |
+|---|---|---|
+| W-D01 | ENDPOINTS §1 unwrapped errors/results versus VOL-E envelopes | Use VOL-E `ok`, `operation`, `request_id`, `result`, `events`, `records`; errors use `ok:false`, `operation`, `request_id`, `error:{code,message,detail}`. NDJSON export is the explicit exception. |
+| W-D02 | Optional dedupe in early prose versus ENDPOINTS §8 required request identity | JSON mutations require `request_id`; `dedupe_key` and `correlation_id` are optional. Binary upload uses required `X-Request-ID`. Native Crier webhook derives identity from authenticated peer and stable delivery ID. |
+| W-D03 | `thread`, unpadded keys and direct agent writes versus VOL-B | Use `reply_to` plus `thread_root`; keys `/chd/room/&lt;room&gt;/m&lt;seq:012d&gt;`; controller-only writes. Ordinary root posts cannot carry a non-null parent; replies name immediate parent in the path. |
+| W-D04 | Worker-run path variants | Canonical `/v1/workers/runs/{run_id}`. `/v1/runs/{run_id}` and `/v1/worker-runs/{run_id}` plus cancel variants are deprecated aliases with identical payloads and canonical dedupe namespace. They are not native gateway routes. |
+| W-D05 | Old Crier-as-VP language versus federation M.4 | Separate scoped peer webhook from VP `/v1/signals`. Local leased-inbox adapter uses a service credential; remote peers cannot forge lease receipts. `as:vp` is a specific peer identity violation. |
+| W-D06 | Attachments name metadata but omit byte transport | Add PUT `/v1/attachments/{id}/content`; one whole octet-stream body. Image/PDF are reference-only. Validate before final publication. |
+| W-D07 | Async fork/export/restore/offboard and approval lack polling | Add operation status/cancel and approval GET. Pending approval is a distinct typed 202 result; polling/resolution does not manufacture execution success. |
+| W-D08 | Provisioning examples omit required runtime/config detail | Require explicit desired profile/workdir/runtime/session-limit fields; explicit temporary-worker lifetime is supported. Worker dispatch adds fresh/fork provisioning with parent bond required for fork, while omitted runtime overrides resolve from immutable worker config. These are request-profile additions, not source examples copied unchanged. |
+| W-D09 | Grant record versus generic permission bags | Use VOL-B §3.13 `kind`, `grantee`, capability object, resource/recipient scopes and `rev`. Grantor, origin, lineage and timestamps are server-derived. Meta-grant cannot confer `create` as a downstream right. |
+| W-D10 | D-038 fork policy versus D-039 archive restore | Fork defaults to preserve-parent policy subject to authority; restore always resolves **current** policy before activation. Archived policy is historical evidence only. |
+| W-D11 | Gateway send-id-only idempotency versus per-attempt/target manifest | Use `contracts/gateway-identity.md`: key includes profile, send, attempt, full target digest and credential scope; allocation and delivery retain separate ledgers. The earlier three-member digest is rejected. Retry uses identical target/body/key. |
+| W-D12 | Under-specified sizes, replay retention, content hashes | Default profile JSON request cap 65536 UTF-8 bytes; IDs 1–128; sequence upper bound 999999999999; exact request comparison is RFC8785 canonical supplied JSON, before optional defaults; binary equality uses raw bytes. Retain replay identity for business-record lifetime and a permanent tombstone thereafter. These exact bindings are profile decisions. |
+| W-D13 | Report schema version pattern over-escaped in source | Correct pattern to `^[0-9]+\.[0-9]+$`; reject assignment/content-class mismatch; split server-stamped `ReportV3` from `ReportInput` which forbids caller `ingest_ts`. The source file itself is untouched. |
+| W-D14 | Native bridge ledger versus network framing | Preserve `BridgeLedgerEnvelope` separately. Network `BridgeEnvelope` has typed payload variants, source/destination, immutable delivery identity and digest. Receiver alone adds local lease/inbound state. Do not mutate signed outbound bytes. |
+| W-D15 | Missing route readback | Add GET `/v1/effective-routing` with all four data classes, even when project memory is disabled. Controller/control/report routes cannot silently become eventual. |
+| W-D16 | Message kind vocabulary versus entry-point authority | Record vocabulary has seven kinds; public post/reply accepts ordinary kinds, report goes through typed report submission, incident is service-only. A recognized but prohibited kind maps to 403 `kind_not_allowed`, evaluated before generic body-schema rejection. |
+
+Promotion must reconcile these decisions across ENDPOINTS, DATA-MODEL, DESIGN, operation cards and the handbook. A source digest or successful schema load does not resolve a normative contradiction.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/19-01.md#3-http-framing-authentication-and-errors -->
+  <section id="CHD-HANDBOOK-CHD35-MA-015BA8-3-HTTP-FRAMING-AUTHENTICATION-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3. HTTP framing, authentication and errors
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/19-01.md#3-1-framing -->
+  <section id="CHD-HANDBOOK-CHD35-MA-015BA8-3-1-FRAMING-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.1 Framing
+
+* HTTPS in non-loopback deployments. JSON is UTF-8 `application/json`, one JSON value per HTTP message; no BOM, duplicate member names, NaN or infinity. Reject malformed/unknown fields with `400 bad_request`. The default 65536-byte cap applies to JSON requests, not to responses or the binary upload body. A deployment may lower the ingress cap; raising it requires a documented profile revision and matching generated validation.
+* Path identifiers are one encoded path segment; do not accept encoded slash/backslash or double-decode. Query parameters appear once, unknown parameters fail 400, booleans are `true`/`false`, integers are base-10. Timestamps are RFC3339 UTC ending `Z`. JSON numbers used as identities/counters must stay in the specified exact-integer bounds; do not round through a lossy client formatter.
+* JSON responses use the declared envelope. `operation` is the OP/WIRE identifier, not the snake_case operationId. The response `request_id` is a non-empty supplied/generated correlation ID; early authentication/parsing errors may have null identity. Read requests generate an ID when none exists. `events`/`records` contain durable references, not raw credentials.
+* `GET /v1/tickets/export` returns `application/x-ndjson`: one complete Ticket JSON object followed by LF per line, no array/envelope/footer. `X-Next-Cursor` is absent on the last page. A final partial line or transport failure invalidates that page; retry its original cursor and deduplicate ticket ID/revision. Error before stream headers is the normal JSON error envelope; never append an error object as a fake ticket after streaming begins.
+* No CHD WebSocket/SSE framing is specified or implicitly exposed. Room following uses ordered HTTP polling. Native gateway event streaming remains a distinct capability-gated adapter, not a second room log.
+
+&lt;figure class="section19-figure"&gt;
+&lt;img class="mdfig" alt="Controller framing, admission, and recovery branches" src="../figures/fig-19.1-1.svg"&gt;
+&lt;figcaption&gt;&lt;span class="n"&gt;FIGURE 19.1-1&lt;/span&gt; — CONTROLLER FRAMING, ADMISSION AND RECOVERY BRANCHES. Snapshot: 2026-11-16. Client, scheduler, and worker producers enter one authenticated controller consumer; normal commit, queue-full hold, rejected report rework, and unknown-execution reconciliation remain visibly distinct.&lt;/figcaption&gt;
+&lt;p class="figure-explanation"&gt;The controller consumes one exact request identity through authentication, schema validation, and idempotency before durable readback. A full queue retains the record and requires polling with the same identity; a rejected report returns to its producer for correction or a new attempt without mutating the valid chain; and a lost response retains the lease until status readback proves the effect or its absence.&lt;/p&gt;
+&lt;/figure&gt;
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/19-01.md#3-2-credentials-and-ordering -->
+  <section id="CHD-HANDBOOK-CHD35-MA-015BA8-3-2-CREDENTIALS-AND-ORDERING-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.2 Credentials and ordering
+
+All controller paths require `Authorization: Bearer &lt;controller-principal-token&gt;`. Operator, VP, agent, scheduler, archive-ingestor and bridge-adapter credentials are distinct. Body `from`, `as`, `authorization`, `source`, Crier headers and grant references are **claims to validate**, never authority. A native Crier deployment bearer is not a controller token.
+
+Authenticate → check credential identity and coarse capability → lookup only in caller-authorized resource set → validate role/kind/target and schema → check idempotency/CAS → evaluate approval → durable commit → acknowledge. Known but unreadable targets and absent targets return the identical `404 not_found`, message `Target not found`, and empty detail `{}`. Only authorized audit data carries the denial reason. Suppress timing distinctions as well as shape differences.
+
+`x-allowed-principals` is a compact scope label, not a complete permission evaluator. Exact role/room legality remains VOL-C §3.6; authority lineage, expiry, current membership, frozen session policy and explicit archive grants must be checked server-side. An approval is not a grant. A scoped bridge peer never becomes VP by connecting.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/19-01.md#3-3-status-and-retry-rules -->
+  <section id="CHD-HANDBOOK-CHD35-MA-015BA8-3-3-STATUS-AND-RETRY-RULES-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 3.3 Status and retry rules
+
+Each endpoint lists exact statuses and code enums in OpenAPI; the generated error catalog below gives meanings and actions. General rules:
+
+* 200: read, completed synchronous mutation, or replay of the original durable outcome. A replay of a pending mutation remains pending in its result even when returned as 200.
+* 201: new durable record/reference, not proof that an agent ran.
+* 202: queue, pending approval, cancellation intent or long-running operation. Inspect the result union and poll the returned reference. Only operation-specific durable result evidence permits `succeeded`.
+* 400/401/403/404/409/422: do not blind-retry. Correct input/credentials/authority; reconcile conflicts from retained identities. 401/403 is not an invitation to fall back to another role.
+* 429 `at_capacity` on interactive message/signal paths can mean **already persisted, wake queued**. Its detail must carry the retained record reference and `queued:true`; retry only the same identity. Async assignment/worker queues normally return 202. A valid scheduler callback returns 200 even when everything queues.
+* 503 store/capability/readiness failure: no claimed new durable business success, no speculative gateway dispatch. A prior ambiguous transport loss must be reconciled by identity; absence of a response is not absence of an effect.
+* `X-Durability: fsync` is required on successful mutation responses. Actual store barrier and readback must precede it. Header presence alone is not implementation proof.
+
+Do not reinterpret native Crier textual error bodies as controller envelopes; dependency statuses and meanings are separately catalogued in `x-dependency-protocol`.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/19-01.md#4-identity-seq-and-ack-semantics -->
+  <section id="CHD-HANDBOOK-CHD35-MA-015BA8-4-IDENTITY-SEQ-AND-ACK-SEMANTI-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4. Identity, seq and ACK semantics
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/19-01.md#4-1-controller-idempotency -->
+  <section id="CHD-HANDBOOK-CHD35-MA-015BA8-4-1-CONTROLLER-IDEMPOTENCY-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.1 Controller idempotency
+
+Scope is authenticated principal + canonical method/path + request_id. Aliases normalize only the route, not identity or body. Validate supplied JSON, canonicalize its exact supplied members using RFC8785, then compare; omission versus explicit default is a different supplied request. The binary path uses raw content bytes and staged attachment identity. `dedupe_key`, retry_identity and business uniqueness provide **additional** collision checks, not permission to ignore request_id.
+
+Same identity and same bytes returns the retained outcome without a second room sequence, objective, worker, approval, ticket transition or external effect. Different bytes under the same identity produce `409 admission_conflict`; different identity for already-open logical work produces `409 duplicate` with authorized winner references. Ticket metadata and transitions additionally compare `expected_revision`; failure writes no partial ticket/event/link changes. Import validates all row structures first, then performs explicitly per-row atomic reconciliation, preserving conflicts rather than deleting absent rows.
+
+Retain the pending result rather than silently upgrading its original replay into a later terminal result; use GET to obtain current status. After payload retention expires, retain an identity tombstone and refuse reuse with conflict. Exactly-once business effects require durable storage coupling, not just an in-memory response cache.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/19-01.md#4-2-room-sequences-and-threads -->
+  <section id="CHD-HANDBOOK-CHD35-MA-015BA8-4-2-ROOM-SEQUENCES-AND-THREADS-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.2 Room sequences and threads
+
+Only the controller assigns `seq`; clients cannot supply it. Under VOL-B §5.1, a fenced single writer uses a per-room mutex and an fsync-reserved allocation window (default 64). The head key is `/chd/room/&lt;room&gt;/_head`; messages use `/chd/room/&lt;room&gt;/m&lt;seq:012d&gt;`. Reserve before allocation, persist message plus replay record before success. Recover from effective head and durable messages; advance past both and never reclaim a reserved tail. Gaps are permanent and legal. No global ordering exists across rooms, tickets, Crier inboxes or gateway runs.
+
+If a crash occurs between message write and replay-index write, recovery must reconcile the message's persisted request_id before allowing retry. The storage sibling's fencing/commit binding is a required implementation gate; DuckBrain's own per-key version and timestamp/UUID sort are not a room sequence allocator or atomic multi-key transaction.
+
+A root has `reply_to:null, thread_root:null`. A reply has an existing lower parent seq in the same room and the stable root derived through ancestry. The root is included when reading `thread=&lt;root&gt;` even though its own thread_root is null. Cycles, cross-room parents, future parents and non-owned branches are refused. Unbounded logical nesting does not permit recursive stack exhaustion; resolve iteratively with cycle detection.
+
+`since` is exclusive. Results are ascending seq, limited after authorized thread filtering. `next_since` is the last returned seq, or input since if no matching records were returned. `has_more` reflects remaining matching records in the read snapshot; no contiguous-sequence assumption. Re-poll from next_since and deduplicate `(room,seq)` locally. There is no separate room read-ACK endpoint and reading does not advance a shared consumer cursor.
+
+The immutable `to_snapshot` determines wake recipients; current membership determines read access. `group` expands to members excluding sender. Owner posts never echo a wake to their own surface. A message HTTP ACK is durable log acceptance, **not** recipient receipt, agent completion, report verification or runtime-stop proof.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/19-01.md#4-3-scheduler-controller-gateway -->
+  <section id="CHD-HANDBOOK-CHD35-MA-015BA8-4-3-SCHEDULER-CONTROLLER-GATEW-S010" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 4.3 Scheduler → controller → gateway
+
+Hop 1 is scheduler POST `/v1/cycle` with its scheduler credential and stable request identity. Controller commits the callback/sends and returns 200, including queued counts. Zero configured triggers means no autonomous callback traffic. Immediate assignment requests also enter the controller; timed and immediate requests use one shared durable capacity ledger, not independent counters.
+
+Hop 2 is controller → the selected agent's profile-bound gateway. Preserve configured provider/model/context; reserve capacity and durable attempt identity before network work. Both NEW and REUSE delivery target the committed native session ID and stable memory-scope key. NEW is a context/delivery label, not permission to omit the session header. Never reconstruct history from last-N room messages. Native allocation/fork/import is not ordinary wake delivery.
+
+`x-gateway-contract` names the native continuation path, headers and exact selected gateway_request_key algorithm. A lost response is reconciled using that same identity, never a speculative second NEW/fork/restore. Native session allocation, resolve-unknown, import and stop schemas/capabilities must be version-bound before those features are armed. This deliverable intentionally does not invent their HTTP bodies or claim a native API supports a stronger ABI than the source proves.
+
+A worker's controller `run_id` is not its native runtime identity. Cancellation commits intent first, asks the gateway to stop, and retains capacity until correlated terminal readback is durable. `uncertain`, `unreachable` and `cancel_requested` retain held reservations. A report or HTTP 202 is never sufficient stop proof.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/19-01.md#5-crier-bridge-protocol -->
+  <section id="CHD-HANDBOOK-CHD35-MA-015BA8-5-CRIER-BRIDGE-PROTOCOL-S011" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5. Crier bridge protocol
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/19-01.md#5-1-application-envelope -->
+  <section id="CHD-HANDBOOK-CHD35-MA-015BA8-5-1-APPLICATION-ENVELOPE-S012" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.1 Application envelope
+
+`BridgeEnvelope` is the network schema. It includes schema_version, immutable delivery_id, peer_request_id (nullable where irrelevant), source system/owner/principal, explicit destination system/kind/name, direction, origin, payload_digest, typed payload, dedupe_key, initial attempt marker and created_at. Payload is exactly one of `BridgeRoomEvent`, `PeerRequest`, `PeerReport`, `BridgeAck`. `outbound_ack` requires BridgeAck; `outbound_delivery` excludes it. The receiver derives its own inbound ledger direction; it never rewrites signed bytes.
+
+Compute payload_digest as `sha256:` + lowercase SHA-256 of RFC8785 canonical payload JSON. The digest is not authentication: bind the full delivery to configured transport identity and FederationMap. Retries retain envelope bytes/IDs; native retry counts are outside the envelope. Duplicate identity with changed digest/body is a conflict, not a new request. Check destination and source against authenticated mapping, reject expired trust, enforce room/ticket/scope/approval before local side effects. Never interpret a peer payload as a local grant or config mutation.
+
+`BridgeRoomEvent.room/seq` must equal the embedded message; its remote sequence is provenance, not a request to allocate that local seq. Peer report IDs, ticket IDs, peer_request_id and content digest must correlate with the accepted local mapping. Origin prevents re-egressing an inbound message back to its originating bridge. No ACK-of-ACK or failure-notification loop is allowed.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/19-01.md#5-2-durable-inbox-carrier -->
+  <section id="CHD-HANDBOOK-CHD35-MA-015BA8-5-2-DURABLE-INBOX-CARRIER-S013" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.2 Durable inbox carrier
+
+Use a registered Crier target with webhook delivery disabled for the durable-inbox path. POST `/agents/{id}/inbox` carries `{payload:BridgeEnvelope,sender,idempotency_key,ttl_seconds}`; CHD supplies all four even though native Crier only requires payload. `idempotency_key` is stable per delivery; TTL is explicit, not reset by retry. Expect 201 with `{id,transport:"inbox",expires_at,...}`. A webhook-enabled target may return 202 or a blocking reply instead: that is a topology mismatch, not evidence of an inbox commit.
+
+GET `/agents/{id}/inbox?limit=10&amp;lease_seconds=30&amp;wait_seconds=120` returns `{messages,lease_id,queue_depth,leased_count}`. Native aliases `max`/`lease` take precedence; CHD sends only canonical names. Limit 1–100, wait 0–120; this adapter bounds lease_seconds to 1–3600 (not a claim that native HTTP implements the MCP upper-bound check). Each entry's `payload` is **base64-encoded bytes**, not an already-decoded object. Decode once, parse strict JSON, validate envelope/digest/authenticated peer before forwarding. Empty messages implies empty lease_id and nothing to ACK, even when queue_depth is positive because other consumers hold leases.
+
+The local bridge calls POST `/v1/bridge/crier/messages` with `BridgeIngress` using **service:bridge-adapter** credentials. Its transport_receipt is locally observed Crier message/lease metadata, not peer-supplied authority. The controller verifies source mapping, persists local business or approval/dead-letter state and dedupe result, and reads it back. Only then emit the application BridgeAck and POST Crier `/agents/{id}/inbox/ack` with `{lease_id,message_ids}` from that retrieval. ACK succeeds 204 with no body. An expired/mismatched lease is 409; unknown/already-ACKed/expired IDs are 404, not proof that this consumer completed work. Reconcile retained delivery state before acknowledging a re-leased duplicate.
+
+Crier GET/ACK use registered-agent Ed25519 signatures: X-Agent-ID must match path id; X-Agent-Ts is decimal Unix seconds within ±30s; X-Agent-Sig is a 128-character hexadecimal Ed25519 signature over `METHOD + LF + path-without-query + LF + timestamp`. For ACK, this profile also requires native optional X-Agent-Body-SHA256 (lowercase raw-body digest) and fourth transcript line `sha256:&lt;digest&gt;`. A configured deployment Bearer may additionally be required. These credentials remain in the bridge, not the remote message body.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/19-01.md#5-3-application-ack-retries-and-isolation -->
+  <section id="CHD-HANDBOOK-CHD35-MA-015BA8-5-3-APPLICATION-ACK-RETRIES-AN-S014" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.3 Application ACK, retries and isolation
+
+BridgeAck carries original delivery_id, outcome, local record_ref and durability_mode=`fsync`. Accepted/pending/duplicate/dead-letter outcomes require a durable reference. Pending means only a local approval record exists, not that work ran. `denied` may carry null record_ref to avoid disclosing protected targets; audit internally. Native inbox ACK only retires transport delivery. It is **not** the correlated application ACK or peer acceptance of an objective.
+
+Persist a local outbound ACK intent before transport ACK so a crash cannot lose the peer response. Send the application ACK through the configured durable peer inbox, or extract and durably retain a blocking webhook response with the explicitly configured reply mapper. Async/batch webhook 2xx does not guarantee the sender sees the response body: use the separate durable ACK path. Do not ACK an application ACK back again.
+
+Lease expiry redelivers; dedupe returns the retained local result without repeating work. Transient transport failures use bounded retry/backoff within configured TTL, with stable identity. Exhaustion produces a durable dead-letter plus one incident per outage window. Unauthorized/malformed deliveries are dead-lettered after authenticated audit, never partially posted. Native `WEBHOOK_FAILED`, `FEDERATION_FAILED`, `MESSAGE_EXPIRED` receipts are `CrierFailure` data, not executable PeerRequest messages. Their code-specific fields are defined in the schema; they must not recursively enter webhook failure delivery.
+
+&lt;figure class="section19-figure"&gt;
+&lt;img class="mdfig" alt="Bridge delivery, lease, application acknowledgement, and dead-letter recovery" src="../figures/fig-19.1-2.svg"&gt;
+&lt;figcaption&gt;&lt;span class="n"&gt;FIGURE 19.1-2&lt;/span&gt; — BRIDGE DELIVERY, LEASE, APPLICATION ACK AND DEAD-LETTER RECOVERY. Snapshot: 2026-11-16. Crier transport produces deliveries; the bridge controller consumes and verifies them; durable business, ACK-intent, and dead-letter ledgers preserve the distinct outcomes.&lt;/figcaption&gt;
+&lt;p class="figure-explanation"&gt;A valid envelope is persisted before the application acknowledgement is emitted, so transport ACK cannot be mistaken for business acceptance. Lease expiry redelivers the same identity for dedupe; malformed or unauthorized input is audited and dead-lettered without a partial post; and an unavailable receiver retains ACK intent for later reconciliation rather than acknowledging an acknowledgement.&lt;/p&gt;
+&lt;/figure&gt;
+
+Relay POST `/relay/publish` uses `{topic,event:BridgeEnvelope}` and returns 202 with empty body. Subscribers receive `{topic,event}`. With zero subscribers, the event is dropped by design. Relay is therefore for explicitly lossy notifications only, never the sole carrier of important work, ACKs or completion proof. A Crier outage degrades only the bridge; local room, report, verification, ticket and cap semantics remain on the controller.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/19-01.md#5-4-webhook-carrier-and-authentication -->
+  <section id="CHD-HANDBOOK-CHD35-MA-015BA8-5-4-WEBHOOK-CARRIER-AND-AUTHEN-S015" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 5.4 Webhook carrier and authentication
+
+POST `/v1/bridge/crier/webhook` and OpenAPI `webhooks.crierDelivery` describe the same receiver. Crier `generic-custom` sends `{crier:{version:1,message_id,...},payload:BridgeEnvelope}`; batch is `{messages:[same-envelope,...]}`. The native metadata carrier only requires version/message_id and permits documented extensions. Sender and target are strings, not mesh PeerRef objects. Missing identity metadata never implies authority; require a resolvable authenticated mapping or reject.
+
+Required by **this CHD profile**: configured controller bridge-principal Bearer, X-Crier-Signature as 64 lowercase hex HMAC-SHA256 over the **exact raw HTTP body**, X-Crier-Retry (initial 0), and X-Crier-Event (`message`, `reply`, `batch`). Verify HMAC in constant time before parsing; do not canonicalize the body first. Native Crier signing/auth is optional, so onboarding must configure CR_WEBHOOK_SECRET plus per-agent bearer auth. This is not the unrelated RSS/githook `sha256=HMAC(timestamp.body)` convention. Native target/agent/session headers may be omitted; when present check consistency with resolved mapping. A shared bus HMAC authenticates the bus, not an arbitrary claimed peer.
+
+`configure`, `configure_ack`, `probe` and arbitrary control payloads are refused 400 without business effects on this dedicated bridge endpoint. The signal source string, guard metadata, sender header and `crier.principal_id` cannot elevate a peer to VP. Detect an attempted `as:vp` as `403 peer_vp_claim` before generic unknown-field rejection.
+
+Batch is 1–100 items and within the same JSON byte cap. Authenticate and structurally validate the complete batch first, then commit per item; a later 503 may follow earlier committed items. Retry dedupes each delivery. The response contains typed ACKs; 2xx is only durable receiver acceptance. Native Crier retries 408/429 and 5xx/transport failures; other 4xx are terminal. HMAC has no timestamp freshness guarantee, so durable delivery dedupe/tombstones, trust expiry and rotation are essential replay controls.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/19-01.md#6-verification-and-implementation-gates -->
+  <section id="CHD-HANDBOOK-CHD35-MA-015BA8-6-VERIFICATION-AND-IMPLEMENTAT-S016" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 6. Verification and implementation gates
+
+Verification is **offline**: OpenAPI structural validation; all local references resolve; every component is a valid 2020-12 schema; all OP-001…048 appear; operation IDs/path parameters/auth/status-code mappings and alias payloads agree; mutation successes declare durability; source hashes match; positive and deliberately invalid fixtures exercise messages, threads, attachments, grants, approval state, report variants, bridge directions and native carriers. The exact count and artifact hash are in `wire-api/verification.json`. The count includes individual reference/status/source assertions, not that many live integration tests.
+
+Pinned oapi-codegen v2.8.2 is run against the final document. Generation/compilation proves transport compatibility only: generated types do not enforce all JSON Schema branches, semantic cross-field relationships, field-presence/null distinctions, authorization, durability or state transitions. Validate raw input/output against the original OpenAPI schemas before accepting business effects. Do not strip schema constraints to make a client compile.
+
+Remaining integration/runtime gates (already owned by the pre-created integration task):
+
+1. Promote the accepted profile and reconcile W-D01…16; regenerate normative manifest/reference index.
+2. Regenerate the CLI/MCP catalog and autogen bundle from the **final** OpenAPI. Siblings used the earlier 57-operation draft hash `c829314c40657e0c16d8b910ead8e778ebb4d8e935db5dc23ca258b8d04a18b0`; its counts and schemas are not current proof. Retain their reported Muster nested-schema/null/number/header defects as release gates.
+3. Bind storage fencing, snapshot/atomic commit and replay recovery to a real supported DuckBrain/controller transaction mechanism; no invented native CAS, SQL table API or multi-key guarantee.
+4. Bind native Hermes allocation/fork/import/unknown-resolution/stop capabilities to exact supported versions and test response loss/restart before arming them. Fail closed when unproven; no fake success IDs.
+5. Implement source-required semantic checks: identity/membership, grant lineage/subset/expiry, schema pin and report content digest, reply ancestry, same-room key/seq binding, operation-specific terminal results, route-class uniqueness, peer source/destination mapping and constant-time signatures.
+6. Exercise race/crash/negative runtime tests: cap=1 concurrent timed/immediate admission; write-before-replay-index crash; approval replay; redelivery after lease expiry; lost application ACK; unknown stop retaining capacity; Crier outage isolation; 404 non-disclosure; malicious peer VP claim. None is claimed passed by a schema validator.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/19-01.md#7-generated-http-operation-inventory -->
+  <section id="CHD-HANDBOOK-CHD35-MA-015BA8-7-GENERATED-HTTP-OPERATION-INV-S017" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 7. Generated HTTP operation inventory
+
+The following inventory is generated from the delivered OpenAPI, not manually maintained. Request/response field definitions are the linked component schemas in that file. All status entries have typed JSON schemas except the explicitly documented NDJSON export.
+
+TABLE 19.1-2 — 7. Generated HTTP operation inventory
+
+| Method | Path | operationId | Trace | Request schema | Statuses | Exposure |
+|---|---|---|---|---|---|---|
+| POST | `/v1/rooms` | `create_room` | OP-010 | application/json: CreateRoom | 201, 200, 400, 401, 403, 404, 409, 503, 202 | scoped |
+| POST | `/v1/rooms/{room}/messages` | `post_message` | OP-011 | application/json: PostMessage | 201, 200, 400, 401, 403, 404, 409, 429, 503, 202 | scoped |
+| GET | `/v1/rooms/{room}/messages` | `read_room` | OP-013 | — | 200, 400, 401, 403, 404, 503 | scoped |
+| POST | `/v1/rooms/{room}/messages/{seq}/replies` | `reply` | OP-012 | application/json: Reply | 201, 200, 400, 401, 403, 404, 409, 429, 503, 202 | scoped |
+| POST | `/v1/rooms/{room}/messages/{seq}/wake` | `wake` | OP-015 | application/json: Wake | 202, 200, 400, 401, 403, 404, 409, 503 | scoped |
+| POST | `/v1/rooms/{room}/bump` | `bump_room` | OP-035 | application/json: Bump | 200, 400, 401, 403, 404, 409, 503 | scoped |
+| POST | `/v1/rooms/{room}/missing-replies/notify` | `notify_missing` | OP-045 | application/json: Notify | 200, 400, 401, 403, 404, 409, 503 | scoped |
+| POST | `/v1/signals` | `ingest_signal` | OP-043 | application/json: Signal | 202, 200, 400, 401, 403, 404, 409, 429, 503 | scoped |
+| POST | `/v1/cycle` | `cycle_callback` | OP-044 | application/json: Cycle | 200, 400, 401, 403, 404, 409, 503 | internal |
+| GET | `/v1/status` | `status` | OP-036, OP-042 | — | 200, 400, 401, 403, 404, 503 | scoped |
+| GET | `/v1/worklog` | `read_worklog` | OP-014 | — | 200, 400, 401, 403, 404, 503 | scoped |
+| POST | `/v1/wakes` | `request_wake` | OP-016 | application/json: RequestWake | 202, 200, 400, 401, 403, 404, 409, 503 | scoped |
+| POST | `/v1/rooms/{room}/reports` | `post_report` | OP-018 | application/json: PostReport | 201, 200, 400, 401, 403, 404, 409, 422, 503 | scoped |
+| POST | `/v1/reports/verify` | `verify_report` | OP-019 | application/json: VerifyReport | 200, 400, 401, 403, 404, 409, 422, 503 | scoped |
+| POST | `/v1/assignments` | `assign` | OP-033, OP-034 | application/json: Assignment | 202, 200, 400, 401, 403, 404, 409, 429, 503 | scoped |
+| POST | `/v1/workers/dispatch` | `dispatch_worker` | OP-020 | application/json: WorkerDispatch | 202, 200, 400, 401, 403, 404, 409, 422, 429, 503 | scoped |
+| GET | `/v1/workers/runs/{run_id}` | `worker_run_status` | OP-021 | — | 200, 400, 401, 403, 404, 503 | scoped |
+| POST | `/v1/workers/runs/{run_id}/cancel` | `cancel_worker` | OP-022 | application/json: CancelRun | 202, 200, 400, 401, 403, 404, 409, 503 | scoped |
+| POST | `/v1/tickets` | `create_ticket` | OP-023 | application/json: CreateTicket | 201, 200, 400, 401, 403, 404, 409, 422, 503 | scoped |
+| GET | `/v1/tickets` | `query_tickets` | OP-027 | — | 200, 400, 401, 403, 404, 503 | scoped |
+| GET | `/v1/tickets/{ticket_id}` | `get_ticket` | OP-024 | — | 200, 400, 401, 403, 404, 503 | scoped |
+| PATCH | `/v1/tickets/{ticket_id}` | `update_ticket` | OP-025 | application/json: UpdateTicket | 200, 400, 401, 403, 404, 409, 422, 503 | scoped |
+| POST | `/v1/tickets/{ticket_id}/transitions` | `transition_ticket` | OP-026 | application/json: TransitionTicket | 200, 400, 401, 403, 404, 409, 422, 503 | scoped |
+| POST | `/v1/tickets/import` | `import_tickets` | OP-028 | application/json: ImportTickets | 200, 400, 401, 403, 404, 409, 422, 503 | scoped |
+| GET | `/v1/tickets/export` | `export_tickets` | OP-028 | — | 200, 400, 401, 403, 404, 503 | scoped |
+| POST | `/v1/admin/bootstrap` | `bootstrap` | OP-001 | application/json: Bootstrap | 200, 400, 401, 403, 404, 409, 503 | operator |
+| POST | `/v1/admin/agents` | `provision_agent` | OP-002, OP-003, OP-004, OP-005 | application/json: ProvisionAgent | 201, 200, 400, 401, 403, 404, 409, 422, 503, 202 | operator |
+| POST | `/v1/workers/provision` | `provision_worker` | OP-006 | application/json: ProvisionWorker | 201, 200, 400, 401, 403, 404, 409, 422, 503 | scoped |
+| POST | `/v1/admin/gateways` | `onboard_gateway` | OP-007 | application/json: OnboardGateway | 201, 200, 400, 401, 403, 404, 409, 503 | operator |
+| POST | `/v1/admin/profiles/{agent}/sync` | `sync_profile` | OP-008 | application/json: SyncProfile | 200, 400, 401, 403, 404, 409, 422, 503 | operator |
+| GET | `/v1/admin/profiles/{agent}` | `read_profile` | OP-009 | — | 200, 400, 401, 403, 404, 503 | operator |
+| POST | `/v1/admin/agents/{agent}/update` | `update_agent` | OP-040 | application/json: UpdateAgent | 200, 400, 401, 403, 404, 409, 422, 503 | operator |
+| POST | `/v1/admin/agents/{agent}/offboard` | `offboard_agent` | OP-041 | application/json: OffboardAgent | 202, 200, 400, 401, 403, 404, 409, 503 | operator |
+| POST | `/v1/admin/reload-credentials` | `reload_credentials` | WIRE-001 | application/json: ReloadCredentials | 200, 400, 401, 403, 404, 409, 503 | operator |
+| POST | `/v1/sessions/{id}/fork` | `fork_session` | OP-017 | application/json: ForkSession | 202, 200, 400, 401, 403, 404, 409, 422, 503 | scoped |
+| GET | `/v1/operations/{job_id}` | `get_operation` | WIRE-002 | — | 200, 400, 401, 403, 404, 503 | scoped |
+| POST | `/v1/operations/{job_id}/cancel` | `cancel_operation` | WIRE-003 | application/json: CancelOperation | 202, 200, 400, 401, 403, 404, 409, 503 | scoped |
+| POST | `/v1/grants` | `issue_grant` | OP-029 | application/json: IssueGrant | 201, 200, 400, 401, 403, 404, 409, 422, 503, 202 | scoped |
+| POST | `/v1/grants/{grant_id}/revoke` | `revoke_grant` | OP-030 | application/json: RevokeGrant | 200, 400, 401, 403, 404, 409, 503 | scoped |
+| POST | `/v1/approvals/{approval_id}` | `resolve_approval` | OP-031 | application/json: ResolveApproval | 200, 400, 401, 403, 404, 409, 503 | scoped |
+| GET | `/v1/approvals/{approval_id}` | `get_approval` | WIRE-011 | — | 200, 400, 401, 403, 404, 503 | scoped |
+| GET | `/v1/audit` | `read_audit` | OP-032 | — | 200, 400, 401, 403, 404, 503 | scoped |
+| GET | `/v1/sessions/{id}/policy` | `get_session_policy` | WIRE-004 | — | 200, 400, 401, 403, 404, 503 | scoped |
+| POST | `/v1/sessions/{session_id}/policy-resync` | `resync_policy` | WIRE-005 | application/json: ResyncPolicy | 200, 400, 401, 403, 404, 409, 503, 202 | scoped |
+| GET | `/v1/policy/effective` | `effective_policy` | WIRE-006 | — | 200, 400, 401, 403, 404, 503 | scoped |
+| POST | `/v1/archive/export` | `export_session` | OP-037 | application/json: ExportSession | 202, 200, 400, 401, 403, 404, 409, 422, 503 | scoped |
+| GET | `/v1/archive/sessions` | `read_archives` | OP-038 | — | 200, 400, 401, 403, 404, 422, 503 | scoped |
+| POST | `/v1/archive/restore` | `restore_session` | OP-039 | application/json: RestoreSession | 202, 200, 400, 401, 403, 404, 409, 422, 503 | scoped |
+| POST | `/v1/attachments` | `stage_attachment` | OP-046 | application/json: StageAttachment | 201, 200, 400, 401, 403, 404, 409, 503 | scoped |
+| PUT | `/v1/attachments/{id}/content` | `upload_attachment_bytes` | WIRE-007 | application/octet-stream: binary | 200, 400, 401, 403, 404, 409, 503 | scoped |
+| POST | `/v1/attachments/{id}/finalize` | `finalize_attachment` | OP-047 | application/json: FinalizeAttachment | 200, 400, 401, 403, 404, 409, 422, 503 | scoped |
+| POST | `/v1/attachments/{id}/cleanup` | `cleanup_attachment` | OP-048 | application/json: CleanupAttachment | 200, 400, 401, 403, 404, 409, 503 | scoped |
+| GET | `/v1/runs/{run_id}` | `worker_run_status_legacy` | OP-021 | — | 200, 400, 401, 403, 404, 503 | exclude / deprecated |
+| POST | `/v1/runs/{run_id}/cancel` | `cancel_worker_legacy` | OP-022 | application/json: CancelRun | 202, 200, 400, 401, 403, 404, 409, 503 | exclude / deprecated |
+| GET | `/v1/worker-runs/{run_id}` | `worker_run_status_handbook` | OP-021 | — | 200, 400, 401, 403, 404, 503 | exclude / deprecated |
+| POST | `/v1/worker-runs/{run_id}/cancel` | `cancel_worker_handbook` | OP-022 | application/json: CancelRun | 202, 200, 400, 401, 403, 404, 409, 503 | exclude / deprecated |
+| POST | `/v1/bridge/crier/messages` | `bridge_ingress` | WIRE-008 | application/json: BridgeIngress | 202, 200, 400, 401, 403, 404, 409, 503 | internal |
+| POST | `/v1/bridge/crier/webhook` | `crier_webhook` | WIRE-009 | application/json: binary | 200, 400, 401, 403, 404, 409, 503 | internal |
+| GET | `/v1/effective-routing` | `effective_routing` | WIRE-010 | — | 200, 400, 401, 403, 404, 503 | scoped |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/19-01.md#8-generated-error-catalog -->
+  <section id="CHD-HANDBOOK-CHD35-MA-015BA8-8-GENERATED-ERROR-CATALOG-S018" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 8. Generated error catalog
+
+This is the union catalog; each operation narrows its allowed codes/statuses in OpenAPI. A catalog entry does not automatically make it a valid response for every operation.
+
+TABLE 19.1-3 — 8. Generated error catalog
+
+| Code | HTTP | Meaning | Retryable | Client action |
+|---|---|---|---|---|
+| `admission_conflict` | 409 | Idempotency key names different work or target | false | Read the ledger and reconcile; never blind-retry. |
+| `approval_required` | 403 | Policy requires an approval not yet recorded | false | Obtain approval through the approval operation. |
+| `assignment_not_grant` | 403 | Assignment attempts permission mutation | false | Use explicit grant operations. |
+| `at_capacity` | 429 | Gateway, agent or fan-out cap is full | true | Wait or enqueue; do not bypass admission. |
+| `attempt_target_conflict` | 422 | Gateway request key is reused with a different target | false | Mint a new attempt identity after reconciliation. |
+| `authority_ref` | 403 | Required authority reference is missing or not usable | false | Supply an authorized authority reference. |
+| `authority_revoked` | 403 | Grant lineage was revoked for a future operation | false | Request a new grant from an authorized issuer. |
+| `bad_report` | 422 | Report correlation, freshness or completion evidence is invalid | false | Correct the report or create a new attempt. |
+| `bad_request` | 400 | Malformed JSON, unknown field, invalid type, limit or pattern | false | Fix the payload; do not retry unchanged. |
+| `capacity_lease_unproven` | 409 | Stop has not been proven after cancellation/timeout | true | Reconcile run status; retain the lease until proven stopped. |
+| `converge_failed` | 503 | Profile update failed before effective readback | true | Rollback to the prior digest, inspect audit, retry after readiness. |
+| `dataset_row_invalid` | 422 | Dataset row violates typed columns or dense row identity | false | Fix the row; staging remains unreadable. |
+| `duckbrain_unavailable` | 503 | Control namespace cannot be durably read/written | true | Back off and retry the same idempotent request. |
+| `duplicate` | 409 | Dedupe key is reused with different request bytes | false | Reconcile the original request and mint a new key only for new work. |
+| `export_incomplete` | 503 | Archive checkpoint cannot prove complete payload coverage | true | Retain the gap record and retry export; do not advertise it. |
+| `fork_policy_widen_refused` | 403 | Fork would widen the parent policy snapshot | false | Use a policy within the parent bounds. |
+| `grant_conflict` | 409 | Grant id or scope conflicts with an existing grant | false | Read the grant and reconcile before issuing another. |
+| `grant_expired_inflight` | 403 | Grant expires while an operation is being authorized | false | Acquire a current grant and retry. |
+| `grant_limit_exceeded` | 422 | Grant count, depth or conferable limit is exceeded | false | Reduce scope or request a higher-authority grant. |
+| `grant_scope_incomplete` | 422 | Archive grant lacks required selectors or bounds | false | Provide complete archive selectors and limits. |
+| `grant_used_after_ancestor_revocation` | 403 | Future session uses a grant whose ancestor was revoked | false | Mint a new grant lineage. |
+| `identity_mismatch` | 403 | Body identity differs from authenticated principal | false | Use the credential identity; never spoof from/as. |
+| `integrity_equal_rev_conflict` | 409 | Equal-revision records have different bytes | true | Stop writes and reconcile the authoritative store. |
+| `kind_not_allowed` | 403 | Message kind is illegal for actor and room kind | false | Choose a legal kind or room. |
+| `meta_grant_exceeds_authority` | 403 | Requested delegated grant exceeds issuer authority | false | Delegate only within the issuer lineage bound. |
+| `not_found` | 404 | Target is unknown or unreadable; existence is not disclosed | false | Do not infer existence; use an authorized target. |
+| `peer_scope_denied` | 403 | Peer scope denied | false | Ask the local owner for scope. |
+| `peer_vp_claim` | 403 | Peer claims VP identity | false | Remove claim; obtain explicit local scope. |
+| `permission_key_conflict` | 422 | Mutually exclusive permission fields are both supplied | false | Use one canonical permission spelling. |
+| `policy_resync_not_granted` | 403 | Caller lacks session policy resync authority | false | Request the explicit session-policy grant. |
+| `profile_missing` | 422 | Referenced profile does not exist on the gateway | false | Provision the profile before dispatch. |
+| `profile_not_distinct` | 422 | Profile is default, missing or shared | false | Provision a unique non-default profile. |
+| `profile_shared` | 422 | Profile is bound to another agent or work unit | false | Provision a distinct profile. |
+| `registry_unjustified` | 403 | Space member lacks a responsibility registry entry | false | Register responsibility or use objective/task room. |
+| `report_already_posted` | 409 | Different report already exists for the send attempt | false | Create a correction/new send; do not overwrite. |
+| `restore_incompatible` | 422 | Archive format, policy or version gate rejects import | false | Use a compatible archive and import as a new session. |
+| `runtime_draining` | 503 | Supported Hermes runtime is draining | true | Retry with the same provider idempotency key after readiness. |
+| `schema_unsupported` | 422 | Report schema version or content class is unsupported | false | Use schema version 3 and a supported content class. |
+| `schema_validation` | 422 | Structured content fails its declared schema | false | Correct content against the declared schema. |
+| `schema_version_unsupported` | 422 | Requested schema version is not supported | false | Use a supported schema version. |
+| `specialization_conflict` | 422 | Profile specialization conflicts with role or policy | false | Resolve the specialization against the role contract. |
+| `storage_unavailable` | 503 | Supported dependency storage is unavailable | true | Back off and retry the same idempotent request. |
+| `temporary_agents_unspecified` | 422 | Temporary worker lacks explicit required fields | false | Supply model, context, lifetime and workspace explicitly. |
+| `thread_not_owned` | 409 | No live bond owns the thread | false | Resolve the live bond. |
+| `ticket_link_conflict` | 409 | Ticket link points to conflicting or inconsistent work | false | Re-read links and submit a consistent patch. |
+| `ticket_owner_required` | 422 | Ticket mutation has no accountable owner | false | Supply exactly one accountable owner. |
+| `ticket_revision_conflict` | 409 | Expected ticket revision is stale | true | Read the ticket, merge intent, retry with the new revision. |
+| `ticket_transition_not_allowed` | 403 | Writer or requested state edge is not allowed | false | Use a canonical edge and authorized writer. |
+| `tool_not_granted` | 403 | Effective use grant is absent, expired or revoked | false | Request the required grant or choose an allowed operation. |
+| `unauthenticated` | 401 | Missing, expired or invalid credential | false | Acquire a valid credential and retry only after re-authentication. |
+| `unknown_execution` | 409 | External runtime outcome is not yet known | true | Reconcile status; never blindly duplicate the effect. |
+| `vp_denied` | 403 | VP policy denies the requested capability | false | Use an allowed capability or change VP policy. |
+| `vp_identity_misuse` | 403 | Agent presents or claims the VP plane | false | Stop; use the agent tool surface; audit this integrity violation. |
+| `workflow_version_unknown` | 422 | Ticket workflow binding is not in the state canon | false | Use a registered workflow and machine reference. |
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd35/manuscript/19-01.md#9-exact-validation-receipt -->
+  <section id="CHD-HANDBOOK-CHD35-MA-015BA8-9-EXACT-VALIDATION-RECEIPT-S019" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+### 9. Exact validation receipt
+
+* OpenAPI SHA-256: `75319699c7496ddb7e96c8bcf8a508f10e886262670c2d5dda5567fd451c7acc`.
+* 59 HTTP operations, 55 paths, 536 component schemas, 1 webhook definition; all 48 operation-reference identities covered.
+* 1944 offline assertions passed (including reference/status checks and rejecting fixtures).
+* Pinned oapi-codegen v2.8.2 generated types/client/Chi/strict-server/spec; `go test verified_wire.gen.go` compiled successfully and reported **no test files**. No runtime-test claim is made.
+* Generator/validator sources and pinned Python dependencies are under `wire-api/`. `verification.json` lists every assertion.
+
+
+&lt;/div&gt;
+  </section>
+</spec>

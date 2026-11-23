@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Converted from coding-hermes-director/handbook/chd32/queries/cookbook.md by scripts/ingest_markdown_specs.py (AUG-176).
+     Verbatim prose; provenance in the per-block source comments. -->
+<spec xmlns="urn:auger:spec:1" id="CHD-HANDBOOK-CHD32-QUERIES-C-DOC-CORPUS" version="1.0.0" schema-version="1.0">
+  <!-- source: coding-hermes-director/handbook/chd32/queries/cookbook.md#preamble -->
+  <section id="CHD-HANDBOOK-CHD32-QUERIES-C-PREAMBLE-S000" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+# Query cookbook (controller API)
+
+All queries are keyset reads. `cursor` is an opaque encoding of the last returned `(commit_seq, record_id)`; clients never use timestamps or offsets. Each entry states both success and the stable error envelope `{code, detail, request_id}`.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/queries/cookbook.md#q1-get-one-ticket -->
+  <section id="CHD-HANDBOOK-CHD32-QUERIES-C-Q1-GET-ONE-TICKET-S001" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Q1 — get one ticket
+`GET /v1/tickets/WF01-002`
+
+Expected result: `200` with the effective ticket revision, latest event, dependency statuses, and `next_cursor: null`. Expected error: `404 {"code":"not_found"}` for an unreadable or unknown ticket.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/queries/cookbook.md#q2-stale-transition -->
+  <section id="CHD-HANDBOOK-CHD32-QUERIES-C-Q2-STALE-TRANSITION-S002" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Q2 — stale transition
+`POST /v1/tickets/WF01-002/transitions` with `expected_revision: 1`, `to: "in_progress"`.
+
+Expected result: `409 {"code":"ticket_revision_conflict","current_revision":2}` and **no** TicketRecord, event, link, or audit-success mutation. Expected error shape: the same conflict envelope; caller must re-read and retry with revision 2.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/queries/cookbook.md#q3-retry-after-conflict -->
+  <section id="CHD-HANDBOOK-CHD32-QUERIES-C-Q3-RETRY-AFTER-CONFLICT-S003" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Q3 — retry after conflict
+Read Q1, then submit the same transition with the returned revision and a fresh request id.
+
+Expected result: `200`, exactly one revision increment and one event. A replay of the same request id returns the original `200` without another event. Expected error: `403 {"code":"ticket_transition_not_allowed"}` when the machine edge or actor is invalid.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/queries/cookbook.md#q4-dependency-gated-query -->
+  <section id="CHD-HANDBOOK-CHD32-QUERIES-C-Q4-DEPENDENCY-GATED-QUERY-S004" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Q4 — dependency-gated query
+`GET /v1/tickets?state=ready&amp;cursor=&lt;cursor&gt;`
+
+Expected result: only tickets whose every dependency is non-terminal-success (`accepted`/`done`) and whose parent facts are valid. A dependency in `cancelled`, `failed`, `expired`, or `rejected` is unsatisfied and the dependent is absent or `blocked`. Expected error: `400 {"code":"cursor_invalid"}` for a malformed cursor.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/queries/cookbook.md#q5-idempotent-intake -->
+  <section id="CHD-HANDBOOK-CHD32-QUERIES-C-Q5-IDEMPOTENT-INTAKE-S005" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Q5 — idempotent intake
+`POST /v1/tickets` with `request_id: "wf03:event-7"`, `source: "intake"`, `source_ref: "event-7"`, twice.
+
+Expected result: first call `201`; second call `200` with the same `ticket_id`, `duplicate: true`, and exactly one logical ticket in the source thread. Expected error: `409 {"code":"duplicate_identity_conflict"}` only when the same source identity carries incompatible immutable fields.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/queries/cookbook.md#q6-dataset-keyset-read -->
+  <section id="CHD-HANDBOOK-CHD32-QUERIES-C-Q6-DATASET-KEYSET-READ-S006" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Q6 — dataset keyset read
+`GET /v1/reports/r-001/dataset?order_by=row_id%20ASC&amp;page_size=100&amp;cursor=...`
+
+Expected result: published rows in `(row_id)` order and a cursor; no offset. Expected error: `422 {"code":"dataset_query_invalid","field":"order_by"}` for an undeclared column or unsupported operator.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/queries/cookbook.md#q7-archive-coverage -->
+  <section id="CHD-HANDBOOK-CHD32-QUERIES-C-Q7-ARCHIVE-COVERAGE-S007" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Q7 — archive coverage
+`GET /v1/archive/sup-1?cursor=...`
+
+Expected result: committed manifests and named open gaps, re-authorized for each page. Expected error: `404 {"code":"not_found"}` for missing or unauthorized archive scope (non-oracle).
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/queries/cookbook.md#q8-effective-revision -->
+  <section id="CHD-HANDBOOK-CHD32-QUERIES-C-Q8-EFFECTIVE-REVISION-S008" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Q8 — effective revision
+`GET /v1/records/chd/ticket/WF01-002?historical=true`
+
+Expected result: highest `rev`; equal-rev records are accepted only when canonical bytes are identical. Expected error: `500 {"code":"integrity_equal_rev_conflict"}` with an incident reference when equal-rev bytes differ.
+  </section>
+  <!-- source: coding-hermes-director/handbook/chd32/queries/cookbook.md#q9-ticket-export-mirror -->
+  <section id="CHD-HANDBOOK-CHD32-QUERIES-C-Q9-TICKET-EXPORT-MIRROR-S009" kind="section" status="active" version="1.0.0" applies-to="ingest.coding-hermes-director">
+## Q9 — ticket export mirror
+`GET /v1/tickets/export?format=jsonl&amp;cursor=...`
+
+Expected result: a boardctl-compatible view marked `authority: controller`; local edits, worktrees and artifacts cannot change it. Expected error: `403 {"code":"export_not_granted"}` when the caller lacks read scope.
+  </section>
+</spec>
