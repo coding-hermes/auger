@@ -415,6 +415,11 @@ fi
 # Isolate the controls from any checkout-local interpreter in the outer tree.
 git clone -q --shared "$HERE" "$skiparms_dir/repo"
 cp "$GATE" "$skiparms_dir/repo/tests/gate.sh"
+# AUG-211: the gate's pytest arm invokes scripts/gate_skip_bound.py; a fixture
+# clone at the pre-AUG-211 commit does not have it (it is uncommitted here), so
+# the inner FULL run would die on the missing helper before the interpreter
+# selection this section proves. Ship the helper next to the copied gate.
+cp "$HERE/scripts/gate_skip_bound.py" "$skiparms_dir/repo/scripts/gate_skip_bound.py"
 INNER_GATE="$skiparms_dir/repo/tests/gate.sh"
 
 run_inner_gate(){
@@ -482,7 +487,19 @@ SHIM
 chmod +x "$skiparms_dir/repo/.venv/bin/python"
 ln -s python "$skiparms_dir/repo/.venv/bin/python3"
 export AUG189_MARKER="$skiparms_dir/pytest-invoked"
+# Wrapped like the AUG-130 call sites above: run_inner_gate returns the inner
+# gate's status, and with set -e still active an unexpected nonzero would kill
+# this script SILENTLY (measured: guard-20261125T230817 rc=1 with no diagnostic
+# between the AUG-130 PASS line and the wrapper-regression FAILED line).
+set +e
 selection_out="$(run_inner_gate AUGER_ALLOW_SKIPPED_ARMS=1)"
+selection_status=$?
+set -e
+[[ "$selection_status" -eq 0 ]] || {
+  printf 'AUG-189: the inner degraded run failed (status %s):\n%s\n' \
+    "$selection_status" "$selection_out" >&2
+  exit 1
+}
 assert_contains "$selection_out" "gate pytest interpreter: $skiparms_dir/repo/.venv/bin/python"
 [[ -s "$AUG189_MARKER" ]] || { printf 'local interpreter never ran pytest\n' >&2; exit 1; }
 printf 'AUG-189 interpreter selection: PASS\n'

@@ -112,11 +112,24 @@ def run_cli(argv: list[str]) -> tuple[int, str]:
 
 
 def run_cli_exit(argv: list[str]) -> tuple[int, str, str]:
-    """Run a verb that is expected to REFUSE; returns (exit_code, message, stdout)."""
+    """Run a verb that is expected to REFUSE; returns (exit_code, message, stdout).
+
+    AUG-211: `SubstrateLockContended` IS a SystemExit subclass, so the
+    `pytest.raises(SystemExit)` below catches a 503 SERIALIZER_LOCKED landing and
+    this harness used to report it as a PASSED verb refusal — a lock storm read as
+    green refusals. Same rule as `run_cli` (AUG-209): the contention is the
+    substrate's answer, not this suite's defect, so it converts into the SAME
+    attributed skip naming the lock and the namespace. Every other SystemExit
+    keeps its loud refusal shape.
+    """
     buf = io.StringIO()
     with pytest.raises(SystemExit) as ei, contextlib.redirect_stdout(buf):
         auger.main(argv)
     exc = ei.value
+    if isinstance(exc, auger.SubstrateLockContended):
+        pytest.skip(
+            f"substrate write contention (503 SERIALIZER_LOCKED, AUG-209): {exc}"
+        )
     code = exc.code if isinstance(exc.code, int) else 1
     return code, str(exc), buf.getvalue()
 
