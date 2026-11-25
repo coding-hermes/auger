@@ -2519,6 +2519,148 @@ def test_recall_non_200_status_is_a_failure_not_an_empty_store(monkeypatch):
     assert auger.recall("auger-075-dead", "any question", limit=3) == []
 
 
+# ============================================ AUG-209: 503 SERIALIZER_LOCKED is contention, typed
+#: The exact wire shape measured live against the running substrate (AUG-209,
+#: 2026-11-25): while a competing writer process holds a namespace's write lock,
+#: a table write answers 503 with THIS body (after the substrate's own ~2s
+#: internal retry). Nothing about the payload, token or schema is wrong.
+_LOCK_BODY = {
+    "error": "Namespace 'auger-pytest-x' is locked by another writer process",
+    "code": "SERIALIZER_LOCKED",
+}
+
+
+def test_a_503_serializer_lock_write_is_typed_contention_not_the_plain_exit(
+    monkeypatch,
+):
+    """AUG-209 AC2 mapping: the ONE 503 shape that means "a competing writer holds the
+    lock" is raised from the write verbs as `SubstrateLockContended` — a typed,
+    attributed contention the harness can skip on — not the plain loud SystemExit.
+
+    Red-proven against the pre-fix code (2026-11-25): before the classification,
+    every verb here raised the plain SystemExit for this body and the class
+    assert failed. The message still carries the status, the body (which names
+    the locked namespace — the attribution AC2 asks for) and the competing-writer
+    sentence, so a CLI caller's composite `except SystemExit` paths keep folding
+    it into their refusal text unchanged.
+    """
+    monkeypatch.setattr(auger, "db", _substrate(503, _LOCK_BODY))
+    for name, call in (
+        ("insert", lambda: auger.insert("auger-pytest-x", "decision", {"id": "D-1"})),
+        (
+            "patch",
+            lambda: auger.patch(
+                "auger-pytest-x", "decision", "D-1", {"status": "decided"}
+            ),
+        ),
+        ("delete_row", lambda: auger.delete_row("auger-pytest-x", "decision", "D-1")),
+        # The two composite write helpers raise their own refusal text (and the
+        # `answer` verb stores its decision through insert_decision, so the
+        # decided fixture's write is covered by exactly this mapping).
+        (
+            "insert_decision",
+            lambda: auger.insert_decision(
+                "auger-pytest-x", {"id": "D-1", "project_id": "P"}
+            ),
+        ),
+        (
+            "insert_edge",
+            lambda: auger.insert_edge(
+                "auger-pytest-x", {"id": "E-1", "src_kind": "decision"}
+            ),
+        ),
+    ):
+        with pytest.raises(auger.SubstrateLockContended) as ei:
+            call()
+        # The type IS the contract: a SystemExit SUBCLASS, so the composite write
+        # paths' `except SystemExit` semantics survive, yet the harness can key
+        # the typed skip on the subclass without ever skipping a loud refusal.
+        assert ei.value.__class__ is auger.SubstrateLockContended, name
+        assert isinstance(ei.value, SystemExit), name
+        msg = str(ei.value)
+        assert "503" in msg, (name, msg)
+        assert "auger-pytest-x" in msg, (name, msg)  # names the locked namespace
+        assert "competing writer" in msg, (name, msg)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"error": "authentication required", "code": "UNAUTHORIZED"},
+        {
+            "error": "Column 'x' (varchar) requires a string",
+            "code": "UNPROCESSABLE_ENTITY",
+        },
+        {"error": "upstream exploded"},  # 503 with NO code at all
+        {"error": "upstream exploded", "code": "SOMETHING_ELSE"},
+        "upstream exploded, not even json",  # 503 with a non-dict body
+    ],
+    ids=[
+        "auth-503",
+        "validation-503",
+        "no-code-503",
+        "unknown-code-503",
+        "non-dict-503",
+    ],
+)
+def test_a_503_that_is_not_the_lock_still_fails_loudly(monkeypatch, body):
+    """AUG-209 AC3: every 503 that is NOT the lock code keeps the loud SystemExit.
+
+    Authentication, validation, an unknown/missing code and a non-JSON body are
+    defects or outages, not transient contention — none of them may be downgraded
+    to a skip. The class assert is the fail-closed pin: a plain SystemExit, never
+    the contention subclass.
+    """
+    monkeypatch.setattr(auger, "db", _substrate(503, body))
+    with pytest.raises(SystemExit) as ei:
+        auger.insert("auger-pytest-x", "decision", {"id": "D-1"})
+    assert not isinstance(ei.value, auger.SubstrateLockContended)
+    assert "insert decision failed (503)" in str(ei.value), str(ei.value)
+
+
+def test_the_lock_code_on_any_other_status_stays_loud(monkeypatch):
+    """AUG-209 AC3 second half: the classifier keys on status AND code together.
+
+    A 500 (or any non-503) carrying the SERIALIZER_LOCKED code is NOT the measured
+    lock refusal — it keeps the loud SystemExit instead of becoming a skip.
+    """
+    monkeypatch.setattr(auger, "db", _substrate(500, _LOCK_BODY))
+    with pytest.raises(SystemExit) as ei:
+        auger.insert("auger-pytest-x", "decision", {"id": "D-1"})
+    assert not isinstance(ei.value, auger.SubstrateLockContended)
+
+
+def test_run_cli_converts_the_typed_contention_into_a_named_skip(monkeypatch):
+    """AUG-209 AC2/AC5 harness seam: `run_cli` turns the typed contention into a
+    pytest.skip whose reason names the lock AND the namespace — the attribution
+    line the pytest summary carries. A plain SystemExit still propagates (the
+    loud path), asserted by the last block.
+    """
+
+    def contended_main(argv):
+        raise auger.SubstrateLockContended(
+            "insert decision failed (503): the namespace write lock is held by a "
+            "competing writer process: Namespace 'auger-pytest-x' is locked by "
+            "another writer process [{'error': '...', 'code': 'SERIALIZER_LOCKED'}]"
+        )
+
+    monkeypatch.setattr(auger, "main", contended_main)
+    with pytest.raises(pytest.skip.Exception) as ei:
+        conftest.run_cli(["-n", "auger-pytest-x", "status"])
+    reason = str(ei.value)
+    assert "AUG-209" in reason, reason
+    assert "SERIALIZER_LOCKED" in reason, reason
+    assert "auger-pytest-x" in reason, reason
+
+    def loud_main(argv):
+        raise SystemExit("insert decision failed (503): {'error': 'upstream'}")
+
+    monkeypatch.setattr(auger, "main", loud_main)
+    with pytest.raises(SystemExit) as ei:
+        conftest.run_cli(["-n", "auger-pytest-x", "status"])
+    assert not isinstance(ei.value, auger.SubstrateLockContended)
+
+
 # ============================================ AUG-101: ONE refusal for a store that cannot be asked
 # Dogfood run 15 (2026-10-12) measured `status` on a dead substrate printing the raw transport dict
 # while `recall` printed its named refusal. The EXIT CODE was 1 for both once the plumbing was
