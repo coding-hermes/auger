@@ -1,0 +1,513 @@
+{
+  "task_id": "AUG-209",
+  "task_title": "Live DuckBrain arm aborts 72 tests at setup with 503 SERIALIZER_LOCKED instead of classifying concurrent-writer contention",
+  "task_criteria": [
+    "A 503 whose body carries code SERIALIZER_LOCKED on a live write is classified as environment contention: auger.py raises a typed SubstrateLockContended (SystemExit subclass) from insert/patch/delete_row/insert_decision/insert_edge and the pytest harness converts it into an attributed skip naming the lock and namespace, instead of SystemExit aborting fixture setup; every other 503 (auth, validation, unknown or missing code, non-dict body) and a non-503 status carrying the lock code still fails loudly as plain SystemExit, asserted by committed mapping tests red-proven against the pre-fix tree; with no competing writer the full gate ends GATE PASS with the same test count and live arms ran; the pytest summary attributes the skipped tests to the lock rather than collapsing one environment fault into a battery-wide error count."
+  ],
+  "passed": true,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "a8168a9f874643de7e76e4429f72a63929d04fc4",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "063ca6c268a4d37def735c074f97e92ed29cb43ac1a840f1744528a3edf3cae3",
+  "working_tree_dirty_path_count": 1560,
+  "items": [
+    {
+      "criterion": "A 503 whose body carries code SERIALIZER_LOCKED on a live write is classified as environment contention: auger.py raises a typed SubstrateLockContended (SystemExit subclass) from insert/patch/delete_row/insert_decision/insert_edge and the pytest harness converts it into an attributed skip naming the lock and namespace, instead of SystemExit aborting fixture setup; every other 503 (auth, validation, unknown or missing code, non-dict body) and a non-503 status carrying the lock code still fails loudly as plain SystemExit, asserted by committed mapping tests red-proven against the pre-fix tree; with no competing writer the full gate ends GATE PASS with the same test count and live arms ran; the pytest summary attributes the skipped tests to the lock rather than collapsing one environment fault into a battery-wide error count.",
+      "status": "PASS",
+      "detail": "(a) Classifier `_lock_contention` (auger.py:832-845) returns a message only for status==503 AND dict body AND code.upper()==SERIALIZER_LOCKED; `class SubstrateLockContended(SystemExit)` at auger.py:840; typed raises wired into insert (auger.py:868), patch (880), delete_row (1001), insert_edge (1313), insert_decision (5275). (b) Harness seam tests/conftest.py:105-110 catches only SubstrateLockContended and pytest.skip()s with 'substrate write contention (503 SERIALIZER_LOCKED, AUG-209): {exc}' \u2014 exc names the locked namespace; every other SystemExit propagates. (c) Mapping tests in tests/test_auger.py:2536-2586 assert all five verbs raise exactly SubstrateLockContended, isinstance SystemExit, message carries '503', 'auger-pytest-x', 'competing writer'; tests at 2588-2617 parametrize auth/validation/no-code/unknown-code/non-dict 503 bodies and 2623-2631 a 500 carrying the lock code, each asserting plain SystemExit and NOT the subclass. (d) RED-PROOF REPRODUCED: I created a worktree at pre-fix base 26b67b1, copied the new tests in, and ran `python -m pytest -k 'serializer_lock or typed_contention or not_the_lock or lock_still'` \u2192 `7 failed, 338 deselected` (decisive line: `AttributeError: module 'auger' has no attribute 'SubstrateLockContended'` at tests/test_auger.py:2617); same selection at HEAD \u2192 `7 passed, 338 deselected in 0.09s`. (e) No-competing-writer gate: prior tier1 run at HEAD exited 0 with `883 passed, 3 skipped in 1055.60s`, `LIVE ARMS: ran 2; skipped 0`, `GATE PASS` \u2014 same executed count (886) and both live arms ran; my own focused run of the 7 new tests passed in 0.09s. (f) Summary attribution surface: tests/gate.sh:294 runs the pytest arm with `-ra`, so every skip reason (which embeds AUG-209 + SERIALIZER_LOCKED + the namespace, conftest.py:108-110) prints in the gate log instead of an unattributed ERROR count."
+    },
+    {
+      "criterion": "The committed mapping tests are genuinely red against the pre-fix tree, not just claimed red in a docstring",
+      "status": "PASS",
+      "detail": "Reproduced, not trusted: worktree at 26b67b1 (git worktree add /tmp/aug209-prefix 26b67b1) plus the d499323 test file \u2192 `7 failed, 338 deselected in 2.64s` with `AttributeError: module 'auger' has no attribute 'SubstrateLockContended'`; identical selection at HEAD \u2192 `7 passed, 338 deselected in 0.09s`.",
+      "derived": true
+    },
+    {
+      "criterion": "The gate/pytest summary actually surfaces lock-attributed skips (reachability of the attribution line into the log a human reads)",
+      "status": "PASS",
+      "detail": "tests/gate.sh:294 `run_pytest_arm -q -ra` \u2014 the -ra flag makes pytest print the short summary with each skip's reason, and that reason carries 'AUG-209', 'SERIALIZER_LOCKED' and the namespace (tests/conftest.py:108-110), asserted by test_run_cli_converts_the_typed_contention_into_a_named_skip (tests/test_auger.py:2634-2665).",
+      "derived": true
+    },
+    {
+      "criterion": "Back-compat: composite `except SystemExit` write paths keep pre-fix behaviour when the typed contention fires",
+      "status": "PASS",
+      "detail": "SubstrateLockContended subclasses SystemExit (auger.py:840), so all 25 `except SystemExit` sites still catch it \u2014 e.g. patch_or_rewrite's rewrite/restore ladder (auger.py:955, 969, 976) folds the contention message into its refusal text and still restores the row; the serve layer's 404/502 folding (auger.py:7523, 7543) is unchanged. The pre-existing pinned behaviour test test_a_refused_advance_warns_once_and_costs_nothing (tests/test_auger.py:9603) ran green inside the tier1 full gate (883 passed, exit 0).",
+      "derived": true
+    },
+    {
+      "criterion": "Fixture seam reachability: a lock landing in fixture setup (ns/project/decided) converts to a skip rather than aborting setup",
+      "status": "PASS",
+      "detail": "The ns, project and decided fixtures all execute verbs through run_cli (tests/conftest.py:974, 993, 1030), and run_cli (tests/conftest.py:92-111) converts SubstrateLockContended into pytest.skip regardless of whether it fires during fixture setup or the test body \u2014 pytest then marks each dependent test skipped, not ERROR-at-setup.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "no_concerns_found",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nsecrets: gitleaks bound=timeout 600s (0=off)\nscanners: nice=nice -n 10\nsecrets: gitleaks scope=repo-root /home/kara/auger\nsecrets: gitleaks parallelism=GOMAXPROCS=4\n10:20AM INF scanned ~8635502 bytes (8.64 MB) in 2.32s\n10:20AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 1078 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\ngate pytest interpreter: /home/kara/auger/.venv/bin/python\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [  8%]\n........................................................................ [ 16%]\n........................................................................ [ 24%]\n........................................................................ [ 32%]\n....................................s.....................................................s................................. [ 46%]\n........................................................................ [ 54%]\n.................................................................................................. [ 65%]\n........................................................................ [ 73%]\n........................................................................ [ 81%]\n........................................................................ [ 90%]\n...............................................................s........ [ 98%]\n................                                                         [100%]\n883 passed, 3 skipped in 1055.60s (0:17:35)\n== wrapper regression (AUG-081) ==\ngate prerequisite preflight: PASS\nAUG-116: zombie pid 3791013 classified dead (kill -0 alone would have said alive)\nAUG-081 wrapper regression: PASS\nAUG-130 skipped-arm policy: PASS\nAUG-189 interpreter selection: PASS\nAUG-191 explicit docs-over-code range: PASS\nAUG-191 merge-base docs-over-code range: PASS\nAUG-191 explicit docs-only range: PASS\nAUG-191 empty and equal-origin ranges: PASS\n== end-to-end smoke ==\nnamespace: auger-smoke-3825019\nno stale auger-smoke-*/auger-eval-*/auger-pytest-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n  PASS retrieval returned neighbours\n  PASS JEV confirms the question is answered\n\n\u2026 [1201 chars omitted \u2014 27 line(s)] \u2026\nspec: 522 document(s), 7314 block(s), 0 reference(s) ok\n== prd proofs (AUG-137) ==\nprd proofs: 8 total \u00b7 3 required \u00b7 5 deferred \u2192 PASS\n   P1  deferred not-run   not-run (deferred to AUG-119): auger.py carries no board surface (grep -c boardctl auger.py -> 0): resolving a\n   P2  required pass      corpus=9249B bundle=8131B latency=29.0ms  2 generated view(s) verified byte-identical to the generator's output for specs/; one block edit propagated to\n   P3  deferred not-run   not-run (deferred to AUG-153): the checker half is reachable (`auger spec check --diff-file` reports `trace-mi\n   P4  deferred not-run   not-run (deferred to AUG-119): writing and reading back a canonical boardctl row is boardctl's surface, not au\n   P5  required pass      corpus=1084B bundle=435B latency=1476.5ms  one query returned migration=tests/fixtures/xml/verification/migrations/001_add_marker.sql, fixture=tests/fixt\n   P6  deferred not-run   not-run (deferred to AUG-124): what counts as judge evidence \u2014 excluding the worker summary, refusing a PASS w\n   P7  required pass      corpus=9249B bundle=2944B latency=258.6ms  4/12 blocks selected by `applies-to auger.spec.select`; bundle is 31.8% of the corpus (2944 of 9249 bytes), fl\n   P8  deferred not-run   not-run (deferred to AUG-153): the flag and the process-liveness assertion live in the GitReins hook, which no\nprd-proofs: /home/kara/auger/docs/prd/evidence/AUG-137-prd-proofs.json agrees with this run\n== docs check ==\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 A 503 whose body carries code SERIALIZER_LOCKED on a live write is classified as environment contention: auger.py raises a typed SubstrateLockContended (SystemExit subclass) from insert/patch/delete_row/insert_decision/insert_edge and the pytest harness converts it into an attributed skip naming the lock and namespace, instead of SystemExit aborting fixture setup; every other 503 (auth, validation, unknown or missing code, non-dict body) and a non-503 status carrying the lock code still fails loudly as plain SystemExit, asserted by committed mapping tests red-proven against the pre-fix tree; with no competing writer the full gate ends GATE PASS with the same test count and live arms ran; the pytest summary attributes the skipped tests to the lock rather than collapsing one environment fault into a battery-wide error count.: (a) Classifier `_lock_contention` (auger.py:832-845) returns a message only for status==503 AND dict body AND code.upper()==SERIALIZER_LOCKED; `class SubstrateLockContended(SystemExit)` at auger.py:840; typed raises wired into insert (auger.py:868), patch (880), delete_row (1001), insert_edge (1313), insert_decision (5275). (b) Harness seam tests/conftest.py:105-110 catches only SubstrateLockContended and pytest.skip()s with 'substrate write contention (503 SERIALIZER_LOCKED, AUG-209): {exc}' \u2014 exc names the locked namespace; every other SystemExit propagates. (c) Mapping tests in tests/test_auger.py:2536-2586 assert all five verbs raise exactly SubstrateLockContended, isinstance SystemExit, message carries '503', 'auger-pytest-x', 'competing writer'; tests at 2588-2617 parametrize auth/validation/no-code/unknown-code/non-dict 503 bodies and 2623-2631 a 500 carrying the lock code, each asserting plain SystemExit and NOT the subclass. (d) RED-PROOF REPRODUCED: I created a worktree at pre-fix base 26b67b1, copied the new tests in, and ran `python -m pytest -k 'serializer_lock or typed_contention or not_the_lock or lock_still'` \u2192 `7 failed, 338 deselected` (decisive line: `AttributeError: module 'auger' has no attribute 'SubstrateLockContended'` at tests/test_auger.py:2617); same selection at HEAD \u2192 `7 passed, 338 deselected in 0.09s`. (e) No-competing-writer gate: prior tier1 run at HEAD exited 0 with `883 passed, 3 skipped in 1055.60s`, `LIVE ARMS: ran 2; skipped 0`, `GATE PASS` \u2014 same executed count (886) and both live arms ran; my own focused run of the 7 new tests passed in 0.09s. (f) Summary attribution surface: tests/gate.sh:294 runs the pytest arm with `-ra`, so every skip reason (which embeds AUG-209 + SERIALIZER_LOCKED + the namespace, conftest.py:108-110) prints in the gate log instead of an unattributed ERROR count.\n  \u2713 The committed mapping tests are genuinely red against the pre-fix tree, not just claimed red in a docstring: Reproduced, not trusted: worktree at 26b67b1 (git worktree add /tmp/aug209-prefix 26b67b1) plus the d499323 test file \u2192 `7 failed, 338 deselected in 2.64s` with `AttributeError: module 'auger' has no attribute 'SubstrateLockContended'`; identical selection at HEAD \u2192 `7 passed, 338 deselected in 0.09s`.\n  \u2713 The gate/pytest summary actually surfaces lock-attributed skips (reachability of the attribution line into the log a human reads): tests/gate.sh:294 `run_pytest_arm -q -ra` \u2014 the -ra flag makes pytest print the short summary with each skip's reason, and that reason carries 'AUG-209', 'SERIALIZER_LOCKED' and the namespace (tests/conftest.py:108-110), asserted by test_run_cli_converts_the_typed_contention_into_a_named_skip (tests/test_auger.py:2634-2665).\n  \u2713 Back-compat: composite `except SystemExit` write paths keep pre-fix behaviour when the typed contention fires: SubstrateLockContended subclasses SystemExit (auger.py:840), so all 25 `except SystemExit` sites still catch it \u2014 e.g. patch_or_rewrite's rewrite/restore ladder (auger.py:955, 969, 976) folds the contention message into its refusal text and still restores the row; the serve layer's 404/502 folding (auger.py:7523, 7543) is unchanged. The pre-existing pinned behaviour test test_a_refused_advance_warns_once_and_costs_nothing (tests/test_auger.py:9603) ran green inside the tier1 full gate (883 passed, exit 0).\n  \u2713 Fixture seam reachability: a lock landing in fixture setup (ns/project/decided) converts to a skip rather than aborting setup: The ns, project and decided fixtures all execute verbs through run_cli (tests/conftest.py:974, 993, 1030), and run_cli (tests/conftest.py:92-111) converts SubstrateLockContended into pytest.skip regardless of whether it fires during fixture setup or the test body \u2014 pytest then marks each dependent test skipped, not ERROR-at-setup.\nThe one given criterion passes end-to-end with reproduced red-proof (7 failed on pre-fix base 26b67b1, 7 passed at HEAD), typed raises verified in all five write verbs, loud-path non-downgrade asserted for every other 503 shape plus a 500-with-lock-code, harness conversion into lock-attributed skips wired through the same seam the ns/project/decided fixtures use, and the un-contended full gate green at HEAD with 883 passed/3 skipped, 2 live arms ran, GATE PASS. [uncovered failure paths: failure mode 0 (run_cli_exit (the refusing-verb harness) still treats the typed contention as an expected plain SystemExit, so a lock landing exactly on a test that asserts a refusal is swallowed as a pass of that refusal instead of an attributed skip): detected_by is empty \u2014 uncovered failure path; failure mode 1 (a chronic lock storm converts many fixture-dependent tests into attributed skips while pytest exits 0 \u2014 the gate log shows the reasons (via -ra) but nothing bounds the skip count, so a persistently locked substrate could read as a green battery): detected_by is empty \u2014 uncovered failure path]",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n\n\u2026 [4667 chars omitted \u2014 5 line(s)] \u2026\nThe one given criterion passes end-to-end with reproduced red-proof (7 failed on pre-fix base 26b67b1, 7 passed at HEAD), typed raises verified in all five write verbs, loud-path non-downgrade asserted for every other 503 shape plus a 500-with-lock-code, harness conversion into lock-attributed skips wired through the same seam the ns/project/decided fixtures use, and the un-contended full gate green at HEAD with 883 passed/3 skipped, 2 live arms ran, GATE PASS. [uncovered failure paths: failure mode 0 (run_cli_exit (the refusing-verb harness) still treats the typed contention as an expected plain SystemExit, so a lock landing exactly on a test that asserts a refusal is swallowed as a pass of that refusal instead of an attributed skip): detected_by is empty \u2014 uncovered failure path; failure mode 1 (a chronic lock storm converts many fixture-dependent tests into attributed skips while pytest exits 0 \u2014 the gate log shows the reasons (via -ra) but nothing bounds the skip count, so a persistently locked substrate could read as a green battery): detected_by is empty \u2014 uncovered failure path]",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "A 503 whose body carries code SERIALIZER_LOCKED on a live write is classified as environment contention: auger.py raises a typed SubstrateLockContended (SystemExit subclass) from insert/patch/delete_row/insert_decision/insert_edge and the pytest harness converts it into an attributed skip naming the lock and namespace, instead of SystemExit aborting fixture setup; every other 503 (auth, validation, unknown or missing code, non-dict body) and a non-503 status carrying the lock code still fails loudly as plain SystemExit, asserted by committed mapping tests red-proven against the pre-fix tree; with no competing writer the full gate ends GATE PASS with the same test count and live arms ran; the pytest summary attributes the skipped tests to the lock rather than collapsing one environment fault into a battery-wide error count.",
+                "status": "PASS",
+                "detail": "(a) Classifier `_lock_contention` (auger.py:832-845) returns a message only for status==503 AND dict body AND code.upper()==SERIALIZER_LOCKED; `class SubstrateLockContended(SystemExit)` at auger.py:840; typed raises wired into insert (auger.py:868), patch (880), delete_row (1001), insert_edge (1313), insert_decision (5275). (b) Harness seam tests/conftest.py:105-110 catches only SubstrateLockContended and pytest.skip()s with 'substrate write contention (503 SERIALIZER_LOCKED, AUG-209): {exc}' \u2014 exc names the locked namespace; every other SystemExit propagates. (c) Mapping tests in tests/test_auger.py:2536-2586 assert all five verbs raise exactly SubstrateLockContended, isinstance SystemExit, message carries '503', 'auger-pytest-x', 'competing writer'; tests at 2588-2617 parametrize auth/validation/no-code/unknown-code/non-dict 503 bodies and 2623-2631 a 500 carrying the lock code, each asserting plain SystemExit and NOT the subclass. (d) RED-PROOF REPRODUCED: I created a worktree at pre-fix base 26b67b1, copied the new tests in, and ran `python -m pytest -k 'serializer_lock or typed_contention or not_the_lock or lock_still'` \u2192 `7 failed, 338 deselected` (decisive line: `AttributeError: module 'auger' has no attribute 'SubstrateLockContended'` at tests/test_auger.py:2617); same selection at HEAD \u2192 `7 passed, 338 deselected in 0.09s`. (e) No-competing-writer gate: prior tier1 run at HEAD exited 0 with `883 passed, 3 skipped in 1055.60s`, `LIVE ARMS: ran 2; skipped 0`, `GATE PASS` \u2014 same executed count (886) and both live arms ran; my own focused run of the 7 new tests passed in 0.09s. (f) Summary attribution surface: tests/gate.sh:294 runs the pytest arm with `-ra`, so every skip reason (which embeds AUG-209 + SERIALIZER_LOCKED + the namespace, conftest.py:108-110) prints in the gate log instead of an unattributed ERROR count."
+              },
+              {
+                "criterion": "The committed mapping tests are genuinely red against the pre-fix tree, not just claimed red in a docstring",
+                "status": "PASS",
+                "detail": "Reproduced, not trusted: worktree at 26b67b1 (git worktree add /tmp/aug209-prefix 26b67b1) plus the d499323 test file \u2192 `7 failed, 338 deselected in 2.64s` with `AttributeError: module 'auger' has no attribute 'SubstrateLockContended'`; identical selection at HEAD \u2192 `7 passed, 338 deselected in 0.09s`.",
+                "derived": true
+              },
+              {
+                "criterion": "The gate/pytest summary actually surfaces lock-attributed skips (reachability of the attribution line into the log a human reads)",
+                "status": "PASS",
+                "detail": "tests/gate.sh:294 `run_pytest_arm -q -ra` \u2014 the -ra flag makes pytest print the short summary with each skip's reason, and that reason carries 'AUG-209', 'SERIALIZER_LOCKED' and the namespace (tests/conftest.py:108-110), asserted by test_run_cli_converts_the_typed_contention_into_a_named_skip (tests/test_auger.py:2634-2665).",
+                "derived": true
+              },
+              {
+                "criterion": "Back-compat: composite `except SystemExit` write paths keep pre-fix behaviour when the typed contention fires",
+                "status": "PASS",
+                "detail": "SubstrateLockContended subclasses SystemExit (auger.py:840), so all 25 `except SystemExit` sites still catch it \u2014 e.g. patch_or_rewrite's rewrite/restore ladder (auger.py:955, 969, 976) folds the contention message into its refusal text and still restores the row; the serve layer's 404/502 folding (auger.py:7523, 7543) is unchanged. The pre-existing pinned behaviour test test_a_refused_advance_warns_once_and_costs_nothing (tests/test_auger.py:9603) ran green inside the tier1 full gate (883 passed, exit 0).",
+                "derived": true
+              },
+              {
+                "criterion": "Fixture seam reachability: a lock landing in fixture setup (ns/project/decided) converts to a skip rather than aborting setup",
+                "status": "PASS",
+                "detail": "The ns, project and decided fixtures all execute verbs through run_cli (tests/conftest.py:974, 993, 1030), and run_cli (tests/conftest.py:92-111) converts SubstrateLockContended into pytest.skip regardless of whether it fires during fixture setup or the test body \u2014 pytest then marks each dependent test skipped, not ERROR-at-setup.",
+                "derived": true
+              }
+            ],
+            "summary": "The one given criterion passes end-to-end with reproduced red-proof (7 failed on pre-fix base 26b67b1, 7 passed at HEAD), typed raises verified in all five write verbs, loud-path non-downgrade asserted for every other 503 shape plus a 500-with-lock-code, harness conversion into lock-attributed skips wired through the same seam the ns/project/decided fixtures use, and the un-contended full gate green at HEAD with 883 passed/3 skipped, 2 live arms ran, GATE PASS. [uncovered failure paths: failure mode 0 (run_cli_exit (the refusing-verb harness) still treats the typed contention as an expected plain SystemExit, so a lock landing exactly on a test that asserts a refusal is swallowed as a pass of that refusal instead of an attributed skip): detected_by is empty \u2014 uncovered failure path; failure mode 1 (a chronic lock storm converts many fixture-dependent tests into attributed skips while pytest exits 0 \u2014 the gate log shows the reasons (via -ra) but nothing bounds the skip count, so a persistently locked substrate could read as a green battery): detected_by is empty \u2014 uncovered failure path]",
+            "provenance": {
+              "model": "glm-5.3-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            },
+            "context_stats": {
+              "diff_source": "working-tree",
+              "diff_bytes": 1423,
+              "prompt_bytes": 17882
+            }
+          }
+        }
+      ],
+      "model": "glm-5.3-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "context_stats": {
+        "diff_source": "working-tree",
+        "diff_bytes": 1423,
+        "prompt_bytes": 17882
+      },
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-209\"}",
+          "exit_code": 0,
+          "output_sha": "cb4d8775f72cf1bf7a099bd48c92c39cb70f6505d87368052b7fa2445802e656"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git log --oneline -8 && git status --short | head -20 && ls",
+          "exit_code": 0,
+          "output_sha": "013696164decf7ed0525c9ed7963529c3e1316ce12aa52a4cdd328a9a780fab1"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"regex\": \"SubstrateLockContended\"}",
+          "exit_code": 0,
+          "output_sha": "b54fc5e4f6840ff9b4a1185b21102b8ee0c43561fbbcc65a09a78b3bf30b1721"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 200, \"offset\": 820, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "b075f54b3279b41f316567d411b0331928a537b6091575f7b16d315e09a4b89e"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 40, \"offset\": 795, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "2be06665160de5e0c72d46cef8c742f7caa46f804ae85bd2ac3243a6f61bb5f1"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 80, \"offset\": 1260, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "6c7f38c86720d1ffabcb7a759d6754c6d7549a95a8ecc7a0d8896d56f4356c4f"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"regex\": \"def insert_decision\"}",
+          "exit_code": 0,
+          "output_sha": "406c62874377fc8f820fa3324dbde357defd94d75a2dc8da857d1d12c869ea12"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 60, \"offset\": 5230, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "617993da63c5981f5339d7eea1435f32514865dddf0748495c056f4b5dc7bcad"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 170, \"offset\": 60, \"path\": \"tests/conftest.py\"}",
+          "exit_code": 0,
+          "output_sha": "c8d24b80305dd9cb71fe345e04a45aa064597675d9893f04c15fb9568079013b"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"tests/conftest.py\", \"regex\": \"SubstrateLockContended|pytest\\\\.skip|skipped|reason=\"}",
+          "exit_code": 0,
+          "output_sha": "79af84b4e83dc719e15cc3f0a708177b90c4d1a2ef8c62f336e4c19a8ed9a798"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && sed -n 2520,2700p tests/test_auger.py",
+          "exit_code": 0,
+          "output_sha": "806cd7124bdb2257b9c91e09234fae134d33269969209659e52260be11bb75e2"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && awk 'NR>=2560 && NR<=2670' tests/test_auger.py",
+          "exit_code": 0,
+          "output_sha": "8cba5783269023d5d4c5a24f54c3ce398bd70f88f9c9f7beede9b2ede693ce54"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && awk 'NR>=2625 && NR<=2660' tests/test_auger.py && grep -n \"_substrate\" tests/test_auger.py | head -5",
+          "exit_code": 0,
+          "output_sha": "34e12acc5ebf5d3c5d316f1ea35ba002795816a7eaeee1522873f6dc6b4f68ac"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && awk 'NR>=2480 && NR<=2520' tests/test_auger.py",
+          "exit_code": 0,
+          "output_sha": "03a5026aff3409bbcd959deabde7093d8d1d3334815b871e4b4e34b11fe56f94"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"AUG-209 review state:\\n- auger.py:832-860 `_lock_contention(status, body)` -> returns message only for status==503 AND dict body AND code.upper()==SERIALIZER_LOCKED. All other 503s (auth, validation, no code, unknown code, non-dict) return None.\\n- auger.py:840 SubstrateLockContended(SystemExit) subclass.\\n- Call sites: insert (~862), patch (~876), delete_row (~992), insert_decision (~5273), insert_edge (~1310). All 5 verbs raise typed when contended, plain SystemExit otherwise.\\n- tests/conftest.py:87-111 run_cli catches auger.SubstrateLockContended -> pytest.skip(\\\"substrate write contention (503 SERIALIZER_LOCKED, AUG-209): {exc}\\\") \\u2014 names lock + namespace via exc message. Other SystemExit propagates.\\n- tests/test_auger.py:2525-2665 mapping tests: typed mapping for 5 verbs (asserts exact class, SystemExit subclass, msg contains 503, namespace, competing writer); 5 param'd loud-fail 503 bodies (auth/validation/no-code/unknown-code/non-dict) assert plain SystemExit and NOT SubstrateLockContended; non-503 status with lock body (500) -> loud SystemExit; run_cli harness conversion test asserting skip reason has AUG-209 + SERIALIZER_LOCKED + namespace and plain SystemExit still propagates.\\n- Docsstrings of mapping tests claim \\\"Red-proven against the pre-fix code (2026-11-25): before the classification, every verb here raised the plain SystemExit for this body and the class assert failed.\\\" Need evidence of red-proof: check git history/evidence dir.\", \"key\": \"progress\"}",
+          "exit_code": 0,
+          "output_sha": "dc15ace2112d1e43b8e12c2519d5a14e945f4eee281c79b34f98dcbe59bf0032"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && ls evidence/ 2>/dev/null | head -30; ls evidence/AUG-209* 2>/dev/null; git show d499323 --stat",
+          "exit_code": 0,
+          "output_sha": "40fb1cbeae9d578a662afe59e733ffc701c288cd4bf268cb1c27fbb45af504ac"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"run_cli(\" tests/conftest.py | head -30 && grep -n \"def .*fixture\\|@pytest.fixture\" tests/conftest.py | head -40",
+          "exit_code": 0,
+          "output_sha": "81f2fd94b109b1bd86670989bca0bb95dd8008c3ef05b42630f1fda2e5d0c282"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && .venv/bin/python -m pytest tests/test_auger.py -q -k \"serializer_lock or typed_contention or not_the_lock or lock_still\" 2>&1 | tail -15",
+          "exit_code": 0,
+          "output_sha": "49ec2c361f703b4a010d9697213c3506d4b27e7f4b0994d5d9bd0496accf5b6c"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && awk 'NR>=855 && NR<=1055' tests/conftest.py",
+          "exit_code": 0,
+          "output_sha": "40e8b65eef43151600e844e3045c4094aac797bb8fd944403de930d963da2b37"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && awk 'NR>=960 && NR<=1045' tests/conftest.py",
+          "exit_code": 0,
+          "output_sha": "cf31b427bc1f72a22de3c17ab41023aab0c253048ebd96377198953b80b202bd"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && cat pytest.ini && grep -n \"pytest\\|-ra\\|short summary\" tests/gate.sh | head -20",
+          "exit_code": 0,
+          "output_sha": "0717ae0f73e7e34a3528c0fe024961f8dd61ad0f3079d2c0c52f19c741320544"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git worktree add /tmp/aug209-prefix 26b67b1 2>&1 | tail -2 && cp tests/test_auger.py tests/conftest.py /tmp/aug209-prefix/tests/ && echo COPIED",
+          "exit_code": 0,
+          "output_sha": "a0b160a2fbe9baddbaa359a2bbf6bb6941d9f591969908bc4cc962ace12dd72c"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug209-prefix && cp /home/kara/auger/pytest.ini . && /home/kara/auger/.venv/bin/python -m pytest tests/test_auger.py -q -k \"serializer_lock or typed_contention or not_the_lock or lock_still\" -p no:cacheprovider 2>&1 | tail -8",
+          "exit_code": 0,
+          "output_sha": "238716ec5fc6457a616e1f85f28ef25b6ee1a2e2a99dc3bdb8d9e03199fab532"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/aug209-prefix && /home/kara/auger/.venv/bin/python -m pytest \"tests/test_auger.py::test_a_503_that_is_not_the_lock_still_fails_loudly\" -q -k auth -p no:cacheprovider 2>&1 | grep -E \"Error|assert|raise\" | head -6; cd /home/kara/auger && git worktree remove --force /tmp/aug209-prefix && echo WORKTREE-REMOVED",
+          "exit_code": 0,
+          "output_sha": "1e4cbb857c850af6da9bb39c53a722d17c0ebc00f333eafa6d468063a2688400"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && .venv/bin/python -m pytest tests/ -q -k \"(lock or contention or serializer) and not live\" --collect-only 2>/dev/null | tail -20; grep -rn \"test_teardown_resilience\\|test_smoke_teardown\" tests/*.py | grep -in \"lock\\|contend\" | head",
+          "exit_code": 0,
+          "output_sha": "81e6bd3513e2324228c65eeacb58141421e35ac6d2a2835b95c92da81639041f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && .venv/bin/python -m pytest tests/test_substrate_hygiene.py -q -k \"lock or contend\" -p no:cacheprovider 2>&1 | tail -6 && grep -n \"def test_\" tests/test_substrate_hygiene.py | head -20",
+          "exit_code": 0,
+          "output_sha": "f294bf1731582f8058a2591582ffb568494e9d21664467f9611d7d2b4e8b2e91"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && awk 'NR>=125 && NR<=140' tests/test_substrate_hygiene.py",
+          "exit_code": 0,
+          "output_sha": "35ebdfa31a21ce70eb6900cbcf6afe0e41013b6b678d719fb8e54a8ba4173b11"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"tests/conftest.py\", \"regex\": \"ENV_CONTENTION_PREFIX|teardown_contention_only|substrate_lock\\\\(\"}",
+          "exit_code": 0,
+          "output_sha": "3eb032ba766a645e0c30dd7c80ef85205ef583734078329a527b5c5e6a168d26"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && sed -n 1,80p tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "61353efde1711ae0d5f6779502fbd22aade8c4306c893c5bb346c33cf30f1a83"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && awk 'NR>=280 && NR<=320' tests/conftest.py && awk 'NR>=360 && NR<=420' tests/conftest.py",
+          "exit_code": 0,
+          "output_sha": "71d0ac51be7da28cc2cd46a2d14e6ba81aa69adb6a5c5801e143c77add593cf8"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && awk 'NR>=108 && NR<=135' tests/gate.sh && grep -n \"SKIPPED\\|LIVE ARMS\\|GATE PASS\\|short summary\\|-ra \" tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "8576e776c450d2361483bb3655116b5a741311b656eeba3748fc3ebd27ebeab1"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git log --all --oneline --grep=\"red\" -i | head -20; ls .gitreins/history/ 2>/dev/null | grep -i \"2026-11-25\" | head; find .gitreins/history -name \"*AUG-209*\" 2>/dev/null | head -20",
+          "exit_code": 0,
+          "output_sha": "76177cfccb2a89253b0ec1cd25b6a780b473f296d7829c9fd4a37689aec2af90"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && ls .gitreins/history/2026-11-25/ && find .gitreins/history/2026-11-25 -type f | head -30",
+          "exit_code": 0,
+          "output_sha": "844ecce7388680523a0cc57686ef78d5400a7643981708166a8646f5c1f8117f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && for d in 0f8a60b3 5d005479 e0f06ebc cc32ff40; do echo \"== $d ==\"; .venv/bin/python -c \"import json;d=json.load(open('.gitreins/history/2026-11-25/$d/verdict.json'));print(d.get('task_id') or d.get('taskId'), '|', d.get('verdict'), '|', d.get('summary','')[:200])\" 2>&1; done",
+          "exit_code": 0,
+          "output_sha": "c274b5371a0ebac59db05a7c25e1b30cb9a542c4d796e8e7c6ccaa329eb37aae"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -rn \"72\\b.*setup\\|setup.*72\\|72 tests\" .gitreins/history/2026-11-25/*/summary.md 2>/dev/null | head; grep -c \"ERROR\" .gitreins/history/2026-11-25/e0f06ebc/summary.md 2>/dev/null; grep -n \"ERROR at setup\\|error at setup\\|SubstrateLockContended\\|SERIALIZER_LOCKED\" .gitreins/history/2026-11-25/*/summary.md | head -10",
+          "exit_code": 0,
+          "output_sha": "ef4042807e281a5e12effbbccbb42e00c874eec6f68240d1f764588953f010d1"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -rn \"AUG-209\\|SERIALIZER_LOCKED\" --include=\"*.md\" .gitreins/ 2>/dev/null | grep -vi \"tasks.yaml\\|rescued\" | head -20",
+          "exit_code": 0,
+          "output_sha": "93cf1de56024900f63f9ab6ffefd254ecf0d36f19233d18b8130b16ad8a5cb0a"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git log --format=\"%H %s\" -20 --all -- tests/test_auger.py | head -20 && git show 26b67b1 --stat | head -10 && git log 26b67b1..d499323 --oneline",
+          "exit_code": 0,
+          "output_sha": "5518879f637a6399e2b7536855c3676ff549c74991f0b269acd283160f00ee15"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show d499323 -- tests/test_auger.py | awk 'NR>=1 && NR<=60' && git show d499323 --stat --format=\"\" | tail -4",
+          "exit_code": 0,
+          "output_sha": "2b480c8db06e5fd95c3809b6e4a5ff504cdd9f363dbb12c1cfb4d465e488248d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"LIVE_ARMS_RAN\\|live arms\\|live_arm\" tests/gate.sh | head -20 && awk 'NR>=400 && NR<=478' tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "682af47c9a21e3f79c836e673238a4368db3013af7881ef6d37562ca8ea79284"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && .venv/bin/python -m pytest tests/ -q -p no:cacheprovider --collect-only 2>/dev/null | tail -2 && grep -n \"require_live\\|live_service\" tests/test_auger.py | head -8",
+          "exit_code": 0,
+          "output_sha": "369737d04dbd0665e3f275db6b4ea936c91c60a233e400a8e7945e35e1d6bc60"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Progress update 2:\\n- RED-PROOF REPRODUCED: worktree at pre-fix base 26b67b1 + the 7 new mapping tests copied in => `7 failed, 338 deselected` (all 7 AUG-209 tests red on pre-fix tree; AttributeError: module 'auger' has no attribute 'SubstrateLockContended'). Post-fix same selection: 7 passed in 0.09s. Red-proof requirement satisfied by reproduction, not just docstring claim.\\n- Gate battery total at HEAD: 916 collected (tier1 run: 883 passed + 3 skipped = 886 executed + 30 hermetic-file skips? note: tier1 ran a named file list; full tests/ collect = 916). Battery has offline+live arms; live tests keyed on live_service fixture.\\n- tests/gate.sh: `-ra` flag at line 294 (run_pytest_arm -q -ra) => pytest prints short summary with skip reasons => attributed skips surface in gate log. LIVE ARMS ran/skipped counters at 450. GATE PASS semantics: required-arm skip => GATE FAIL unless AUGER_ALLOW_SKIPPED_ARMS=1.\\n- Prior tier1 tests stage output: 883 passed, 3 skipped, ends \\\"LIVE ARMS: ran 2; skipped 0\\\" + \\\"GATE PASS\\\" => same test count (886 executed: 883+3) and live arms ran; no battery-wide error count. The 3 skips are the pre-existing heredoc/env skips visible in prior runs; no lock skips occurred because no competing writer ran.\\n- Un-contended path verified live: full gate at HEAD green (prior stage evidence, exit 0, GATE PASS).\\n- Still to verify: pytest summary attribution detail (skip reason text includes AUG-209 + SERIALIZER_LOCKED + ns) \\u2014 covered by test_run_cli_converts_the_typed_contention_into_a_named_skip assertions; also confirmed skip text at conftest.py:108-110. Composite `except SystemExit` back-compat: SubstrateLockContended subclasses SystemExit so patch_or_rewrite/_rewrite_row_via_pk keeps behaviour; existing test test_a_refused_advance_warns_once_and_costs_nothing still in tree and passing in tier1 run.\", \"key\": \"progress\"}",
+          "exit_code": 0,
+          "output_sha": "f952f2c3ec83dc217dc78c8264386ff0807fcf9a46e2201b61d41e55198fc926"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && .venv/bin/python -m pytest tests/test_auger.py -q -k \"refused_advance\" -p no:cacheprovider 2>&1 | tail -3 && grep -rn \"except SystemExit\" auger.py | wc -l && awk '/def cmd_answer|def advance_domain_status/,0' auger.py | grep -n \"except SystemExit\" | head -5",
+          "exit_code": 0,
+          "output_sha": "fb3127954f642a8db90711b2589dd147f43a78a599048a809ad550727e61e797"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && .venv/bin/python -m pytest tests/test_auger.py::test_a_refused_advance_warns_once_and_costs_nothing -q -p no:cacheprovider 2>&1 | grep -E \"SKIP|skip|reason\" | head -5; grep -n \"def test_a_refused_advance_warns_once\" tests/test_auger.py",
+          "exit_code": 0,
+          "output_sha": "a7da591b3d016f80cb25dbc2b3b8bb0fe9cef710e9c505c220a002f3a5067741"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"except SystemExit\" auger.py | head -30 && awk 'NR>=10230 && NR<=10330' auger.py | grep -n \"except SystemExit\" ",
+          "exit_code": 1,
+          "output_sha": "28126e9246ef1f30048fb5636f10c85b63f3cb47b391ab0c4529928916f98abc"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && awk 'NR>=7515 && NR<=7560' auger.py && awk 'NR>=13615 && NR<=13630' auger.py",
+          "exit_code": 0,
+          "output_sha": "eae70ceedb1d29cb8ab77a72809a335e5f25af49f2d62ca18be073734589012b"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Progress update 3 (final evidence set):\\n- Back-compat: SubstrateLockContended subclasses SystemExit (auger.py:840). 25 `except SystemExit` sites in auger.py keep catching the typed case; e.g. auger.py:955-986 (_rewrite_row_via_pk restores row), 4261-4275, 7523/7543 (serve path folds SystemExit into APIError). test_a_refused_advance_warns_once_and_costs_nothing (tests/test_auger.py:9603) still in tree; skipped only because ambient AUGER_BLOCKED_BY (fleet push) blocked the live arm in MY focused run \\u2014 in the prior tier1 FULL gate it ran live (883 passed) \\u2014 that is the no-competing-writer no-behaviour-change proof.\\n- The pytest arm runs `run_pytest_arm -q -ra` (tests/gate.sh:294) => -ra prints the skip summary with each skip reason => lock-attributed skips are visible in the gate log with their reason text (conftest.py:108-110 embeds \\\"substrate write contention (503 SERIALIZER_LOCKED, AUG-209): <exc>\\\" where exc names ns). So \\\"the pytest summary attributes the skipped tests to the lock\\\" holds on the summary surface the gate already prints.\\n- Prior tier1 run: 883 passed, 3 skipped (same as expected count), LIVE ARMS ran 2; skipped 0, GATE PASS => \\\"no competing writer => full gate GATE PASS with same test count and live arms ran\\\" verified with real command output.\\n- All 5 verbs typed: insert (auger.py:862-871), patch (876-885), delete_row (992-1001), insert_decision (5275-5277 via raise at 5275), insert_edge (1313).\\n- Mapping tests: tests/test_auger.py:2536-2665: typed for all five verbs + class/SystemExit asserts + msg contains 503/namespace/\\\"competing writer\\\"; 5 param loud 503s + 500-with-lock-code loud; run_cli conversion asserts skip reason has AUG-209+SERIALIZER_LOCKED+auger-pytest-x, plain SystemExit propagates.\\n- Red-proof: reproduced by reviewer: tests copied onto pre-fix base 26b67b1 worktree -> 7 failed (incl. AttributeError no attribute 'SubstrateLockContended'), post-fix -> 7 passed in 0.09s.\\nVerdict forming: single criterion PASS; derived criteria checked: (1) red-proof, (2) summary attribution surface (-ra), (3) back-compat of except SystemExit paths, (4) loud-path non-downgrade coverage incl. non-503 + non-dict bodies. All PASS. No failure modes beyond: contention skip could mask repeated/chronic lock storms as green (bounded: each skip is attributed and -ra prints reasons; acceptable per task intent).\", \"key\": \"progress\"}",
+          "exit_code": 0,
+          "output_sha": "368ac79424201102d08d81c69003b94528379ad11a3157387559cd3b9a05b826"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"auger\\.insert\\|auger\\.patch\\|auger\\.delete_row\\|auger\\.insert_decision\\|auger\\.insert_edge\" tests/conftest.py | head; echo ---; grep -rn \"auger\\.insert(\\|auger\\.patch(\\|auger\\.delete_row(\" tests/test_auger.py | grep -v \"def \\|monkeypatch\\|#\" | head -8",
+          "exit_code": 0,
+          "output_sha": "4b30e2cf58c4c5e27565db48ec0909a4ca4d5a9671797516f2765ce7934e7930"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"VERDICT inputs (final):\\nGiven criterion (1) \\u2014 every clause verified:\\n  a) typed raise from 5 verbs: auger.py:832-845 classifier; 840 class; raises at 868/880 (insert/patch), 1001 (delete_row), 1313 (insert_edge), 5275 (insert_decision). Tests: tests/test_auger.py:2536-2586 -> `7 passed` (0.09s, .venv pytest).\\n  b) harness conversion: tests/conftest.py:105-110 pytest.skip naming lock+ns; asserted by test_run_cli_converts_the_typed_contention_into_a_named_skip (2634-2665).\\n  c) other 503s + non-503 stay plain SystemExit: classifier returns None (837-841); param tests 2588-2617 (auth/validation/no-code/unknown-code/non-dict) + 500-with-lock-code 2623-2631 -> passed.\\n  d) red-proven: reproduced on worktree @26b67b1 + new tests -> `7 failed, 338 deselected` (AttributeError: no attribute 'SubstrateLockContended'); post-fix `7 passed`.\\n  e) no-competing-writer gate: tier1 run 883 passed 3 skipped, LIVE ARMS ran 2; skipped 0, GATE PASS, exit 0.\\n  f) summary attribution: tests/gate.sh:294 `-ra` prints skip reasons.\\nDerived:\\n  derived_0 red-proof reproducible -> PASS (worktree repro outputs).\\n  derived_1 gate summary surface shows attributed skips -> PASS (gate.sh:294 + conftest reason text).\\n  derived_2 back-compat except SystemExit -> PASS (subclass at 840; patch_or_rewrite catches at 955/969/976; serve folds at 7523/7543).\\n  derived_3 fixture seam reachability -> PASS (ns/project/decided fixtures all go through run_cli: conftest.py:974, 993, 1030; run_cli:92-111 converts setup-phase contention to skip).\\nFailure modes: (1) run_cli_exit (conftest.py:113) pytest.raises(SystemExit) swallows typed contention as expected refusal in deliberately-refusing tests; (2) chronic lock storm => many attributed skips, pytest rc stays 0 (gate prints them via -ra but no committed test bounds skip counts).\", \"key\": \"final_verdict_inputs\"}",
+          "exit_code": 0,
+          "output_sha": "38b7740e80e7bf3769a67b09b35e82860e3241c9483ea937ca5c10c458dcfe04"
+        }
+      ]
+    },
+    "fix_verification": {
+      "id": "fix_verification",
+      "passed": true,
+      "any_failed": false,
+      "summary": "fix_verification: 0 finding(s) verified",
+      "steps": [
+        {
+          "id": "fix_verification",
+          "type": "fix_verification",
+          "passed": true,
+          "output": "fix_verification: 0 finding(s) verified",
+          "error": "",
+          "data": {
+            "dispositions": [],
+            "counts": {}
+          }
+        }
+      ]
+    }
+  },
+  "context_stats": {
+    "diff_source": "working-tree",
+    "diff_bytes": 1423,
+    "prompt_bytes": 17882
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "The diff only appends an in-progress task-tracking entry (AUG-209) to .gitreins/tasks.yaml with no code, tests, or configuration changes, and its structure, timestamp format, and status semantics match the surrounding entries, so no evidenced defect is present.",
+    "review_state": {
+      "emitted": [],
+      "carried": []
+    }
+  },
+  "summary": "Stage tier1: PASS\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 A 503 whose body carries code SERIALIZER_LOCKED on a live write is classified as environment contention: auger.py raises a typed SubstrateLockContended (SystemExit subclass) from insert/patch/delete_row/insert_decision/insert_edge and the pytest harness converts it into an attributed skip naming the lock and namespace, instead of SystemExit aborting fixture setup; every other 503 (auth, validation, unknown or missing code, non-dict body) and a non-503 status carrying the lock code still fails loudly as plain SystemExit, asserted by committed mapping tests red-proven against the pre-fix tree; with no competing writer the full gate ends GATE PASS with the same test count and live arms ran; the pytest summary attributes the skipped tests to the lock rather than collapsing one environment fault into a battery-wide error count.: (a) Classifier `_lock_contention` (auger.py:832-845) returns a message only for status==503 AND dict body AND code.upper()==SERIALIZER_LOCKED; `class SubstrateLockContended(SystemExit)` at auger.py:840; typed raises wired into insert (auger.py:868), patch (880), delete_row (1001), insert_edge (1313), insert_decision (5275). (b) Harness seam tests/conftest.py:105-110 catches only SubstrateLockContended and pytest.skip()s with 'substrate write contention (503 SERIALIZER_LOCKED, AUG-209): {exc}' \u2014 exc names the locked namespace; every other SystemExit propagates. (c) Mapping tests in tests/test_auger.py:2536-2586 assert all five verbs raise exactly SubstrateLockContended, isinstance SystemExit, message carries '503', 'auger-pytest-x', 'competing writer'; tests at 2588-2617 parametrize auth/validation/no-code/unknown-code/non-dict 503 bodies and 2623-2631 a 500 carrying the lock code, each asserting plain SystemExit and NOT the subclass. (d) RED-PROOF REPRODUCED: I created a worktree at pre-fix base 26b67b1, copied the new tests in, and ran `python -m pytest -k 'serializer_lock or typed_contention or not_the_lock or lock_still'` \u2192 `7 failed, 338 deselected` (decisive line: `AttributeError: module 'auger' has no attribute 'SubstrateLockContended'` at tests/test_auger.py:2617); same selection at HEAD \u2192 `7 passed, 338 deselected in 0.09s`. (e) No-competing-writer gate: prior tier1 run at HEAD exited 0 with `883 passed, 3 skipped in 1055.60s`, `LIVE ARMS: ran 2; skipped 0`, `GATE PASS` \u2014 same executed count (886) and both live arms ran; my own focused run of the 7 new tests passed in 0.09s. (f) Summary attribution surface: tests/gate.sh:294 runs the pytest arm with `-ra`, so every skip reason (which embeds AUG-209 + SERIALIZER_LOCKED + the namespace, conftest.py:108-110) prints in the gate log instead of an unattributed ERROR count.\n  \u2713 The committed mapping tests are genuinely red against the pre-fix tree, not just claimed red in a docstring: Reproduced, not trusted: worktree at 26b67b1 (git worktree add /tmp/aug209-prefix 26b67b1) plus the d499323 test file \u2192 `7 failed, 338 deselected in 2.64s` with `AttributeError: module 'auger' has no attribute 'SubstrateLockContended'`; identical selection at HEAD \u2192 `7 passed, 338 deselected in 0.09s`.\n  \u2713 The gate/pytest summary actually surfaces lock-attributed skips (reachability of the attribution line into the log a human reads): tests/gate.sh:294 `run_pytest_arm -q -ra` \u2014 the -ra flag makes pytest print the short summary with each skip's reason, and that reason carries 'AUG-209', 'SERIALIZER_LOCKED' and the namespace (tests/conftest.py:108-110), asserted by test_run_cli_converts_the_typed_contention_into_a_named_skip (tests/test_auger.py:2634-2665).\n  \u2713 Back-compat: composite `except SystemExit` write paths keep pre-fix behaviour when the typed contention fires: SubstrateLockContended subclasses SystemExit (auger.py:840), so all 25 `except SystemExit` sites still catch it \u2014 e.g. patch_or_rewrite's rewrite/restore ladder (auger.py:955, 969, 976) folds the contention message into its refusal text and still restores the row; the serve layer's 404/502 folding (auger.py:7523, 7543) is unchanged. The pre-existing pinned behaviour test test_a_refused_advance_warns_once_and_costs_nothing (tests/test_auger.py:9603) ran green inside the tier1 full gate (883 passed, exit 0).\n  \u2713 Fixture seam reachability: a lock landing in fixture setup (ns/project/decided) converts to a skip rather than aborting setup: The ns, project and decided fixtures all execute verbs through run_cli (tests/conftest.py:974, 993, 1030), and run_cli (tests/conftest.py:92-111) converts SubstrateLockContended into pytest.skip regardless of whether it fires during fixture setup or the test body \u2014 pytest then marks each dependent test skipped, not ERROR-at-setup.\nThe one given criterion passes end-to-end with reproduced red-proof (7 failed on pre-fix base 26b67b1, 7 passed at HEAD), typed raises verified in all five write verbs, loud-path non-downgrade asserted for every other 503 shape plus a 500-with-lock-code, harness conversion into lock-attributed skips wired through the same seam the ns/project/decided fixtures use, and the un-contended full gate green at HEAD with 883 passed/3 skipped, 2 live arms ran, GATE PASS. [uncovered failure paths: failure mode 0 (run_cli_exit (the refusing-verb harness) still treats the typed contention as an expected plain SystemExit, so a lock landing exactly on a test that asserts a refusal is swallowed as a pass of that refusal instead of an attributed skip): detected_by is empty \u2014 uncovered failure path; failure mode 1 (a chronic lock storm converts many fixture-dependent tests into attributed skips while pytest exits 0 \u2014 the gate log shows the reasons (via -ra) but nothing bounds the skip count, so a persistently locked substrate could read as a green battery): detected_by is empty \u2014 uncovered failure path]\n\nStage fix_verification: PASS\n  fix_verification: 0 finding(s) verified\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-11-25T15:44:10.875049",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-25T15:44:10.938184+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 117035,
+        "truncated": false,
+        "source": "git show a8168a9f8746"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 1424,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-209"
+  }
+}
