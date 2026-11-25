@@ -816,9 +816,58 @@ def select_or_empty(ns: str, table: str, query: str = "") -> list:
     return _select_paged(ns, table, query, strict=False)
 
 
+def _lock_contention(status: int, body) -> str | None:
+    """One line describing a 503 SERIALIZER_LOCKED refusal, or None for anything else.
+
+    Measured live against the running substrate (AUG-209, 2026-11-25): while a
+    competing writer process holds a namespace's write lock, a table write is
+    answered ``503`` with body
+    ``{'error': "Namespace '<ns>' is locked by another writer process", 'code':
+    'SERIALIZER_LOCKED'}`` — after the substrate's own ~2s internal retry. That ONE
+    shape is environment contention: the lock will be released by its holder and
+    nothing about the payload, the token or the schema is wrong. Every other 503 —
+    authentication, validation, an unknown or missing code, or a non-dict body —
+    returns None here and keeps the caller's loud failure.
+    """
+    if status != 503 or not isinstance(body, dict):
+        return None
+    if str(body.get("code") or "").upper() != "SERIALIZER_LOCKED":
+        return None
+    detail = str(body.get("error") or "namespace write lock is held").strip()
+    return f"the namespace write lock is held by a competing writer process: {detail}"
+
+
+class SubstrateLockContended(SystemExit):
+    """A WRITE was refused with 503 SERIALIZER_LOCKED: environment contention.
+
+    AUG-209. A competing writer process holds the namespace's write lock, the
+    substrate's own retry budget expired, and the write will succeed once the
+    holder releases — nothing about the payload, token or schema is wrong, so
+    failing the whole battery on it (one fault ERRORing every fixture-dependent
+    test at setup) is the wrong verdict. The type is what makes the outcome
+    ATTRIBUTED: the pytest harness catches this class and converts it into a
+    typed skip naming the competing writer/namespace, while a committed test
+    pins the fail-closed side — any 503 that is NOT this code still raises the
+    plain loud SystemExit and is never downgraded to a skip.
+
+    It SUBCLASSES SystemExit on purpose: every existing composite write path
+    (`except SystemExit` in the domain advance's rewrite and in
+    `patch_or_rewrite`) keeps its exact pre-fix behaviour — the refusal text is
+    folded into its message, the row is restored, and the answer's own
+    SERIALIZER_LOCKED warning semantics (measured by the pre-existing
+    `test_a_refused_advance_warns_once_and_costs_nothing`) do not change. The
+    pytest-side skip is keyed on the SUBCLASS, never on plain SystemExit.
+    """
+
+
 def insert(ns: str, table: str, rows) -> dict:
     st, body, _ = db(tbl(ns, table), "POST", rows if isinstance(rows, list) else [rows])
     if st not in (200, 201):
+        contended = _lock_contention(st, body)
+        if contended:
+            raise SubstrateLockContended(
+                f"insert {table} failed ({st}): {contended} [{body}]"
+            )
         raise SystemExit(f"insert {table} failed ({st}): {body}")
     return body
 
@@ -826,6 +875,11 @@ def insert(ns: str, table: str, rows) -> dict:
 def patch(ns: str, table: str, pk: str, values: dict) -> dict:
     st, body, _ = db(tbl(ns, table, f"pk=eq.{pk}"), "PATCH", values)
     if st != 200:
+        contended = _lock_contention(st, body)
+        if contended:
+            raise SubstrateLockContended(
+                f"patch {table} failed ({st}): {contended} [{body}]"
+            )
         raise SystemExit(f"patch {table} failed ({st}): {body}")
     return body
 
@@ -942,6 +996,11 @@ def delete_row(ns: str, table: str, pk: str) -> dict:
     advance_domain_status)."""
     st, body, _ = db(tbl(ns, table, f"pk=eq.{pk}"), "DELETE")
     if st not in (200, 204):
+        contended = _lock_contention(st, body)
+        if contended:
+            raise SubstrateLockContended(
+                f"delete {table} failed ({st}): {contended} [{body}]"
+            )
         raise SystemExit(f"delete {table} failed ({st}): {body}")
     return body
 
@@ -1249,6 +1308,9 @@ def insert_edge(ns: str, row: dict) -> str:
                 f"declaration is re-read."
             )
         raise SystemExit(f"insert edge failed ({st2}): {body2}")
+    contended = _lock_contention(st, body)
+    if contended:
+        raise SubstrateLockContended(f"insert edge failed ({st}): {contended} [{body}]")
     raise SystemExit(f"insert edge failed ({st}): {body}")
 
 
@@ -5208,6 +5270,11 @@ def insert_decision(ns: str, row: dict) -> str:
                 f"the declaration is re-read."
             )
         raise SystemExit(f"insert decision failed ({st2}): {body2}")
+    contended = _lock_contention(st, body)
+    if contended:
+        raise SubstrateLockContended(
+            f"insert decision failed ({st}): {contended} [{body}]"
+        )
     raise SystemExit(f"insert decision failed ({st}): {body}")
 
 

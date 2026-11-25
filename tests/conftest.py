@@ -90,10 +90,24 @@ REMEDY = (
 
 # ---------------------------------------------------------------- CLI harness
 def run_cli(argv: list[str]) -> tuple[int, str]:
-    """Invoke the CLI in-process and capture its stdout. SystemExit is NOT caught here."""
+    """Invoke the CLI in-process and capture its stdout. SystemExit is NOT caught here.
+
+    ONE exception (AUG-209): `auger.SubstrateLockContended` — a 503 SERIALIZER_LOCKED
+    on a write, i.e. a competing writer process holding the namespace's lock — is
+    environment contention, not this suite's defect, so it converts into a TYPED
+    SKIP that names the competing writer/namespace. The skip fires wherever the
+    contention lands (fixture setup or test body), which is why one lock event
+    costs skipped tests instead of ERRORing every fixture-dependent case at
+    setup. Every other SystemExit propagates: the loud path is untouched.
+    """
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        rc = auger.main(argv)
+        try:
+            rc = auger.main(argv)
+        except auger.SubstrateLockContended as exc:
+            pytest.skip(
+                f"substrate write contention (503 SERIALIZER_LOCKED, AUG-209): {exc}"
+            )
     return rc, buf.getvalue()
 
 
