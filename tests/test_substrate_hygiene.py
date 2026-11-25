@@ -504,3 +504,143 @@ def test_conftest_hooks_are_wired_by_names_the_gate_helpers_read():
     assert "def pytest_runtest_logstart(" in source
     assert "def pytest_runtest_logreport(" in source
     assert cf.GATE_PROGRESS_ENV == "AUGER_GATE_PROGRESS_FILE"
+
+
+# ------------------------------------------------- AUG-211: the lock-attributed skip-count bound
+# Failure mode 0 of the AUG-209 lock classification (judge verdict 40aa2b34): the
+# typed-contention skips are the RIGHT per-test answer, but a chronic 503
+# SERIALIZER_LOCKED storm can convert dozens of tests into skips while the
+# battery still exits 0 "green". The gate must read the skips back, attribute
+# them to the lock by the AUG-209 skip-reason convention, and fail loudly past a
+# stated ceiling. Non-lock skips (hosted-CI live-arm skips, foreign-leg
+# contention on unrelated surfaces) are OUT of scope — they must never trip the
+# bound. The decision lives in scripts/gate_skip_bound.py so these proofs never
+# run the whole gate.
+def _load_bound_script():
+    spec = importlib.util.spec_from_file_location(
+        "gate_skip_bound", REPO_ROOT / "scripts" / "gate_skip_bound.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _lock_skip_line(count: int, nodeid: str = "tests/test_auger.py::test_x") -> str:
+    """The exact -rs short-summary shape conftest's attributed skips print."""
+    return (
+        f"SKIPPED [{count}] {nodeid}: substrate write contention "
+        f"(503 SERIALIZER_LOCKED, AUG-209): held by a competing writer"
+    )
+
+
+def test_skip_bound_counts_only_lock_attributed_skips():
+    """A lock storm is counted by the AUG-209 skip-reason convention, not by every skip.
+
+    The hosted-CI mode legitimately skips 139 live-dependent tests; those must
+    never trip the bound (DEFECT-1 rework: mode-blind ceiling was a false red
+    for every hosted-CI run).
+    """
+    mod = _load_bound_script()
+    output = (
+        _lock_skip_line(1, "tests/test_auger.py::test_insert_refuses")
+        + "\n"
+        + "SKIPPED [139] tests/test_live.py::test_live_arm: live substrate not configured\n"
+        + _lock_skip_line(1, "tests/test_auger.py::test_ask_writes")
+        + "\n"
+        + "2 failed, 1183 passed, 141 skipped, 3 warnings in 123.45s\n"
+    )
+    assert mod.lock_skip_count(output) == 2
+    assert mod.total_skip_count(output) == 141
+
+
+def test_skip_bound_counts_the_aggregated_short_summary_bracket():
+    """pytest aggregates same-location skips as ``SKIPPED [n]`` — the n is the storm."""
+    mod = _load_bound_script()
+    output = (
+        "SKIPPED [47] tests/test_auger.py:910: substrate write contention "
+        "(503 SERIALIZER_LOCKED, AUG-209): held\n"
+        "1183 passed, 47 skipped in 500.11s\n"
+    )
+    assert mod.lock_skip_count(output) == 47
+
+
+def test_skip_bound_decision_keys_on_the_ceiling():
+    mod = _load_bound_script()
+    assert mod.within_bound(0, 10)
+    assert mod.within_bound(10, 10)  # at the ceiling is still a pass
+    assert not mod.within_bound(11, 10)
+
+
+def test_skip_bound_fails_closed_when_skips_cannot_be_attributed(tmp_path, capsys):
+    """A skip total with NO short-summary lines means the reasons were never captured.
+
+    The gate invokes pytest with -rs; if a future edit drops it, the bound must
+    say the attribution is UNPROVEN and fail — never silently count 0 and pass.
+    """
+    mod = _load_bound_script()
+    summary = tmp_path / "summary.txt"
+    summary.write_text("1183 passed, 12 skipped in 9.00s\n")
+    assert mod.main(["--summary-file", str(summary), "--ceiling", "10"]) == 1
+    err = capsys.readouterr().err
+    assert "UNATTRIBUTED" in err, err
+
+
+def test_skip_bound_script_fails_loud_over_the_ceiling(tmp_path, capsys):
+    mod = _load_bound_script()
+    summary = tmp_path / "summary.txt"
+    summary.write_text(_lock_skip_line(47) + "\n1183 passed, 47 skipped in 500.11s\n")
+    assert mod.main(["--summary-file", str(summary), "--ceiling", "10"]) == 1
+    err = capsys.readouterr().err
+    assert "SKIP STORM" in err, err
+    assert "47" in err and "10" in err, err
+    assert "SERIALIZER_LOCKED" in err, err  # names the suspected lock storm
+
+
+def test_skip_bound_script_passes_within_the_ceiling(tmp_path, capsys):
+    mod = _load_bound_script()
+    summary = tmp_path / "summary.txt"
+    # One lock-attributed skip PLUS 139 hosted-CI live-arm skips: the bound
+    # grades the LOCK count, so this healthy hosted-CI shape passes.
+    summary.write_text(
+        _lock_skip_line(1)
+        + "\nSKIPPED [139] tests/test_live.py::test_live_arm: live substrate not configured\n"
+        + "1183 passed, 140 skipped in 500.11s\n"
+    )
+    assert mod.main(["--summary-file", str(summary), "--ceiling", "10"]) == 0
+    out = capsys.readouterr().out
+    assert "1" in out and "10" in out  # the attributed count and ceiling are stated
+
+
+def test_gate_wires_the_skip_count_bound():
+    gate = (REPO_ROOT / "tests" / "gate.sh").read_text()
+    assert "scripts/gate_skip_bound.py" in gate, (
+        "the gate's pytest arm must grade the run's skip count through the helper"
+    )
+    assert "AUGER_GATE_SKIP_CEILING" in gate, (
+        "the ceiling must be visible (and overridable) in tests/gate.sh"
+    )
+
+
+def test_gate_pytest_arm_names_this_file():
+    """The repo pattern: an unrun proof is an unenforced proof — the arm must name us."""
+    arm = [
+        line
+        for line in (REPO_ROOT / "tests" / "gate.sh")
+        .read_text(encoding="utf-8")
+        .splitlines()
+        if "python3 -m pytest" in line
+    ]
+    assert arm, "tests/gate.sh must have a pytest arm"
+    assert "tests/test_substrate_hygiene.py" in arm[0], (
+        "tests/test_substrate_hygiene.py is not in the gate's pytest arm — the AUG-211 "
+        "proofs would be an unrun proof"
+    )
+    assert "-rs" in arm[0].split(), (
+        "the pytest arm must run with -rs so skip REASONS reach the captured "
+        "summary the lock-attributed bound parses"
+    )
+    named = [token for token in arm[0].split() if token.startswith("tests/test_")]
+    missing = [name for name in named if not (REPO_ROOT / name).is_file()]
+    assert not missing, (
+        f"tests/gate.sh's pytest arm names files that do not exist: {missing}"
+    )

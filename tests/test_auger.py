@@ -2661,6 +2661,41 @@ def test_run_cli_converts_the_typed_contention_into_a_named_skip(monkeypatch):
     assert not isinstance(ei.value, auger.SubstrateLockContended)
 
 
+def test_run_cli_exit_converts_the_typed_contention_into_a_named_skip(monkeypatch):
+    """AUG-211 AC1: the refusing-verb harness must not swallow a typed contention.
+
+    `SubstrateLockContended` IS a SystemExit subclass, so `run_cli_exit`'s
+    `pytest.raises(SystemExit)` used to catch a 503 SERIALIZER_LOCKED landing and
+    report it as a PASSED verb refusal — a lock storm read as green refusals. The
+    harness now converts the landing into the SAME attributed skip `run_cli`
+    emits (AUG-209 convention: the reason names the lock AND the namespace). A
+    plain SystemExit refusal still returns as data — the loud path is untouched.
+    """
+
+    def contended_main(argv):
+        raise auger.SubstrateLockContended(
+            "insert decision failed (503): the namespace write lock is held by a "
+            "competing writer process: Namespace 'auger-pytest-x' is locked by "
+            "another writer process [{'error': '...', 'code': 'SERIALIZER_LOCKED'}]"
+        )
+
+    monkeypatch.setattr(auger, "main", contended_main)
+    with pytest.raises(pytest.skip.Exception) as ei:
+        conftest.run_cli_exit(["-n", "auger-pytest-x", "status"])
+    reason = str(ei.value)
+    assert "AUG-209" in reason, reason
+    assert "SERIALIZER_LOCKED" in reason, reason
+    assert "auger-pytest-x" in reason, reason
+
+    def loud_main(argv):
+        raise SystemExit("insert decision failed (503): {'error': 'upstream'}")
+
+    monkeypatch.setattr(auger, "main", loud_main)
+    code, msg, out = conftest.run_cli_exit(["-n", "auger-pytest-x", "status"])
+    assert code == 1, (code, msg)
+    assert "insert decision failed (503)" in msg, msg
+
+
 # ============================================ AUG-101: ONE refusal for a store that cannot be asked
 # Dogfood run 15 (2026-10-12) measured `status` on a dead substrate printing the raw transport dict
 # while `recall` printed its named refusal. The EXIT CODE was 1 for both once the plumbing was
