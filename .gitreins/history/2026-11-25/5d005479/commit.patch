@@ -1,0 +1,68 @@
+commit 4638a305845c48560712986cdf3e44ebe61aa9c8
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Tue Nov 24 20:06:57 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Tue Nov 24 20:28:22 2026 -0500
+
+    fix(aug-208): judge/tier1 launch path supplies DUCKBRAIN_URL so host verdicts grade the real battery
+    
+    Every gitreins tier-1 verdict recorded on this host (7/7 in
+    .gitreins/history/2026-11-23) landed tier1 tests passed=false / exit_code 2
+    because the tracked launch path (test_command) ran `bash tests/gate.sh` with no
+    DUCKBRAIN_URL, and the gate refuses to self-default: require_live_prerequisites
+    aborts with exit 2 at the preflight before pytest ever runs. Environmental red
+    on every verdict, tier-2 items PASSing underneath.
+    
+    Fix: test_command now supplies the local DuckBrain,
+    `DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh`, with a comment
+    explaining the dev-host supply and why the gate must not self-default
+    (tests/gate.sh itself is NOT weakened — AC4 fail-closed kept).
+    
+    Measured (this host, pre-fix):
+    
+    AC1 (GATE_MODE_ONLY=1):  "gate mode: live", rc=0
+    AC4 arm 1 (env -u DUCKBRAIN_URL):
+      ERROR: DuckBrain URL missing — set DUCKBRAIN_URL before running the live gate (or use AUGER_CI=1 on hosted CI).   rc=2
+    AC4 arm 2 (AUGER_CI=1):
+      ERROR: refusing AUGER_CI=1 downgrade on a non-runner host; require GITHUB_ACTIONS=true or CI=1/true.               rc=2
+    AC2: tier1 tests exit_code = 2 in 589dd5f9, 8a7e18a2, 36569fbe
+      while their tier2 items all read PASS (3 / 7 / 8 items).
+    AC5 baseline audit: bound_failed_verdict=27 (unchanged, as expected — the drop
+      accumulates as post-fix verdicts re-record).
+    
+    Launch-path proof: running the exact new test_command string under `timeout 90`
+    shows the gate passing the prerequisite preflight and entering the pytest arm
+    (progress dots) — first run also crossed py_compile, ruff and the wrapper
+    regression before the kill. (Kill expected and fine; the setsid'd pytest
+    survivor was reaped by hand after the probe.)
+    
+    Worktree note: the worktree ships no .venv, so the gate initially fell back to
+    an interpreter without dev deps and skipped the pytest arm; .venv was
+    provisioned with `uv venv .venv && uv pip install -e '.[dev]'` so the probe
+    proves the pytest arm, not a skip. No tracked file touched by that.
+    
+    Addresses AUG-208.
+---
+ .gitreins/config.yaml | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/.gitreins/config.yaml b/.gitreins/config.yaml
+index 33c681a..663deab 100644
+--- a/.gitreins/config.yaml
++++ b/.gitreins/config.yaml
+@@ -12,7 +12,14 @@ guards:
+   # tests/gate.sh is the repo's whole gate: py_compile + ruff + the end-to-end
+   # smoke loop (15 assertions against a live throwaway DuckBrain namespace).
+   # Naming the wrapper rather than smoke.sh alone keeps the arms together.
+-  test_command: bash tests/gate.sh
++  # AUG-208: test_command is the judge/tier-1 launch path on this dev host, and
++  # it IS tracked here — so the URL supply belongs in this line, not in
++  # tests/gate.sh. The gate deliberately refuses to self-default or probe for
++  # DUCKBRAIN_URL (AC4: a genuinely absent URL must still fail closed with exit
++  # 2 at the preflight); supplying it here keeps that refusal intact while
++  # giving the tier-1 launcher the local DuckBrain it needs. Changing the URL
++  # later is a one-line edit in this file, never a weakening of the gate.
++  test_command: DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh
+   # measured 2026-09-25 (AUG-077 commit attempts): 3x consecutive timeouts at
+   # 1800s with pytest at ~72% (143/198, zero failures, secrets+lint clean) —
+   # the suite grew past the 09-22 measurement (810s) on a box whose fleet load

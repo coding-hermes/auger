@@ -1,0 +1,455 @@
+{
+  "task_id": "AUG-208",
+  "task_title": "Judge tier1 can never pass on this host: tests/gate.sh live mode aborts with exit 2 when DUCKBRAIN_URL is unset",
+  "task_criteria": [
+    "judge/tier1 launch path supplies DUCKBRAIN_URL so a verdict recorded on this host has its tests step passed=true; fail-closed kept (unset DUCKBRAIN_URL still exits 2; AUGER_CI=1 downgrade on non-runner host still refuses); audit bound_failed_verdict drops below the 27 recorded at filing"
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "4638a305845c48560712986cdf3e44ebe61aa9c8",
+  "pass_class": "degraded",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "69ee624036702dc757e7ea03494ba097817fee1ee2fffc4370b3054834c9a08a",
+  "working_tree_dirty_path_count": 1571,
+  "items": [
+    {
+      "criterion": "judge/tier1 launch path supplies DUCKBRAIN_URL so a verdict recorded on this host has its tests step passed=true; fail-closed kept (unset DUCKBRAIN_URL still exits 2; AUGER_CI=1 downgrade on non-runner host still refuses); audit bound_failed_verdict drops below the 27 recorded at filing",
+      "status": "FAIL",
+      "detail": "The criterion has three clauses; clauses 1 and 2 PASS, clause 3 FAILS as measured. (1) SUPPLY + GREEN VERDICT: .gitreins/config.yaml:22 (commit 4638a30, the only file it touches) now reads `test_command: DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh`; this shell env assignment demonstrably reaches the gate \u2014 the installed gitreins engine executes this string verbatim (pipx venv engine/guard_manager.py:3433 reads guards.test_command, spawned via command_hygiene.run_bounded shell=True at command_hygiene.py:189/200 through guard_manager.py:3492-3500), and .gitreins/history/2026-11-25/cc32ff40/verdict.json (run on this host, worktree /home/kara/auger, evaluated_at 2026-11-25T01:51:40) records the tier1 tests step passed=true exit=0 ending 'LIVE ARMS: ran 2; skipped 0 / GATE PASS'; first-hand probe `DUCKBRAIN_URL=http://127.0.0.1:3000 GATE_MODE_ONLY=1 bash tests/gate.sh` -> 'gate mode: live' rc=0, and a 45s probe with the URL set passed the preflight into the pytest arm; ambient DUCKBRAIN_URL in this shell is empty, so the URL comes solely from that config line. (2) FAIL-CLOSED KEPT, first-hand: `env -u DUCKBRAIN_URL bash tests/gate.sh` -> rc=2 'ERROR: DuckBrain URL missing \u2014 set DUCKBRAIN_URL before running the live gate' (tests/gate.sh:78-80, exit 2 at :94); `AUGER_CI=1 GITHUB_ACTIONS= CI= bash tests/gate.sh` on this non-runner host -> rc=2 'ERROR: refusing AUGER_CI=1 downgrade on a non-runner host' (tests/gate.sh:29-35); git show 4638a30 --name-only = .gitreins/config.yaml only, so tests/gate.sh is untouched. (3) AUDIT DROP NOT ACHIEVED: first-hand `python3 scripts/audit_board_evidence.py` prints `bound_failed_verdict=28 ... RESULT: OK` \u2014 28 is NOT below the 27 recorded at filing. --verbose composition shows the increment is exactly the new row `BOUND AUG-208 cc32ff40 (fail)` alongside the 27 pre-existing BOUND(fail) rows (AUG-200, AUG-205 589dd5f9, AUG-206 8a7e18a2, AUG-207 36569fbe, ...): the prior judge verdict of AUG-208 itself, whose tier1 tests step was green but whose overall passed=false was caused by clause 3 measuring 27 at that time. Even in the best case (this evaluation recording COMPLETE and the row re-binding to a passing run) the count returns to 27, not below it; a drop below 27 requires green re-recorded verdicts for the other bound rows, and the change touches only .gitreins/config.yaml \u2014 the commit message itself concedes 'bound_failed_verdict=27 (unchanged, as expected \u2014 the drop accumulates as post-fix verdicts re-record)'. The criterion as written demands the measured drop; it has not happened."
+    },
+    {
+      "criterion": "The judge/tier-1 tests step executes guards.test_command verbatim through the installed engine, so the env prefix `DUCKBRAIN_URL=http://127.0.0.1:3000` actually reaches tests/gate.sh (wired, not dead config)",
+      "status": "PASS",
+      "detail": "Installed engine: /home/kara/.local/share/pipx/venvs/gitreins/lib/python3.14/site-packages/engine/guard_manager.py:3433 `test_command = self.config.get(\"guards\", {}).get(\"test_command\", ...)`; :3492-3500 spawns `spawn_cmd = scanner_nice.shell_wrap(resolved_cmd, ...)` then `command_hygiene.run_bounded(...)`; engine/command_hygiene.py:189/200 documents shell=True execution; _resolve_test_command (guard_manager.py:838+) passes commands without uv/pipenv/poetry runner prefixes through unchanged, so the leading env assignment survives. Empirical seam proof: cc32ff40 verdict tier1 tests step passed=True exit=0 with 'LIVE ARMS: ran 2; skipped 0 / GATE PASS' while the same shell has empty ambient DUCKBRAIN_URL (first-hand echo), and unset-URL runs exit 2 \u2014 the only URL source is the config line.",
+      "derived": true
+    },
+    {
+      "criterion": "The change does not degrade the GitHub Actions CI arm: ci.yml runs tests/gate.sh directly and the hosted-CI skip path (AUGER_CI=1 + runner markers) remains the only CI route, unaffected by the guards.test_command edit",
+      "status": "PASS",
+      "detail": ".github/workflows/ci.yml:3,37-39 runs `tests/gate.sh` directly with AUGER_CI=1 in the job env and GitHub's runner markers \u2014 it does not consume guards.test_command; commit 4638a30 touched only .gitreins/config.yaml (git show --name-only); the non-runner refusal was re-verified first-hand rc=2, so a leaked AUGER_CI=1 off CI still fails closed.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "needs_review",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nsecrets: gitleaks bound=timeout 600s (0=off)\nscanners: nice=nice -n 10\nsecrets: gitleaks scope=repo-root /home/kara/auger\nsecrets: gitleaks parallelism=GOMAXPROCS=4\n8:54PM INF scanned ~8607464 bytes (8.61 MB) in 6.27s\n8:54PM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 1077 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\ngate pytest interpreter: /home/kara/auger/.venv/bin/python\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\nAUGER_BLOCKED_BY: full-fleet sync push pid 3007483; live arms will be skipped\nsss........ssssss..sssssssssssssssssssssssssssssssssssssssssssssssssssss [  8%]\nsssssssssssss.sss............................ssssssss................s.. [ 16%]\n..sss............sssssssssssssssssssssssssssssssss..sss........s...ssss. [ 24%]\n..............ss.s.s.ssssss.ssssssssssssssssss...ssssssssss......sssssss [ 32%]\nssssssss.ssssssssssssssssssssss...........ss....s....................... [ 41%]\n..........s............................................................. [ 49%]\n....................................................................ss.. [ 57%]\n........................................................................ [ 65%]\n........................................................................ [ 73%]\n........................................................................ [ 82%]\n........................................................................ [ 90%]\n........................................................................ [ 98%]\n..............                                                           [100%]\n666 passed, 212 skipped in 110.00s (0:01:49)\n== wrapper regression (AUG-081) ==\ngate prerequisite preflight: PASS\nAUG-116: zombie pid 3350837 classified dead (kill -0 alone would have said alive)\nAUG-081 wrapper regression: PASS\nAUG-130 skipped-arm policy: PASS\nAUG-189 interpreter selection: PASS\nAUG-191 explicit docs-over-code range: PASS\nAUG-191 merge-base docs-over-code range: PASS\nAUG-191 explicit docs-only range: PASS\nAUG-191 empty and equal-origin ranges: PASS\n== end-to-end smoke ==\nnamespace: auger-smoke-3371706\nno stale auger-smoke-*/auger-eval-*/auger-pytest-* older than a day\n== init ==\n  PASS all fourteen tables declared and visible\n  PASS no API-visibility warnings\n== start ==\n  PASS seed stored and embedded\n== answer ==\n  PASS decision recorded\n  PASS second decision recorded\n== status ==\n  PASS status counts decisions\n  PASS status surfaces the thin decision\n== check: retrieval + JEV says ALREADY ANSWERED ==\n\n\u2026 [1296 chars omitted \u2014 29 line(s)] \u2026\nspec: 522 document(s), 7314 block(s), 0 reference(s) ok\n== prd proofs (AUG-137) ==\nprd proofs: 8 total \u00b7 3 required \u00b7 5 deferred \u2192 PASS\n   P1  deferred not-run   not-run (deferred to AUG-119): auger.py carries no board surface (grep -c boardctl auger.py -> 0): resolving a\n   P2  required pass      corpus=9249B bundle=8131B latency=30.5ms  2 generated view(s) verified byte-identical to the generator's output for specs/; one block edit propagated to\n   P3  deferred not-run   not-run (deferred to AUG-153): the checker half is reachable (`auger spec check --diff-file` reports `trace-mi\n   P4  deferred not-run   not-run (deferred to AUG-119): writing and reading back a canonical boardctl row is boardctl's surface, not au\n   P5  required pass      corpus=1084B bundle=435B latency=1413.7ms  one query returned migration=tests/fixtures/xml/verification/migrations/001_add_marker.sql, fixture=tests/fixt\n   P6  deferred not-run   not-run (deferred to AUG-124): what counts as judge evidence \u2014 excluding the worker summary, refusing a PASS w\n   P7  required pass      corpus=9249B bundle=2944B latency=249.7ms  4/12 blocks selected by `applies-to auger.spec.select`; bundle is 31.8% of the corpus (2944 of 9249 bytes), fl\n   P8  deferred not-run   not-run (deferred to AUG-153): the flag and the process-liveness assertion live in the GitReins hook, which no\nprd-proofs: /home/kara/auger/docs/prd/evidence/AUG-137-prd-proofs.json agrees with this run\n== docs check ==\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": false,
+      "any_failed": true,
+      "summary": "INCOMPLETE\n  \u2717 judge/tier1 launch path supplies DUCKBRAIN_URL so a verdict recorded on this host has its tests step passed=true; fail-closed kept (unset DUCKBRAIN_URL still exits 2; AUGER_CI=1 downgrade on non-runner host still refuses); audit bound_failed_verdict drops below the 27 recorded at filing: The criterion has three clauses; clauses 1 and 2 PASS, clause 3 FAILS as measured. (1) SUPPLY + GREEN VERDICT: .gitreins/config.yaml:22 (commit 4638a30, the only file it touches) now reads `test_command: DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh`; this shell env assignment demonstrably reaches the gate \u2014 the installed gitreins engine executes this string verbatim (pipx venv engine/guard_manager.py:3433 reads guards.test_command, spawned via command_hygiene.run_bounded shell=True at command_hygiene.py:189/200 through guard_manager.py:3492-3500), and .gitreins/history/2026-11-25/cc32ff40/verdict.json (run on this host, worktree /home/kara/auger, evaluated_at 2026-11-25T01:51:40) records the tier1 tests step passed=true exit=0 ending 'LIVE ARMS: ran 2; skipped 0 / GATE PASS'; first-hand probe `DUCKBRAIN_URL=http://127.0.0.1:3000 GATE_MODE_ONLY=1 bash tests/gate.sh` -> 'gate mode: live' rc=0, and a 45s probe with the URL set passed the preflight into the pytest arm; ambient DUCKBRAIN_URL in this shell is empty, so the URL comes solely from that config line. (2) FAIL-CLOSED KEPT, first-hand: `env -u DUCKBRAIN_URL bash tests/gate.sh` -> rc=2 'ERROR: DuckBrain URL missing \u2014 set DUCKBRAIN_URL before running the live gate' (tests/gate.sh:78-80, exit 2 at :94); `AUGER_CI=1 GITHUB_ACTIONS= CI= bash tests/gate.sh` on this non-runner host -> rc=2 'ERROR: refusing AUGER_CI=1 downgrade on a non-runner host' (tests/gate.sh:29-35); git show 4638a30 --name-only = .gitreins/config.yaml only, so tests/gate.sh is untouched. (3) AUDIT DROP NOT ACHIEVED: first-hand `python3 scripts/audit_board_evidence.py` prints `bound_failed_verdict=28 ... RESULT: OK` \u2014 28 is NOT below the 27 recorded at filing. --verbose composition shows the increment is exactly the new row `BOUND AUG-208 cc32ff40 (fail)` alongside the 27 pre-existing BOUND(fail) rows (AUG-200, AUG-205 589dd5f9, AUG-206 8a7e18a2, AUG-207 36569fbe, ...): the prior judge verdict of AUG-208 itself, whose tier1 tests step was green but whose overall passed=false was caused by clause 3 measuring 27 at that time. Even in the best case (this evaluation recording COMPLETE and the row re-binding to a passing run) the count returns to 27, not below it; a drop below 27 requires green re-recorded verdicts for the other bound rows, and the change touches only .gitreins/config.yaml \u2014 the commit message itself concedes 'bound_failed_verdict=27 (unchanged, as expected \u2014 the drop accumulates as post-fix verdicts re-record)'. The criterion as written demands the measured drop; it has not happened.\n  \u2713 The judge/tier-1 tests step executes guards.test_command verbatim through the installed engine, so the env prefix `DUCKBRAIN_URL=http://127.0.0.1:3000` actually reaches tests/gate.sh (wired, not dead config): Installed engine: /home/kara/.local/share/pipx/venvs/gitreins/lib/python3.14/site-packages/engine/guard_manager.py:3433 `test_command = self.config.get(\"guards\", {}).get(\"test_command\", ...)`; :3492-3500 spawns `spawn_cmd = scanner_nice.shell_wrap(resolved_cmd, ...)` then `command_hygiene.run_bounded(...)`; engine/command_hygiene.py:189/200 documents shell=True execution; _resolve_test_command (guard_manager.py:838+) passes commands without uv/pipenv/poetry runner prefixes through unchanged, so the leading env assignment survives. Empirical seam proof: cc32ff40 verdict tier1 tests step passed=True exit=0 with 'LIVE ARMS: ran 2; skipped 0 / GATE PASS' while the same shell has empty ambient DUCKBRAIN_URL (first-hand echo), and unset-URL runs exit 2 \u2014 the only URL source is the config line.\n  \u2713 The change does not degrade the GitHub Actions CI arm: ci.yml runs tests/gate.sh directly and the hosted-CI skip path (AUGER_CI=1 + runner markers) remains the only CI route, unaffected by the guards.test_command edit: .github/workflows/ci.yml:3,37-39 runs `tests/gate.sh` directly with AUGER_CI=1 in the job env and GitHub's runner markers \u2014 it does not consume guards.test_command; commit 4638a30 touched only .gitreins/config.yaml (git show --name-only); the non-runner refusal was re-verified first-hand rc=2, so a leaked AUGER_CI=1 off CI still fails closed.\n  \u2717 Coverage FAILED \u2014 not passing: judge/tier1 launch path supplies DUCKBRAIN_URL so a verdict recorded on this host has its tests step passed=true; fail-closed kept (unset DUCKBRAIN_URL still exits 2; AUGER_CI=1 downgrade on non-runner host still refuses); audit bound_failed_verdict drops below the 27 recorded at filing\nClauses 1-2 verified first-hand (config.yaml:22 supplies DUCKBRAIN_URL on the engine-executed test_command; cc32ff40 tier1 tests passed=true; unset-URL and AUGER_CI=1 both exit 2), but clause 3 fails: the audit measures bound_failed_verdict=28, not below 27 \u2014 the increment is AUG-208's own prior verdict bound as (fail).",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": false,
+          "output": "INCOMPLETE\n\n\u2026 [3875 chars omitted \u2014 2 line(s)] \u2026\n  \u2713 The change does not degrade the GitHub Actions CI arm: ci.yml runs tests/gate.sh directly and the hosted-CI skip path (AUGER_CI=1 + runner markers) remains the only CI route, unaffected by the guards.test_command edit: .github/workflows/ci.yml:3,37-39 runs `tests/gate.sh` directly with AUGER_CI=1 in the job env and GitHub's runner markers \u2014 it does not consume guards.test_command; commit 4638a30 touched only .gitreins/config.yaml (git show --name-only); the non-runner refusal was re-verified first-hand rc=2, so a leaked AUGER_CI=1 off CI still fails closed.\n  \u2717 Coverage FAILED \u2014 not passing: judge/tier1 launch path supplies DUCKBRAIN_URL so a verdict recorded on this host has its tests step passed=true; fail-closed kept (unset DUCKBRAIN_URL still exits 2; AUGER_CI=1 downgrade on non-runner host still refuses); audit bound_failed_verdict drops below the 27 recorded at filing\nClauses 1-2 verified first-hand (config.yaml:22 supplies DUCKBRAIN_URL on the engine-executed test_command; cc32ff40 tier1 tests passed=true; unset-URL and AUGER_CI=1 both exit 2), but clause 3 fails: the audit measures bound_failed_verdict=28, not below 27 \u2014 the increment is AUG-208's own prior verdict bound as (fail).",
+          "error": "",
+          "data": {
+            "verdict": "INCOMPLETE",
+            "items": [
+              {
+                "criterion": "judge/tier1 launch path supplies DUCKBRAIN_URL so a verdict recorded on this host has its tests step passed=true; fail-closed kept (unset DUCKBRAIN_URL still exits 2; AUGER_CI=1 downgrade on non-runner host still refuses); audit bound_failed_verdict drops below the 27 recorded at filing",
+                "status": "FAIL",
+                "detail": "The criterion has three clauses; clauses 1 and 2 PASS, clause 3 FAILS as measured. (1) SUPPLY + GREEN VERDICT: .gitreins/config.yaml:22 (commit 4638a30, the only file it touches) now reads `test_command: DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh`; this shell env assignment demonstrably reaches the gate \u2014 the installed gitreins engine executes this string verbatim (pipx venv engine/guard_manager.py:3433 reads guards.test_command, spawned via command_hygiene.run_bounded shell=True at command_hygiene.py:189/200 through guard_manager.py:3492-3500), and .gitreins/history/2026-11-25/cc32ff40/verdict.json (run on this host, worktree /home/kara/auger, evaluated_at 2026-11-25T01:51:40) records the tier1 tests step passed=true exit=0 ending 'LIVE ARMS: ran 2; skipped 0 / GATE PASS'; first-hand probe `DUCKBRAIN_URL=http://127.0.0.1:3000 GATE_MODE_ONLY=1 bash tests/gate.sh` -> 'gate mode: live' rc=0, and a 45s probe with the URL set passed the preflight into the pytest arm; ambient DUCKBRAIN_URL in this shell is empty, so the URL comes solely from that config line. (2) FAIL-CLOSED KEPT, first-hand: `env -u DUCKBRAIN_URL bash tests/gate.sh` -> rc=2 'ERROR: DuckBrain URL missing \u2014 set DUCKBRAIN_URL before running the live gate' (tests/gate.sh:78-80, exit 2 at :94); `AUGER_CI=1 GITHUB_ACTIONS= CI= bash tests/gate.sh` on this non-runner host -> rc=2 'ERROR: refusing AUGER_CI=1 downgrade on a non-runner host' (tests/gate.sh:29-35); git show 4638a30 --name-only = .gitreins/config.yaml only, so tests/gate.sh is untouched. (3) AUDIT DROP NOT ACHIEVED: first-hand `python3 scripts/audit_board_evidence.py` prints `bound_failed_verdict=28 ... RESULT: OK` \u2014 28 is NOT below the 27 recorded at filing. --verbose composition shows the increment is exactly the new row `BOUND AUG-208 cc32ff40 (fail)` alongside the 27 pre-existing BOUND(fail) rows (AUG-200, AUG-205 589dd5f9, AUG-206 8a7e18a2, AUG-207 36569fbe, ...): the prior judge verdict of AUG-208 itself, whose tier1 tests step was green but whose overall passed=false was caused by clause 3 measuring 27 at that time. Even in the best case (this evaluation recording COMPLETE and the row re-binding to a passing run) the count returns to 27, not below it; a drop below 27 requires green re-recorded verdicts for the other bound rows, and the change touches only .gitreins/config.yaml \u2014 the commit message itself concedes 'bound_failed_verdict=27 (unchanged, as expected \u2014 the drop accumulates as post-fix verdicts re-record)'. The criterion as written demands the measured drop; it has not happened."
+              },
+              {
+                "criterion": "The judge/tier-1 tests step executes guards.test_command verbatim through the installed engine, so the env prefix `DUCKBRAIN_URL=http://127.0.0.1:3000` actually reaches tests/gate.sh (wired, not dead config)",
+                "status": "PASS",
+                "detail": "Installed engine: /home/kara/.local/share/pipx/venvs/gitreins/lib/python3.14/site-packages/engine/guard_manager.py:3433 `test_command = self.config.get(\"guards\", {}).get(\"test_command\", ...)`; :3492-3500 spawns `spawn_cmd = scanner_nice.shell_wrap(resolved_cmd, ...)` then `command_hygiene.run_bounded(...)`; engine/command_hygiene.py:189/200 documents shell=True execution; _resolve_test_command (guard_manager.py:838+) passes commands without uv/pipenv/poetry runner prefixes through unchanged, so the leading env assignment survives. Empirical seam proof: cc32ff40 verdict tier1 tests step passed=True exit=0 with 'LIVE ARMS: ran 2; skipped 0 / GATE PASS' while the same shell has empty ambient DUCKBRAIN_URL (first-hand echo), and unset-URL runs exit 2 \u2014 the only URL source is the config line.",
+                "derived": true
+              },
+              {
+                "criterion": "The change does not degrade the GitHub Actions CI arm: ci.yml runs tests/gate.sh directly and the hosted-CI skip path (AUGER_CI=1 + runner markers) remains the only CI route, unaffected by the guards.test_command edit",
+                "status": "PASS",
+                "detail": ".github/workflows/ci.yml:3,37-39 runs `tests/gate.sh` directly with AUGER_CI=1 in the job env and GitHub's runner markers \u2014 it does not consume guards.test_command; commit 4638a30 touched only .gitreins/config.yaml (git show --name-only); the non-runner refusal was re-verified first-hand rc=2, so a leaked AUGER_CI=1 off CI still fails closed.",
+                "derived": true
+              }
+            ],
+            "summary": "Clauses 1-2 verified first-hand (config.yaml:22 supplies DUCKBRAIN_URL on the engine-executed test_command; cc32ff40 tier1 tests passed=true; unset-URL and AUGER_CI=1 both exit 2), but clause 3 fails: the audit measures bound_failed_verdict=28, not below 27 \u2014 the increment is AUG-208's own prior verdict bound as (fail).",
+            "provenance": {
+              "model": "glm-5.3-flash",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            },
+            "context_stats": {
+              "diff_source": "working-tree",
+              "diff_bytes": 535,
+              "prompt_bytes": 16433
+            }
+          }
+        }
+      ],
+      "model": "glm-5.3-flash",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "context_stats": {
+        "diff_source": "working-tree",
+        "diff_bytes": 535,
+        "prompt_bytes": 16433
+      },
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-208\"}",
+          "exit_code": 0,
+          "output_sha": "a59ad6b608266ec9e4a3782957ff1a74861228f5066b60193e2503e3d138a81a"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"AUG-208: judge tier1 launch path must supply DUCKBRAIN_URL so verdicts on this host have tests step passed=true; fail-closed kept (unset DUCKBRAIN_URL exits 2; AUGER_CI=1 downgrade on non-runner host refuses); audit bound_failed_verdict drops below 27 recorded at filing. Plan: read .gitreins/config.yaml (test_command, judge config), find tier1 launch path (gitreins hook? judge script?), find tests/gate.sh DUCKBRAIN_URL handling, find bound_failed_verdict audit.\", \"key\": \"plan\"}",
+          "exit_code": 0,
+          "output_sha": "4da881b01d1b981e475c443a1334e4fcced1f0edf2a6a5a484ab603d9b5f28f4"
+        },
+        {
+          "tool": "run_command",
+          "command": "ls /home/kara/auger && cat /home/kara/auger/.gitreins/config.yaml",
+          "exit_code": 0,
+          "output_sha": "260ddc1eeb98dce49158a6c2649c1d5e150f26d15bfebff80c257050f5638463"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"regex\": \"DUCKBRAIN_URL\"}",
+          "exit_code": 0,
+          "output_sha": "7e3ec42714dcaa6aa8527021c139e2143c7c2489d88757541186a1aa3fa021c4"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"regex\": \"bound_failed_verdict\"}",
+          "exit_code": 0,
+          "output_sha": "b833a360eeaa365201dce18ea22fb484aabaa2ebb425d859a7f43a9faa4efbbb"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 130, \"path\": \"tests/gate.sh\"}",
+          "exit_code": 0,
+          "output_sha": "9648bad70682d1e2d56d737e5e51b6b676a9a3be0136515d18e806dcab6a169b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git log --oneline -8 && git log -3 --format='%h %s' -- .gitreins/config.yaml && ls -s ~/.duckbrain/foreman-status.token ~/.duckbrain/token 2>/dev/null; test -s ~/.hermes/.env && echo hermes-env-present || echo hermes-env-missing",
+          "exit_code": 0,
+          "output_sha": "5d0b1e9a2b6b3037ff0b9db34edf00a852e05ce52a58dcd98ac545fd264b36bc"
+        },
+        {
+          "tool": "read_diff",
+          "command": "read_diff {}",
+          "exit_code": 0,
+          "output_sha": "2df9cefc59a70273d627fe35103af0bc2ba4310095157475cc422040df294b34"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show 4638a30 --stat && git show 4638a30 | head -120",
+          "exit_code": 0,
+          "output_sha": "df805f6b0bd72888de153b9ed0506e20c477e330a2cf98cf073b1bf7d0973a9b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"test_command\" .gitreins/config.yaml && python3 scripts/audit_board_evidence.py --help 2>&1 | head -40",
+          "exit_code": 0,
+          "output_sha": "6ceb31627d7669bb63b56f0d89c2f1ca253ac80fbb2dfe9e1237dc758fba2f0d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && python3 scripts/audit_board_evidence.py 2>&1 | tail -12",
+          "exit_code": 0,
+          "output_sha": "aecd7e802694c403c667d7a8b7d79bd4242636b8cf7c257b5ee734cbf82e4dfa"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && ls .gitreins/history/ | tail -5 && for d in $(ls -d .gitreins/history/2026-11-25* 2>/dev/null | head -6); do echo \"== $d\"; ls \"$d\"; done",
+          "exit_code": 0,
+          "output_sha": "3f66d4a48b1a702d17cab4133eab1b340915acdc4d171f7dc2d588ef28a1ef5c"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && ls .gitreins/history/2026-11-25/cc32ff40/ && python3 -c \"\nimport json,glob\nfor p in sorted(glob.glob('.gitreins/history/2026-11-25/cc32ff40/*')):\n    print('---',p)\n    if p.endswith('.json'):\n        d=json.load(open(p))\n        print(json.dumps(d,indent=1)[:3000])\n\"",
+          "exit_code": 0,
+          "output_sha": "4a782c6aa54cac09da8da9c9d9a35efc55a911045ad5304ef192a5278bc0601c"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && python3 -c \"\nimport json\nd=json.load(open('.gitreins/history/2026-11-25/cc32ff40/verdict.json'))\nprint('top keys:', sorted(d.keys()))\nprint('passed:', d['passed'])\nprint('summary:', json.dumps(d.get('summary',''))[:600])\nfor k in ('stages','tier1','pipeline','guards'):\n    if k in d: print(k, '->', json.dumps(d[k])[:800])\nprint('item detail tail:', json.dumps(d['items'][0]['detail'])[-700:])\n\" && grep -c . .coding-hermes/board/tasks.jsonl; python3 -c \"\nimport json\nfor line in open('.coding-hermes/board/tasks.jsonl'):\n    r=json.loads(line)\n    if r.get('id','').endswith('aug208') or 'AUG-208' in str(r.get('id','')):\n        print(json.dumps(r)[:600])\n\"",
+          "exit_code": 0,
+          "output_sha": "6915cf5ce4afe9c1c68f0834622e982244f937aff06ba62fe393d76d4d0ea1d0"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && sed -n '380,520p' scripts/audit_board_evidence.py",
+          "exit_code": 0,
+          "output_sha": "7d30cbcede748e1d8e4fc94ef4adc9a9d6ff62950dfcd324ed0c6da97d024f14"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && python3 -c \"\nimport json\nd=json.load(open('.gitreins/history/2026-11-25/cc32ff40/verdict.json'))\nt1=d['stages']['tier1']\nfor s in t1['steps']:\n    print(s['id'], 'passed=', s['passed'], 'exit=', s.get('data',{}).get('exit_code'))\n    if s['id']=='tests':\n        out=s['output']\n        print('tests tail:', out[-400:])\n\"",
+          "exit_code": 0,
+          "output_sha": "89467d38f0003b527182e6b42058444d8f538ce4d4df7152433ec0d539db4d47"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && sed -n '300,380p' scripts/audit_board_evidence.py && grep -n \"passed\\|BOUND\\|def classify\" scripts/audit_board_evidence.py | head -30",
+          "exit_code": 0,
+          "output_sha": "50ba9e1b8e8647b36a87159cb48bf5953c933b06eb4229393fa7ab59d5ee41af"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && python3 -c \"\nimport json,glob\nn=0; fails=[]\nfor p in glob.glob('.gitreins/history/*/*/verdict.json'):\n    try: d=json.load(open(p))\n    except Exception as e: continue\n    n+=1\n    if d.get('passed') is False: fails.append((p,d.get('evaluated_at')))\nprint('verdict files:',n,'passed=false:',len(fails))\nfor p,t in sorted(fails,key=lambda x:(x[1] or ''))[-8:]: print(t,p)\n\"",
+          "exit_code": 0,
+          "output_sha": "96694809cb34bdd93e03e3a91ce3fc194d2bc1f720a2bfbf6a7f029f6e807348"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && python3 scripts/audit_board_evidence.py --verbose 2>/dev/null | grep -E \"^BOUND .*\\(fail\" | sed 's/(fail.*/(fail/' && echo ---- && git show 4638a30 --name-only --format=",
+          "exit_code": 0,
+          "output_sha": "5c199a7fda071fd28955c962c6e946231db1fc3b5ee473bf6509eec0304eceef"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && echo \"ambient DUCKBRAIN_URL=[${DUCKBRAIN_URL:-}] GITHUB_ACTIONS=[${GITHUB_ACTIONS:-}] CI=[${CI:-}]\" && timeout 25 env -u DUCKBRAIN_URL bash tests/gate.sh; echo \"unset-URL rc=$?\"; timeout 25 env AUGER_CI=1 GITHUB_ACTIONS= CI= bash tests/gate.sh; echo \"auger-ci=1 rc=$?\"",
+          "exit_code": 0,
+          "output_sha": "aaaa9246b609cdb99aa5b8c2caa4313c7acad91147fcb593b4db41c6a1f58c1c"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && GR=$(python3 -c \"import gitreins,os;print(os.path.dirname(gitreins.__file__))\" 2>/dev/null); echo \"gitreins at: $GR\"; grep -rn \"test_command\" \"$GR\" 2>/dev/null | grep -v \".pyc\" | head -8",
+          "exit_code": 0,
+          "output_sha": "9ca584d5a342ef2facce3511d50c38235c96db497621fdf04d77edf9403685ae"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && DUCKBRAIN_URL=http://127.0.0.1:3000 GATE_MODE_ONLY=1 bash tests/gate.sh; echo \"with-url mode-only rc=$?\"; timeout 45 env DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh 2>&1 | head -8; echo \"probe rc=${PIPESTATUS[0]}\"",
+          "exit_code": -15,
+          "output_sha": "1a550a3955f146897445f67f8c4c296e8816b6eb4817379dee61e09f4645b52f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && cat .git/hooks/pre-commit 2>/dev/null | head -20; pip3 show gitreins 2>/dev/null | head -3; find /home/kara -maxdepth 6 -name \"guard_manager.py\" -not -path \"*/node_modules/*\" 2>/dev/null | head -3",
+          "exit_code": -15,
+          "output_sha": "df251e8f174026dd0d8288ca5cf6057db31c089a8d97e3607208915a2b3a88a8"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && python3 -c \"\nimport json\nfor run in ['36569fbe','589dd5f9']:\n    d=json.load(open(f'.gitreins/history/2026-11-23/{run}/verdict.json'))\n    for s in d['stages']['tier1']['steps']:\n        if s['id']=='tests':\n            print(run,'tests exit=',s.get('data',{}).get('exit_code'),'passed=',s['passed'])\n            print('  tail:', repr(s['output'][-200:]))\n\"",
+          "exit_code": 0,
+          "output_sha": "767890391b752431875393e79a9fd5c9efb8cc5196aa5e159e372133d876fda3"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show 8a7e18a2:.gitreins/config.yaml | grep -n \"test_command\" && ls /home/kara/.local/pipx/venvs 2>/dev/null; which gitreins boardctl; head -5 $(which gitreins) 2>/dev/null",
+          "exit_code": 0,
+          "output_sha": "838e35fa03f6b4742cf6975b4729df6d58a2486e3dcff8a3401d1f739af3bf88"
+        },
+        {
+          "tool": "run_command",
+          "command": "GR=/home/kara/.local/share/pipx/venvs/gitreins/lib/python*/site-packages/gitreins; grep -n \"test_command\" $GR/engine/guard_manager.py $GR/engine/command_hygiene.py 2>/dev/null | head -8 && sed -n '/def .*run_bounded/,+12p' $GR/engine/command_hygiene.py 2>/dev/null | head -14",
+          "exit_code": 0,
+          "output_sha": "fd96028d65a600d90f344db63f79068b025cb8d389c508197e2b752368f40f91"
+        },
+        {
+          "tool": "run_command",
+          "command": "ls /home/kara/.local/share/pipx/venvs/gitreins/lib/ 2>/dev/null; find /home/kara/.local/share/pipx/venvs/gitreins -name \"guard_manager.py\" 2>/dev/null | head -2; grep -rn \"test_command\" /home/kara/.local/share/pipx/venvs/gitreins --include=\"*.py\" -l 2>/dev/null | head -4",
+          "exit_code": 0,
+          "output_sha": "c613fe5e429555acc5b71ff67f5c2a31e47282684741fd9a908f43cc5e9f4b31"
+        },
+        {
+          "tool": "run_command",
+          "command": "SP=/home/kara/.local/share/pipx/venvs/gitreins/lib/python3.14/site-packages; grep -n \"test_command\" $SP/engine/guard_manager.py | head; grep -rn \"shell=True\\|def run_bounded\" $SP/engine/command_hygiene.py $SP/engine/guard_manager.py 2>/dev/null | head -6",
+          "exit_code": 0,
+          "output_sha": "a5cc4d7b758e54e1b6c0621df722468b7c832850e15e17765a94b19309354b98"
+        },
+        {
+          "tool": "run_command",
+          "command": "SP=/home/kara/.local/share/pipx/venvs/gitreins/lib/python3.14/site-packages; grep -n 'config\\[\"test_command\"\\]\\|config.get(\"test_command\"\\|\"test_command\"' $SP/engine/guard_manager.py | head -8; sed -n '830,860p' $SP/engine/guard_manager.py",
+          "exit_code": 0,
+          "output_sha": "62c4fe59b7340a95bc08f907cc9ebcf53c6ffc39a5b81b5d030107f78b7ebf71"
+        },
+        {
+          "tool": "run_command",
+          "command": "SP=/home/kara/.local/share/pipx/venvs/gitreins/lib/python3.14/site-packages; sed -n '3428,3450p' $SP/engine/guard_manager.py",
+          "exit_code": 0,
+          "output_sha": "9f2c6140fc2221fbf39a41f64da277caa5e85bfe6c5f5169cd87403dc6e697bf"
+        },
+        {
+          "tool": "run_command",
+          "command": "SP=/home/kara/.local/share/pipx/venvs/gitreins/lib/python3.14/site-packages; grep -n \"test_command\\b\" $SP/engine/guard_manager.py | sed -n '1,20p'; sed -n '3470,3520p' $SP/engine/guard_manager.py | grep -n \"run_bounded\\|test_command\\|shell\" ",
+          "exit_code": 0,
+          "output_sha": "99b4708cdfc9731c3a3a11057898084c1003676bdbb694fc0168c015ae5ada37"
+        },
+        {
+          "tool": "run_command",
+          "command": "SP=/home/kara/.local/share/pipx/venvs/gitreins/lib/python3.14/site-packages; sed -n '3516,3560p' $SP/engine/guard_manager.py",
+          "exit_code": 0,
+          "output_sha": "269ca482a23ae5a134cbf5b15c9876f6795c6f710602401b59236afb50054287"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"gate.sh\\|test_command\" .github/workflows/ci.yml | head -6 && python3 -c \"\nimport json\nfor line in open('.coding-hermes/board/tasks.jsonl'):\n    r=json.loads(line)\n    if r.get('id')=='AUG-208':\n        print('status:',r['status'],'| evidence:',json.dumps(r.get('detail',{}).get('evidence')))\n\"",
+          "exit_code": 0,
+          "output_sha": "838f83f9f7338048f1c83436fa4537b57c8835014cf7ad5e236c3ea558fb4f08"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"clause1a supply: .gitreins/config.yaml:22 `test_command: DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh` (commit 4638a30, only file touched). Ambient DUCKBRAIN_URL in judge shell = empty (first-hand echo), so the URL comes solely from this line.\\nclause1b verdict recorded on this host with tests passed=true: cc32ff40/.gitreins/history/2026-11-25/verdict.json tier1 tests step passed=True exit=0, tail 'LIVE ARMS: ran 2; skipped 0 / GATE PASS' (evaluated_at 2026-11-25T01:51:40, host /home/kara/auger); this evaluation's prior-stage tests lane also exit 0 GATE PASS. First-hand probe: GATE_MODE_ONLY=1 rc=0 'gate mode: live'; 45s probe with URL passed preflight and entered pytest arm.\\nclause2 fail-closed: first-hand `env -u DUCKBRAIN_URL bash tests/gate.sh` -> rc=2 'ERROR: DuckBrain URL missing' (tests/gate.sh:78-80, exit 2 at :94); `AUGER_CI=1 GITHUB_ACTIONS= CI= bash tests/gate.sh` -> rc=2 'ERROR: refusing AUGER_CI=1 downgrade on a non-runner host' (tests/gate.sh:29-35). tests/gate.sh untouched by commit (git show --name-only: .gitreins/config.yaml only).\\nclause3 audit: first-hand `python3 scripts/audit_board_evidence.py` -> bound_failed_verdict=28 (NOT <27). --verbose composition: 27 pre-existing BOUND(fail) rows + 'BOUND AUG-208 cc32ff40 (fail)' = 28. The new row is the prior judge verdict of AUG-208 itself, whose tier1 tests step was GREEN (passed=True) but whose verdict passed=false solely on clause 3 (measured 27 at that time). Even in best case (this verdict COMPLETE) the row re-binds to a passing run -> 27, still not below 27; a drop below 27 requires green re-recorded verdicts for other bound rows (AUG-200/205/206/207...), not delivered (commit touches config.yaml only; commit message concedes 'bound_failed_verdict=27 (unchanged, as expected)'). CLAUSE 3 FAILS.\\nderived_0 seam PASS: installed gitreins pipx venv engine/guard_manager.py:3433 reads guards.test_command; :3492-3500 spawn via scanner_nice.shell_wrap + command_hygiene.run_bounded (command_hygiene.py:189,200 shell=True); _resolve_test_command passes non-runner-prefixed strings verbatim -> env prefix takes effect; empirically proven by cc32ff40 tests step.\\nderived_1 CI unaffected PASS: .github/workflows/ci.yml invokes bash tests/gate.sh directly (not via guards.test_command); commit touched only .gitreins/config.yaml.\\nVERDICT: INCOMPLETE (given criterion FAIL on clause 3; derived_0, derived_1 PASS).\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "3a8e23d84df835fd8967039a0b30315c1e52aa29420373703dfc8d6604be867c"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"derived_0: The judge/tier-1 tests step executes guards.test_command verbatim through the installed engine, so the env prefix `DUCKBRAIN_URL=http://127.0.0.1:3000` actually reaches tests/gate.sh (wired, not dead config)\", \"key\": \"derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "f28a9bcf7e4feab9db78d2bdaa905e9ef08b1d2b0f247884b9a96b6f718cc70b"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"derived_1: The change does not degrade the GitHub Actions CI arm: ci.yml runs tests/gate.sh directly and the hosted-CI skip path (AUGER_CI=1 + runner markers) remains the only CI route, unaffected by the guards.test_command edit\", \"key\": \"derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "fcc20a37890338242937b6ec11e2303770d4c7acab557a18275667701c3a02af"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"verified_derived_0: PASS \\u2014 installed engine executes guards.test_command verbatim: pipx venv engine/guard_manager.py:3433 `test_command = self.config.get(\\\"guards\\\", {}).get(\\\"test_command\\\", ...)`; :3492-3500 spawns via scanner_nice.shell_wrap -> command_hygiene.run_bounded (command_hygiene.py:189,200 shell=True); _resolve_test_command passes strings without uv/pipenv/poetry prefixes through unchanged, so the env assignment stays. Empirical proof: cc32ff40 verdict tier1 tests step passed=True exit=0 with 'LIVE ARMS: ran 2; skipped 0 / GATE PASS' on this host whose ambient DUCKBRAIN_URL is empty (first-hand echo). Also first-hand: DUCKBRAIN_URL=... bash tests/gate.sh enters pytest arm; unset fails rc=2.\\nverified_derived_1: PASS \\u2014 .github/workflows/ci.yml:3,37-39 runs `tests/gate.sh` directly under AUGER_CI=1 + GITHUB runner markers; commit 4638a30 touched only .gitreins/config.yaml (git show --name-only), so the hosted-CI path is untouched; fail-closed AUGER_CI=1 refusal re-verified first-hand rc=2.\", \"key\": \"verified_derived_0_and_1\"}",
+          "exit_code": 0,
+          "output_sha": "5757aafa65199419f93eb6499ed5c9629aeecf2e58b0d6f46449d8b7d619cb1b"
+        }
+      ]
+    },
+    "fix_verification": {
+      "id": "fix_verification",
+      "passed": true,
+      "any_failed": false,
+      "summary": "fix_verification: 1 finding(s) verified\n  \u2717 tier2:item_0 [unclassified] not_fixed: flagged code still present at .gitreins/config.yaml:22 \u2014 region unchanged\n  \u26a0 verdict capped at needs_review by 1 unhandled finding(s)",
+      "steps": [
+        {
+          "id": "fix_verification",
+          "type": "fix_verification",
+          "passed": true,
+          "output": "fix_verification: 1 finding(s) verified\n  \u2717 tier2:item_0 [unclassified] not_fixed: flagged code still present at .gitreins/config.yaml:22 \u2014 region unchanged\n  \u26a0 verdict capped at needs_review by 1 unhandled finding(s)",
+          "error": "",
+          "data": {
+            "dispositions": [
+              {
+                "finding_id": "tier2:item_0",
+                "severity": "",
+                "disposition": "not_fixed",
+                "evidence": "flagged code still present at .gitreins/config.yaml:22 \u2014 region unchanged",
+                "path": ".gitreins/config.yaml",
+                "line": 22
+              }
+            ],
+            "counts": {
+              "not_fixed": 1
+            },
+            "verdict_cap": "needs_review",
+            "capped_findings": [
+              "tier2:item_0"
+            ]
+          }
+        }
+      ],
+      "dispositions": [
+        {
+          "finding_id": "tier2:item_0",
+          "severity": "",
+          "disposition": "not_fixed",
+          "evidence": "flagged code still present at .gitreins/config.yaml:22 \u2014 region unchanged",
+          "path": ".gitreins/config.yaml",
+          "line": 22
+        }
+      ],
+      "verdict_cap": "needs_review"
+    }
+  },
+  "context_stats": {
+    "diff_source": "working-tree",
+    "diff_bytes": 535,
+    "prompt_bytes": 16433
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "",
+    "error": "unparseable reviewer reply: no parseable JSON object in reply: ''",
+    "raw_reply": "",
+    "retry": {
+      "count": 1,
+      "raw_reply": ""
+    },
+    "review_state": {
+      "emitted": [],
+      "carried": []
+    }
+  },
+  "summary": "Stage tier1: PASS\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10\n\nStage tier2: FAIL\n  INCOMPLETE\n  \u2717 judge/tier1 launch path supplies DUCKBRAIN_URL so a verdict recorded on this host has its tests step passed=true; fail-closed kept (unset DUCKBRAIN_URL still exits 2; AUGER_CI=1 downgrade on non-runner host still refuses); audit bound_failed_verdict drops below the 27 recorded at filing: The criterion has three clauses; clauses 1 and 2 PASS, clause 3 FAILS as measured. (1) SUPPLY + GREEN VERDICT: .gitreins/config.yaml:22 (commit 4638a30, the only file it touches) now reads `test_command: DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh`; this shell env assignment demonstrably reaches the gate \u2014 the installed gitreins engine executes this string verbatim (pipx venv engine/guard_manager.py:3433 reads guards.test_command, spawned via command_hygiene.run_bounded shell=True at command_hygiene.py:189/200 through guard_manager.py:3492-3500), and .gitreins/history/2026-11-25/cc32ff40/verdict.json (run on this host, worktree /home/kara/auger, evaluated_at 2026-11-25T01:51:40) records the tier1 tests step passed=true exit=0 ending 'LIVE ARMS: ran 2; skipped 0 / GATE PASS'; first-hand probe `DUCKBRAIN_URL=http://127.0.0.1:3000 GATE_MODE_ONLY=1 bash tests/gate.sh` -> 'gate mode: live' rc=0, and a 45s probe with the URL set passed the preflight into the pytest arm; ambient DUCKBRAIN_URL in this shell is empty, so the URL comes solely from that config line. (2) FAIL-CLOSED KEPT, first-hand: `env -u DUCKBRAIN_URL bash tests/gate.sh` -> rc=2 'ERROR: DuckBrain URL missing \u2014 set DUCKBRAIN_URL before running the live gate' (tests/gate.sh:78-80, exit 2 at :94); `AUGER_CI=1 GITHUB_ACTIONS= CI= bash tests/gate.sh` on this non-runner host -> rc=2 'ERROR: refusing AUGER_CI=1 downgrade on a non-runner host' (tests/gate.sh:29-35); git show 4638a30 --name-only = .gitreins/config.yaml only, so tests/gate.sh is untouched. (3) AUDIT DROP NOT ACHIEVED: first-hand `python3 scripts/audit_board_evidence.py` prints `bound_failed_verdict=28 ... RESULT: OK` \u2014 28 is NOT below the 27 recorded at filing. --verbose composition shows the increment is exactly the new row `BOUND AUG-208 cc32ff40 (fail)` alongside the 27 pre-existing BOUND(fail) rows (AUG-200, AUG-205 589dd5f9, AUG-206 8a7e18a2, AUG-207 36569fbe, ...): the prior judge verdict of AUG-208 itself, whose tier1 tests step was green but whose overall passed=false was caused by clause 3 measuring 27 at that time. Even in the best case (this evaluation recording COMPLETE and the row re-binding to a passing run) the count returns to 27, not below it; a drop below 27 requires green re-recorded verdicts for the other bound rows, and the change touches only .gitreins/config.yaml \u2014 the commit message itself concedes 'bound_failed_verdict=27 (unchanged, as expected \u2014 the drop accumulates as post-fix verdicts re-record)'. The criterion as written demands the measured drop; it has not happened.\n  \u2713 The judge/tier-1 tests step executes guards.test_command verbatim through the installed engine, so the env prefix `DUCKBRAIN_URL=http://127.0.0.1:3000` actually reaches tests/gate.sh (wired, not dead config): Installed engine: /home/kara/.local/share/pipx/venvs/gitreins/lib/python3.14/site-packages/engine/guard_manager.py:3433 `test_command = self.config.get(\"guards\", {}).get(\"test_command\", ...)`; :3492-3500 spawns `spawn_cmd = scanner_nice.shell_wrap(resolved_cmd, ...)` then `command_hygiene.run_bounded(...)`; engine/command_hygiene.py:189/200 documents shell=True execution; _resolve_test_command (guard_manager.py:838+) passes commands without uv/pipenv/poetry runner prefixes through unchanged, so the leading env assignment survives. Empirical seam proof: cc32ff40 verdict tier1 tests step passed=True exit=0 with 'LIVE ARMS: ran 2; skipped 0 / GATE PASS' while the same shell has empty ambient DUCKBRAIN_URL (first-hand echo), and unset-URL runs exit 2 \u2014 the only URL source is the config line.\n  \u2713 The change does not degrade the GitHub Actions CI arm: ci.yml runs tests/gate.sh directly and the hosted-CI skip path (AUGER_CI=1 + runner markers) remains the only CI route, unaffected by the guards.test_command edit: .github/workflows/ci.yml:3,37-39 runs `tests/gate.sh` directly with AUGER_CI=1 in the job env and GitHub's runner markers \u2014 it does not consume guards.test_command; commit 4638a30 touched only .gitreins/config.yaml (git show --name-only); the non-runner refusal was re-verified first-hand rc=2, so a leaked AUGER_CI=1 off CI still fails closed.\n  \u2717 Coverage FAILED \u2014 not passing: judge/tier1 launch path supplies DUCKBRAIN_URL so a verdict recorded on this host has its tests step passed=true; fail-closed kept (unset DUCKBRAIN_URL still exits 2; AUGER_CI=1 downgrade on non-runner host still refuses); audit bound_failed_verdict drops below the 27 recorded at filing\nClauses 1-2 verified first-hand (config.yaml:22 supplies DUCKBRAIN_URL on the engine-executed test_command; cc32ff40 tier1 tests passed=true; unset-URL and AUGER_CI=1 both exit 2), but clause 3 fails: the audit measures bound_failed_verdict=28, not below 27 \u2014 the increment is AUG-208's own prior verdict bound as (fail).\n\nStage fix_verification: PASS\n  fix_verification: 1 finding(s) verified\n  \u2717 tier2:item_0 [unclassified] not_fixed: flagged code still present at .gitreins/config.yaml:22 \u2014 region unchanged\n  \u26a0 verdict capped at needs_review by 1 unhandled finding(s)\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-11-25T02:09:08.831022",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-25T02:09:08.882471+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 3916,
+        "truncated": false,
+        "source": "git show 4638a305845c"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 30682,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-208"
+  }
+}
