@@ -528,3 +528,109 @@ def test_recall_battery_refuses_unresolvable_target(tmp_path, monkeypatch):
         recall_battery.resolve_targets("fixture", [("q", "FIX-NOPE-NOPE-S999")])
     with pytest.raises(SystemExit, match="unresolved target"):
         recall_battery.resolve_targets("fixture", [("q", None)])
+
+
+def _patch_register_store(monkeypatch) -> dict:
+    """A fake substrate store whose read-back sees exactly what `remember` wrote."""
+    store: dict[str, str] = {}
+
+    def fake_remember(ns, key, content):
+        assert ns == recall_battery.NAMESPACE
+        store[key] = content
+
+    def fake_read_back_rows(project):
+        return [{"key": key} for key in store]
+
+    monkeypatch.setattr(recall_battery, "read_back_rows", fake_read_back_rows)
+    monkeypatch.setattr(recall_battery.auger, "remember", fake_remember)
+    return store
+
+
+def _fake_blocks(monkeypatch, texts: dict[str, str]) -> None:
+    monkeypatch.setattr(
+        recall_battery,
+        "load_blocks",
+        lambda project: [
+            {"id": bid, "text": text, "status": "active"} for bid, text in texts.items()
+        ],
+    )
+
+
+def test_register_is_idempotent_by_read_back(monkeypatch):
+    """AUG-181 AC2: a second register run on an unchanged corpus writes ZERO new rows.
+
+    A memory write APPENDS and there is no row DELETE route, so the guard must be the
+    read-back of stored keys, not the previous run's log.
+    """
+    _fake_blocks(
+        monkeypatch,
+        {
+            "FIX-INTRO-SETUP-S001": "Install the tool.",
+            "FIX-INTRO-TEARDOWN-S003": "Tear it down.",
+        },
+    )
+    _patch_register_store(monkeypatch)
+    first = recall_battery.register("fixture")
+    assert first["rows_planned"] == 2
+    assert first["rows_written"] == 2 and first["skipped_existing"] == 0
+    second = recall_battery.register("fixture")
+    assert second["rows_written"] == 0
+    assert second["skipped_existing"] == 2
+
+
+def test_register_skips_partial_prefixes_and_names_failures(monkeypatch):
+    """A half-registered prefix (or a newly named block) only writes the MISSING keys."""
+    _fake_blocks(
+        monkeypatch,
+        {
+            "FIX-INTRO-SETUP-S001": "Install the tool.",
+            "FIX-NEW-BLOCK-S004": "New prose.",
+        },
+    )
+    store = _patch_register_store(monkeypatch)
+    # The prefix already holds ONE of the two keys (an earlier run wrote it, or it was
+    # written under the append regime). Only the genuinely missing key may be POSTed.
+    store[f"{recall_battery.project_key('fixture')}FIX-INTRO-SETUP-S001"] = (
+        "already there"
+    )
+    report = recall_battery.register("fixture")
+    assert report["rows_written"] == 1 and report["skipped_existing"] == 1
+    assert f"{recall_battery.project_key('fixture')}FIX-NEW-BLOCK-S004" in store
+
+
+def test_register_failed_writes_are_named_not_counted(tmp_path, monkeypatch):
+    """A row that 500s through every retry is named in `failed_rows` and NOT counted as added."""
+    _fake_blocks(monkeypatch, {"FIX-INTRO-SETUP-S001": "Install the tool."})
+    _patch_register_store(monkeypatch)
+
+    def failing_remember(ns, key, content):
+        raise SystemExit(f"remember {key} failed (500): INTERNAL_ERROR")
+
+    monkeypatch.setattr(recall_battery.auger, "remember", failing_remember)
+    report = recall_battery.register("fixture")
+    assert report["rows_written"] == 0 and report["failed_rows"], report
+    assert "FIX-INTRO-SETUP-S001" in report["failed_rows"][0]
+
+
+def test_census_derives_counts_from_read_back(monkeypatch):
+    """AUG-181 AC1: keys/rows/duplicate_keys come from the read-back rows, never a log."""
+    prefix = recall_battery.project_key("fixture")
+    rows = (
+        [{"key": f"{prefix}A"}] * 2
+        + [{"key": f"{prefix}B"}]
+        + [
+            {"key": f"{prefix}C-P01"},
+            {"key": f"{prefix}C-P01"},
+            {"key": f"{prefix}C-P02"},
+        ]
+    )
+    monkeypatch.setattr(recall_battery, "read_back_rows", lambda project: rows)
+    row = recall_battery.census("fixture")
+    assert row["keys"] == 4
+    assert row["rows"] == 6
+    assert row["duplicate_keys"] == 2
+    assert row["duplicate_rows"] == 4
+    assert row["max_copies"] == 2
+    # Every count must carry the read-back command that produced it (AC3 FAILIF).
+    assert "/api/memories?namespace=auger" in row["read_back"]
+    assert "prefix=" in row["read_back"] and "limit=" in row["read_back"]

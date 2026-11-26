@@ -1,17 +1,25 @@
 #!/usr/bin/env python3
 """AUG-176 AC3 recall battery: register converted blocks, query, report the hit rate.
 
-Two halves, both driven against the LIVE DuckBrain substrate (DUCKBRAIN_URL/DUCKBRAIN_API_KEY):
+Three halves, all driven against the LIVE DuckBrain substrate (DUCKBRAIN_URL/DUCKBRAIN_API_KEY):
 
 register  every active block of each converted corpus becomes one memory row keyed
           `/auger/AUG176-<project>/<BLOCK-ID>` whose content is the block's verbatim text —
           so a hit's key round-trips to the block id and (via the corpus manifest) to the
-          source file + section anchor.
+          source file + section anchor. IDEMPOTENT BY READ-BACK (AUG-181): a memory write
+          APPENDS and there is no row DELETE route, so before writing the keys already
+          stored under the prefix are read back and skipped — a re-run adds 0 rows
+          (`rows_written=0`, `skipped_existing` names how many keys were already present).
 
 run       >=10 realistic queries per project, each with a KNOWN target block; the search is
           auger's own recall surface (`recall()` -> the substrate's semantic search, scoped to
           the project's key prefix); a query HITS when the target block is in the top-5. The
           report is the AC3 table; a miss names the query so it can be re-chunked and re-run.
+
+census    per-project `keys` / `rows` / `duplicate_keys` over the whole corpus prefix,
+          derived ENTIRELY from paged read-backs (`GET /api/memories?namespace=auger&
+          prefix=...`) — never from a registration log (AUG-181 AC1). Each count carries
+          the read-back command that produced it.
 
 The evaluator (`_hit`) is a pure function so tests can pin its contract without a substrate.
 """
@@ -22,7 +30,9 @@ import argparse
 import json
 import sys
 import time
+from collections import Counter
 from pathlib import Path
+from urllib.parse import quote
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
@@ -34,6 +44,10 @@ NAMESPACE = "auger"
 PROJECT_KEY_PREFIX = "AUG176"
 CORPORA_ROOT = REPO_ROOT / "corpora"
 TOP_K = 5
+#: Rows per page of a `GET /api/memories` read-back. The substrate honours `limit` up to
+#: its own hard cap (1000 measured); 500 keeps one page small enough to stay under
+#: transport timeouts while the whole corpus prefix still walks in a handful of pages.
+READ_BACK_PAGE = 500
 #: Rows requested per query. The namespace stores every block at least twice (see
 #: `_distinct_keys`), so the window must be wider than TOP_K for "top-5 BLOCKS" to be
 #: measurable; the report records how many distinct blocks the window actually held.
@@ -185,6 +199,57 @@ def project_key(project: str) -> str:
     return f"/auger/{PROJECT_KEY_PREFIX}-{project}/"
 
 
+def read_back_command(
+    project: str, offset: int = 0, limit: int = READ_BACK_PAGE
+) -> str:
+    """The exact substrate command a census/registration count came from.
+
+    AUG-181: every number this script prints about stored rows must be derivable from a
+    read-back, never from a registration log — so each census row carries the command that
+    produced it, ready to re-run against the live substrate.
+    """
+    prefix = quote(project_key(project), safe=auger._QUERY_VALUE_SAFE)
+    ns = auger.url_seg(NAMESPACE)
+    return (
+        f"GET {auger.DB_URL}/api/memories?namespace={ns}"
+        f"&prefix={prefix}&limit={limit}&offset={offset}"
+    )
+
+
+def read_back_rows(project: str, max_pages: int = 200) -> list[dict]:
+    """Every stored memory row under the project's key prefix, via paged read-back.
+
+    AUG-181: the substrate's row listing honours `limit` up to a server cap of 1000 and
+    pages through `offset`/`hasMore`/`nextOffset`, so a full walk needs a loop, not one
+    GET. Returns the raw item dicts (one per STORED row — duplicates included, which is
+    exactly what the census and the idempotence guard must see). A read failure is loud
+    (`SystemExit` naming the substrate's own words), never an empty list that a caller
+    could misread as "nothing stored".
+    """
+    rows: list[dict] = []
+    offset, page = 0, READ_BACK_PAGE
+    for _ in range(max_pages):
+        st, body, _ = auger.db(
+            f"/api/memories?namespace={auger.url_seg(NAMESPACE)}"
+            f"&prefix={quote(project_key(project), safe=auger._QUERY_VALUE_SAFE)}"
+            f"&limit={page}&offset={offset}",
+            timeout=180,
+        )
+        if st != 200:
+            raise auger.substrate_read_failure(NAMESPACE, "row read-back", st, body)
+        items = body.get("items", []) if isinstance(body, dict) else []
+        rows.extend(item for item in items if isinstance(item, dict))
+        if not body.get("hasMore"):
+            break
+        offset = body.get("nextOffset", offset + page)
+    else:
+        raise SystemExit(
+            f"read_back_rows: {project} did not finish within {max_pages} pages "
+            f"(give up loudly, never serve a truncated census)"
+        )
+    return rows
+
+
 def _distinct_keys(hits: list) -> list[str]:
     """Distinct keys of `hits`, in substrate order, with PART rows attributed to their block.
 
@@ -231,8 +296,6 @@ def load_blocks(project: str) -> list[dict]:
 
 def register(project: str) -> dict:
     blocks = load_blocks(project)
-    written = 0
-    failures: list[str] = []
     rows: list[tuple[str, str]] = []
     for block in blocks:
         content = block["text"].strip()
@@ -264,28 +327,84 @@ def register(project: str) -> dict:
         parts = hard
         for idx, part in enumerate(parts, start=1):
             rows.append((f"{project_key(project)}{block['id']}-P{idx:02d}", part))
-    for key, content in rows:
+    # AUG-181, idempotence by read-back: a memory write APPENDS (there is no upsert and
+    # no DELETE route for a row), so a plain re-run doubles the namespace. Read back the
+    # keys already stored under this prefix and skip them; only genuinely new keys are
+    # POSTed. The read-back is the guard's authority — never the previous run's log.
+    existing = {str(r.get("key", "")) for r in read_back_rows(project)}
+    existing.discard("")
+    pending = [(key, content) for key, content in rows if key not in existing]
+    skipped_existing = len(rows) - len(pending)
+    added = 0
+    failures: list[str] = []
+    for key, content in pending:
         # The substrate answers an occasional 500 INTERNAL_ERROR under continuous write
         # load; a row that fails after bounded retries is NAMED, never silently skipped.
+        ok = False
         for attempt in range(4):
             try:
                 auger.remember(NAMESPACE, key, content)
+                ok = True
                 break
             except SystemExit as exc:
                 if attempt == 3:
                     failures.append(f"{key.rsplit('/', 1)[-1]}: {exc}")
                 else:
                     time.sleep(1.5 * (attempt + 1))
-        written += 1
-        if written % 100 == 0:
-            print(f"  {project}: {written} row(s) written", file=sys.stderr, flush=True)
+        if not ok:
+            continue  # a failed write must not count as "added"
+        added += 1
+        if added % 100 == 0:
+            print(f"  {project}: {added} row(s) added", file=sys.stderr, flush=True)
         time.sleep(0.05)  # bounded politeness: the substrate embeds every row on write
     return {
         "project": project,
         "blocks": len(blocks),
-        "rows_written": written,
+        "rows_planned": len(rows),
+        "rows_written": added,
+        "skipped_existing": skipped_existing,
         "failed_rows": failures,
     }
+
+
+def census(project: str) -> dict:
+    """Per-project duplicate census, derived ENTIRELY from read-backs (AUG-181 AC1).
+
+    `rows` is the number of stored memory rows under the prefix, `keys` the distinct key
+    strings among them, `duplicate_keys` the keys stored more than once. The command that
+    produced the numbers rides in the output (`read_back`) — a count without its
+    read-back is not evidence.
+    """
+    rows = read_back_rows(project)
+    counts = Counter(str(r.get("key", "")) for r in rows)
+    counts.pop("", None)
+    duplicated = {key: n for key, n in counts.items() if n > 1}
+    return {
+        "project": project,
+        "prefix": project_key(project),
+        "keys": len(counts),
+        "rows": sum(counts.values()),
+        "duplicate_keys": len(duplicated),
+        "duplicate_rows": sum(n for n in duplicated.values()),
+        "max_copies": max(counts.values(), default=0),
+        "duplicate_sample": sorted(duplicated)[:20],
+        "read_back": (
+            f"{read_back_command(project, offset=0, limit=READ_BACK_PAGE)} — "
+            f"paged via hasMore/nextOffset until the walk completes"
+        ),
+    }
+
+
+def print_census_row(row: dict) -> None:
+    print(
+        f"{row['prefix']}: keys={row['keys']} rows={row['rows']} "
+        f"duplicate_keys={row['duplicate_keys']} "
+        f"(duplicate_rows={row['duplicate_rows']}, max_copies={row['max_copies']})"
+    )
+    print(f"  read-back: {row['read_back']}")
+    if row["duplicate_sample"]:
+        names = "; ".join(row["duplicate_sample"])
+        print(f"  duplicate keys (first {len(row['duplicate_sample'])}): {names}")
 
 
 def resolve_targets(project: str, queries: list[tuple[str, str | None]]) -> list[dict]:
@@ -359,7 +478,9 @@ def run_battery(project: str, queries: list[dict]) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument(
-        "action", choices=["register", "run"], help="register rows / run queries"
+        "action",
+        choices=["register", "run", "census"],
+        help="register rows / run queries / per-project duplicate census (read-back derived)",
     )
     parser.add_argument(
         "--project", default=None, help="one project (default: all three)"
@@ -371,6 +492,10 @@ def main(argv: list[str] | None = None) -> int:
         for project in projects:
             stats = register(project)
             print(json.dumps(stats))
+        return 0
+    if args.action == "census":
+        for project in projects:
+            print_census_row(census(project))
         return 0
     reports = []
     for project in projects:
