@@ -89,6 +89,43 @@ REMEDY = (
 
 
 # ---------------------------------------------------------------- CLI harness
+#: AUG-212 (the AUG-210 ambient-dependence family): the session preflight's
+#: AUGER_BLOCKED_BY sentinel only guards a blocker present at SESSION START. A
+#: full-fleet sync push — or any competing writer — that starts MID-RUN instead
+#: lands inside live arms as the substrate's own contention refusals, and judge
+#: verdict 4572d101 recorded exactly that: the ask-loop gate-refusal test failed
+#: its exact-shape assertions at a tip three same-tier-1 runs graded green
+#: (2 failed / 911 passed at b6b3425). The typed write-lock shape is
+#: `SubstrateLockContended` (AUG-209, handled in `run_cli` below). The remaining
+#: MEASURED ambient contention signatures are classified here, FAIL-CLOSED: only
+#: these measured shape pairs are downgraded to the attributed named skip —
+#: every other SystemExit keeps its loud path, including the deliberate
+#: non-contention 503s (no SERIALIZER_LOCKED code) the AUG-076/AUG-085 tests pin:
+#:   * "failed (503)" + "SERIALIZER_LOCKED" — the AUG-209 measured lock body on a
+#:     READ or on a write path that is not typed: the SAME lock event (a competing
+#:     writer holds the namespace), so the skip reuses the AUG-209 convention text
+#:     and `scripts/gate_skip_bound.py` counts it in the same lock-storm bound.
+#:   * "failed (409)" + "push in flight"/"sync push" — the AUG-197 measured
+#:     sync-push conflict the preflight names when it is present at start.
+def ambient_contention_skip_reason(exc: BaseException) -> str | None:
+    """The attributed named-skip reason for a MEASURED ambient contention shape, else None.
+
+    `None` means "not one of the measured shapes" — the caller keeps the loud path.
+    """
+    text = str(exc)
+    lowered = text.lower()
+    if "failed (503)" in text and "SERIALIZER_LOCKED" in text:
+        return (
+            "substrate write contention (503 SERIALIZER_LOCKED, AUG-209): "
+            f"{text} — mid-run ambient classification (AUG-212, AUG-210 family)"
+        )
+    if "failed (409)" in text and (
+        "push in flight" in lowered or "sync push" in lowered
+    ):
+        return f"substrate sync-push contention (AUG-212, AUG-210 family): {text}"
+    return None
+
+
 def run_cli(argv: list[str]) -> tuple[int, str]:
     """Invoke the CLI in-process and capture its stdout. SystemExit is NOT caught here.
 
@@ -99,6 +136,13 @@ def run_cli(argv: list[str]) -> tuple[int, str]:
     contention lands (fixture setup or test body), which is why one lock event
     costs skipped tests instead of ERRORing every fixture-dependent case at
     setup. Every other SystemExit propagates: the loud path is untouched.
+
+    AUG-212 adds the mid-run arm of the same principle: a MEASURED ambient
+    contention signature that reaches the harness as a PLAIN SystemExit (the
+    AUG-209 lock body on a read, or the AUG-197 sync-push conflict) is attributed
+    the same way instead of failing a refusal-asserting test's exact-shape
+    assertions. Fail-closed: `ambient_contention_skip_reason` downgrades only the
+    measured shape pairs; anything else re-raises.
     """
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
@@ -108,6 +152,13 @@ def run_cli(argv: list[str]) -> tuple[int, str]:
             pytest.skip(
                 f"substrate write contention (503 SERIALIZER_LOCKED, AUG-209): {exc}"
             )
+        except (
+            SystemExit
+        ) as exc:  # AUG-212: a measured ambient shape is a named skip; else loud
+            reason = ambient_contention_skip_reason(exc)
+            if reason is None:
+                raise
+            pytest.skip(reason)
     return rc, buf.getvalue()
 
 

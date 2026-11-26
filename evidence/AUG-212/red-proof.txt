@@ -1,0 +1,201 @@
+AUG-212 RED-PROOF — new regression tests against the BASE tree (25c6764): base tests/conftest.py + base tests/test_auger.py with the AUG-212 regression tests appended. 2026-11-26T06:52:26Z. Host had just seen a REAL full-fleet sync push (pid 1335969, 'node --import tsx bin/duckbrain.ts s3 sync all push', ~10min), recorded as the ambient event the classification targets.
+ERROR: AUGER_BLOCKED_BY: full-fleet sync push pid 1745558
+
+rc=4
+FFFF.....                                                                [100%]
+=================================== FAILURES ===================================
+_ test_ask_refusal_names_a_mid_run_sync_push_contention_skip_instead_of_failing _
+
+project = {'ns': 'auger-pytest-beec4c54-b12af49c622b', 'pid': 'P-PYTEST', 'seed': 'One small CLI that watches directories, recor...tra services.\n', 'seed_file': '/mnt/ssd/tmp/pytest-of-kara/pytest-6799/test_ask_refusal_names_a_mid_r0/seed.txt', ...}
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cf2a9e5a780>
+
+    def test_ask_refusal_names_a_mid_run_sync_push_contention_skip_instead_of_failing(
+        project: dict, monkeypatch
+    ):
+        """AUG-212 (AUG-210 family, verdict 4572d101): a full-fleet sync push that starts
+        AFTER the session preflight flew lands inside the ask verb's live reads as the
+        substrate's own contention refusals. The QA-AUGER-14 injected-process-list seam
+        names the sentinel the preflight would have printed; the ask-loop refusal test
+        must then answer the mid-run contention with a NAMED SKIP — never a FAIL of the
+        exact-shape assertions, and never a silent skip.
+        """
+        sentinel = conftest.substrate_preflight(
+            process_commands=[(424242, "node bin/duckbrain.ts s3 sync all push")],
+            push_probe=lambda: None,
+            lock_holder=lambda: None,
+        )
+        assert sentinel == "AUGER_BLOCKED_BY: full-fleet sync push pid 424242"
+    
+        def contended_read(*a, **k):
+            raise SystemExit(
+                "select question failed (503): {'error': \"Namespace "
+                f"'{project['ns']}' is locked by another writer process\", "
+                "'code': 'SERIALIZER_LOCKED'}"
+            )
+    
+        monkeypatch.setattr(auger, "askable_questions", contended_read)
+        with pytest.raises(pytest.skip.Exception) as ei:
+>           test_ask_stores_nothing_when_a_gate_refuses_the_proposal(
+                project,
+                monkeypatch,
+                ask_stub(Q_NEXT, 0.24, None),
+                "the gate returned no answered-verdict",
+            )
+
+tests/test_auger.py:11787: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/test_auger.py:5848: in test_ask_stores_nothing_when_a_gate_refuses_the_proposal
+    rc, out = run_cli(["-n", ns, "ask"])
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/conftest.py:106: in run_cli
+    rc = auger.main(argv)
+         ^^^^^^^^^^^^^^^^
+auger.py:14935: in main
+    return a.fn(a)
+           ^^^^^^^
+auger.py:5167: in cmd_ask
+    ask = askable_questions(ns, pid)
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+a = ('auger-pytest-beec4c54-b12af49c622b', 'P-PYTEST'), k = {}
+
+    def contended_read(*a, **k):
+>       raise SystemExit(
+            "select question failed (503): {'error': \"Namespace "
+            f"'{project['ns']}' is locked by another writer process\", "
+            "'code': 'SERIALIZER_LOCKED'}"
+        )
+E       SystemExit: select question failed (503): {'error': "Namespace 'auger-pytest-beec4c54-b12af49c622b' is locked by another writer process", 'code': 'SERIALIZER_LOCKED'}
+
+tests/test_auger.py:11779: SystemExit
+----------------------------- Captured stderr call -----------------------------
+embedding query... (first recall in a process pays the provider round-trip, ~20s)
+__ test_ask_refusal_names_the_fail_closed_store_read_skip_instead_of_failing ___
+
+project = {'ns': 'auger-pytest-beec4c54-4b3425515cac', 'pid': 'P-PYTEST', 'seed': 'One small CLI that watches directories, recor...tra services.\n', 'seed_file': '/mnt/ssd/tmp/pytest-of-kara/pytest-6799/test_ask_refusal_names_the_fai0/seed.txt', ...}
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cf2aa131e00>
+
+    def test_ask_refusal_names_the_fail_closed_store_read_skip_instead_of_failing(
+        project: dict, monkeypatch
+    ):
+        """AUG-212: the OTHER measured ambient shape — the store could not be read
+        mid-run, so the ask verb takes its own AUG-075 fail-closed exit (rc 1,
+        'substrate unavailable — cannot ask'). The refusal test classifies that shape
+        as a named skip too: the exact-shape contract was never reached, and the skip
+        carries the store's own words."""
+        def dead_recall(*a, **k):
+            raise auger.SubstrateError(
+                f"substrate read failed for {project['ns']!r} (status 0): "
+                "transport: connection refused — a failed read is NOT an empty store"
+            )
+    
+        monkeypatch.setattr(auger, "recall", dead_recall)
+        with pytest.raises(pytest.skip.Exception) as ei:
+>           test_ask_stores_nothing_when_a_gate_refuses_the_proposal(
+                project,
+                monkeypatch,
+                ask_stub(Q_NEXT, 0.24, None),
+                "the gate returned no answered-verdict",
+            )
+
+tests/test_auger.py:11816: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+project = {'ns': 'auger-pytest-beec4c54-4b3425515cac', 'pid': 'P-PYTEST', 'seed': 'One small CLI that watches directories, recor...tra services.\n', 'seed_file': '/mnt/ssd/tmp/pytest-of-kara/pytest-6799/test_ask_refusal_names_the_fai0/seed.txt', ...}
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cf2aa131e00>
+stub = <function ask_stub.<locals>._stub at 0x7cf2ae6a4460>
+want = 'the gate returned no answered-verdict'
+
+    @pytest.mark.parametrize(
+        "stub, want",
+        [
+            (ask_stub("", 0.24, 0.10), "JEV proposed no question"),
+            (
+                ask_stub(Q_NEXT, 0.24, auger.T_ANSWERED + 0.05),
+                "the gate scores it already answered",
+            ),
+            (ask_stub(Q_NEXT, 0.24, None), "the gate returned no answered-verdict"),
+        ],
+    )
+    def test_ask_stores_nothing_when_a_gate_refuses_the_proposal(
+        project: dict, monkeypatch, stub, want
+    ):
+        """Fail-closed: every refusal leaves the `question` table exactly as empty as it was, and says so."""
+        ns, pid = project["ns"], project["pid"]
+        monkeypatch.setattr(auger, "jev", stub)
+    
+        rc, out = run_cli(["-n", ns, "ask"])
+>       assert rc == 0, out
+E       AssertionError: substrate unavailable — cannot ask: substrate read failed for 'auger-pytest-beec4c54-4b3425515cac' (status 0): transport: connection refused — a failed read is NOT an empty store
+E         fail-closed: no next-question is invented while the memory store cannot be read.
+E         
+E       assert 1 == 0
+
+tests/test_auger.py:5849: AssertionError
+________ test_run_cli_converts_a_read_lock_landing_into_the_named_skip _________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cf2aed1dd90>
+
+    def test_run_cli_converts_a_read_lock_landing_into_the_named_skip(monkeypatch):
+        """AUG-212 unit seam: the AUG-209 lock body landing on a READ (or on an untyped
+        write path) reaches `run_cli` as a plain SystemExit and is attributed the SAME
+        named skip — deliberately reusing the AUG-209 convention text so
+        `scripts/gate_skip_bound.py`'s existing lock-storm bound counts it, with the
+        AUG-212 attribution carried in the tail."""
+        def contended_main(argv):
+            raise SystemExit(_AUG212_LOCK_READ_EXIT)
+    
+        monkeypatch.setattr(auger, "main", contended_main)
+        with pytest.raises(pytest.skip.Exception) as ei:
+>           conftest.run_cli(["-n", "auger-pytest-x", "status"])
+
+tests/test_auger.py:11839: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/conftest.py:106: in run_cli
+    rc = auger.main(argv)
+         ^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+argv = ['-n', 'auger-pytest-x', 'status']
+
+    def contended_main(argv):
+>       raise SystemExit(_AUG212_LOCK_READ_EXIT)
+E       SystemExit: select question failed (503): {'error': "Namespace 'auger-pytest-x' is locked by another writer process", 'code': 'SERIALIZER_LOCKED'}
+
+tests/test_auger.py:11835: SystemExit
+_____ test_run_cli_converts_a_read_sync_push_conflict_into_the_named_skip ______
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x7cf2ac322be0>
+
+    def test_run_cli_converts_a_read_sync_push_conflict_into_the_named_skip(monkeypatch):
+        """AUG-212 unit seam: the AUG-197 measured sync-push conflict on a mid-run call
+        is the same ambient event the preflight names AUGER_BLOCKED_BY at start — the
+        harness attributes a named skip instead of failing the caller."""
+        def contended_main(argv):
+            raise SystemExit(
+                "delete question failed (409): {'error': 'sync push in progress'}"
+            )
+    
+        monkeypatch.setattr(auger, "main", contended_main)
+        with pytest.raises(pytest.skip.Exception) as ei:
+>           conftest.run_cli(["-n", "auger-pytest-x", "status"])
+
+tests/test_auger.py:11859: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+tests/conftest.py:106: in run_cli
+    rc = auger.main(argv)
+         ^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+argv = ['-n', 'auger-pytest-x', 'status']
+
+    def contended_main(argv):
+>       raise SystemExit(
+            "delete question failed (409): {'error': 'sync push in progress'}"
+        )
+E       SystemExit: delete question failed (409): {'error': 'sync push in progress'}
+
+tests/test_auger.py:11853: SystemExit
+4 failed, 5 passed, 346 deselected in 4.92s
+rc=1
