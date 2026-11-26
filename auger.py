@@ -13471,13 +13471,15 @@ def _git_toplevel(directory):
 
     Run with `-C`, never from the caller's cwd: the answer must be a function of the
     directory handed in, not of wherever the process happens to be standing.
+
+    AUG-170: the subprocess goes through `_spec_git_run`, so a host without a `git`
+    binary reaches the user as the typed `as-of-git-unavailable` refusal (exit 2,
+    `spec error (as-of-git-unavailable)`) from EVERY spec verb that resolves a
+    repository root — not as a raw FileNotFoundError traceback out of
+    `_spec_repository_root`. "Not a work tree" (a non-zero rev-parse) stays the
+    `None` return the AUG-127 validators build their own refusals on.
     """
-    probe = subprocess.run(
-        ["git", "-C", str(directory), "rev-parse", "--show-toplevel"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    probe = _spec_git_run(["git", "-C", str(directory), "rev-parse", "--show-toplevel"])
     if probe.returncode != 0:
         return None
     shown = probe.stdout.strip()
@@ -13490,15 +13492,17 @@ def _git_toplevel(directory):
 def _spec_git_run(args: list) -> subprocess.CompletedProcess:
     """A `git` subprocess that refuses as `as-of-git-unavailable` when git is absent.
 
-    The refusal class belongs to the FEATURE (--as-of), not to repo discovery: the
-    AUG-127 validators keep `_git_toplevel`'s raise-through behaviour untouched.
+    AUG-167 introduced this seam for `--as-of`; AUG-170 made it THE seam for every
+    spec verb's git read, `_git_toplevel` included: a missing binary is a typed
+    refusal (`spec error (as-of-git-unavailable)`, exit 2), never a raw traceback.
     """
     try:
         return subprocess.run(args, capture_output=True, text=True, check=False)
     except FileNotFoundError:
         raise SpecError(
             "as-of-git-unavailable",
-            "the git executable is not available; --as-of reads corpus history through git",
+            "the git executable is not available; auger reads repository history and "
+            "repository roots through git",
         ) from None
 
 
@@ -13513,11 +13517,10 @@ def _spec_corpus_as_of(spec_root, ref: str):
     (a silently-current answer on a valid ref is exactly the defect this forbids).
     """
     spec_root = Path(spec_root).resolve()
-    top = None
-    try:
-        top = _git_toplevel(spec_root)
-    except FileNotFoundError:
-        pass
+    # AUG-170: a missing git binary raises the typed `as-of-git-unavailable` straight
+    # out of `_git_toplevel` (via `_spec_git_run`) — the old `except FileNotFoundError:
+    # pass` here is gone, because the refusal now happens at the seam, not at this caller.
+    top = _git_toplevel(spec_root)
     if top is None:
         if _spec_git_run(["git", "--version"]).returncode != 0:
             raise SpecError(

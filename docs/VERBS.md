@@ -780,7 +780,11 @@ loop* works through it command by command.
 to (AUG-127), and it must be a git work tree's top level. It defaults to
 `git rev-parse --show-toplevel` resolved FROM THE SPEC ROOT; with neither, the verb refuses
 `unresolvable-repo-root` rather than resolving obligations against auger's own checkout. See
-docs/XML-SPEC-SCHEMA.md § The repository root.
+docs/XML-SPEC-SCHEMA.md § The repository root. That default resolution runs git too, so a host
+without a `git` binary refuses `as-of-git-unavailable` (AUG-170) — the same typed code the
+`--as-of` feature refuses with, `spec error (as-of-git-unavailable)` on stderr and exit 2,
+never a raw traceback — from every spec verb that resolves a repository root (`validate`,
+`check`, `bundle`).
 
 Corpus: every `*.xml` under ROOT. Selection is AND across different flags and OR within one
 flag's repeated values (the `--option`/`--on` shape). Assembly emits the matched blocks plus
