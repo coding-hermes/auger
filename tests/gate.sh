@@ -189,6 +189,22 @@ run_pytest_arm(){
   local budget="${AUGER_GATE_PYTEST_BUDGET:-2400s}"
   local kill_after="${AUGER_GATE_PYTEST_KILL_AFTER:-30s}"
   local rc=0
+  # AUG-211 (AC2): LOCK-ATTRIBUTED skip-count bound for this arm. The AUG-209
+  # typed-contention skips are the right per-test answer, but a chronic 503
+  # SERIALIZER_LOCKED storm can convert dozens of tests into skips while the
+  # battery still exits 0 "green". The arm's output is therefore captured (-rs
+  # so every attributed skip prints its REASON) and its lock-attributed skip
+  # count graded against this ceiling (at-or-below passes) by
+  # scripts/gate_skip_bound.py; a storm past the ceiling fails the gate LOUDLY.
+  # Ceiling: 10 LOCK-attributed skips. Other skips (hosted-CI live-arm skips,
+  # unrelated foreign-leg contention) are OUT of scope and never trip the
+  # bound. Raise only with AUGER_GATE_SKIP_CEILING and a named reason.
+  local skip_ceiling="${AUGER_GATE_SKIP_CEILING:-10}"
+  local pytest_out
+  pytest_out="$(mktemp "${TMPDIR:-/tmp}/auger-gate-pytest-out.XXXXXX")" || pytest_out=""
+  if [ -z "$pytest_out" ]; then
+    echo "AUG-211: could not create the pytest output capture — the skip-count bound is UNPROVEN for this run" >&2
+  fi
   # tests/test_xml_specs.py (AUG-118): the XML spec corpus suite — hermetic (no DuckBrain, no JEV),
   # so it runs in the hosted-CI mode too. Named here so the guard's test command (`bash tests/gate.sh`)
   # cannot silently stop covering the XML surface.
@@ -254,7 +270,7 @@ run_pytest_arm(){
   # selection on the shipped corpus, and the four typed refusals (unknown-ref,
   # not-a-repository, corpus-missing, git-unavailable) answer rc 2 on empty stdout.
   # The run is read-only over specs/ and leaves no temp litter. Hermetic (~3s).
-  setsid timeout --kill-after="$kill_after" "$budget" "$GATE_PYTHON" -m pytest tests/test_auger.py tests/test_openapi_parity.py tests/test_api_service.py tests/test_upgrade_path.py tests/test_xml_specs.py tests/test_spec_check_node_list.py tests/test_verification_graph.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_spec_obligation_gate.py tests/test_spec_decision_ref.py tests/test_spec_rollback.py tests/test_spec_render.py tests/test_spec_assembly_report.py tests/test_trace_artifact.py tests/test_smoke_teardown.py tests/test_xsd_conformance.py tests/test_spec_repository_root.py tests/test_spec_alignment_check.py tests/test_spec_semantic_findings.py tests/test_spec_corpus_view.py tests/test_xml_task_contract.py tests/test_spec_context.py tests/test_plan_approval.py tests/test_task_context.py tests/test_task_packet.py tests/test_brief_spec_context.py tests/test_prd_proofs.py tests/test_usage_skill.py tests/test_packaging.py tests/test_packaging_wheel.py tests/test_teardown_resilience.py tests/test_board_evidence_audit.py tests/test_verdict_hygiene.py tests/test_executable_path_robustness.py tests/test_spec_as_of.py tests/test_ci_boardctl_install.py tests/test_board_shrink_check.py tests/test_spec_ingest.py tests/test_chd_full_corpus.py "$@" || rc=$? # python3 -m pytest: source-inventory marker
+  setsid timeout --kill-after="$kill_after" "$budget" "$GATE_PYTHON" -m pytest tests/test_auger.py tests/test_openapi_parity.py tests/test_api_service.py tests/test_upgrade_path.py tests/test_xml_specs.py tests/test_spec_check_node_list.py tests/test_verification_graph.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_spec_obligation_gate.py tests/test_spec_decision_ref.py tests/test_spec_rollback.py tests/test_spec_render.py tests/test_spec_assembly_report.py tests/test_trace_artifact.py tests/test_smoke_teardown.py tests/test_xsd_conformance.py tests/test_spec_repository_root.py tests/test_spec_alignment_check.py tests/test_spec_semantic_findings.py tests/test_spec_corpus_view.py tests/test_xml_task_contract.py tests/test_spec_context.py tests/test_plan_approval.py tests/test_task_context.py tests/test_task_packet.py tests/test_brief_spec_context.py tests/test_prd_proofs.py tests/test_usage_skill.py tests/test_packaging.py tests/test_packaging_wheel.py tests/test_teardown_resilience.py tests/test_board_evidence_audit.py tests/test_verdict_hygiene.py tests/test_executable_path_robustness.py tests/test_spec_as_of.py tests/test_ci_boardctl_install.py tests/test_board_shrink_check.py tests/test_spec_ingest.py tests/test_chd_full_corpus.py tests/test_substrate_hygiene.py -rs "$@" 2>&1 | tee "$pytest_out" || rc=$? # python3 -m pytest: source-inventory marker
   if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
     echo "GATE TIMEOUT: the pytest arm exceeded ${budget} and was killed as a process group (setsid+timeout, AUG-081) — investigate hung tests; failing the gate" >&2
     # AUG-197 (AC1): a bounded, ATTRIBUTED result. Name the test in flight at the
@@ -268,7 +284,22 @@ run_pytest_arm(){
     fi
     exit 1
   fi
+  # AUG-211 (AC2): a zero-exit battery is only green when its LOCK-ATTRIBUTED
+  # skip count is at or below the stated ceiling — a lock storm must be named,
+  # never averaged into a pass. The bound grades the captured summary (the
+  # -rs short summary above carries every skip's reason); its loud SKIP STORM
+  # block goes to stderr and the gate fails.
+  if [ "$rc" -eq 0 ] && [ -n "$pytest_out" ]; then
+    if ! "$GATE_PYTHON" "$HERE/scripts/gate_skip_bound.py" \
+        --summary-file "$pytest_out" --ceiling "$skip_ceiling"; then
+      echo "GATE FAIL: pytest skip-count bound exceeded (AUG-211) — see the SKIP STORM block above; failing the gate" >&2
+      [ -n "$AUGER_GATE_PROGRESS_FILE" ] && rm -f "$AUGER_GATE_PROGRESS_FILE"
+      [ -n "$pytest_out" ] && rm -f "$pytest_out"
+      exit 1
+    fi
+  fi
   [ -n "$AUGER_GATE_PROGRESS_FILE" ] && rm -f "$AUGER_GATE_PROGRESS_FILE"
+  [ -n "$pytest_out" ] && rm -f "$pytest_out"
   return "$rc"
 }
 
