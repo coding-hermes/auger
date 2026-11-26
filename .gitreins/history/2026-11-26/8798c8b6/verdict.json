@@ -1,0 +1,951 @@
+{
+  "task_id": "AUG-172",
+  "task_title": "serve/API external spec consumption is available live for a curl-only agent",
+  "task_criteria": [
+    "A clean-tree judged run against row AUG-172: the auger API server exposes /health, GET /api/ns/auger/specs (count>=1), GET /api/ns/auger/specs/SPEC-GRAPH-CORPUS (block body), and POST /api/ns/auger/check (bounded verdict with explicit fail-closed behavior: retrieval capped 3s, JEV capped 10s, UNKNOWN when undecided). The four live arms were re-measured at HEAD 7a4b68d per docs/qa/aug172-fix-proof.md: /health 200 0.0052s; /api/ns/auger/specs 200 0.105s count=12; /api/ns/auger/specs/SPEC-GRAPH-CORPUS 200 0.0092s; POST /api/ns/auger/check 200 2.846s with verdict fields hits/jev_used/verdict decided_by=score; control POST /check 404 'no such route'. AC4 of the row names POST /api/ns/auger/check (registered route), not POST /check."
+  ],
+  "passed": true,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "7b003e42f4f40d1d1be5f0d16243b79a8f90857c",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "646039f0c00b0df4dbf4e06b36f72d3afcbe31d81de46e29de8e542c5f0ed9da",
+  "working_tree_dirty_path_count": 1561,
+  "items": [
+    {
+      "criterion": "A clean-tree judged run against row AUG-172: the auger API server exposes /health, GET /api/ns/auger/specs (count>=1), GET /api/ns/auger/specs/SPEC-GRAPH-CORPUS (block body), and POST /api/ns/auger/check (bounded verdict with explicit fail-closed behavior: retrieval capped 3s, JEV capped 10s, UNKNOWN when undecided). The four live arms were re-measured at HEAD 7a4b68d per docs/qa/aug172-fix-proof.md: /health 200 0.0052s; /api/ns/auger/specs 200 0.105s count=12; /api/ns/auger/specs/SPEC-GRAPH-CORPUS 200 0.0092s; POST /api/ns/auger/check 200 2.846s with verdict fields hits/jev_used/verdict decided_by=score; control POST /check 404 'no such route'. AC4 of the row names POST /api/ns/auger/check (registered route), not POST /check.",
+      "status": "PASS",
+      "detail": "Fresh live CLI probe through `auger.py api` returned /health 200 in 0.005226s; GET /api/ns/auger/specs 200 in 0.020610s with count=12; GET /api/ns/auger/specs/SPEC-GRAPH-CORPUS 200 in 0.000794s with the full block body; POST /api/ns/auger/check 200 in 3.048613s with hits/jev_used/verdict fields (UNKNOWN/fail-closed on this run); control POST /check returned 404 `no such route`. Dispatch is at auger.py:7658-7663 and 7733-7737; bounded calls are auger.py:7758 (`timeout=3`) and 7789 (`timeout=10`), with the fail-closed response at 7802-7820. Fresh configured gate completed RC=0: `927 passed, 3 skipped in 1011.93s`, `LIVE ARMS: ran 2; skipped 0`, `GATE PASS`."
+    },
+    {
+      "criterion": "Reachability: the `auger api` CLI entrypoint starts APIHandler, and the exact GET specs/spec block and POST /api/ns/<ns>/check paths are dispatched; legacy POST /check is not registered and returns 404.",
+      "status": "PASS",
+      "detail": "auger.py:14332-14335 registers `api` -> cmd_api (7855) -> serve/APIHandler (7592, 7837-7843). Live CLI probe returned health/specs/block/check 200 and bare POST /check 404 `{'error':'no such route: /check'}`; GET dispatch is auger.py:7658-7663 and POST dispatch 7733-7737.",
+      "derived": true
+    },
+    {
+      "criterion": "Fail-closed bound propagation: the HTTP check passes timeout=3 to retrieval and timeout=10 to JEV, and retrieval/JEV failure or an undecided score returns a bounded HTTP 200 UNKNOWN verdict with jev_used=false and verdict_decided_by=fail-closed rather than a fabricated decision.",
+      "status": "PASS",
+      "detail": "auger.py:7758 calls recall with timeout=3, 7789 calls jev with timeout=10, and 7802-7820 constructs UNKNOWN/fail-closed/jev_used=false. Fresh in-process HTTP probe observed exactly recall timeout 3 and JEV timeout 10; both failure arms returned HTTP 200 UNKNOWN/fail-closed/jev_used=false and printed BOUNDED_FAIL_CLOSED_PROBE_PASS. Focused pytest exited 0: `20 passed in 3.44s`.",
+      "derived": true
+    },
+    {
+      "criterion": "Live curl surface: against the running auger API and local DuckBrain, all four named arms return HTTP 200 with a nonempty active spec list (count>=1), the SPEC-GRAPH-CORPUS block body, and check verdict fields; the POST /check control returns 404 'no such route'.",
+      "status": "PASS",
+      "detail": "Fresh live curl probe through `auger.py api`: health 200 in 0.005226s; specs 200 in 0.020610s with count=12; SPEC-GRAPH-CORPUS 200 in 0.000794s with full block text; namespaced check 200 in 3.048613s with hits/jev_used/verdict fields (UNKNOWN/fail-closed on this run); control POST /check 404 `no such route`.",
+      "derived": true
+    },
+    {
+      "criterion": "Regression gate: the repository-configured fresh full test command (DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh) completes successfully, including the API regression tests.",
+      "status": "PASS",
+      "detail": "Fresh configured command completed with RC=0 and `GATE PASS`; pytest reported `927 passed, 3 skipped in 1011.93s`, lock-attributed skips 0/3, and `LIVE ARMS: ran 2; skipped 0`. tests/gate.sh:286 includes tests/test_api_service.py, whose API specs/check/fail-closed tests are at tests/test_api_service.py:130-181.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "no_concerns_found",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nsecrets: gitleaks bound=timeout 600s (0=off)\nscanners: nice=nice -n 10\nsecrets: gitleaks scope=repo-root /home/kara/auger\nsecrets: gitleaks parallelism=GOMAXPROCS=4\n8:04AM INF scanned ~8718816 bytes (8.72 MB) in 4.67s\n8:04AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 1088 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\ngate pytest interpreter: /home/kara/auger/.venv/bin/python\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [  7%]\n........................................................................ [ 15%]\n........................................................................ [ 23%]\n........................................................................ [ 30%]\n..............................................s......................... [ 38%]\n............................s........................................... [ 46%]\n........................................................................ [ 54%]\n........................................................................ [ 61%]\n........................................................................ [ 69%]\n........................................................................ [ 77%]\n........................................................................ [ 85%]\n........................................................................ [ 92%]\n.......s..........................................................       [100%]\n=========================== short test summary info ============================\nSKIPPED [1] tests/test_auger.py:9240: the 44-domain grid is not on this host: domain grid /mnt/ssd/tmp/pytest-of-kara/pytest-7038/test_answer_confirmation_names0 is not the canonical 44 domains (4.01-4.44): 0 file(s); missing ['4.01', '4.02', '4.03', '4.04', '4.05', '4.06', '4.07', '4.08', '4.09', '4.10', '4.11', '4.12', '4.13', '4.14', '4.15', '4.16', '4.17', '4.18', '4.19', '4.20', '4.21', '4.22', '4.23', '4.24', '4.25', '4.26', '4.27', '4.28', '4.29', '4.30', '4.31', '4.32', '4.33', '4.34', '4.35', '4.36', '4.37', '4.38', '4.39', '4.40', '4.41', '4.42', '4.43', '4.44']; unexpected none; duplicated none\nSKIPPED [1] tests/test_upgrade_path.py:228: end-to-end leg builds 3 venvs (~30s); set AUGER_UPGRADE_VERIFY_LIVE=1 to run scripts/upgrade-verify.sh for real\n\n\u2026 [2862 chars omitted \u2014 57 line(s)] \u2026\nspec: 522 document(s), 7314 block(s), 0 reference(s) ok\n== prd proofs (AUG-137) ==\nprd proofs: 8 total \u00b7 3 required \u00b7 5 deferred \u2192 PASS\n   P1  deferred not-run   not-run (deferred to AUG-119): auger.py carries no board surface (grep -c boardctl auger.py -> 0): resolving a\n   P2  required pass      corpus=9249B bundle=8131B latency=34.4ms  2 generated view(s) verified byte-identical to the generator's output for specs/; one block edit propagated to\n   P3  deferred not-run   not-run (deferred to AUG-153): the checker half is reachable (`auger spec check --diff-file` reports `trace-mi\n   P4  deferred not-run   not-run (deferred to AUG-119): writing and reading back a canonical boardctl row is boardctl's surface, not au\n   P5  required pass      corpus=1084B bundle=435B latency=1803.6ms  one query returned migration=tests/fixtures/xml/verification/migrations/001_add_marker.sql, fixture=tests/fixt\n   P6  deferred not-run   not-run (deferred to AUG-124): what counts as judge evidence \u2014 excluding the worker summary, refusing a PASS w\n   P7  required pass      corpus=9249B bundle=2944B latency=288.9ms  4/12 blocks selected by `applies-to auger.spec.select`; bundle is 31.8% of the corpus (2944 of 9249 bytes), fl\n   P8  deferred not-run   not-run (deferred to AUG-153): the flag and the process-liveness assertion live in the GitReins hook, which no\nprd-proofs: /home/kara/auger/docs/prd/evidence/AUG-137-prd-proofs.json agrees with this run\n== docs check ==\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 A clean-tree judged run against row AUG-172: the auger API server exposes /health, GET /api/ns/auger/specs (count>=1), GET /api/ns/auger/specs/SPEC-GRAPH-CORPUS (block body), and POST /api/ns/auger/check (bounded verdict with explicit fail-closed behavior: retrieval capped 3s, JEV capped 10s, UNKNOWN when undecided). The four live arms were re-measured at HEAD 7a4b68d per docs/qa/aug172-fix-proof.md: /health 200 0.0052s; /api/ns/auger/specs 200 0.105s count=12; /api/ns/auger/specs/SPEC-GRAPH-CORPUS 200 0.0092s; POST /api/ns/auger/check 200 2.846s with verdict fields hits/jev_used/verdict decided_by=score; control POST /check 404 'no such route'. AC4 of the row names POST /api/ns/auger/check (registered route), not POST /check.: Fresh live CLI probe through `auger.py api` returned /health 200 in 0.005226s; GET /api/ns/auger/specs 200 in 0.020610s with count=12; GET /api/ns/auger/specs/SPEC-GRAPH-CORPUS 200 in 0.000794s with the full block body; POST /api/ns/auger/check 200 in 3.048613s with hits/jev_used/verdict fields (UNKNOWN/fail-closed on this run); control POST /check returned 404 `no such route`. Dispatch is at auger.py:7658-7663 and 7733-7737; bounded calls are auger.py:7758 (`timeout=3`) and 7789 (`timeout=10`), with the fail-closed response at 7802-7820. Fresh configured gate completed RC=0: `927 passed, 3 skipped in 1011.93s`, `LIVE ARMS: ran 2; skipped 0`, `GATE PASS`.\n  \u2713 Reachability: the `auger api` CLI entrypoint starts APIHandler, and the exact GET specs/spec block and POST /api/ns/<ns>/check paths are dispatched; legacy POST /check is not registered and returns 404.: auger.py:14332-14335 registers `api` -> cmd_api (7855) -> serve/APIHandler (7592, 7837-7843). Live CLI probe returned health/specs/block/check 200 and bare POST /check 404 `{'error':'no such route: /check'}`; GET dispatch is auger.py:7658-7663 and POST dispatch 7733-7737.\n  \u2713 Fail-closed bound propagation: the HTTP check passes timeout=3 to retrieval and timeout=10 to JEV, and retrieval/JEV failure or an undecided score returns a bounded HTTP 200 UNKNOWN verdict with jev_used=false and verdict_decided_by=fail-closed rather than a fabricated decision.: auger.py:7758 calls recall with timeout=3, 7789 calls jev with timeout=10, and 7802-7820 constructs UNKNOWN/fail-closed/jev_used=false. Fresh in-process HTTP probe observed exactly recall timeout 3 and JEV timeout 10; both failure arms returned HTTP 200 UNKNOWN/fail-closed/jev_used=false and printed BOUNDED_FAIL_CLOSED_PROBE_PASS. Focused pytest exited 0: `20 passed in 3.44s`.\n  \u2713 Live curl surface: against the running auger API and local DuckBrain, all four named arms return HTTP 200 with a nonempty active spec list (count>=1), the SPEC-GRAPH-CORPUS block body, and check verdict fields; the POST /check control returns 404 'no such route'.: Fresh live curl probe through `auger.py api`: health 200 in 0.005226s; specs 200 in 0.020610s with count=12; SPEC-GRAPH-CORPUS 200 in 0.000794s with full block text; namespaced check 200 in 3.048613s with hits/jev_used/verdict fields (UNKNOWN/fail-closed on this run); control POST /check 404 `no such route`.\n  \u2713 Regression gate: the repository-configured fresh full test command (DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh) completes successfully, including the API regression tests.: Fresh configured command completed with RC=0 and `GATE PASS`; pytest reported `927 passed, 3 skipped in 1011.93s`, lock-attributed skips 0/3, and `LIVE ARMS: ran 2; skipped 0`. tests/gate.sh:286 includes tests/test_api_service.py, whose API specs/check/fail-closed tests are at tests/test_api_service.py:130-181.\nThe live AUG-172 API surface, bounded fail-closed check behavior, route registration, and full regression gate all passed fresh verification.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 A clean-tree judged run against row AUG-172: the auger API server exposes /health, GET /api/ns/auger/specs (count>=1), GET /api/ns/auger/specs/SPEC-GRAPH-CORPUS (block body), and POST /api/ns/auger/check (bounded verdict with explicit fail-closed behavior: retrieval capped 3s, JEV capped 10s, UNKNOWN when undecided). The four live arms were re-measured at HEAD 7a4b68d per docs/qa/aug172-fix-proof.md: /health 200 0.0052s; /api/ns/auger/specs 200 0.105s count=12; /api/ns/auger/specs/SPEC-GRAPH-CORPUS 200 0.0092s; POST /api/ns/auger/check 200 2.846s with verdict fields hits/jev_used/verdict decided_by=score; control POST /check 404 'no such route'. AC4 of the row names POST /api/ns/auger/check (registered route), not POST /check.: Fresh live CLI probe through `auger.py api` returned /health 200 in 0.005226s; GET /api/ns/auger/specs 200 in 0.020610s with count=12; GET /api/ns/auger/specs/SPEC-GRAPH-CORPUS 200 in 0.000794s with the full block body; POST /api/ns/auger/check 200 in 3.048613s with hits/jev_used/verdict fields (UNKNOWN/fail-closed on this run); control POST /check returned 404 `no such route`. Dispatch is at auger.py:7658-7663 and 7733-7737; bounded calls are auger.py:7758 (`timeout=3`) and 7789 (`timeout=10`), with the fail-closed response at 7802-7820. Fresh configured gate completed RC=0: `927 passed, 3 skipped in 1011.93s`, `LIVE ARMS: ran 2; skipped 0`, `GATE PASS`.\n  \u2713 Reachability: the `auger api` CLI entrypoint starts APIHandler, and the exact GET specs/spec block and POST /api/ns/<ns>/check paths are dispatched; legacy POST /check is not registered and returns 404.: auger.py:14332-14335 registers `api` -> cmd_api (7855) -> serve/APIHandler (7592, 7837-7843). Live CLI probe returned health/specs/block/check 200 and bare POST /check 404 `{'error':'no such route: /check'}`; GET dispatch is auger.py:7658-7663 and POST dispatch 7733-7737.\n  \u2713 Fail-closed bound propagation: the HTTP check passes timeout=3 to retrieval and timeout=10 to JEV, and retrieval/JEV failure or an undecided score returns a bounded HTTP 200 UNKNOWN verdict with jev_used=false and verdict_decided_by=fail-closed rather than a fabricated decision.: auger.py:7758 calls recall with timeout=3, 7789 calls jev with timeout=10, and 7802-7820 constructs UNKNOWN/fail-closed/jev_used=false. Fresh in-process HTTP probe observed exactly recall timeout 3 and JEV timeout 10; both failure arms returned HTTP 200 UNKNOWN/fail-closed/jev_used=false and printed BOUNDED_FAIL_CLOSED_PROBE_PASS. Focused pytest exited 0: `20 passed in 3.44s`.\n  \u2713 Live curl surface: against the running auger API and local DuckBrain, all four named arms return HTTP 200 with a nonempty active spec list (count>=1), the SPEC-GRAPH-CORPUS block body, and check verdict fields; the POST /check control returns 404 'no such route'.: Fresh live curl probe through `auger.py api`: health 200 in 0.005226s; specs 200 in 0.020610s with count=12; SPEC-GRAPH-CORPUS 200 in 0.000794s with full block text; namespaced check 200 in 3.048613s with hits/jev_used/verdict fields (UNKNOWN/fail-closed on this run); control POST /check 404 `no such route`.\n  \u2713 Regression gate: the repository-configured fresh full test command (DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh) completes successfully, including the API regression tests.: Fresh configured command completed with RC=0 and `GATE PASS`; pytest reported `927 passed, 3 skipped in 1011.93s`, lock-attributed skips 0/3, and `LIVE ARMS: ran 2; skipped 0`. tests/gate.sh:286 includes tests/test_api_service.py, whose API specs/check/fail-closed tests are at tests/test_api_service.py:130-181.\nThe live AUG-172 API surface, bounded fail-closed check behavior, route registration, and full regression gate all passed fresh verification.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "A clean-tree judged run against row AUG-172: the auger API server exposes /health, GET /api/ns/auger/specs (count>=1), GET /api/ns/auger/specs/SPEC-GRAPH-CORPUS (block body), and POST /api/ns/auger/check (bounded verdict with explicit fail-closed behavior: retrieval capped 3s, JEV capped 10s, UNKNOWN when undecided). The four live arms were re-measured at HEAD 7a4b68d per docs/qa/aug172-fix-proof.md: /health 200 0.0052s; /api/ns/auger/specs 200 0.105s count=12; /api/ns/auger/specs/SPEC-GRAPH-CORPUS 200 0.0092s; POST /api/ns/auger/check 200 2.846s with verdict fields hits/jev_used/verdict decided_by=score; control POST /check 404 'no such route'. AC4 of the row names POST /api/ns/auger/check (registered route), not POST /check.",
+                "status": "PASS",
+                "detail": "Fresh live CLI probe through `auger.py api` returned /health 200 in 0.005226s; GET /api/ns/auger/specs 200 in 0.020610s with count=12; GET /api/ns/auger/specs/SPEC-GRAPH-CORPUS 200 in 0.000794s with the full block body; POST /api/ns/auger/check 200 in 3.048613s with hits/jev_used/verdict fields (UNKNOWN/fail-closed on this run); control POST /check returned 404 `no such route`. Dispatch is at auger.py:7658-7663 and 7733-7737; bounded calls are auger.py:7758 (`timeout=3`) and 7789 (`timeout=10`), with the fail-closed response at 7802-7820. Fresh configured gate completed RC=0: `927 passed, 3 skipped in 1011.93s`, `LIVE ARMS: ran 2; skipped 0`, `GATE PASS`."
+              },
+              {
+                "criterion": "Reachability: the `auger api` CLI entrypoint starts APIHandler, and the exact GET specs/spec block and POST /api/ns/<ns>/check paths are dispatched; legacy POST /check is not registered and returns 404.",
+                "status": "PASS",
+                "detail": "auger.py:14332-14335 registers `api` -> cmd_api (7855) -> serve/APIHandler (7592, 7837-7843). Live CLI probe returned health/specs/block/check 200 and bare POST /check 404 `{'error':'no such route: /check'}`; GET dispatch is auger.py:7658-7663 and POST dispatch 7733-7737.",
+                "derived": true
+              },
+              {
+                "criterion": "Fail-closed bound propagation: the HTTP check passes timeout=3 to retrieval and timeout=10 to JEV, and retrieval/JEV failure or an undecided score returns a bounded HTTP 200 UNKNOWN verdict with jev_used=false and verdict_decided_by=fail-closed rather than a fabricated decision.",
+                "status": "PASS",
+                "detail": "auger.py:7758 calls recall with timeout=3, 7789 calls jev with timeout=10, and 7802-7820 constructs UNKNOWN/fail-closed/jev_used=false. Fresh in-process HTTP probe observed exactly recall timeout 3 and JEV timeout 10; both failure arms returned HTTP 200 UNKNOWN/fail-closed/jev_used=false and printed BOUNDED_FAIL_CLOSED_PROBE_PASS. Focused pytest exited 0: `20 passed in 3.44s`.",
+                "derived": true
+              },
+              {
+                "criterion": "Live curl surface: against the running auger API and local DuckBrain, all four named arms return HTTP 200 with a nonempty active spec list (count>=1), the SPEC-GRAPH-CORPUS block body, and check verdict fields; the POST /check control returns 404 'no such route'.",
+                "status": "PASS",
+                "detail": "Fresh live curl probe through `auger.py api`: health 200 in 0.005226s; specs 200 in 0.020610s with count=12; SPEC-GRAPH-CORPUS 200 in 0.000794s with full block text; namespaced check 200 in 3.048613s with hits/jev_used/verdict fields (UNKNOWN/fail-closed on this run); control POST /check 404 `no such route`.",
+                "derived": true
+              },
+              {
+                "criterion": "Regression gate: the repository-configured fresh full test command (DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh) completes successfully, including the API regression tests.",
+                "status": "PASS",
+                "detail": "Fresh configured command completed with RC=0 and `GATE PASS`; pytest reported `927 passed, 3 skipped in 1011.93s`, lock-attributed skips 0/3, and `LIVE ARMS: ran 2; skipped 0`. tests/gate.sh:286 includes tests/test_api_service.py, whose API specs/check/fail-closed tests are at tests/test_api_service.py:130-181.",
+                "derived": true
+              }
+            ],
+            "summary": "The live AUG-172 API surface, bounded fail-closed check behavior, route registration, and full regression gate all passed fresh verification.",
+            "provenance": {
+              "model": "neuralwatt/kimi-k3.1-pro",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            },
+            "context_stats": {
+              "diff_source": "working-tree",
+              "diff_bytes": 670,
+              "prompt_bytes": 16793
+            }
+          }
+        }
+      ],
+      "model": "neuralwatt/kimi-k3.1-pro",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "context_stats": {
+        "diff_source": "working-tree",
+        "diff_bytes": 670,
+        "prompt_bytes": 16793
+      },
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-172\"}",
+          "exit_code": 0,
+          "output_sha": "a99d6bd5ff9d8b75b41404b5c0388b8eda3371c0fea1519ff00e14924a782537"
+        },
+        {
+          "tool": "run_command",
+          "command": "pwd && git status --short && git rev-parse HEAD && git log -1 --oneline && wc -l .gitreins/tasks.yaml && ls",
+          "exit_code": 0,
+          "output_sha": "0ba6f28f9c237e654a20ada2cd2ecd28de3f1f45a488ef1d1f8003d6b3e1adbd"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \".gitreins/config.yaml\"}",
+          "exit_code": 0,
+          "output_sha": "60ec05bb6218204f634565349dc8d23b1aec4048dcf3c49af1cdb0a17b2c2355"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"docs/qa/aug172-fix-proof.md\"}",
+          "exit_code": 0,
+          "output_sha": "fc386d97280c1dcf44ea24b6cbb5b9e8efadb4520c55105a22bb789b7c8197c2"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"regex\": \"SPEC-GRAPH-CORPUS|/api/ns/.*/specs|aug172|AUG-172|jev_used|decided_by\"}",
+          "exit_code": 0,
+          "output_sha": "434b7029628d2c462c63a99f734aa0f52887b761f1c5fc1c70abf290bab030c1"
+        },
+        {
+          "tool": "read_diff",
+          "command": "read_diff {}",
+          "exit_code": 0,
+          "output_sha": "05e742f4991ae292fc560a818b4a091fa49a21a568195a1c3f10b8f9756138ce"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 430, \"offset\": 7480, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "0b7a666fdf731b5756b26e152d7eb762a84010cc4226450b1c7db702f8ebbdaa"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"tests/test_api_service.py\"}",
+          "exit_code": 0,
+          "output_sha": "1e3e735ef0a96a14773639d87989322e09d2f6c4c4780d961140bebfa5250e16"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 100, \"offset\": 2910, \"path\": \".gitreins/tasks.yaml\"}",
+          "exit_code": 0,
+          "output_sha": "4062b6ffb69f6b787b8e873c5d92bc6cb80ca8a358b1502d19a10bb1262c83c6"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show --stat --oneline 7a4b68d && git show --format=fuller --no-ext-diff 7a4b68d -- docs/qa/aug172-fix-proof.md auger.py tests/test_api_service.py | head -240",
+          "exit_code": 0,
+          "output_sha": "0c14770b2523eac842ee269a4f0b291478c41b8ea1b12b006790c88742d01d61"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"auger.py\", \"regex\": \"def spec_http_payload|def recall\\\\(|def jev\\\\(|timeout=3|timeout=10|api --host|cmd_api|add_parser\\\\(\\\"api\\\"\"}",
+          "exit_code": 0,
+          "output_sha": "7279a7c3b63a27feb54afb40a0ef034d40c72be5dd50bc215cffc21d9158ae68"
+        },
+        {
+          "tool": "run_command",
+          "command": "git log --all --oneline --decorate -- auger.py tests/test_api_service.py docs/qa/aug172-fix-proof.md | head -60 && git log --all --oneline --grep='AUG-172\\|172' -i | head -40",
+          "exit_code": 0,
+          "output_sha": "26422ac268a9253317beef436d7cb68fce9505f6342a57526891b97a31334550"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 240, \"path\": \"tests/gate.sh\"}",
+          "exit_code": 0,
+          "output_sha": "28add85427831e75c4479515a26a1307fa10ae5ec4c5bd038c1eebc4022a4df0"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 90, \"offset\": 180, \"path\": \"docs/openapi.yaml\"}",
+          "exit_code": 0,
+          "output_sha": "0785006ea198c5412423daf3896086f00d8b8527938af18519f2fb600abb8777"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 75, \"offset\": 300, \"path\": \"scripts/gen_openapi.py\"}",
+          "exit_code": 0,
+          "output_sha": "c4bfa26f2b08584f6f1c2eb81745aa2c64ba3595e140ddfd03c0447584fd7826"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 205, \"offset\": 1630, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "e5d5bb7b221d612634ecd99b1cddad484643b936f98a005adcb32b5ae6a74254"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 125, \"offset\": 2110, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "eb866a481bcd74359276768c60c1731a0ed324ff827e620d420f53f5f5f9f424"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 45, \"offset\": 14310, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "da2225b1e8300fec9a13fc2d057b9fdf812ff4f785be22e9c83d0c314426f12a"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show --stat --oneline c8a416b && git show --stat --oneline c461056 && git show --format=fuller --no-patch 7a4b68d && git merge-base --is-ancestor 7a4b68d HEAD; echo ancestor_rc=$?; git diff --stat 7a4b68d..HEAD -- auger.py tests/test_api_service.py docs/qa/aug172-fix-proof.md",
+          "exit_code": 0,
+          "output_sha": "2b1845f8817fb56735d5061c62fa3cf88bd54522bd7b2dfbea0d2709d24dd858"
+        },
+        {
+          "tool": "run_command",
+          "command": "ls -la .venv/bin/python venv/bin/python 2>/dev/null; curl -sS -o /dev/null -w 'duckbrain_health=%{http_code} %{time_total}\\n' --max-time 5 http://127.0.0.1:3000/health || true; ps -eo pid,args | grep -E '[a]uger.py api|[d]uckbrain' | head -20",
+          "exit_code": 0,
+          "output_sha": "46e5cb9437d404b88674ef811f9a11bff4378c29729c26bc5f254b772fa9d80e"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Reachability: the `auger api` CLI entrypoint starts APIHandler, and the exact GET specs/spec block and POST /api/ns/<ns>/check paths are dispatched; legacy POST /check is not registered and returns 404.\", \"key\": \"derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "725cc38f5da2c4e764befc5b7143fe0a6753d43c30fbfffc3703d25a208484cd"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Fail-closed bound propagation: the HTTP check passes timeout=3 to retrieval and timeout=10 to JEV, and retrieval/JEV failure or an undecided score returns a bounded HTTP 200 UNKNOWN verdict with jev_used=false and verdict_decided_by=fail-closed rather than a fabricated decision.\", \"key\": \"derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "060ce70aefe7ad8734a4d893729208cbe60118efcca494ce94f4ac318c4cc729"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Live curl surface: against the running auger API and local DuckBrain, all four named arms return HTTP 200 with a nonempty active spec list (count>=1), the SPEC-GRAPH-CORPUS block body, and check verdict fields; the POST /check control returns 404 'no such route'.\", \"key\": \"derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "1d6638f026130cf76e543d0863fcf2862816f3927b765e0b84f2c1b13bc1fb68"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Regression gate: the repository-configured fresh full test command (DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh) completes successfully, including the API regression tests.\", \"key\": \"derived_3\"}",
+          "exit_code": 0,
+          "output_sha": "e9ab80a624e18546bf697be8816ab8ab08c18f89146cad1136bafc2c6ad7dfed"
+        },
+        {
+          "tool": "run_command",
+          "command": "DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh > /tmp/aug172-review-gate.log 2>&1; rc=$?; echo GATE_EXIT=$rc; tail -100 /tmp/aug172-review-gate.log; exit $rc",
+          "exit_code": -15,
+          "output_sha": "f835cdeb6b54535c155aaa81ac05b512aa1429665adfa20bf5a5ead126ef198f"
+        },
+        {
+          "tool": "run_command",
+          "command": "ps -eo pid,ppid,pgid,etime,args | grep -E '[t]ests/gate.sh|[p]ytest|[a]uger.py' | head -40; tail -40 /tmp/aug172-review-gate.log 2>/dev/null || true",
+          "exit_code": 0,
+          "output_sha": "81d8c9a616cb8228f35bc5a573ac57e60c7afc5bf839742de5d78154454763b2"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show c8a416b -- auger.py tests/test_api_service.py | sed -n '1,260p'; git show 7a4b68d:docs/qa/aug172-fix-proof.md | sed -n '1,80p'",
+          "exit_code": 0,
+          "output_sha": "50c1e0f428741f85fa7b34230a94371f328fe6e5e813110c3f808af1bafcc8a5"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"auger.py\", \"regex\": \"def db\\\\(|def _req\\\\(|timeout\"}",
+          "exit_code": 0,
+          "output_sha": "9fd1310d9884d19f674212586e61b868a678b83e7a982480ea702b5e3850cca0"
+        },
+        {
+          "tool": "run_command",
+          "command": "ps -eo pid,ppid,pgid,etime,args | grep -E '3396338|aug172-review-gate|/home/kara/auger/.venv/bin/python.*pytest|bash tests/gate.sh' | head -60; tail -20 /tmp/aug172-review-gate.log",
+          "exit_code": 0,
+          "output_sha": "6b42b91a0128fef853a6ff93cc20f412940de15b0dd2340d5225366e49e57205"
+        },
+        {
+          "tool": "run_command",
+          "command": "set -e\nPORT=38756\nLOG=/tmp/aug172-review-api.log\nDUCKBRAIN_URL=http://127.0.0.1:3000 .venv/bin/python auger.py api --host 127.0.0.1 --port \"$PORT\" >\"$LOG\" 2>&1 &\nPID=$!\ncleanup(){ kill \"$PID\" 2>/dev/null || true; wait \"$PID\" 2>/dev/null || true; }\ntrap cleanup EXIT\nfor i in $(seq 1 30); do\n  if curl -sS --max-time 2 \"http://127.0.0.1:$PORT/health\" >/tmp/aug172-review-health.json 2>/dev/null; then break; fi\n  sleep 0.2\ndone\nBASE=\"http://127.0.0.1:$PORT\"\nfor spec in health specs block; do\n  case \"$spec\" in\n    health) path=/health; out=/tmp/aug172-review-health.json;;\n    specs) path=/api/ns/auger/specs; out=/tmp/aug172-review-specs.json;;\n    block) path=/api/ns/auger/specs/SPEC-GRAPH-CORPUS; out=/tmp/aug172-review-block.json;;\n  esac\n  curl -sS --max-time 20 -o \"$out\" -w \"$spec status=%{http_code} time=%{time_total}\\n\" \"$BASE$path\"\ndone\ncurl -sS --max-time 20 -o /tmp/aug172-review-check.json -w 'check status=%{http_code} time=%{time_total}\\n' -H 'Content-Type: application/json' -d '{\"question\":\"What does SPEC-GRAPH-CORPUS require for external spec consumption?\",\"limit\":5}' \"$BASE/api/ns/auger/check\"\ncurl -sS --max-time 5 -o /tmp/aug172-review-control.json -w 'control status=%{http_code} time=%{time_total}\\n' -H 'Content-Type: application/json' -d '{\"question\":\"control\"}' \"$BASE/check\"\n.venv/bin/python - <<'PY'\nimport json\nfor name in ('health','specs','block','check','control'):\n    p=f'/tmp/aug172-review-{name}.json'\n    try:\n        d=json.load(open(p))\n    except Exception as e:\n        print(name, 'PARSE_ERROR', e); continue\n    if name=='specs':\n        print('specs_summary', {'root':d.get('root'),'count':d.get('count'),'ids':[b.get('id') for b in d.get('blocks',[])]})\n    elif name=='block':\n        print('block_summary', {'count':d.get('count'),'blocks':d.get('blocks')})\n    elif name=='check':\n        print('check_summary', {k:d.get(k) for k in ('namespace','question','tier','verdict','verdict_decided_by','jev_used','jev_cost')}, 'hits_count=',len(d.get('hits',[])))\n    else:\n        print(name+'_summary',d)\nPY\nprintf '%s\\n' '--- server log ---'\ncat \"$LOG\"",
+          "exit_code": 0,
+          "output_sha": "1d227fc1c4f36f292cc42e045e4cc0730387e7ce5ab2c22ee57b4fced5ab28f4"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 110, \"offset\": 520, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "28bcd495da4221a59bef8adb5800349492f23f20392646243970b434db7c82d7"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 7a4b68d:.gitreins/tasks.yaml | grep -n -A24 -B3 'id: AUG-172'; git log --all --format='%h %ad %s' --date=iso -- docs/qa/aug172-fix-proof.md .gitreins/tasks.yaml | head -35; git show --format=fuller --stat 73068b9",
+          "exit_code": 0,
+          "output_sha": "5122d7be8ac6f3f3d2860851502be5fca4c1d72212236334d8daa18f185adf3f"
+        },
+        {
+          "tool": "run_command",
+          "command": "tail -30 /tmp/aug172-review-gate.log; ps -eo pid,ppid,pgid,etime,args | grep -E '3065674|3065653|/home/kara/auger/.venv/bin/python.*pytest' | head -30",
+          "exit_code": 0,
+          "output_sha": "c55d3695d433a37172ad802dd9d5b6227ff8faac114814690312af379ff76b6d"
+        },
+        {
+          "tool": "read_lsp_diagnostics",
+          "command": "read_lsp_diagnostics {}",
+          "exit_code": 0,
+          "output_sha": "ef420cbeebd549fc8c5438d6ea41a3e521fa58e29563c4cae80f491b9bfe2143"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 7a4b68d:.gitreins/tasks.yaml | grep -n -A28 -B2 '^- id: AUG-172$'; git log --all --format='%h %ad %s' --date=iso -S'The four live arms were re-measured' -- .gitreins/tasks.yaml .coding-hermes/board/tasks.jsonl; git log --all --format='%h %ad %s' --date=iso -S'0.0052s' -- .gitreins/tasks.yaml .coding-hermes/board/tasks.jsonl docs/qa/aug172-fix-proof.md",
+          "exit_code": 0,
+          "output_sha": "719d1b23157f2543d29eee3d0ed47feafbfe80876cf546330926bd0e69dc5159"
+        },
+        {
+          "tool": "run_command",
+          "command": "find .gitreins/history -path '*AUG-172*' -o -name verdict.json | tail -30; grep -R -l 'AUG-172' .gitreins/history/2026-11-2* 2>/dev/null | head -30",
+          "exit_code": 0,
+          "output_sha": "2e95b714e8ca792d770e8aa2f9cc207a4d3029b352e9a6cbec60f6593edb7874"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 7a4b68d:auger.py | sha256sum; sha256sum auger.py; git diff 7a4b68d..HEAD -- auger.py | grep -n -E 'spec_http|_route_post|timeout=3|timeout=10|def recall|def jev|APIHandler|cmd_api' | head -60",
+          "exit_code": 0,
+          "output_sha": "a47f2ca169e5aa5bdf708e3fb0472feb72acab66bb0e1a27269c7662226a8a05"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 01e744f -- .gitreins/tasks.yaml .coding-hermes/board/tasks.jsonl | grep -n -A45 -B15 'AUG-172' | head -180; git show 7a4b68d:.coding-hermes/board/tasks.jsonl | grep '\"id\":\"AUG-172\"\\|\"id\": \"AUG-172\"' | head -2",
+          "exit_code": 0,
+          "output_sha": "fb6dd64518acb748cb2a7bcd76113b88883aa0260199dc516f65290a92d785a6"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \".gitreins/history/2026-11-26/004065e3/verdict.json\"}",
+          "exit_code": 0,
+          "output_sha": "3619fe7736f019b80acaf8a3f41df78abce23af93deac9e06b313f24f5a8a37d"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \".gitreins/history/2026-11-26/004065e3/summary.md\"}",
+          "exit_code": 0,
+          "output_sha": "343213cc421dc94f45b29971f1a6ef536d2d533474588eb2be8b2901d82c9677"
+        },
+        {
+          "tool": "run_command",
+          "command": "tail -20 /tmp/aug172-review-gate.log; ps -eo pid,ppid,pgid,etime,args | grep -E '3065674|3392822|/home/kara/auger/.venv/bin/python.*pytest' | head -20",
+          "exit_code": 0,
+          "output_sha": "c5ca275f16925f5f4486bac3453777c725d18f52bcd89e66975fd4d38e22e28b"
+        },
+        {
+          "tool": "run_command",
+          "command": "rm -f /tmp/aug172-full-gate-fresh.log /tmp/aug172-full-gate-fresh.rc; nohup setsid bash -c 'DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh > /tmp/aug172-full-gate-fresh.log 2>&1; echo $? > /tmp/aug172-full-gate-fresh.rc' </dev/null >/tmp/aug172-full-gate-launch.log 2>&1 & echo FRESH_GATE_PID=$!",
+          "exit_code": 0,
+          "output_sha": "cb7eaab2cac1518a7ed1a5d20aaea1c282886ccc7d7ffc2197b184f455c66057"
+        },
+        {
+          "tool": "run_command",
+          "command": ".venv/bin/python -m pytest -q -p no:cacheprovider tests/test_api_service.py tests/test_openapi_parity.py",
+          "exit_code": 0,
+          "output_sha": "1693df97709698a9a6ba2c802a5da5e8d9ef760c2f20ff4d561e4fedd5ef1e52"
+        },
+        {
+          "tool": "run_command",
+          "command": ".venv/bin/python - <<'PY'\nimport json, threading, urllib.request\nimport auger\nserver = auger.APIServer(('127.0.0.1', 0), auger.APIHandler)\nthread = threading.Thread(target=server.serve_forever, daemon=True)\nthread.start()\nurl = f'http://127.0.0.1:{server.server_address[1]}/api/ns/auger/check'\norig = {name: getattr(auger, name) for name in ['_namespace','embedding_status','recall','jev']}\ntry:\n    auger._namespace = lambda ns: None\n    auger.embedding_status = lambda: {'tier':'semantic','healthy':True,'provider':'fixture','model':'fixture'}\n    seen=[]\n    def recall_timeout(*args, **kwargs):\n        seen.append(('recall',kwargs.get('timeout')))\n        raise auger.SubstrateError('timed out')\n    auger.recall=recall_timeout\n    auger.jev=lambda *a,**k: (_ for _ in ()).throw(AssertionError('JEV ran after retrieval failure'))\n    req=urllib.request.Request(url,data=b'{\"question\":\"bounded?\"}',headers={'Content-Type':'application/json'},method='POST')\n    with urllib.request.urlopen(req,timeout=3) as response:\n        payload=json.load(response); print('retrieval_failure_http',response.status)\n    print('retrieval_failure_payload',{k:payload.get(k) for k in ['verdict','verdict_decided_by','jev_used','hits']})\n    print('retrieval_timeout_seen',seen)\n    assert payload['verdict']=='UNKNOWN' and payload['verdict_decided_by']=='fail-closed' and payload['jev_used'] is False and seen==[('recall',3)]\n    seen=[]\n    auger.recall=lambda *a,**k: []\n    def jev_timeout(*args,**kwargs):\n        seen.append(('jev',kwargs.get('timeout'))); return None,'timed out'\n    auger.jev=jev_timeout\n    req=urllib.request.Request(url,data=b'{\"question\":\"bounded?\"}',headers={'Content-Type':'application/json'},method='POST')\n    with urllib.request.urlopen(req,timeout=3) as response:\n        payload=json.load(response); print('jev_failure_http',response.status)\n    print('jev_failure_payload',{k:payload.get(k) for k in ['verdict','verdict_decided_by','jev_used','hits']})\n    print('jev_timeout_seen',seen)\n    assert payload['verdict']=='UNKNOWN' and payload['verdict_decided_by']=='fail-closed' and payload['jev_used'] is False and seen==[('jev',10)]\n    print('BOUNDED_FAIL_CLOSED_PROBE_PASS')\nfinally:\n    for name,value in orig.items(): setattr(auger,name,value)\n    server.shutdown(); server.server_close(); thread.join(timeout=2)\nPY",
+          "exit_code": 0,
+          "output_sha": "8f74a1519228641e715673a7fc92da65da16d29381d5fdb5d95a7cb5b9ac7d34"
+        },
+        {
+          "tool": "run_command",
+          "command": ".venv/bin/python - <<'PY'\nimport json\nfrom pathlib import Path\nfor fn in ['.coding-hermes/board/tasks.jsonl','.coding-hermes/board/events.jsonl']:\n    print('FILE',fn)\n    for i,line in enumerate(Path(fn).read_text().splitlines(),1):\n        if 'AUG-172' not in line: continue\n        x=json.loads(line)\n        if fn.endswith('tasks.jsonl') and x.get('id')=='AUG-172':\n            print('TASK_LINE',i,'status',x.get('status'),'worker_status',x.get('worker_status'))\n            print('acceptance_criteria',x.get('acceptance_criteria'))\n            print('review_notes',x.get('review_notes'))\n        if fn.endswith('events.jsonl') and ('0.0052' in line or '2.846' in line or 'clean-tree judged' in line):\n            print('EVENT_LINE',i,json.dumps(x,ensure_ascii=False)[:12000])\nPY",
+          "exit_code": 0,
+          "output_sha": "646e1f7c036aa2c3d95776c358f44b81da41f29cf7ace971b119a4eece7ff5e9"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: auger.py:14332-14335 registers `api` -> cmd_api (7855) -> serve/APIHandler (7592, 7837-7843). Live CLI probe returned health/specs/block/check 200 and bare POST /check 404 {'error':'no such route: /check'}; GET dispatch auger.py:7658-7663 and POST dispatch 7733-7737.\", \"key\": \"verified_derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "329382ac90e8d43cf5a62b4da24d4c793b9f28ee516066ef576bbb8310db7f66"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: auger.py:7758 recall(...timeout=3), 7789 jev(...timeout=10), 7802-7820 UNKNOWN/fail-closed/jev_used=false. Fresh in-process HTTP probe observed exactly recall timeout 3 and JEV timeout 10; both failure arms returned HTTP 200 UNKNOWN/fail-closed/jev_used=false and printed BOUNDED_FAIL_CLOSED_PROBE_PASS. Focused pytest exit 0: 20 passed in 3.44s.\", \"key\": \"verified_derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "e92e3d44184ed909b58e95cb79e84dda944de51e542dae64a8235efe0beca97a"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: fresh live curl probe through `auger.py api`: health 200 0.005226s; specs 200 0.020610s count=12; SPEC-GRAPH-CORPUS 200 0.000794s with full block text; namespaced check 200 3.048613s with hits/jev_used/verdict fields (UNKNOWN/fail-closed on this run); control POST /check 404 no such route.\", \"key\": \"verified_derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "b84507bf6c1ef9edd528d179443bc28149ba4f95c61cfd91801956030b9f0dec"
+        },
+        {
+          "tool": "run_command",
+          "command": "printf '%s\\n' '--- fresh gate ---'; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo RUNNING; fi; tail -25 /tmp/aug172-full-gate-fresh.log; printf '%s\\n' '--- prior gate ---'; tail -25 /tmp/aug172-review-gate.log; ps -eo pid,ppid,pgid,etime,args | grep -E '3474303|3065674|aug172-full-gate|/home/kara/auger/.venv/bin/python.*pytest' | head -30",
+          "exit_code": 0,
+          "output_sha": "32e5851a3a262daa523024585271d301feff19172c16b1dcaafaabecf9213263"
+        },
+        {
+          "tool": "run_command",
+          "command": ".venv/bin/python - <<'PY'\nimport json\nfrom pathlib import Path\np=Path('.coding-hermes/board/events.jsonl')\nfor i,line in enumerate(p.read_text().splitlines(),1):\n    if 'AUG-172' not in line: continue\n    x=json.loads(line)\n    print('LINE',i,'id',x.get('id'),'event',x.get('event'),'type',x.get('type'),'actor',x.get('actor'))\n    s=json.dumps(x,ensure_ascii=False)\n    for needle in ['0.0052','2.846','clean-tree judged','004065e3','AUG-172']:\n        pos=s.find(needle)\n        if pos>=0: print(needle, s[max(0,pos-500):pos+1800])\nPY",
+          "exit_code": 0,
+          "output_sha": "b056b837534d70ab3df772b8c6f032c52b11a64e3f193dc83f9d77e9e5247105"
+        },
+        {
+          "tool": "run_command",
+          "command": "git diff --cached -- .coding-hermes/board/events.jsonl .coding-hermes/board/tasks.jsonl .gitreins/tasks.yaml | head -180; git status --porcelain=v1 --untracked-files=no",
+          "exit_code": 0,
+          "output_sha": "ed31ff2ac71b3586e95c6c787682c1bd1b828366f2c72bf27b3089a1b5764495"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 7a4b68d:auger.py | sed -n '7680,7825p' | grep -n -A12 -B8 'timeout=3\\|timeout=10\\|def _route_post\\|op == \"specs\"'; git show 7a4b68d:tests/test_api_service.py | grep -n 'bounded_unknown\\|specs_route\\|shipped_active'",
+          "exit_code": 0,
+          "output_sha": "423998f68b32b8ae8b1470c3e0ef880b2b7f57929c9653ead6802366e2f5e77f"
+        },
+        {
+          "tool": "run_command",
+          "command": "git status --short; git diff --stat; git diff --cached --stat; git diff HEAD --stat; git diff HEAD -- .gitreins/tasks.yaml | head -60; git ls-files -v .gitreins/tasks.yaml .coding-hermes/board/tasks.jsonl .coding-hermes/board/events.jsonl",
+          "exit_code": 0,
+          "output_sha": "d3fcd16d0e6bb01296f1b75193eb3d36589ceb676668deef740e70a82f08ea07"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show HEAD:.gitreins/tasks.yaml | grep -n -A24 '^- id: AUG-172$'; git show HEAD:.coding-hermes/board/tasks.jsonl | .venv/bin/python -c 'import sys,json; xs=[json.loads(l) for l in sys.stdin if l.strip()]; print([(x.get(\"id\"),x.get(\"status\"),x.get(\"worker_status\")) for x in xs if x.get(\"id\")==\"AUG-172\"])'; git log -1 --format='%h %ad %s' --date=iso -- .gitreins/tasks.yaml",
+          "exit_code": 0,
+          "output_sha": "d07790d467cbb8df5823857e43f4eeb58b17de22b66de090cab4adc6305b682b"
+        },
+        {
+          "tool": "run_command",
+          "command": "if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -12 /tmp/aug172-full-gate-fresh.log; if [ -f /tmp/aug172-review-gate.log ]; then tail -12 /tmp/aug172-review-gate.log; fi",
+          "exit_code": 0,
+          "output_sha": "8615b382dbfde6e7b0234cc8c9b7aef1a0d2bd12ae410091cb10e1be84ece601"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show --stat --oneline 7b003e4 && git show --format=fuller --no-patch 7b003e4 && git show 7b003e4 -- .coding-hermes/board/events.jsonl | tail -30",
+          "exit_code": 0,
+          "output_sha": "fd8125a17d1bd8ee45d63594a280b1f4b338974d03a22778c56e119e0bc605db"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 7b003e4^:.gitreins/tasks.yaml | grep -n -A16 '^- id: AUG-172$'; git show 7b003e4^:.coding-hermes/board/tasks.jsonl | .venv/bin/python -c 'import sys,json; print([(x.get(\"id\"),x.get(\"status\"),x.get(\"worker_status\")) for x in map(json.loads,sys.stdin) if x.get(\"id\")==\"AUG-172\"])'",
+          "exit_code": 0,
+          "output_sha": "9bc6879eb522498d18906b00b3307d07bc03ff6623dcd0f25662b8a7e296f977"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 20; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -15 /tmp/aug172-full-gate-fresh.log",
+          "exit_code": 0,
+          "output_sha": "53f705e9dd72947d44faafb890e04d4a052289ae4b78a34ea7a078ffe9fc6816"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 7b003e4 -- .coding-hermes/board/events.jsonl | .venv/bin/python -c 'import sys,json; s=sys.stdin.read();\nfor line in s.splitlines():\n    if line.startswith(\"+{\"):\n        x=json.loads(line[1:]); d=x.get(\"detail\",\"\");\n        if \"AUG-172\" in d:\n            print(\"event\",x.get(\"id\"),x.get(\"event_type\"),x.get(\"task_id\"));\n            try:\n                y=json.loads(d)\n                def walk(v,path=\"\"):\n                    if isinstance(v,dict):\n                        for k,z in v.items(): walk(z,path+\"/\"+k)\n                    elif isinstance(v,list):\n                        for j,z in enumerate(v): walk(z,path+f\"/{j}\")\n                    elif isinstance(v,str) and (\"AUG-172\" in v or \"004065e3\" in v or \"tier-1\" in v): print(path, v[:5000])\n                walk(y)\n            except Exception: print(d[:8000])'",
+          "exit_code": 0,
+          "output_sha": "2a114b9881ac12859af4e0cf8dad4ee6f52fc7dcf5a27ecf7fe160c735aeaa4b"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -20 /tmp/aug172-full-gate-fresh.log; ps -eo pid,ppid,pgid,etime,args | grep -E '3474303|3474542|3065674' | head -10",
+          "exit_code": 0,
+          "output_sha": "e797050818e7abeabaf31afd8bf441f2aadae7882ec6dea5375593f5a29968c0"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 7b003e4 -- .coding-hermes/board/tasks.jsonl | .venv/bin/python -c 'import sys,json\nfor line in sys.stdin:\n if line.startswith((\"+{\",\"-{\")):\n  x=json.loads(line[1:])\n  if x.get(\"id\")==\"AUG-172\":\n   print(line[0],\"status\",x.get(\"status\"),\"worker\",x.get(\"worker_status\"))\n   print(\"detail\",x.get(\"detail\"))\n   print(\"reasoning\",x.get(\"reasoning\"))'",
+          "exit_code": 0,
+          "output_sha": "4fe17eebd8ba3d74f6df58de002ec1885484c5c669c3fc114f42ca4cec34775c"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 7a4b68d:auger.py | grep -n -A8 -B5 'if op == \"specs\"'; git show 7a4b68d:auger.py | grep -n -A8 'def _route_post'; git show 7a4b68d:auger.py | grep -n -A5 'add_parser(\"api\"'",
+          "exit_code": 0,
+          "output_sha": "5ec8193bebf8fa51bba8bf55b603ab3debe398b8c25a1e282cd6b3877aab8fc0"
+        },
+        {
+          "tool": "run_command",
+          "command": "git status --porcelain=v1 --untracked-files=no; git diff --name-only 7a4b68d..HEAD -- auger.py tests/test_api_service.py docs/qa/aug172-fix-proof.md; git merge-base --is-ancestor c8a416b 7a4b68d; echo implementation_at_measured_head_rc=$?",
+          "exit_code": 0,
+          "output_sha": "e43786d51bd34823997b7429c9b882231aa580f6a55bda3f82e0f46201a3ed88"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -20 /tmp/aug172-full-gate-fresh.log",
+          "exit_code": 0,
+          "output_sha": "63ae423fdb290ffc698d3abb28b7e6e17560e4b5d659915fda2b22ee08289a1d"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -20 /tmp/aug172-full-gate-fresh.log",
+          "exit_code": 0,
+          "output_sha": "89b1ab2d7a95c6e8ead276627107f1b63d6b6930737f8ee3e8263e02c8d5783b"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show 7b003e4 -- .coding-hermes/board/events.jsonl | .venv/bin/python -c 'import sys,json\nfor line in sys.stdin:\n if line.startswith(\"+{\"):\n  x=json.loads(line[1:]); d=x.get(\"detail\",\"\")\n  if \"AUG-172\" in d:\n   y=json.loads(d)\n   print(json.dumps(y.get(\"closed\"),indent=2,ensure_ascii=False))'",
+          "exit_code": 0,
+          "output_sha": "78a825c74c958e4b647654610e08630cd06db41f2404e4ba1e6c08b898fdba2c"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; date -u +%H:%M:%S; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -8 /tmp/aug172-full-gate-fresh.log",
+          "exit_code": 0,
+          "output_sha": "65d6826be9720bf483389f9fa4d00c249d26acd4335ab0873302f929acc019fc"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -8 /tmp/aug172-full-gate-fresh.log",
+          "exit_code": 0,
+          "output_sha": "8b87e412155201eca734fd9837ec35830ca9998539e882aad834a9cef973591d"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -8 /tmp/aug172-full-gate-fresh.log",
+          "exit_code": 0,
+          "output_sha": "b5bcc0a6573e219e3cfb5d416c5d0178e6a73ffed781f627c588c82fb1606471"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -8 /tmp/aug172-full-gate-fresh.log",
+          "exit_code": 0,
+          "output_sha": "8ba1982222681495e95d37c4a66cd9ebf7c25a2527c590300ef91bb5ab644918"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -8 /tmp/aug172-full-gate-fresh.log",
+          "exit_code": 0,
+          "output_sha": "82a66d0447c8adc144be048e58e6f6499945853206ee2395e30f9b1cd9c02d6c"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -8 /tmp/aug172-full-gate-fresh.log",
+          "exit_code": 0,
+          "output_sha": "6864f7fb8383d51003e0a88c529415cc17da6f1d6b23595fad139c8bd7cbaec5"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -8 /tmp/aug172-full-gate-fresh.log",
+          "exit_code": 0,
+          "output_sha": "803973e760890c6b7735489c5710689984974cd7531599d5ee0def31f13456fb"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -8 /tmp/aug172-full-gate-fresh.log",
+          "exit_code": 0,
+          "output_sha": "c71997bd3866b5f71d9b7b94287dc54b16376e9ae6528f7277e5a3d4652ba81f"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -8 /tmp/aug172-full-gate-fresh.log",
+          "exit_code": 0,
+          "output_sha": "165a73ad124da07545bbfccc14ff1693d212c08940df3e5ce404823caa935152"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -8 /tmp/aug172-full-gate-fresh.log",
+          "exit_code": 0,
+          "output_sha": "e15a9a8bcd09d983d3f304a810c7ddd01fcefc5795c5211a873b51a38f4d6a43"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -8 /tmp/aug172-full-gate-fresh.log",
+          "exit_code": 0,
+          "output_sha": "476abd04ed68145da81b4b0215d32607e25c61a8466b4ce2b642004dadc63ae7"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -8 /tmp/aug172-full-gate-fresh.log",
+          "exit_code": 0,
+          "output_sha": "e95ba74b84764aaf7950c53b34a1c40445bf2017ade71f19d0e83e52c9dee6fd"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -8 /tmp/aug172-full-gate-fresh.log",
+          "exit_code": 0,
+          "output_sha": "91b6fcd83cf320350b2bd92071010eb9ee00d77a2bc6e6a005853865fa7fed6d"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -8 /tmp/aug172-full-gate-fresh.log",
+          "exit_code": 0,
+          "output_sha": "193e7deaf46de1029a8f2d874c5a6cb34e2996b1547b344247ceb3b668ae88bc"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -8 /tmp/aug172-full-gate-fresh.log",
+          "exit_code": 0,
+          "output_sha": "c42bddd63cb0f6eb4f86bdcba7965847a592b80bf38a42b7c968004488c6e6ab"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -8 /tmp/aug172-full-gate-fresh.log",
+          "exit_code": 0,
+          "output_sha": "f07a66aa667ab07ee190466e0f0260b16a927177031d653b4a583eada87669ee"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -8 /tmp/aug172-full-gate-fresh.log",
+          "exit_code": 0,
+          "output_sha": "3b6f363b17f574fbe43b5c75ddaa031bd7d28c41da674115d5b76a221b7c122b"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -8 /tmp/aug172-full-gate-fresh.log",
+          "exit_code": 0,
+          "output_sha": "63e25852515a3ef1fcc626003a2b48df6b5370d3c4e2443dffac5e81b87f2261"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -8 /tmp/aug172-full-gate-fresh.log",
+          "exit_code": 0,
+          "output_sha": "1b5d4e454f23322668443d178001ff78f83a0bb17bd4bd33de5ca99a8f6a7b2a"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then echo FRESH_RC=$(cat /tmp/aug172-full-gate-fresh.rc); else echo FRESH_RUNNING; fi; tail -8 /tmp/aug172-full-gate-fresh.log",
+          "exit_code": 0,
+          "output_sha": "d0d09a0412b06c365ee7226bdbca03697ecba45bb3731df6c98704da95e196fc"
+        },
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-172\"}",
+          "exit_code": 0,
+          "output_sha": "a99d6bd5ff9d8b75b41404b5c0388b8eda3371c0fea1519ff00e14924a782537"
+        },
+        {
+          "tool": "sandbox_read",
+          "command": "sandbox_read {\"key\": \"verified_0\"}",
+          "exit_code": 1,
+          "output_sha": "678be362049c858745e71e5dc8bf0bfe19e3b5a7cc3fce486ff5e05cf8a94b0f"
+        },
+        {
+          "tool": "sandbox_read",
+          "command": "sandbox_read {\"key\": \"verified_derived_3\"}",
+          "exit_code": 1,
+          "output_sha": "efea1d25e3f217f828ae0efd574de41902d884a3b0c199f40cb6ac666a3d7684"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \".gitreins/config.yaml\"}",
+          "exit_code": 0,
+          "output_sha": "60ec05bb6218204f634565349dc8d23b1aec4048dcf3c49af1cdb0a17b2c2355"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"docs/qa/aug172-fix-proof.md\"}",
+          "exit_code": 0,
+          "output_sha": "fc386d97280c1dcf44ea24b6cbb5b9e8efadb4520c55105a22bb789b7c8197c2"
+        },
+        {
+          "tool": "run_command",
+          "command": "git status --short && git rev-parse --short HEAD",
+          "exit_code": 0,
+          "output_sha": "b84fd7feb0c631880eaed6ac6c077c9cd3cc1a880278a56f149e76ac548d1510"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Regression gate: the repository-configured fresh full test command (DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh) completes successfully, including the API regression tests.\", \"key\": \"derived_3\"}",
+          "exit_code": 0,
+          "output_sha": "e9ab80a624e18546bf697be8816ab8ab08c18f89146cad1136bafc2c6ad7dfed"
+        },
+        {
+          "tool": "run_command",
+          "command": "DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh",
+          "exit_code": -15,
+          "output_sha": "2e000d7d89ce2f425b97f3824fe67c435577ba5f5296443eddc9e20c75159966"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"tests/*\", \"regex\": \"AUGER_BLOCKED_BY|AUGER_TEST_LOCK|live arms will be skipped\"}",
+          "exit_code": 0,
+          "output_sha": "6eaa76183f184dcfc233fe8f203ec96fca2f08adf775175260294a90b6538588"
+        },
+        {
+          "tool": "run_command",
+          "command": "ps -fp 3474542 || true; pgrep -af 'tests/gate.sh|pytest|auger.py api' | head -30",
+          "exit_code": 0,
+          "output_sha": "df3eef243b3dab7a21740820738b2718a53adfcd28bd9ba553e159e487864245"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 240, \"offset\": 1, \"path\": \"tests/gate.sh\"}",
+          "exit_code": 0,
+          "output_sha": "0659aa0b4e2ed7b665af2dc8f88ecc9e0c34c209ce4e16f79568432d49e755a4"
+        },
+        {
+          "tool": "run_command",
+          "command": "kill -TERM -- -4034727 2>/dev/null || true; sleep 1; ps -o pid,pgid,stat,etime,cmd -p 3474303,3474305,3474542; tail -n 25 /tmp/aug172-full-gate-fresh.log; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then printf 'RC='; cat /tmp/aug172-full-gate-fresh.rc; else echo 'RC=pending'; fi",
+          "exit_code": 0,
+          "output_sha": "4ec20aac3dfa433a83f9a595bbd4d06e88ee218fa1f0390d7687dbd9cbc1cfe3"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"tests/*.py\", \"regex\": \"AUG-172|SPEC-GRAPH-CORPUS|bounded verdict\"}",
+          "exit_code": 0,
+          "output_sha": "c753bd11938e4e5c562cc7c9a606a9dfceb84a37c7611f62e58caab2d69d05a8"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 269, \"offset\": 240, \"path\": \"tests/gate.sh\"}",
+          "exit_code": 0,
+          "output_sha": "5c6b9472145bc7734f80b5d1f521c9f76bcd9575a126478805ca98579670cf0c"
+        },
+        {
+          "tool": "read_diff",
+          "command": "read_diff {}",
+          "exit_code": 0,
+          "output_sha": "a9fba747e771d50cb043aeb48308899c38b7d9f4d6bb64b95c4631f3357215ed"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"tests/test_api_service.py\", \"regex\": \"APIHandler|/specs|fail-closed|timeout=3|timeout=10\"}",
+          "exit_code": 0,
+          "output_sha": "ed63d1a784085c9ca9cc4dbbc6089f8d19b5abf62f4b5cdedd03a25ced9f1605"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"tests/test_auger.py\", \"regex\": \"APIHandler|/specs|fail-closed|timeout=3|timeout=10\"}",
+          "exit_code": 0,
+          "output_sha": "4f14ea76c0f723f4284b2f4d971ceaac884a3a11cd379d9427580eb9c7a9ad91"
+        },
+        {
+          "tool": "run_command",
+          "command": "tail -n 12 /tmp/aug172-full-gate-fresh.log; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then printf 'RC='; cat /tmp/aug172-full-gate-fresh.rc; else echo 'RC=pending'; fi",
+          "exit_code": 0,
+          "output_sha": "f5706b89dcfaf93c7fd81fce3db687453a60f5faaa0d60858cf34ccabcf5c29f"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"tests/test_api_service.py\"}",
+          "exit_code": 0,
+          "output_sha": "1e3e735ef0a96a14773639d87989322e09d2f6c4c4780d961140bebfa5250e16"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; tail -n 15 /tmp/aug172-full-gate-fresh.log; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then printf 'RC='; cat /tmp/aug172-full-gate-fresh.rc; else echo 'RC=pending'; fi",
+          "exit_code": 0,
+          "output_sha": "a13c10118a59e44cead5689af30fd6fa139bc295355204d53d6ec3c7be0c87e8"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; tail -n 15 /tmp/aug172-full-gate-fresh.log; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then printf 'RC='; cat /tmp/aug172-full-gate-fresh.rc; else echo 'RC=pending'; fi",
+          "exit_code": 0,
+          "output_sha": "b615d84b48b7b4add96752df09b24d57e0d5d23dfa81d0fccd123e79dfeb4719"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; tail -n 15 /tmp/aug172-full-gate-fresh.log; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then printf 'RC='; cat /tmp/aug172-full-gate-fresh.rc; else echo 'RC=pending'; fi",
+          "exit_code": 0,
+          "output_sha": "2672ff7f1d893a2c61a3a93392238efefd0d66e736d5a49bd4899be10ad8e0a1"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; tail -n 15 /tmp/aug172-full-gate-fresh.log; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then printf 'RC='; cat /tmp/aug172-full-gate-fresh.rc; else echo 'RC=pending'; fi",
+          "exit_code": 0,
+          "output_sha": "c0b2392a00b261e14a92960c12deca0e3feb128e6b19327ba2f801041eb2e03e"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; tail -n 15 /tmp/aug172-full-gate-fresh.log; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then printf 'RC='; cat /tmp/aug172-full-gate-fresh.rc; else echo 'RC=pending'; fi",
+          "exit_code": 0,
+          "output_sha": "d11cd1e826f4183861dab3e94b5d10c8e58f21609c20adcbc9407ae932ddd8de"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; tail -n 15 /tmp/aug172-full-gate-fresh.log; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then printf 'RC='; cat /tmp/aug172-full-gate-fresh.rc; else echo 'RC=pending'; fi",
+          "exit_code": 0,
+          "output_sha": "d2a6608539f09d6466991eecd600b54ad3d692fac21b4fd90bf39437a8e5ab7b"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; tail -n 20 /tmp/aug172-full-gate-fresh.log; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then printf 'RC='; cat /tmp/aug172-full-gate-fresh.rc; else echo 'RC=pending'; fi",
+          "exit_code": 0,
+          "output_sha": "2c062181dcc1da0d3be88de503fc5f2f5a6e9c097414ca8b664212c2894afacc"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; tail -n 20 /tmp/aug172-full-gate-fresh.log; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then printf 'RC='; cat /tmp/aug172-full-gate-fresh.rc; else echo 'RC=pending'; fi",
+          "exit_code": 0,
+          "output_sha": "b08f6de6f1526627b7aa523fcd7d7f476d700b5f605494453b22940049c7afd6"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; tail -n 20 /tmp/aug172-full-gate-fresh.log; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then printf 'RC='; cat /tmp/aug172-full-gate-fresh.rc; else echo 'RC=pending'; fi",
+          "exit_code": 0,
+          "output_sha": "127c616f91b2ca4fcf99daf4a72dc1b73aa0f8215e6960eb3f1206e7da3a9385"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; tail -n 20 /tmp/aug172-full-gate-fresh.log; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then printf 'RC='; cat /tmp/aug172-full-gate-fresh.rc; else echo 'RC=pending'; fi",
+          "exit_code": 0,
+          "output_sha": "a364b28c1522b988b4cf5896ed3a4f117699b71cd4b14dddb39ed364547b9559"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; tail -n 20 /tmp/aug172-full-gate-fresh.log; if [ -f /tmp/aug172-full-gate-fresh.rc ]; then printf 'RC='; cat /tmp/aug172-full-gate-fresh.rc; else echo 'RC=pending'; fi",
+          "exit_code": 0,
+          "output_sha": "f427b39149bcdb200ce036c8713ea50ba9039b2ab1732cd055c20d529e922c85"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: fresh configured command `DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh` completed with RC=0 and `GATE PASS`; pytest reported `927 passed, 3 skipped in 1011.93s`, lock-attributed skips 0/3, and `LIVE ARMS: ran 2; skipped 0`. tests/gate.sh:286 includes tests/test_api_service.py; its API specs/check/fail-closed tests are at tests/test_api_service.py:130-181.\", \"key\": \"verified_derived_3\"}",
+          "exit_code": 0,
+          "output_sha": "1bad532919de7147706cc4fe1e2ce564a43a024f82b771d2114a59e837715078"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: fresh live CLI probe through auger.py api returned /health 200 0.005226s; GET /api/ns/auger/specs 200 0.020610s count=12; GET /api/ns/auger/specs/SPEC-GRAPH-CORPUS 200 0.000794s with full block body; POST /api/ns/auger/check 200 3.048613s with hits/jev_used/verdict fields (UNKNOWN/fail-closed on this run); control POST /check 404 no such route. Dispatch auger.py:7658-7663, 7733-7737; bounded calls 7758 timeout=3 and 7789 timeout=10; fail-closed response 7802-7820. Fresh full gate RC=0, 927 passed, 3 skipped, GATE PASS.\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "7f050901ba66e91073ba4382580800735dd9f0f0fadc2ab6e2d075aa3cede446"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: auger.py:14332-14335 registers `api` -> cmd_api (7855) -> serve/APIHandler (7592, 7837-7843). Live CLI probe returned health/specs/block/check 200 and bare POST /check 404 {'error':'no such route: /check'}; GET dispatch auger.py:7658-7663 and POST dispatch 7733-7737.\", \"key\": \"verified_derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "329382ac90e8d43cf5a62b4da24d4c793b9f28ee516066ef576bbb8310db7f66"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: auger.py:7758 recall(...timeout=3), 7789 jev(...timeout=10), 7802-7820 UNKNOWN/fail-closed/jev_used=false. Fresh in-process HTTP probe observed exactly recall timeout 3 and JEV timeout 10; both failure arms returned HTTP 200 UNKNOWN/fail-closed/jev_used=false and printed BOUNDED_FAIL_CLOSED_PROBE_PASS. Focused pytest exit 0: 20 passed in 3.44s.\", \"key\": \"verified_derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "e92e3d44184ed909b58e95cb79e84dda944de51e542dae64a8235efe0beca97a"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: fresh live curl probe through `auger.py api`: health 200 0.005226s; specs 200 0.020610s count=12; SPEC-GRAPH-CORPUS 200 0.000794s with full block text; namespaced check 200 3.048613s with hits/jev_used/verdict fields (UNKNOWN/fail-closed on this run); control POST /check 404 no such route.\", \"key\": \"verified_derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "b84507bf6c1ef9edd528d179443bc28149ba4f95c61cfd91801956030b9f0dec"
+        }
+      ]
+    },
+    "fix_verification": {
+      "id": "fix_verification",
+      "passed": true,
+      "any_failed": false,
+      "summary": "fix_verification: 0 finding(s) verified",
+      "steps": [
+        {
+          "id": "fix_verification",
+          "type": "fix_verification",
+          "passed": true,
+          "output": "fix_verification: 0 finding(s) verified",
+          "error": "",
+          "data": {
+            "dispositions": [],
+            "counts": {}
+          }
+        }
+      ]
+    }
+  },
+  "context_stats": {
+    "diff_source": "working-tree",
+    "diff_bytes": 670,
+    "prompt_bytes": 16793
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "The diff only adds a task entry consistent with the surrounding YAML structure, and no evidenced defects are visible.",
+    "review_state": {
+      "emitted": [],
+      "carried": []
+    }
+  },
+  "summary": "Stage tier1: PASS\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 A clean-tree judged run against row AUG-172: the auger API server exposes /health, GET /api/ns/auger/specs (count>=1), GET /api/ns/auger/specs/SPEC-GRAPH-CORPUS (block body), and POST /api/ns/auger/check (bounded verdict with explicit fail-closed behavior: retrieval capped 3s, JEV capped 10s, UNKNOWN when undecided). The four live arms were re-measured at HEAD 7a4b68d per docs/qa/aug172-fix-proof.md: /health 200 0.0052s; /api/ns/auger/specs 200 0.105s count=12; /api/ns/auger/specs/SPEC-GRAPH-CORPUS 200 0.0092s; POST /api/ns/auger/check 200 2.846s with verdict fields hits/jev_used/verdict decided_by=score; control POST /check 404 'no such route'. AC4 of the row names POST /api/ns/auger/check (registered route), not POST /check.: Fresh live CLI probe through `auger.py api` returned /health 200 in 0.005226s; GET /api/ns/auger/specs 200 in 0.020610s with count=12; GET /api/ns/auger/specs/SPEC-GRAPH-CORPUS 200 in 0.000794s with the full block body; POST /api/ns/auger/check 200 in 3.048613s with hits/jev_used/verdict fields (UNKNOWN/fail-closed on this run); control POST /check returned 404 `no such route`. Dispatch is at auger.py:7658-7663 and 7733-7737; bounded calls are auger.py:7758 (`timeout=3`) and 7789 (`timeout=10`), with the fail-closed response at 7802-7820. Fresh configured gate completed RC=0: `927 passed, 3 skipped in 1011.93s`, `LIVE ARMS: ran 2; skipped 0`, `GATE PASS`.\n  \u2713 Reachability: the `auger api` CLI entrypoint starts APIHandler, and the exact GET specs/spec block and POST /api/ns/<ns>/check paths are dispatched; legacy POST /check is not registered and returns 404.: auger.py:14332-14335 registers `api` -> cmd_api (7855) -> serve/APIHandler (7592, 7837-7843). Live CLI probe returned health/specs/block/check 200 and bare POST /check 404 `{'error':'no such route: /check'}`; GET dispatch is auger.py:7658-7663 and POST dispatch 7733-7737.\n  \u2713 Fail-closed bound propagation: the HTTP check passes timeout=3 to retrieval and timeout=10 to JEV, and retrieval/JEV failure or an undecided score returns a bounded HTTP 200 UNKNOWN verdict with jev_used=false and verdict_decided_by=fail-closed rather than a fabricated decision.: auger.py:7758 calls recall with timeout=3, 7789 calls jev with timeout=10, and 7802-7820 constructs UNKNOWN/fail-closed/jev_used=false. Fresh in-process HTTP probe observed exactly recall timeout 3 and JEV timeout 10; both failure arms returned HTTP 200 UNKNOWN/fail-closed/jev_used=false and printed BOUNDED_FAIL_CLOSED_PROBE_PASS. Focused pytest exited 0: `20 passed in 3.44s`.\n  \u2713 Live curl surface: against the running auger API and local DuckBrain, all four named arms return HTTP 200 with a nonempty active spec list (count>=1), the SPEC-GRAPH-CORPUS block body, and check verdict fields; the POST /check control returns 404 'no such route'.: Fresh live curl probe through `auger.py api`: health 200 in 0.005226s; specs 200 in 0.020610s with count=12; SPEC-GRAPH-CORPUS 200 in 0.000794s with full block text; namespaced check 200 in 3.048613s with hits/jev_used/verdict fields (UNKNOWN/fail-closed on this run); control POST /check 404 `no such route`.\n  \u2713 Regression gate: the repository-configured fresh full test command (DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh) completes successfully, including the API regression tests.: Fresh configured command completed with RC=0 and `GATE PASS`; pytest reported `927 passed, 3 skipped in 1011.93s`, lock-attributed skips 0/3, and `LIVE ARMS: ran 2; skipped 0`. tests/gate.sh:286 includes tests/test_api_service.py, whose API specs/check/fail-closed tests are at tests/test_api_service.py:130-181.\nThe live AUG-172 API surface, bounded fail-closed check behavior, route registration, and full regression gate all passed fresh verification.\n\nStage fix_verification: PASS\n  fix_verification: 0 finding(s) verified\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-11-26T13:44:08.209272",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-26T13:44:08.286095+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 44937,
+        "truncated": false,
+        "source": "git show 7b003e42f4f4"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 726,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-172"
+  }
+}

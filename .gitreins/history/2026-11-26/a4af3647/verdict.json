@@ -1,0 +1,502 @@
+{
+  "task_id": "AUG-188",
+  "task_title": "Committed-board evidence audit reds the suite on main",
+  "task_criteria": [
+    "AC: scripts/audit_board_evidence.py exits 0 printing RESULT: OK at the graded tip AND tests/test_board_evidence_audit.py::test_the_committed_board_audits_clean passes (17 passed). Pre-fix trees red on both."
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "7b003e42f4f40d1d1be5f0d16243b79a8f90857c",
+  "pass_class": "degraded",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "a79e595aeb435e21fcf3e62d2a586abec7eac9166206b2f6fb5ac9d1b52a75b7",
+  "working_tree_dirty_path_count": 1571,
+  "items": [
+    {
+      "criterion": "AC: scripts/audit_board_evidence.py exits 0 printing RESULT: OK at the graded tip AND tests/test_board_evidence_audit.py::test_the_committed_board_audits_clean passes (17 passed). Pre-fix trees red on both.",
+      "status": "FAIL",
+      "detail": "Locally (dirty worktree) both halves are green: `python3 scripts/audit_board_evidence.py` -> `complete_rows=278 bound=131 unresolvable=0 missing=0 ... RESULT: OK`, exit 0; `.venv/bin/python -m pytest tests/test_board_evidence_audit.py -p no:cacheprovider -q` -> `17 passed in 1.48s`, and `::test_the_committed_board_audits_clean` alone -> `1 passed in 0.15s`. Pre-fix redness is also real: `git archive aa48674` (the commit that filed AUG-188) -> audit exit 1 with `UNRESOLVABLE QA-AUGER-13 foreign-citation: cites only verdicts for other tasks: f3733f6c->AUG-151` / `RESULT: FAIL`, pytest `2 failed, 15 passed` including test_the_committed_board_audits_clean. BUT the green at the graded tip is an artifact of UNTRACKED local verdict dirs: on a tracked-only copy of HEAD 7b003e4 (`git archive HEAD .coding-hermes/board .gitreins/history scripts tests`) the audit exits 1 printing `complete_rows=277 bound=129 unresolvable=1 ... LABEL AUG-172 detail.evidence[].run_id=004065e3 resolves to no verdict file`, `UNRESOLVABLE AUG-172 foreign-citation: cites only verdicts for other tasks: bad8aaea->AUG-172-APIFIX`, `RESULT: FAIL`, and the same tree's pytest run is `3 failed, 14 passed` (test_the_committed_board_audits_clean, test_every_bound_row_resolves_to_its_own_task, test_no_complete_row_carries_a_fabricated_label). HEAD 7b003e4 flipped AUG-172 to complete citing run 004065e3 without tracking .gitreins/history/2026-11-26/004065e3/ (it is `??` in git status), so the committed board still reds the suite on any clean checkout/CI \u2014 the exact defect class AUG-188 exists to remove."
+    },
+    {
+      "criterion": "Reachability: the board-evidence audit test file is actually executed by the repo's real test surface (tests/gate.sh pytest arm, which .gitreins/config.yaml guards.test_command invokes), so the green result is not an unrun proof.",
+      "status": "PASS",
+      "detail": "tests/gate.sh:273 pytest arm explicitly lists tests/test_board_evidence_audit.py; .gitreins/config.yaml sets `test_command: DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh`; tests/test_board_evidence_audit.py:541 test_gate_arm_runs_this_file asserts this and was inside the observed `17 passed in 1.48s` run.",
+      "derived": true
+    },
+    {
+      "criterion": "Seam/clean-checkout: the run ids the committed board binds to must resolve from TRACKED .gitreins/history artifacts (not untracked local dirs), otherwise the audit is green locally but red on a fresh clone/CI.",
+      "status": "FAIL",
+      "detail": "A scan of every complete row's cited run ids against `git ls-files .gitreins/history` printed `cited run ids on complete rows: 199` / `bindings whose verdict.json is NOT tracked: 2` -> ('AUG-172','004065e3') and ('AUG-190','fb5477b8'); both dirs are untracked (`?? .gitreins/history/2026-11-26/004065e3/`, `?? .gitreins/history/2026-11-26/fb5477b8/`). Confirmed behaviourally: tracked-only HEAD archive -> audit exit 1 RESULT: FAIL, while the identically archived parent 7b003e4^ -> exit 0 `complete_rows=276 bound=129 unresolvable=0 missing=0 ... RESULT: OK`, i.e. HEAD re-breaks the clean-checkout audit.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "needs_review",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nsecrets: gitleaks bound=timeout 600s (0=off)\nscanners: nice=nice -n 10\nsecrets: gitleaks scope=repo-root /home/kara/auger\nsecrets: gitleaks parallelism=GOMAXPROCS=4\n9:16AM INF scanned ~8723554 bytes (8.72 MB) in 3.65s\n9:16AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 1089 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\ngate pytest interpreter: /home/kara/auger/.venv/bin/python\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\nAUGER_BLOCKED_BY: full-fleet sync push pid 778484; live arms will be skipped\nsss........ssssss..sssssssssssssssssssssssssssssssssssssssssssssssssssss [  7%]\nsssssssssssss.sss.....................................ssssssss.......... [ 15%]\n......s....sss............ssssssssssssssssssssssssss.......sssssssss..ss [ 23%]\ns........s...ssss...............ss.s.s.ssssss.ssssssssssssssssss...sssss [ 30%]\nsssss......sssssssssssssss.ssssssssssssssssssssss...........ss....s..... [ 38%]\n............................s........................................... [ 46%]\n........................................................................ [ 54%]\n..............ss........................................................ [ 61%]\n........................................................................ [ 69%]\n........................................................................ [ 77%]\n........................................................................ [ 85%]\n........................................................................ [ 92%]\n.......s..........................................................       [100%]\n=========================== short test summary info ============================\nSKIPPED [197] tests/test_auger.py: AUGER_BLOCKED_BY: full-fleet sync push pid 778484; live arm skipped\nSKIPPED [4] tests/test_auger.py:850: AUGER_BLOCKED_BY: full-fleet sync push pid 778484; live arm skipped\nSKIPPED [2] tests/test_auger.py:890: AUGER_BLOCKED_BY: full-fleet sync push pid 778484; live arm skipped\nSKIPPED [1] tests/test_auger.py:2247: AUGER_BLOCKED_BY: full-fleet sync push pid 778484; live arm skipped\nSKIPPED [1] tests/test_auger.py:2269: AUGER_BLOCKED_BY: full-fleet sync push pid 778484; live arm skipped\nSKIPPED [3] tests/test_auger.py:5830: AUGER_BLOCKED_BY: full-fleet sync push pid 778484; live arm skipped\nSKIPPED [1] tests/test_auger.py:8695: AUGER_BLOCKED_BY: full-fleet sync push pid 778484; live arm skipped\nSKIPPED [1] tests/test_auger.py:9177: AUGER_BLOCKED_BY: full-fleet sync push pid 778484; live arm skipped\nSKIPPED [1] tests/conftest.py:955: AUGER_BLOCKED_BY: full-fleet sync push pid 778484; live arm skipped\n\n\u2026 [3157 chars omitted \u2014 59 line(s)] \u2026\nspec: 522 document(s), 7314 block(s), 0 reference(s) ok\n== prd proofs (AUG-137) ==\nprd proofs: 8 total \u00b7 3 required \u00b7 5 deferred \u2192 PASS\n   P1  deferred not-run   not-run (deferred to AUG-119): auger.py carries no board surface (grep -c boardctl auger.py -> 0): resolving a\n   P2  required pass      corpus=9249B bundle=8131B latency=29.0ms  2 generated view(s) verified byte-identical to the generator's output for specs/; one block edit propagated to\n   P3  deferred not-run   not-run (deferred to AUG-153): the checker half is reachable (`auger spec check --diff-file` reports `trace-mi\n   P4  deferred not-run   not-run (deferred to AUG-119): writing and reading back a canonical boardctl row is boardctl's surface, not au\n   P5  required pass      corpus=1084B bundle=435B latency=1311.9ms  one query returned migration=tests/fixtures/xml/verification/migrations/001_add_marker.sql, fixture=tests/fixt\n   P6  deferred not-run   not-run (deferred to AUG-124): what counts as judge evidence \u2014 excluding the worker summary, refusing a PASS w\n   P7  required pass      corpus=9249B bundle=2944B latency=217.6ms  4/12 blocks selected by `applies-to auger.spec.select`; bundle is 31.8% of the corpus (2944 of 9249 bytes), fl\n   P8  deferred not-run   not-run (deferred to AUG-153): the flag and the process-liveness assertion live in the GitReins hook, which no\nprd-proofs: /home/kara/auger/docs/prd/evidence/AUG-137-prd-proofs.json agrees with this run\n== docs check ==\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": false,
+      "any_failed": true,
+      "summary": "INCOMPLETE\n  \u2717 AC: scripts/audit_board_evidence.py exits 0 printing RESULT: OK at the graded tip AND tests/test_board_evidence_audit.py::test_the_committed_board_audits_clean passes (17 passed). Pre-fix trees red on both.: Locally (dirty worktree) both halves are green: `python3 scripts/audit_board_evidence.py` -> `complete_rows=278 bound=131 unresolvable=0 missing=0 ... RESULT: OK`, exit 0; `.venv/bin/python -m pytest tests/test_board_evidence_audit.py -p no:cacheprovider -q` -> `17 passed in 1.48s`, and `::test_the_committed_board_audits_clean` alone -> `1 passed in 0.15s`. Pre-fix redness is also real: `git archive aa48674` (the commit that filed AUG-188) -> audit exit 1 with `UNRESOLVABLE QA-AUGER-13 foreign-citation: cites only verdicts for other tasks: f3733f6c->AUG-151` / `RESULT: FAIL`, pytest `2 failed, 15 passed` including test_the_committed_board_audits_clean. BUT the green at the graded tip is an artifact of UNTRACKED local verdict dirs: on a tracked-only copy of HEAD 7b003e4 (`git archive HEAD .coding-hermes/board .gitreins/history scripts tests`) the audit exits 1 printing `complete_rows=277 bound=129 unresolvable=1 ... LABEL AUG-172 detail.evidence[].run_id=004065e3 resolves to no verdict file`, `UNRESOLVABLE AUG-172 foreign-citation: cites only verdicts for other tasks: bad8aaea->AUG-172-APIFIX`, `RESULT: FAIL`, and the same tree's pytest run is `3 failed, 14 passed` (test_the_committed_board_audits_clean, test_every_bound_row_resolves_to_its_own_task, test_no_complete_row_carries_a_fabricated_label). HEAD 7b003e4 flipped AUG-172 to complete citing run 004065e3 without tracking .gitreins/history/2026-11-26/004065e3/ (it is `??` in git status), so the committed board still reds the suite on any clean checkout/CI \u2014 the exact defect class AUG-188 exists to remove.\n  \u2713 Reachability: the board-evidence audit test file is actually executed by the repo's real test surface (tests/gate.sh pytest arm, which .gitreins/config.yaml guards.test_command invokes), so the green result is not an unrun proof.: tests/gate.sh:273 pytest arm explicitly lists tests/test_board_evidence_audit.py; .gitreins/config.yaml sets `test_command: DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh`; tests/test_board_evidence_audit.py:541 test_gate_arm_runs_this_file asserts this and was inside the observed `17 passed in 1.48s` run.\n  \u2717 Seam/clean-checkout: the run ids the committed board binds to must resolve from TRACKED .gitreins/history artifacts (not untracked local dirs), otherwise the audit is green locally but red on a fresh clone/CI.: A scan of every complete row's cited run ids against `git ls-files .gitreins/history` printed `cited run ids on complete rows: 199` / `bindings whose verdict.json is NOT tracked: 2` -> ('AUG-172','004065e3') and ('AUG-190','fb5477b8'); both dirs are untracked (`?? .gitreins/history/2026-11-26/004065e3/`, `?? .gitreins/history/2026-11-26/fb5477b8/`). Confirmed behaviourally: tracked-only HEAD archive -> audit exit 1 RESULT: FAIL, while the identically archived parent 7b003e4^ -> exit 0 `complete_rows=276 bound=129 unresolvable=0 missing=0 ... RESULT: OK`, i.e. HEAD re-breaks the clean-checkout audit.\n  \u2717 Coverage FAILED \u2014 not passing: AC: scripts/audit_board_evidence.py exits 0 printing RESULT: OK at the graded tip AND tests/test_board_evidence_audit.py::test_the_committed_board_audits_clean passes (17 passed). Pre-fix trees red on both.\nThe AUG-188 fix itself is real (pre-fix tree reds both arms, current worktree is 17-passed/RESULT: OK), but the graded committed tip 7b003e4 re-breaks the same invariant: AUG-172 was closed citing untracked verdict 004065e3 and still names foreign run bad8aaea, so on tracked files alone the audit exits 1 (RESULT: FAIL) and the board-evidence tests go 3 failed, 14 passed.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": false,
+          "output": "INCOMPLETE\n  \u2717 AC: scripts/audit_board_evidence.py exits 0 printing RESULT: OK at the graded tip AND tests/test_board_evidence_audit.py::test_the_committed_board_audits_clean passes (17 passed). Pre-fix trees red on both.: Locally (dirty worktree) both halves are green: `python3 scripts/audit_board_evidence.py` -> `complete_rows=278 bound=131 unresolvable=0 missing=0 ... RESULT: OK`, exit 0; `.venv/bin/python -m pytest tests/test_board_evidence_audit.py -p no:cacheprovider -q` -> `17 passed in 1.48s`, and `::test_the_committed_board_audits_clean` alone -> `1 passed in 0.15s`. Pre-fix redness is also real: `git archive aa48674` (the commit that filed AUG-188) -> audit exit 1 with `UNRESOLVABLE QA-AUGER-13 foreign-citation: cites only verdicts for other tasks: f3733f6c->AUG-151` / `RESULT: FAIL`, pytest `2 failed, 15 passed` including test_the_committed_board_audits_clean. BUT the green at the graded tip is an artifact of UNTRACKED local verdict dirs: on a tracked-only copy of HEAD 7b003e4 (`git archive HEAD .coding-hermes/board .gitreins/history scripts tests`) the audit exits 1 printing `complete_rows=277 bound=129 unresolvable=1 ... LABEL AUG-172 detail.evidence[].run_id=004065e3 resolves to no verdict file`, `UNRESOLVABLE AUG-172 foreign-citation: cites only verdicts for other tasks: bad8aaea->AUG-172-APIFIX`, `RESULT: FAIL`, and the same tree's pytest run is `3 failed, 14 passed` (test_the_committed_board_audits_clean, test_every_bound_row_resolves_to_its_own_task, test_no_complete_row_carries_a_fabricated_label). HEAD 7b003e4 flipped AUG-172 to complete citing run 004065e3 without tracking .gitreins/history/2026-11-26/004065e3/ (it is `??` in git status), so the committed board still reds the suite on any clean checkout/CI \u2014 the exact defect class AUG-188 exists to remove.\n  \u2713 Reachability: the board-evidence audit test file is actually executed by the repo's real test surface (tests/gate.sh pytest arm, which .gitreins/config.yaml guards.test_command invokes), so the green result is not an unrun proof.: tests/gate.sh:273 pytest arm explicitly lists tests/test_board_evidence_audit.py; .gitreins/config.yaml sets `test_command: DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh`; tests/test_board_evidence_audit.py:541 test_gate_arm_runs_this_file asserts this and was inside the observed `17 passed in 1.48s` run.\n  \u2717 Seam/clean-checkout: the run ids the committed board binds to must resolve from TRACKED .gitreins/history artifacts (not untracked local dirs), otherwise the audit is green locally but red on a fresh clone/CI.: A scan of every complete row's cited run ids against `git ls-files .gitreins/history` printed `cited run ids on complete rows: 199` / `bindings whose verdict.json is NOT tracked: 2` -> ('AUG-172','004065e3') and ('AUG-190','fb5477b8'); both dirs are untracked (`?? .gitreins/history/2026-11-26/004065e3/`, `?? .gitreins/history/2026-11-26/fb5477b8/`). Confirmed behaviourally: tracked-only HEAD archive -> audit exit 1 RESULT: FAIL, while the identically archived parent 7b003e4^ -> exit 0 `complete_rows=276 bound=129 unresolvable=0 missing=0 ... RESULT: OK`, i.e. HEAD re-breaks the clean-checkout audit.\n  \u2717 Coverage FAILED \u2014 not passing: AC: scripts/audit_board_evidence.py exits 0 printing RESULT: OK at the graded tip AND tests/test_board_evidence_audit.py::test_the_committed_board_audits_clean passes (17 passed). Pre-fix trees red on both.\nThe AUG-188 fix itself is real (pre-fix tree reds both arms, current worktree is 17-passed/RESULT: OK), but the graded committed tip 7b003e4 re-breaks the same invariant: AUG-172 was closed citing untracked verdict 004065e3 and still names foreign run bad8aaea, so on tracked files alone the audit exits 1 (RESULT: FAIL) and the board-evidence tests go 3 failed, 14 passed.",
+          "error": "",
+          "data": {
+            "verdict": "INCOMPLETE",
+            "items": [
+              {
+                "criterion": "AC: scripts/audit_board_evidence.py exits 0 printing RESULT: OK at the graded tip AND tests/test_board_evidence_audit.py::test_the_committed_board_audits_clean passes (17 passed). Pre-fix trees red on both.",
+                "status": "FAIL",
+                "detail": "Locally (dirty worktree) both halves are green: `python3 scripts/audit_board_evidence.py` -> `complete_rows=278 bound=131 unresolvable=0 missing=0 ... RESULT: OK`, exit 0; `.venv/bin/python -m pytest tests/test_board_evidence_audit.py -p no:cacheprovider -q` -> `17 passed in 1.48s`, and `::test_the_committed_board_audits_clean` alone -> `1 passed in 0.15s`. Pre-fix redness is also real: `git archive aa48674` (the commit that filed AUG-188) -> audit exit 1 with `UNRESOLVABLE QA-AUGER-13 foreign-citation: cites only verdicts for other tasks: f3733f6c->AUG-151` / `RESULT: FAIL`, pytest `2 failed, 15 passed` including test_the_committed_board_audits_clean. BUT the green at the graded tip is an artifact of UNTRACKED local verdict dirs: on a tracked-only copy of HEAD 7b003e4 (`git archive HEAD .coding-hermes/board .gitreins/history scripts tests`) the audit exits 1 printing `complete_rows=277 bound=129 unresolvable=1 ... LABEL AUG-172 detail.evidence[].run_id=004065e3 resolves to no verdict file`, `UNRESOLVABLE AUG-172 foreign-citation: cites only verdicts for other tasks: bad8aaea->AUG-172-APIFIX`, `RESULT: FAIL`, and the same tree's pytest run is `3 failed, 14 passed` (test_the_committed_board_audits_clean, test_every_bound_row_resolves_to_its_own_task, test_no_complete_row_carries_a_fabricated_label). HEAD 7b003e4 flipped AUG-172 to complete citing run 004065e3 without tracking .gitreins/history/2026-11-26/004065e3/ (it is `??` in git status), so the committed board still reds the suite on any clean checkout/CI \u2014 the exact defect class AUG-188 exists to remove."
+              },
+              {
+                "criterion": "Reachability: the board-evidence audit test file is actually executed by the repo's real test surface (tests/gate.sh pytest arm, which .gitreins/config.yaml guards.test_command invokes), so the green result is not an unrun proof.",
+                "status": "PASS",
+                "detail": "tests/gate.sh:273 pytest arm explicitly lists tests/test_board_evidence_audit.py; .gitreins/config.yaml sets `test_command: DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh`; tests/test_board_evidence_audit.py:541 test_gate_arm_runs_this_file asserts this and was inside the observed `17 passed in 1.48s` run.",
+                "derived": true
+              },
+              {
+                "criterion": "Seam/clean-checkout: the run ids the committed board binds to must resolve from TRACKED .gitreins/history artifacts (not untracked local dirs), otherwise the audit is green locally but red on a fresh clone/CI.",
+                "status": "FAIL",
+                "detail": "A scan of every complete row's cited run ids against `git ls-files .gitreins/history` printed `cited run ids on complete rows: 199` / `bindings whose verdict.json is NOT tracked: 2` -> ('AUG-172','004065e3') and ('AUG-190','fb5477b8'); both dirs are untracked (`?? .gitreins/history/2026-11-26/004065e3/`, `?? .gitreins/history/2026-11-26/fb5477b8/`). Confirmed behaviourally: tracked-only HEAD archive -> audit exit 1 RESULT: FAIL, while the identically archived parent 7b003e4^ -> exit 0 `complete_rows=276 bound=129 unresolvable=0 missing=0 ... RESULT: OK`, i.e. HEAD re-breaks the clean-checkout audit.",
+                "derived": true
+              }
+            ],
+            "summary": "The AUG-188 fix itself is real (pre-fix tree reds both arms, current worktree is 17-passed/RESULT: OK), but the graded committed tip 7b003e4 re-breaks the same invariant: AUG-172 was closed citing untracked verdict 004065e3 and still names foreign run bad8aaea, so on tracked files alone the audit exits 1 (RESULT: FAIL) and the board-evidence tests go 3 failed, 14 passed.",
+            "provenance": {
+              "model": "neuralwatt/kimi-k3.1-pro",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            },
+            "context_stats": {
+              "diff_source": "working-tree",
+              "diff_bytes": 1401,
+              "prompt_bytes": 17234
+            }
+          }
+        }
+      ],
+      "model": "neuralwatt/kimi-k3.1-pro",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "context_stats": {
+        "diff_source": "working-tree",
+        "diff_bytes": 1401,
+        "prompt_bytes": 17234
+      },
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-188\"}",
+          "exit_code": 0,
+          "output_sha": "5f0b0d7f5d4ec1cb5b0fc690142034645d46827380592c8b1dd467d28cc64425"
+        },
+        {
+          "tool": "read_diff",
+          "command": "read_diff {}",
+          "exit_code": 0,
+          "output_sha": "56e0f77aa361f4ab708a1879f529bdd5e2a802b8dc2bb9c067888b78d959359a"
+        },
+        {
+          "tool": "run_command",
+          "command": "pwd && git status --short && git log --oneline -15",
+          "exit_code": 0,
+          "output_sha": "403e86f91cf16b3b22f99522fd147ce76403c3723407a28244390cfe6ec4d07b"
+        },
+        {
+          "tool": "run_command",
+          "command": "ls scripts/ | head -50; echo ---; ls tests/ | head -60; echo ---; git log --oneline --all -- scripts/audit_board_evidence.py tests/test_board_evidence_audit.py | head -20",
+          "exit_code": 0,
+          "output_sha": "fbc865ab9d4ec95d48079f93b33589e3402edb86780ded71a7a62f35284a531b"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"scripts/audit_board_evidence.py\"}",
+          "exit_code": 0,
+          "output_sha": "9445a599bae6aef7ac5d0dd6c0ddc73f7cc46cd72f3646a4577c59bc5ccc7665"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"offset\": 400, \"path\": \"scripts/audit_board_evidence.py\"}",
+          "exit_code": 0,
+          "output_sha": "3348e9cf53cf6fbe1d4980e0b25f910cf3094afa9c3e80be4e9eaa0a57c33ec4"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"tests/test_board_evidence_audit.py\"}",
+          "exit_code": 0,
+          "output_sha": "5aeb4be0cf319ad02aa68b8ad9fc4acc1310b4eaac2671cc991cc0131fc85054"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"offset\": 400, \"path\": \"tests/test_board_evidence_audit.py\"}",
+          "exit_code": 0,
+          "output_sha": "ddfbe801f72aaaeee2da6ed05c8e31235a8b3005b4c0df4fb02b5f989ead7937"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && python3 scripts/audit_board_evidence.py; echo \"EXIT=$?\"",
+          "exit_code": 0,
+          "output_sha": "e56c590d1b754b771319f2cabee805b6fdc86415a99104061e686a87c52b0ba1"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && cat .gitreins/config.yaml | head -60",
+          "exit_code": 0,
+          "output_sha": "3a6a37d2a93f94fc93709bfb7a57a3c876374da3ff8beab7bfdab29c82652f66"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && .venv/bin/python -m pytest tests/test_board_evidence_audit.py -p no:cacheprovider -q 2>&1 | tail -20; echo \"EXIT=${PIPESTATUS[0]}\"",
+          "exit_code": 2,
+          "output_sha": "af4bb07e5ac5d7d7974d7029c498f6f4ac32663b92db07d5911108929483c7f1"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && .venv/bin/python -m pytest tests/test_board_evidence_audit.py::test_the_committed_board_audits_clean -p no:cacheprovider -q 2>&1 | tail -5",
+          "exit_code": 0,
+          "output_sha": "b098dac14aa58503513265a9454a7b0204226b0a8c9c1d7f183b5c19c55a0071"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git log --oneline --all --grep=\"AUG-188\" | head -20; echo ---; git log --oneline -20 -- .coding-hermes/board/tasks.jsonl",
+          "exit_code": 0,
+          "output_sha": "b7b9325d3db235b1227eb6b243ed8f77ee2ee9cfa6feb74328a52edc46398a98"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show --stat aa48674 | head -30; echo ===; git show aa48674 -- .gitreins/tasks.yaml | head -60",
+          "exit_code": 0,
+          "output_sha": "de875bac25db3f9d05e3fb9b3f1ae1e94521577a8ccd1f3db4b979cccd0d2929"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show --stat b3e8f17 | head -40; echo ===; git show --stat 15b6d72 | head -20; echo ===; git show --stat a3be1d2 | head -30",
+          "exit_code": 0,
+          "output_sha": "b93fbeaa7e67eed11733aedcd2c4a4b4bea965c561c963613d348cda1b33b45e"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show aa48674:.coding-hermes/board/tasks.jsonl > /tmp/prefix_board.jsonl && python3 scripts/audit_board_evidence.py --board /tmp/prefix_board.jsonl --history .gitreins/history 2>&1 | tail -8; echo \"EXIT=$?\"",
+          "exit_code": 0,
+          "output_sha": "b87ab046c56ee539d675f231311c51d52f207b3a44548b09fcf7fbe0c5424182"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && python3 scripts/audit_board_evidence.py --board /tmp/prefix_board.jsonl --history .gitreins/history > /tmp/prefix_out.txt 2>&1; echo \"EXIT=$?\"; tail -3 /tmp/prefix_out.txt",
+          "exit_code": 0,
+          "output_sha": "2a8482b8dbe063bbe8d4613d64e4948edd47bf544dcddf3d4e31d0f826796782"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show aa48674:.gitreins/history > /dev/null 2>&1; git ls-tree -r --name-only aa48674 .gitreins/history | grep verdict.json | wc -l; git ls-tree -r --name-only HEAD .gitreins/history | grep verdict.json | wc -l",
+          "exit_code": 0,
+          "output_sha": "f8585f46dcf4a80c84fe711bdfb269e8355e6e67c2b3a602bc811936cb6f7d4f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && rm -rf /tmp/prefix_tree && mkdir -p /tmp/prefix_tree && git archive aa48674 .coding-hermes/board .gitreins/history scripts tests | tar -x -C /tmp/prefix_tree && ls /tmp/prefix_tree && cd /tmp/prefix_tree && python3 scripts/audit_board_evidence.py > /tmp/prefix_tree_out.txt 2>&1; echo \"AUDIT_EXIT=$?\"; tail -4 /tmp/prefix_tree_out.txt",
+          "exit_code": 0,
+          "output_sha": "42e8bfb7b8b304b3c33c1967acd5d736561ad3ece139e6d88f80bccb1f45ffac"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/prefix_tree && /home/kara/auger/.venv/bin/python -m pytest tests/test_board_evidence_audit.py -p no:cacheprovider -q -p no:conftest 2>&1 | tail -12",
+          "exit_code": 0,
+          "output_sha": "c7ae9108d6aff98b444e75c7813a719535e2c13455231753f2066e99a2cc21fa"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git diff -- .coding-hermes/board/tasks.jsonl | head -40; echo ===; git diff -- .coding-hermes/board/events.jsonl | head -20",
+          "exit_code": 0,
+          "output_sha": "9011913558b23259dea0aeab7a16d78d2a4f64221802bc999ecae162cfde047b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git diff -- .coding-hermes/board/tasks.jsonl | cut -c1-600",
+          "exit_code": 0,
+          "output_sha": "c44a418b5ae675117513521c62e4c39c30bfe99a85cef24a0fe9b47d2b7d9b6d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git diff -- .coding-hermes/board/tasks.jsonl | grep -E '^[+-]\\{' | python3 -c \"\nimport sys, json\nfor line in sys.stdin:\n    sign = line[0]\n    row = json.loads(line[1:])\n    print(sign, row['id'], row.get('status'), row.get('evidence_run_id'), json.dumps((row.get('detail') or {}).get('evidence'))[:200])\n\"",
+          "exit_code": 0,
+          "output_sha": "25922fbacadef31df5b9e0a6a1deef3374223acf5059216d5ee684f5e0d0bfb1"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && ls .gitreins/history/2026-11-26/fb5477b8/ && python3 -c \"\nimport json\nd=json.load(open('.gitreins/history/2026-11-26/fb5477b8/verdict.json'))\nprint({k:d[k] for k in ('task_id','passed') if k in d})\n\"; git ls-files .gitreins/history/2026-11-26/fb5477b8/",
+          "exit_code": 0,
+          "output_sha": "94736ed4cd3d4bfd9eadf8709794aacf0ce0f3ced92695f1d54da8b3c7bc600e"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show HEAD:.coding-hermes/board/tasks.jsonl > /tmp/head_board.jsonl && python3 scripts/audit_board_evidence.py --board /tmp/head_board.jsonl --history .gitreins/history > /tmp/head_audit.txt 2>&1; echo \"HEAD_BOARD_AUDIT_EXIT=$?\"; head -4 /tmp/head_audit.txt; tail -2 /tmp/head_audit.txt",
+          "exit_code": 0,
+          "output_sha": "e015ef389cf34230c891515cc63c09293c5deb127dee0725b9bfab499c003b00"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n \"test_board_evidence_audit\" tests/gate.sh; echo ===; grep -n \"python3 -m pytest\" tests/gate.sh | cut -c1-400",
+          "exit_code": 0,
+          "output_sha": "c9a30a5e8151513eca26e35208e2e2488ba65ecfa456169f02cc17a13a423e1c"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Reachability: the board-evidence audit test file is actually executed by the repo's real test surface (tests/gate.sh pytest arm, which .gitreins/config.yaml guards.test_command invokes), so the green result is not an unrun proof.\", \"key\": \"derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "74d8923aaee6774f863a3a193eec61074ec67c0af4f8e8ba6e7655f8d0b8979d"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Seam/clean-checkout: the run ids the committed board binds to must resolve from TRACKED .gitreins/history artifacts (not untracked local dirs), otherwise the audit is green locally but red on a fresh clone/CI.\", \"key\": \"derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "bf9d5bd589b3d9d49484340c1809bc76df6cb8ba84d2036b96db1ce4c1ca68fe"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && python3 - <<'PY'\nimport json, subprocess\nfrom pathlib import Path\ntracked = set(subprocess.run(['git','ls-files','.gitreins/history'],capture_output=True,text=True).stdout.split())\nmissing=[]\nfor line in Path('.coding-hermes/board/tasks.jsonl').read_text().splitlines():\n    if not line.strip(): continue\n    row=json.loads(line)\n    if row.get('status')!='complete': continue\n    ids=[]\n    v=row.get('evidence_run_id')\n    if isinstance(v,str) and v.strip() and not v.startswith('none:'): ids.append(v.strip())\n    for e in (row.get('detail') or {}).get('evidence') or []:\n        if isinstance(e,dict):\n            r=e.get('run_id')\n            if isinstance(r,str) and not r.startswith('none:'): ids.append(r)\n    for r in ids:\n        hits=[p for p in tracked if p.endswith('/'+r+'/verdict.json')]\n        if not hits: missing.append((row['id'],r))\nprint('complete rows with bindings whose verdict.json is NOT tracked:', len(missing))\nfor m in missing[:20]: print(m)\nPY",
+          "exit_code": 1,
+          "output_sha": "e41711f23a1256e10d68ab1039cc812a0723c7fc772373630ec83a589d15bfd4"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && python3 - <<'PY'\nimport json, subprocess\nfrom pathlib import Path\ntracked = set(subprocess.run(['git','ls-files','.gitreins/history'],capture_output=True,text=True).stdout.split())\nmissing=[]; total=0\nfor line in Path('.coding-hermes/board/tasks.jsonl').read_text().splitlines():\n    if not line.strip(): continue\n    row=json.loads(line)\n    if row.get('status')!='complete': continue\n    ids=[]\n    v=row.get('evidence_run_id')\n    if isinstance(v,str) and v.strip() and not v.startswith('none:'): ids.append(v.strip())\n    detail=row.get('detail')\n    entries=detail.get('evidence') if isinstance(detail,dict) else None\n    for e in entries or []:\n        if isinstance(e,dict):\n            r=e.get('run_id')\n            if isinstance(r,str) and not r.startswith('none:'): ids.append(r)\n    for r in ids:\n        total+=1\n        hits=[p for p in tracked if p.endswith('/'+r+'/verdict.json')]\n        if not hits: missing.append((row['id'],r))\nprint('cited run ids on complete rows:', total)\nprint('bindings whose verdict.json is NOT tracked:', len(missing))\nfor m in missing[:20]: print(m)\nPY",
+          "exit_code": 0,
+          "output_sha": "6da9ccdabf501d57fd5556752f3f84d7c25e92afc5b187243a7d5a4eb1884a99"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && rm -rf /tmp/tip_tree && mkdir -p /tmp/tip_tree && git archive HEAD .coding-hermes/board .gitreins/history scripts tests | tar -x -C /tmp/tip_tree && cd /tmp/tip_tree && python3 scripts/audit_board_evidence.py > /tmp/tip_audit.txt 2>&1; echo \"TRACKED_TIP_AUDIT_EXIT=$?\"; head -4 /tmp/tip_audit.txt; tail -3 /tmp/tip_audit.txt",
+          "exit_code": 0,
+          "output_sha": "c55baba5a2d8e69a261d0779884c81a1ee07c01034e996eb7ae7e86b0ec28292"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show HEAD:.coding-hermes/board/tasks.jsonl | python3 -c \"\nimport sys,json\nfor line in sys.stdin:\n    r=json.loads(line)\n    if r['id']=='AUG-172':\n        print(json.dumps(r,indent=1)[:4000])\n\"",
+          "exit_code": 0,
+          "output_sha": "08ec1402015580c6efbdda176fa0a58047a138ecf76b87d9b1ddf74c3d198f7f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show HEAD:.coding-hermes/board/tasks.jsonl | python3 -c \"\nimport sys,json\nfor line in sys.stdin:\n    r=json.loads(line)\n    if r['id']=='AUG-172':\n        print('evidence_run_id=',repr(r.get('evidence_run_id')))\n        print('foreman_note=',repr(r.get('foreman_note'))[:1500])\n        print('keys=',list(r))\n\"; echo ===; git ls-tree -r --name-only HEAD .gitreins/history/2026-11-26 | head",
+          "exit_code": 0,
+          "output_sha": "8885a3db7ecc68d90191ece934ea1c39a98a0bd4a9c99c403b9e50818bb0b815"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /tmp/tip_tree && /home/kara/auger/.venv/bin/python -m pytest tests/test_board_evidence_audit.py -p no:cacheprovider -q 2>&1 | tail -8",
+          "exit_code": 0,
+          "output_sha": "b0a2700ba3ce92f634d598dd15ec9014b3c647aaa50ef29f64373e23c142bbf7"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show --stat 7b003e4 | head -25; echo ===; git show 7b003e4 -- .coding-hermes/board/tasks.jsonl | grep -E '^[+-]\\{' | python3 -c \"\nimport sys,json\nfor line in sys.stdin:\n    r=json.loads(line[1:])\n    print(line[0], r['id'], r.get('status'), r.get('evidence_run_id'), json.dumps((r.get('detail') or {}).get('evidence'))[:150] if isinstance(r.get('detail'),dict) else None)\n\"",
+          "exit_code": 0,
+          "output_sha": "0f83663bb8551d6fe49ad2b6a59947377bebb436d8a04f048b5b538e3a7f0a8f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show 7b003e4^:.coding-hermes/board/tasks.jsonl > /tmp/prev_board.jsonl && python3 scripts/audit_board_evidence.py --board /tmp/prev_board.jsonl --history .gitreins/history > /tmp/prev_audit.txt 2>&1; echo \"PREV_TIP_BOARD_AUDIT_EXIT=$?\"; head -2 /tmp/prev_audit.txt; tail -2 /tmp/prev_audit.txt",
+          "exit_code": 0,
+          "output_sha": "074a905bf0b0d8d62a8323b036f2712a193584e2a53eb0b20376513ad220b75b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && rm -rf /tmp/prevtip_tree && mkdir -p /tmp/prevtip_tree && git archive 7b003e4^ .coding-hermes/board .gitreins/history scripts tests | tar -x -C /tmp/prevtip_tree && cd /tmp/prevtip_tree && python3 scripts/audit_board_evidence.py > /tmp/prevtip_audit.txt 2>&1; echo \"PREV_TRACKED_TIP_AUDIT_EXIT=$?\"; head -2 /tmp/prevtip_audit.txt; tail -2 /tmp/prevtip_audit.txt",
+          "exit_code": 0,
+          "output_sha": "e2444886d2dd436b4e4a8c50ad99b8e5bc98faecf62908d079b7d9148093ea96"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"MIXED/FAIL: In the dirty working tree the two named commands are green \\u2014 `python3 scripts/audit_board_evidence.py` printed `complete_rows=278 bound=131 unresolvable=0 missing=0 ... RESULT: OK` exit 0, and `.venv/bin/python -m pytest tests/test_board_evidence_audit.py -p no:cacheprovider -q` printed `17 passed in 1.48s` (focused `::test_the_committed_board_audits_clean` -> `1 passed in 0.15s`). Pre-fix reproduction also confirmed: `git archive aa48674` (the commit that filed AUG-188) -> audit exit 1 `UNRESOLVABLE QA-AUGER-13 foreign-citation ... RESULT: FAIL`, pytest `2 failed, 15 passed` incl. test_the_committed_board_audits_clean. BUT at the graded COMMITTED tip (HEAD 7b003e4, tracked files only via `git archive HEAD`) the same audit exits 1: `complete_rows=277 bound=129 unresolvable=1 ... LABEL AUG-172 detail.evidence[].run_id=004065e3 resolves to no verdict file; UNRESOLVABLE AUG-172 foreign-citation: cites only verdicts for other tasks: bad8aaea->AUG-172-APIFIX; RESULT: FAIL`, and the tracked-tip pytest run is `3 failed, 14 passed` (test_the_committed_board_audits_clean, test_every_bound_row_resolves_to_its_own_task, test_no_complete_row_carries_a_fabricated_label). Cause: HEAD 7b003e4 flipped AUG-172 to complete citing run 004065e3 but never tracked .gitreins/history/2026-11-26/004065e3/ (untracked locally); the working-tree-only AUG-190 close cites fb5477b8, also untracked. The green run depends on untracked local verdict dirs, so the committed board still reds the suite on a clean checkout.\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "412a4df898530a7ebe3d674337f130416144a69299db1721671a23f14117497a"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: tests/gate.sh:273 pytest arm names tests/test_board_evidence_audit.py among its test files, and .gitreins/config.yaml guards.test_command is `DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh`; tests/test_board_evidence_audit.py::test_gate_arm_runs_this_file asserts this and was in the 17-passed run.\", \"key\": \"verified_derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "2f8afe463a01544d02a6437c8b185b2a1ef9c94ef06ff41ff617ac9e58de9873"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"FAIL: 2 of the 199 run ids cited by complete board rows have no TRACKED verdict.json \\u2014 AUG-172 -> 004065e3 (closed by HEAD 7b003e4) and AUG-190 -> fb5477b8 (working-tree-only close). Both dirs exist only as untracked local files (`git status --short` shows `?? .gitreins/history/2026-11-26/004065e3/` and `?? .gitreins/history/2026-11-26/fb5477b8/`). Proof: `git archive HEAD ... | tar -x -C /tmp/tip_tree && python3 scripts/audit_board_evidence.py` -> exit 1 RESULT: FAIL; the parent commit 7b003e4^ archived the same way exits 0 RESULT: OK, so HEAD re-breaks the clean-checkout audit.\", \"key\": \"verified_derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "1c085434f60b2e773456e217d34290f36aae774714e479a5bea6f807534958c9"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && python3 -c \"\nimport json\nd=json.load(open('.gitreins/history/2026-11-26/004065e3/verdict.json'))\nprint({k:d.get(k) for k in ('task_id','passed','verdict','pass_class')})\n\"; git ls-tree -r --name-only HEAD .gitreins/history | grep -c \"bad8aaea\" ; git ls-tree -r --name-only HEAD .gitreins/history | grep \"bad8aaea\" | head -3",
+          "exit_code": 0,
+          "output_sha": "c8173ff8778cdbbdf4e0e0c31ed7ce3ad498063ec7e941a09819d04398e2da42"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && python3 -c \"\nimport json\nd=json.load(open('.gitreins/history/2026-11-15/bad8aaea/verdict.json'))\nprint({k:d.get(k) for k in ('task_id','passed','pass_class')})\n\"",
+          "exit_code": 0,
+          "output_sha": "2f254f5835dd470a0316e58cae122d19ce84052bb0c7e0039761f34a8539f98b"
+        }
+      ]
+    },
+    "fix_verification": {
+      "id": "fix_verification",
+      "passed": true,
+      "any_failed": false,
+      "summary": "fix_verification: 2 finding(s) verified\n  \u2717 tier2:item_0 [unclassified] not_fixed: flagged code still present at scripts/audit_board_evidence.py:45 \u2014 region unchanged\n  \u2717 tier2:item_2 [unclassified] not_fixed: flagged code location could not be resolved from the finding text (no repo-relative path matched the working tree or the judged diff); reported unhandled (fail-closed)\n  \u26a0 verdict capped at needs_review by 2 unhandled finding(s)",
+      "steps": [
+        {
+          "id": "fix_verification",
+          "type": "fix_verification",
+          "passed": true,
+          "output": "fix_verification: 2 finding(s) verified\n  \u2717 tier2:item_0 [unclassified] not_fixed: flagged code still present at scripts/audit_board_evidence.py:45 \u2014 region unchanged\n  \u2717 tier2:item_2 [unclassified] not_fixed: flagged code location could not be resolved from the finding text (no repo-relative path matched the working tree or the judged diff); reported unhandled (fail-closed)\n  \u26a0 verdict capped at needs_review by 2 unhandled finding(s)",
+          "error": "",
+          "data": {
+            "dispositions": [
+              {
+                "finding_id": "tier2:item_0",
+                "severity": "",
+                "disposition": "not_fixed",
+                "evidence": "flagged code still present at scripts/audit_board_evidence.py:45 \u2014 region unchanged",
+                "path": "scripts/audit_board_evidence.py",
+                "line": null
+              },
+              {
+                "finding_id": "tier2:item_2",
+                "severity": "",
+                "disposition": "not_fixed",
+                "evidence": "flagged code location could not be resolved from the finding text (no repo-relative path matched the working tree or the judged diff); reported unhandled (fail-closed)",
+                "path": "",
+                "line": null
+              }
+            ],
+            "counts": {
+              "not_fixed": 2
+            },
+            "verdict_cap": "needs_review",
+            "capped_findings": [
+              "tier2:item_0",
+              "tier2:item_2"
+            ]
+          }
+        }
+      ],
+      "dispositions": [
+        {
+          "finding_id": "tier2:item_0",
+          "severity": "",
+          "disposition": "not_fixed",
+          "evidence": "flagged code still present at scripts/audit_board_evidence.py:45 \u2014 region unchanged",
+          "path": "scripts/audit_board_evidence.py",
+          "line": null
+        },
+        {
+          "finding_id": "tier2:item_2",
+          "severity": "",
+          "disposition": "not_fixed",
+          "evidence": "flagged code location could not be resolved from the finding text (no repo-relative path matched the working tree or the judged diff); reported unhandled (fail-closed)",
+          "path": "",
+          "line": null
+        }
+      ],
+      "verdict_cap": "needs_review"
+    }
+  },
+  "context_stats": {
+    "diff_source": "working-tree",
+    "diff_bytes": 1401,
+    "prompt_bytes": 17234
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "",
+    "error": "unparseable reviewer reply: no parseable JSON object in reply: ''",
+    "raw_reply": "",
+    "retry": {
+      "count": 1,
+      "raw_reply": ""
+    },
+    "review_state": {
+      "emitted": [],
+      "carried": []
+    }
+  },
+  "summary": "Stage tier1: PASS\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10\n\nStage tier2: FAIL\n  INCOMPLETE\n  \u2717 AC: scripts/audit_board_evidence.py exits 0 printing RESULT: OK at the graded tip AND tests/test_board_evidence_audit.py::test_the_committed_board_audits_clean passes (17 passed). Pre-fix trees red on both.: Locally (dirty worktree) both halves are green: `python3 scripts/audit_board_evidence.py` -> `complete_rows=278 bound=131 unresolvable=0 missing=0 ... RESULT: OK`, exit 0; `.venv/bin/python -m pytest tests/test_board_evidence_audit.py -p no:cacheprovider -q` -> `17 passed in 1.48s`, and `::test_the_committed_board_audits_clean` alone -> `1 passed in 0.15s`. Pre-fix redness is also real: `git archive aa48674` (the commit that filed AUG-188) -> audit exit 1 with `UNRESOLVABLE QA-AUGER-13 foreign-citation: cites only verdicts for other tasks: f3733f6c->AUG-151` / `RESULT: FAIL`, pytest `2 failed, 15 passed` including test_the_committed_board_audits_clean. BUT the green at the graded tip is an artifact of UNTRACKED local verdict dirs: on a tracked-only copy of HEAD 7b003e4 (`git archive HEAD .coding-hermes/board .gitreins/history scripts tests`) the audit exits 1 printing `complete_rows=277 bound=129 unresolvable=1 ... LABEL AUG-172 detail.evidence[].run_id=004065e3 resolves to no verdict file`, `UNRESOLVABLE AUG-172 foreign-citation: cites only verdicts for other tasks: bad8aaea->AUG-172-APIFIX`, `RESULT: FAIL`, and the same tree's pytest run is `3 failed, 14 passed` (test_the_committed_board_audits_clean, test_every_bound_row_resolves_to_its_own_task, test_no_complete_row_carries_a_fabricated_label). HEAD 7b003e4 flipped AUG-172 to complete citing run 004065e3 without tracking .gitreins/history/2026-11-26/004065e3/ (it is `??` in git status), so the committed board still reds the suite on any clean checkout/CI \u2014 the exact defect class AUG-188 exists to remove.\n  \u2713 Reachability: the board-evidence audit test file is actually executed by the repo's real test surface (tests/gate.sh pytest arm, which .gitreins/config.yaml guards.test_command invokes), so the green result is not an unrun proof.: tests/gate.sh:273 pytest arm explicitly lists tests/test_board_evidence_audit.py; .gitreins/config.yaml sets `test_command: DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh`; tests/test_board_evidence_audit.py:541 test_gate_arm_runs_this_file asserts this and was inside the observed `17 passed in 1.48s` run.\n  \u2717 Seam/clean-checkout: the run ids the committed board binds to must resolve from TRACKED .gitreins/history artifacts (not untracked local dirs), otherwise the audit is green locally but red on a fresh clone/CI.: A scan of every complete row's cited run ids against `git ls-files .gitreins/history` printed `cited run ids on complete rows: 199` / `bindings whose verdict.json is NOT tracked: 2` -> ('AUG-172','004065e3') and ('AUG-190','fb5477b8'); both dirs are untracked (`?? .gitreins/history/2026-11-26/004065e3/`, `?? .gitreins/history/2026-11-26/fb5477b8/`). Confirmed behaviourally: tracked-only HEAD archive -> audit exit 1 RESULT: FAIL, while the identically archived parent 7b003e4^ -> exit 0 `complete_rows=276 bound=129 unresolvable=0 missing=0 ... RESULT: OK`, i.e. HEAD re-breaks the clean-checkout audit.\n  \u2717 Coverage FAILED \u2014 not passing: AC: scripts/audit_board_evidence.py exits 0 printing RESULT: OK at the graded tip AND tests/test_board_evidence_audit.py::test_the_committed_board_audits_clean passes (17 passed). Pre-fix trees red on both.\nThe AUG-188 fix itself is real (pre-fix tree reds both arms, current worktree is 17-passed/RESULT: OK), but the graded committed tip 7b003e4 re-breaks the same invariant: AUG-172 was closed citing untracked verdict 004065e3 and still names foreign run bad8aaea, so on tracked files alone the audit exits 1 (RESULT: FAIL) and the board-evidence tests go 3 failed, 14 passed.\n\nStage fix_verification: PASS\n  fix_verification: 2 finding(s) verified\n  \u2717 tier2:item_0 [unclassified] not_fixed: flagged code still present at scripts/audit_board_evidence.py:45 \u2014 region unchanged\n  \u2717 tier2:item_2 [unclassified] not_fixed: flagged code location could not be resolved from the finding text (no repo-relative path matched the working tree or the judged diff); reported unhandled (fail-closed)\n  \u26a0 verdict capped at needs_review by 2 unhandled finding(s)\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-11-26T14:24:10.369594",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-26T14:24:10.431144+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 44937,
+        "truncated": false,
+        "source": "git show 7b003e42f4f4"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 40633,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-188"
+  }
+}

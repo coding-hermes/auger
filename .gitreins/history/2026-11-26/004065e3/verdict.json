@@ -1,0 +1,505 @@
+{
+  "task_id": "AUG-172",
+  "task_title": "serve/API external spec consumption is available live for a curl-only agent",
+  "task_criteria": [
+    "A clean-tree judged run against row AUG-172: the auger API server exposes /health, GET /api/ns/auger/specs (count>=1), GET /api/ns/auger/specs/SPEC-GRAPH-CORPUS (block body), and POST /api/ns/auger/check (bounded verdict with explicit fail-closed behavior: retrieval capped 3s, JEV capped 10s, UNKNOWN when undecided). The four live arms were re-measured at HEAD 7a4b68d per docs/qa/aug172-fix-proof.md: /health 200 0.0052s; /api/ns/auger/specs 200 0.105s count=12; /api/ns/auger/specs/SPEC-GRAPH-CORPUS 200 0.0092s; POST /api/ns/auger/check 200 2.846s with verdict fields hits/jev_used/verdict decided_by=score; control POST /check 404 'no such route'. AC4 of the row names POST /api/ns/auger/check (registered route), not POST /check."
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "3986b187cb2d3622db94f6e0ecfd6ac4eaccc3d3",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "cbaa8af9adc654b29e371592a5037606fe66e407a51e98d7988b075c4d4c73a0",
+  "working_tree_dirty_path_count": 1556,
+  "items": [
+    {
+      "criterion": "A clean-tree judged run against row AUG-172: the auger API server exposes /health, GET /api/ns/auger/specs (count>=1), GET /api/ns/auger/specs/SPEC-GRAPH-CORPUS (block body), and POST /api/ns/auger/check (bounded verdict with explicit fail-closed behavior: retrieval capped 3s, JEV capped 10s, UNKNOWN when undecided). The four live arms were re-measured at HEAD 7a4b68d per docs/qa/aug172-fix-proof.md: /health 200 0.0052s; /api/ns/auger/specs 200 0.105s count=12; /api/ns/auger/specs/SPEC-GRAPH-CORPUS 200 0.0092s; POST /api/ns/auger/check 200 2.846s with verdict fields hits/jev_used/verdict decided_by=score; control POST /check 404 'no such route'. AC4 of the row names POST /api/ns/auger/check (registered route), not POST /check.",
+      "status": "PASS",
+      "detail": "No tracked modifications (`git status --porcelain=v1 --untracked-files=no` empty; HEAD 3986b18). A live curl-only probe launched from /tmp through `auger.py api` returned: health 200 0.006757s; specs 200 0.024561s with count=12; SPEC-GRAPH-CORPUS 200 0.000861s with the full block body; namespaced check 200 2.841965s with 3 hits, jev_used=true, verdict=NOT YET ANSWERED, verdict_decided_by=score; and bare POST /check 404 with `{\"error\":\"no such route: /check\"}`. The exact historical HEAD 7a4b68d measurements (0.0052s, 0.105s/count=12, 0.0092s, 2.846s/score, control 404) are recorded at .coding-hermes/board/events.jsonl:668 and commit 01e744f; docs/qa/aug172-fix-proof.md:17-28 supplies the probe recipe. The row's AC4 at .coding-hermes/board/tasks.jsonl:272 names the registered namespaced route and explicitly rejects the bare /check alias. Retrieval/JEV timeout and UNKNOWN behavior were additionally exercised by an HTTP probe that printed BOUNDED_FAIL_CLOSED_PROBE_PASS. Focused verification: `.venv/bin/python -m pytest -q tests/test_api_service.py` exited 0 with 9 passed; `.venv/bin/python -m pytest -q tests/test_openapi_parity.py` exited 0 with 11 passed."
+    },
+    {
+      "criterion": "The four required endpoints and the POST /check control must be reachable through the actual `auger.py api` CLI entrypoint on a live socket, with the documented response shapes and no project lookup for spec reads.",
+      "status": "PASS",
+      "detail": "The CLI registration at auger.py:14332-14335 dispatches to cmd_api at auger.py:7855 and serve/APIHandler at auger.py:7592. The live /tmp probe reached all four endpoints and the control with the expected status/body shapes. The specs branch at auger.py:7661-7663 returns before `_namespace(ns)` at auger.py:7665, so spec reads do not perform project lookup; tests/test_api_service.py:157-168 covers this route contract.",
+      "derived": true
+    },
+    {
+      "criterion": "The HTTP check path must actually pass retrieval timeout=3 and JEV timeout=10, and retrieval/JEV failure must produce HTTP 200 UNKNOWN with jev_used=false and verdict_decided_by=fail-closed rather than an error or optimistic verdict.",
+      "status": "PASS",
+      "detail": "auger.py:7768-7770 calls `recall(..., timeout=3)` and auger.py:7790-7795 calls `jev(..., timeout=10)`; auger.py:7802-7820 selects UNKNOWN/fail-closed when no usable score exists. An actual in-process HTTP probe observed retrieval timeout 3 and JEV timeout 10, and both failure arms returned HTTP 200 with `{'verdict':'UNKNOWN','verdict_decided_by':'fail-closed','jev_used':False}`, ending with BOUNDED_FAIL_CLOSED_PROBE_PASS. The focused API suite also passed 9 tests in 3.59s.",
+      "derived": true
+    },
+    {
+      "criterion": "The claimed HEAD 7a4b68d re-measurements and POST /check route correction must be substantiated by committed repository evidence, with docs/qa/aug172-fix-proof.md supplying the probe recipe.",
+      "status": "PASS",
+      "detail": ".coding-hermes/board/events.jsonl:668 records the exact HEAD 7a4b68d measurements and the namespaced-check/control-404 result; commit 01e744f records the AC4 route correction and repeats the measurements. docs/qa/aug172-fix-proof.md:17-28 documents the /tmp server launch and probe procedure. The independent live probe reproduced the same count=12, block-body, score-decided check, and bare-/check 404 behavior.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "no_concerns_found",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": false,
+      "any_failed": true,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2717 tests: scanners: nice=nice -n 10",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nsecrets: gitleaks bound=timeout 600s (0=off)\nscanners: nice=nice -n 10\nsecrets: gitleaks scope=repo-root /home/kara/auger\nsecrets: gitleaks parallelism=GOMAXPROCS=4\n7:34AM INF scanned ~8717681 bytes (8.72 MB) in 3.71s\n7:34AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 1088 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": false,
+          "output": "scanners: nice=nice -n 10\ngate pytest interpreter: /home/kara/auger/.venv/bin/python\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [  7%]\n........................................................................ [ 15%]\n........................................................................F..............s......................................................................................................s.....................................................s................................. [ 45%]\n........................................................................ [ 53%]\n.................................................................................................. [ 63%]\n........................................................................ [ 71%]\n........................................................................ [ 79%]\n........................................................................ [ 86%]\n...............................................................s........ [ 94%]\n..................................................                       [100%]\n=================================== FAILURES ===================================\n_______________ test_a_broken_verb_fails_exactly_one_named_test ________________\n\ntmp_path = PosixPath('/mnt/ssd/tmp/pytest-of-kara/pytest-7022/test_a_broken_verb_fails_exact0')\nlive_service = 'http://127.0.0.1:3000'\n\n    def test_a_broken_verb_fails_exactly_one_named_test(tmp_path, live_service):\n        \"\"\"The acceptance criterion, proved by RUNNING a suite with one verb deliberately broken.\n    \n        A child suite of four deterministic tests covers four verbs. Only the toggle's write is\n        broken. The observed result must be EXACTLY ONE failure, and it must be the test that\n        names the toggle: a zero means the suite never observed the broken write, and a cascade is\n        the signature of one failing test corrupting the next (shared state, order dependence).\n        Both fail this test.\n        \"\"\"\n        child = tmp_path / \"childtests\"\n        child.mkdir()\n        nonce = uuid.uuid4().hex[:8]\n        # The child gets its OWN conftest.py (copied, not imported) and its own rootdir via -c, so\n\n\u2026 [3269 chars omitted \u2014 62 line(s)] \u2026\nSKIPPED [1] tests/test_auger.py:9240: the 44-domain grid is not on this host: domain grid /mnt/ssd/tmp/pytest-of-kara/pytest-7022/test_answer_confirmation_names0 is not the canonical 44 domains (4.01-4.44): 0 file(s); missing ['4.01', '4.02', '4.03', '4.04', '4.05', '4.06', '4.07', '4.08', '4.09', '4.10', '4.11', '4.12', '4.13', '4.14', '4.15', '4.16', '4.17', '4.18', '4.19', '4.20', '4.21', '4.22', '4.23', '4.24', '4.25', '4.26', '4.27', '4.28', '4.29', '4.30', '4.31', '4.32', '4.33', '4.34', '4.35', '4.36', '4.37', '4.38', '4.39', '4.40', '4.41', '4.42', '4.43', '4.44']; unexpected none; duplicated none\nSKIPPED [1] tests/test_upgrade_path.py:228: end-to-end leg builds 3 venvs (~30s); set AUGER_UPGRADE_VERIFY_LIVE=1 to run scripts/upgrade-verify.sh for real\nSKIPPED [1] tests/test_spec_ingest.py:368: code-factory: upstream source drift past the manifest's recorded revision (corpus bound to f72dce5a1cc8869232c2993aad21eca5b455095b, live tree at 5ae9e3e4c5b469fb05070ae4a6fc0c7f546bd4a2); first containment break at code-factory/specs/ENVELOPE.md/CF-ENVELOPE-OK-IS-THE-VERDICT-STATUS-IS-TH-S003 \u2014 regenerate corpora/code-factory with scripts/ingest_markdown_specs.py to re-bind; the portable digest leg (test_shipped_block_digests_match_manifest) covered the shipped corpus's integrity here\n1 failed, 925 passed, 4 skipped in 1245.46s (0:20:45)\n",
+          "error": "",
+          "data": {
+            "exit_code": 1
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 A clean-tree judged run against row AUG-172: the auger API server exposes /health, GET /api/ns/auger/specs (count>=1), GET /api/ns/auger/specs/SPEC-GRAPH-CORPUS (block body), and POST /api/ns/auger/check (bounded verdict with explicit fail-closed behavior: retrieval capped 3s, JEV capped 10s, UNKNOWN when undecided). The four live arms were re-measured at HEAD 7a4b68d per docs/qa/aug172-fix-proof.md: /health 200 0.0052s; /api/ns/auger/specs 200 0.105s count=12; /api/ns/auger/specs/SPEC-GRAPH-CORPUS 200 0.0092s; POST /api/ns/auger/check 200 2.846s with verdict fields hits/jev_used/verdict decided_by=score; control POST /check 404 'no such route'. AC4 of the row names POST /api/ns/auger/check (registered route), not POST /check.: No tracked modifications (`git status --porcelain=v1 --untracked-files=no` empty; HEAD 3986b18). A live curl-only probe launched from /tmp through `auger.py api` returned: health 200 0.006757s; specs 200 0.024561s with count=12; SPEC-GRAPH-CORPUS 200 0.000861s with the full block body; namespaced check 200 2.841965s with 3 hits, jev_used=true, verdict=NOT YET ANSWERED, verdict_decided_by=score; and bare POST /check 404 with `{\"error\":\"no such route: /check\"}`. The exact historical HEAD 7a4b68d measurements (0.0052s, 0.105s/count=12, 0.0092s, 2.846s/score, control 404) are recorded at .coding-hermes/board/events.jsonl:668 and commit 01e744f; docs/qa/aug172-fix-proof.md:17-28 supplies the probe recipe. The row's AC4 at .coding-hermes/board/tasks.jsonl:272 names the registered namespaced route and explicitly rejects the bare /check alias. Retrieval/JEV timeout and UNKNOWN behavior were additionally exercised by an HTTP probe that printed BOUNDED_FAIL_CLOSED_PROBE_PASS. Focused verification: `.venv/bin/python -m pytest -q tests/test_api_service.py` exited 0 with 9 passed; `.venv/bin/python -m pytest -q tests/test_openapi_parity.py` exited 0 with 11 passed.\n  \u2713 The four required endpoints and the POST /check control must be reachable through the actual `auger.py api` CLI entrypoint on a live socket, with the documented response shapes and no project lookup for spec reads.: The CLI registration at auger.py:14332-14335 dispatches to cmd_api at auger.py:7855 and serve/APIHandler at auger.py:7592. The live /tmp probe reached all four endpoints and the control with the expected status/body shapes. The specs branch at auger.py:7661-7663 returns before `_namespace(ns)` at auger.py:7665, so spec reads do not perform project lookup; tests/test_api_service.py:157-168 covers this route contract.\n  \u2713 The HTTP check path must actually pass retrieval timeout=3 and JEV timeout=10, and retrieval/JEV failure must produce HTTP 200 UNKNOWN with jev_used=false and verdict_decided_by=fail-closed rather than an error or optimistic verdict.: auger.py:7768-7770 calls `recall(..., timeout=3)` and auger.py:7790-7795 calls `jev(..., timeout=10)`; auger.py:7802-7820 selects UNKNOWN/fail-closed when no usable score exists. An actual in-process HTTP probe observed retrieval timeout 3 and JEV timeout 10, and both failure arms returned HTTP 200 with `{'verdict':'UNKNOWN','verdict_decided_by':'fail-closed','jev_used':False}`, ending with BOUNDED_FAIL_CLOSED_PROBE_PASS. The focused API suite also passed 9 tests in 3.59s.\n  \u2713 The claimed HEAD 7a4b68d re-measurements and POST /check route correction must be substantiated by committed repository evidence, with docs/qa/aug172-fix-proof.md supplying the probe recipe.: .coding-hermes/board/events.jsonl:668 records the exact HEAD 7a4b68d measurements and the namespaced-check/control-404 result; commit 01e744f records the AC4 route correction and repeats the measurements. docs/qa/aug172-fix-proof.md:17-28 documents the /tmp server launch and probe procedure. The independent live probe reproduced the same count=12, block-body, score-decided check, and bare-/check 404 behavior.\nThe namespaced API surface is live and bounded, the HEAD 7a4b68d measurements and route correction are recorded, and focused API/OpenAPI verification passes.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 A clean-tree judged run against row AUG-172: the auger API server exposes /health, GET /api/ns/auger/specs (count>=1), GET /api/ns/auger/specs/SPEC-GRAPH-CORPUS (block body), and POST /api/ns/auger/check (bounded verdict with explicit fail-closed behavior: retrieval capped 3s, JEV capped 10s, UNKNOWN when undecided). The four live arms were re-measured at HEAD 7a4b68d per docs/qa/aug172-fix-proof.md: /health 200 0.0052s; /api/ns/auger/specs 200 0.105s count=12; /api/ns/auger/specs/SPEC-GRAPH-CORPUS 200 0.0092s; POST /api/ns/auger/check 200 2.846s with verdict fields hits/jev_used/verdict decided_by=score; control POST /check 404 'no such route'. AC4 of the row names POST /api/ns/auger/check (registered route), not POST /check.: No tracked modifications (`git status --porcelain=v1 --untracked-files=no` empty; HEAD 3986b18). A live curl-only probe launched from /tmp through `auger.py api` returned: health 200 0.006757s; specs 200 0.024561s with count=12; SPEC-GRAPH-CORPUS 200 0.000861s with the full block body; namespaced check 200 2.841965s with 3 hits, jev_used=true, verdict=NOT YET ANSWERED, verdict_decided_by=score; and bare POST /check 404 with `{\"error\":\"no such route: /check\"}`. The exact historical HEAD 7a4b68d measurements (0.0052s, 0.105s/count=12, 0.0092s, 2.846s/score, control 404) are recorded at .coding-hermes/board/events.jsonl:668 and commit 01e744f; docs/qa/aug172-fix-proof.md:17-28 supplies the probe recipe. The row's AC4 at .coding-hermes/board/tasks.jsonl:272 names the registered namespaced route and explicitly rejects the bare /check alias. Retrieval/JEV timeout and UNKNOWN behavior were additionally exercised by an HTTP probe that printed BOUNDED_FAIL_CLOSED_PROBE_PASS. Focused verification: `.venv/bin/python -m pytest -q tests/test_api_service.py` exited 0 with 9 passed; `.venv/bin/python -m pytest -q tests/test_openapi_parity.py` exited 0 with 11 passed.\n\n\u2026 [640 chars omitted \u2014 1 line(s)] \u2026\n  \u2713 The HTTP check path must actually pass retrieval timeout=3 and JEV timeout=10, and retrieval/JEV failure must produce HTTP 200 UNKNOWN with jev_used=false and verdict_decided_by=fail-closed rather than an error or optimistic verdict.: auger.py:7768-7770 calls `recall(..., timeout=3)` and auger.py:7790-7795 calls `jev(..., timeout=10)`; auger.py:7802-7820 selects UNKNOWN/fail-closed when no usable score exists. An actual in-process HTTP probe observed retrieval timeout 3 and JEV timeout 10, and both failure arms returned HTTP 200 with `{'verdict':'UNKNOWN','verdict_decided_by':'fail-closed','jev_used':False}`, ending with BOUNDED_FAIL_CLOSED_PROBE_PASS. The focused API suite also passed 9 tests in 3.59s.\n  \u2713 The claimed HEAD 7a4b68d re-measurements and POST /check route correction must be substantiated by committed repository evidence, with docs/qa/aug172-fix-proof.md supplying the probe recipe.: .coding-hermes/board/events.jsonl:668 records the exact HEAD 7a4b68d measurements and the namespaced-check/control-404 result; commit 01e744f records the AC4 route correction and repeats the measurements. docs/qa/aug172-fix-proof.md:17-28 documents the /tmp server launch and probe procedure. The independent live probe reproduced the same count=12, block-body, score-decided check, and bare-/check 404 behavior.\nThe namespaced API surface is live and bounded, the HEAD 7a4b68d measurements and route correction are recorded, and focused API/OpenAPI verification passes.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "A clean-tree judged run against row AUG-172: the auger API server exposes /health, GET /api/ns/auger/specs (count>=1), GET /api/ns/auger/specs/SPEC-GRAPH-CORPUS (block body), and POST /api/ns/auger/check (bounded verdict with explicit fail-closed behavior: retrieval capped 3s, JEV capped 10s, UNKNOWN when undecided). The four live arms were re-measured at HEAD 7a4b68d per docs/qa/aug172-fix-proof.md: /health 200 0.0052s; /api/ns/auger/specs 200 0.105s count=12; /api/ns/auger/specs/SPEC-GRAPH-CORPUS 200 0.0092s; POST /api/ns/auger/check 200 2.846s with verdict fields hits/jev_used/verdict decided_by=score; control POST /check 404 'no such route'. AC4 of the row names POST /api/ns/auger/check (registered route), not POST /check.",
+                "status": "PASS",
+                "detail": "No tracked modifications (`git status --porcelain=v1 --untracked-files=no` empty; HEAD 3986b18). A live curl-only probe launched from /tmp through `auger.py api` returned: health 200 0.006757s; specs 200 0.024561s with count=12; SPEC-GRAPH-CORPUS 200 0.000861s with the full block body; namespaced check 200 2.841965s with 3 hits, jev_used=true, verdict=NOT YET ANSWERED, verdict_decided_by=score; and bare POST /check 404 with `{\"error\":\"no such route: /check\"}`. The exact historical HEAD 7a4b68d measurements (0.0052s, 0.105s/count=12, 0.0092s, 2.846s/score, control 404) are recorded at .coding-hermes/board/events.jsonl:668 and commit 01e744f; docs/qa/aug172-fix-proof.md:17-28 supplies the probe recipe. The row's AC4 at .coding-hermes/board/tasks.jsonl:272 names the registered namespaced route and explicitly rejects the bare /check alias. Retrieval/JEV timeout and UNKNOWN behavior were additionally exercised by an HTTP probe that printed BOUNDED_FAIL_CLOSED_PROBE_PASS. Focused verification: `.venv/bin/python -m pytest -q tests/test_api_service.py` exited 0 with 9 passed; `.venv/bin/python -m pytest -q tests/test_openapi_parity.py` exited 0 with 11 passed."
+              },
+              {
+                "criterion": "The four required endpoints and the POST /check control must be reachable through the actual `auger.py api` CLI entrypoint on a live socket, with the documented response shapes and no project lookup for spec reads.",
+                "status": "PASS",
+                "detail": "The CLI registration at auger.py:14332-14335 dispatches to cmd_api at auger.py:7855 and serve/APIHandler at auger.py:7592. The live /tmp probe reached all four endpoints and the control with the expected status/body shapes. The specs branch at auger.py:7661-7663 returns before `_namespace(ns)` at auger.py:7665, so spec reads do not perform project lookup; tests/test_api_service.py:157-168 covers this route contract.",
+                "derived": true
+              },
+              {
+                "criterion": "The HTTP check path must actually pass retrieval timeout=3 and JEV timeout=10, and retrieval/JEV failure must produce HTTP 200 UNKNOWN with jev_used=false and verdict_decided_by=fail-closed rather than an error or optimistic verdict.",
+                "status": "PASS",
+                "detail": "auger.py:7768-7770 calls `recall(..., timeout=3)` and auger.py:7790-7795 calls `jev(..., timeout=10)`; auger.py:7802-7820 selects UNKNOWN/fail-closed when no usable score exists. An actual in-process HTTP probe observed retrieval timeout 3 and JEV timeout 10, and both failure arms returned HTTP 200 with `{'verdict':'UNKNOWN','verdict_decided_by':'fail-closed','jev_used':False}`, ending with BOUNDED_FAIL_CLOSED_PROBE_PASS. The focused API suite also passed 9 tests in 3.59s.",
+                "derived": true
+              },
+              {
+                "criterion": "The claimed HEAD 7a4b68d re-measurements and POST /check route correction must be substantiated by committed repository evidence, with docs/qa/aug172-fix-proof.md supplying the probe recipe.",
+                "status": "PASS",
+                "detail": ".coding-hermes/board/events.jsonl:668 records the exact HEAD 7a4b68d measurements and the namespaced-check/control-404 result; commit 01e744f records the AC4 route correction and repeats the measurements. docs/qa/aug172-fix-proof.md:17-28 documents the /tmp server launch and probe procedure. The independent live probe reproduced the same count=12, block-body, score-decided check, and bare-/check 404 behavior.",
+                "derived": true
+              }
+            ],
+            "summary": "The namespaced API surface is live and bounded, the HEAD 7a4b68d measurements and route correction are recorded, and focused API/OpenAPI verification passes.",
+            "provenance": {
+              "model": "neuralwatt/kimi-k3.1-pro",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            },
+            "context_stats": {
+              "diff_source": "working-tree",
+              "diff_bytes": 0,
+              "prompt_bytes": 6299
+            }
+          }
+        }
+      ],
+      "model": "neuralwatt/kimi-k3.1-pro",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "context_stats": {
+        "diff_source": "working-tree",
+        "diff_bytes": 0,
+        "prompt_bytes": 6299
+      },
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-172\"}",
+          "exit_code": 0,
+          "output_sha": "86e01d4ec3127186fc1cb1bc515efd7ceb9d2e410cf67952071bba58fa7cd2a2"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \".gitreins/config.yaml\"}",
+          "exit_code": 0,
+          "output_sha": "60ec05bb6218204f634565349dc8d23b1aec4048dcf3c49af1cdb0a17b2c2355"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"docs/qa/aug172-fix-proof.md\"}",
+          "exit_code": 0,
+          "output_sha": "fc386d97280c1dcf44ea24b6cbb5b9e8efadb4520c55105a22bb789b7c8197c2"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"regex\": \"api/ns/auger/(specs|check)|SPEC-GRAPH-CORPUS|decided_by|jev_used\"}",
+          "exit_code": 0,
+          "output_sha": "970557e90c3da0f32d3f1bac6e5dc316a871fcfa8f470dba26bbe9ca20a73ed1"
+        },
+        {
+          "tool": "run_command",
+          "command": "git status --short && git log --oneline -12 && printf '\\nHEAD=' && git rev-parse HEAD && printf '\\n7a4b68d=' && git rev-parse 7a4b68d 2>/dev/null || true",
+          "exit_code": 0,
+          "output_sha": "253bee32f3d8e3bea72a723e90194952f7c2edc3372183d023c65f391ae708e2"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"tests/test_api_service.py\"}",
+          "exit_code": 0,
+          "output_sha": "1e3e735ef0a96a14773639d87989322e09d2f6c4c4780d961140bebfa5250e16"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 430, \"offset\": 7480, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "0b7a666fdf731b5756b26e152d7eb762a84010cc4226450b1c7db702f8ebbdaa"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"auger.py\", \"regex\": \"def .*api|/health|no such route|specs|/check|api --host|argparse.*api\"}",
+          "exit_code": 0,
+          "output_sha": "4e8f242c6457d9268d544c0f024a2e82861dd5efad1cfdb4d006e397461e53a6"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show --stat --oneline 7a4b68d && git show 7a4b68d:docs/qa/aug172-fix-proof.md && printf '\\n--- commits touching proof ---\\n' && git log --oneline --all -- docs/qa/aug172-fix-proof.md | head -20 && printf '\\n--- current relevant history ---\\n' && git log --oneline --all -- auger.py tests/test_api_service.py | head -25",
+          "exit_code": 0,
+          "output_sha": "3c848af590ff0517f24e207ac73d9ae94e602e945a1b075be72a356eef1cfea3"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 100, \"offset\": 1, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "fa6e8d89ed8e7429d8a1b325e92a5332bfc2e231cab759c6ef03cf4e9e4a050a"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 330, \"offset\": 1700, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "d998156ebfa3e8ec5a52b6fc1370129bff9f23d352def9c29530723b2f5b2a90"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"regex\": \"def spec_http_payload|spec_http_payload\\\\(|class APIHandler|def cmd_api|add_parser\\\\(\\\"api\\\"|set_defaults\\\\(func=cmd_api|AUGER_API_DEFAULT_PORT\"}",
+          "exit_code": 0,
+          "output_sha": "c95c00acfce5a906ffa453516fdd4884c7260c086bbc858e33a9a8d77fe05bfc"
+        },
+        {
+          "tool": "run_command",
+          "command": "git log --oneline --all --grep='AUG-172' && printf '\\n--- proof commit ---\\n' && git show --stat --oneline c461056 && printf '\\n--- tracked/untracked status ---\\n' && git status --porcelain=v1 --untracked-files=no && printf '\\n--- processes/ports ---\\n' && ps -eo pid,args | grep -E '[a]uger.py api|[d]uckbrain' | head -20 && (curl -sS --max-time 2 -o /dev/null -w 'duckbrain_health=%{http_code}\\n' http://127.0.0.1:3000/health || true)",
+          "exit_code": 0,
+          "output_sha": "581b05c91df1b55a141d0dd24c0a880152c197d227e70854aa0677c26b0dd9da"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"The four required endpoints and the POST /check control must be reachable through the actual `auger.py api` CLI entrypoint on a live socket, with the documented response shapes and no project lookup for spec reads.\", \"key\": \"derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "a3da5b2fdcb0bb7cbe546d72873cb76c1803c442821a03a6a43aa09d761b0f17"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"The HTTP check path must actually pass retrieval timeout=3 and JEV timeout=10, and retrieval/JEV failure must produce HTTP 200 UNKNOWN with jev_used=false and verdict_decided_by=fail-closed rather than an error or optimistic verdict.\", \"key\": \"derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "4d481aac5833b0fb549cd616414e968c53870d77aea02779f9c159d5b6e3af75"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"The claimed re-measurement at HEAD 7a4b68d must be substantiated by the committed docs/qa/aug172-fix-proof.md values (including decided_by=score and the control 404), not merely by current code or a different live run.\", \"key\": \"derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "e7896c7f23deace06d1be539889a9b6a248353dd2c7b935950058ba85880485e"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 65, \"offset\": 14300, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "c383facc627f8307457b0cb31c007301f9145f793f13be7fb568904cfac88222"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show --format=fuller --stat a8168a9 && printf '\\n--- AUG-172 board rows ---\\n' && grep -n 'AUG-172' .coding-hermes/board/tasks.jsonl | tail -5 && printf '\\n--- proof-related files ---\\n' && find docs evidence -type f \\( -iname '*172*' -o -iname '*api*proof*' \\) -print | sort && printf '\\n--- exact claimed values search ---\\n' && grep -R -n -E '2\\.846|0\\.0052|0\\.0092|0\\.105|decided_by=score|no such route' docs evidence .coding-hermes/board 2>/dev/null | head -100",
+          "exit_code": 0,
+          "output_sha": "ac94ec069613c196157c6652ad0979f76d178b0df2400b1c822107d2210aa65a"
+        },
+        {
+          "tool": "run_command",
+          "command": "python3 - <<'PY'\nimport json\nfrom pathlib import Path\nfor fn in ['.coding-hermes/board/tasks.jsonl','.coding-hermes/board/events.jsonl']:\n    print('\\nFILE',fn)\n    for i,line in enumerate(Path(fn).read_text().splitlines(),1):\n        if 'AUG-172' not in line: continue\n        try:\n            x=json.loads(line)\n        except Exception:\n            print(i,line[:1000]); continue\n        print('LINE',i,'keys',list(x))\n        for k,v in x.items():\n            if k in ('description','title','acceptance_criteria','criteria','notes','detail','payload','message','data','task','event'):\n                s=json.dumps(v,ensure_ascii=False)\n                if 'AUG-172' in s or k in ('acceptance_criteria','criteria','notes','description','message'):\n                    print(k, s[:12000])\n        if fn.endswith('events.jsonl'):\n            print(json.dumps(x,ensure_ascii=False)[:12000])\nPY",
+          "exit_code": 0,
+          "output_sha": "66f73a3095ac67a289589f07dd8d712c943fbdece3ca7f1959a76ff83601db43"
+        },
+        {
+          "tool": "run_command",
+          "command": "printf '%s\\n' '--- exact values outside board ---'; grep -R -n -E '2\\.846|0\\.0052|0\\.0092|0\\.105|decided_by=score' --exclude='tasks.jsonl' --exclude='events.jsonl' --exclude-dir='.git' --exclude-dir='.venv' . 2>/dev/null | head -100; printf '%s\\n' '--- commit ancestry ---'; git show -s --format='%H %P %s' a8168a9 7a4b68d c461056; git merge-base --is-ancestor 7a4b68d HEAD; echo ancestor_7a4b68d_head=$?; git merge-base --is-ancestor c461056 HEAD; echo ancestor_proof_head=$?",
+          "exit_code": 0,
+          "output_sha": "f5266135d5d3a9207a84eb71d687f5a1be4c60317572f0cd21b32edcd2dfb453"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 100, \"offset\": 180, \"path\": \"docs/openapi.yaml\"}",
+          "exit_code": 0,
+          "output_sha": "78cb15e9eaecd6353160f112fb7b937fa9c0652a8bec293d27575aadb80a1208"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 90, \"offset\": 300, \"path\": \"scripts/gen_openapi.py\"}",
+          "exit_code": 0,
+          "output_sha": "e1117902194d1830eed5271c866aad0a02bda0196c14ef3c13c592b8510275a6"
+        },
+        {
+          "tool": "run_command",
+          "command": "python3 - <<'PY'\nimport json\nfrom pathlib import Path\nfor i,line in enumerate(Path('.coding-hermes/board/tasks.jsonl').read_text().splitlines(),1):\n    x=json.loads(line)\n    if x.get('id')=='AUG-172':\n        print('LINE',i)\n        for k in ['status','id','title','detail','reasoning','review_notes','acceptance_criteria','foreman_note','worker_status','commit_hash','guard_result','ci_result','updated_at']:\n            print(f'\\n{k}:\\n{x.get(k)}')\nPY",
+          "exit_code": 0,
+          "output_sha": "130667c64ff75d567ef40479c7945f3b3bab05c80633f4c949e4971083f72417"
+        },
+        {
+          "tool": "run_command",
+          "command": "python3 - <<'PY'\nimport json\nfrom pathlib import Path\nfor i,line in enumerate(Path('.coding-hermes/board/events.jsonl').read_text().splitlines(),1):\n    if 'AUG-172' not in line: continue\n    x=json.loads(line)\n    print('\\nLINE',i)\n    print(json.dumps(x,ensure_ascii=False,indent=2)[:18000])\nPY",
+          "exit_code": 0,
+          "output_sha": "9e07aa13b90ee5e77ce101f794a0accabaea85acd10645c910963bad0a4bb8f3"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show --format=fuller --stat 01e744f && git show --format= -- .coding-hermes/board/tasks.jsonl 01e744f | python3 -c 'import sys; s=sys.stdin.read(); print(s[:18000])'",
+          "exit_code": 0,
+          "output_sha": "61661ce29ba826042e2dfe8f60f220edd33385e415c0496c61ba40b4300b7bef"
+        },
+        {
+          "tool": "run_command",
+          "command": ".venv/bin/python -m pytest -q tests/test_api_service.py",
+          "exit_code": 0,
+          "output_sha": "b2d51d81e0d7b2c61401f6e5ebb15c2a8d447414e1ea6935a3edf51fc2e872eb"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"The claimed HEAD 7a4b68d re-measurements and POST /check route correction must be substantiated by committed repository evidence, with docs/qa/aug172-fix-proof.md supplying the probe recipe.\", \"key\": \"derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "33d1d156bc6c719caca629d2e267b5722c731203247d4bff3548d64abf7d7bd1"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"auger.py\", \"regex\": \"^def jev\\\\(|^def recall\\\\(|^def _req\\\\(|^def db\\\\(|JEV.*KEY|OPENROUTER\"}",
+          "exit_code": 0,
+          "output_sha": "5f9a6eff7303fe59b16b59d2d30c52953da5e105786613c2db0aec8057f49b9e"
+        },
+        {
+          "tool": "run_command",
+          "command": "set -euo pipefail\nROOT=$PWD\nTMP=$(mktemp -d /tmp/aug172-review.XXXXXX)\nPORT=38757\nSERVER_PID=''\ncleanup() { if [ -n \"$SERVER_PID\" ]; then kill \"$SERVER_PID\" 2>/dev/null || true; wait \"$SERVER_PID\" 2>/dev/null || true; fi; }\ntrap cleanup EXIT\ncd /tmp\nDUCKBRAIN_URL=http://127.0.0.1:3000 \"$ROOT/.venv/bin/python\" \"$ROOT/auger.py\" api --host 127.0.0.1 --port \"$PORT\" >\"$TMP/server.log\" 2>&1 &\nSERVER_PID=$!\nready=0\nfor i in $(seq 1 50); do\n  if curl -sS --max-time 1 -o /dev/null \"http://127.0.0.1:$PORT/health\" 2>/dev/null; then ready=1; break; fi\n  if ! kill -0 \"$SERVER_PID\" 2>/dev/null; then break; fi\n  sleep 0.1\ndone\nif [ \"$ready\" != 1 ]; then echo 'SERVER_FAILED'; cat \"$TMP/server.log\"; exit 1; fi\nBASE=\"http://127.0.0.1:$PORT\"\ncurl -sS --max-time 20 -o \"$TMP/health.json\" -w 'health %{http_code} %{time_total}\\n' \"$BASE/health\"\ncurl -sS --max-time 20 -o \"$TMP/specs.json\" -w 'specs %{http_code} %{time_total}\\n' \"$BASE/api/ns/auger/specs\"\ncurl -sS --max-time 20 -o \"$TMP/block.json\" -w 'block %{http_code} %{time_total}\\n' \"$BASE/api/ns/auger/specs/SPEC-GRAPH-CORPUS\"\ncurl -sS --max-time 20 -o \"$TMP/check.json\" -w 'check %{http_code} %{time_total}\\n' -X POST -H 'Content-Type: application/json' -d '{\"question\":\"what does SPEC-GRAPH-CORPUS require about graph edges?\",\"limit\":3}' \"$BASE/api/ns/auger/check\"\ncurl -sS --max-time 20 -o \"$TMP/control.json\" -w 'control %{http_code} %{time_total}\\n' -X POST -H 'Content-Type: application/json' -d '{\"question\":\"control\"}' \"$BASE/check\"\nTMP=\"$TMP\" \"$ROOT/.venv/bin/python\" - <<'PY'\nimport json, os\nfrom pathlib import Path\np=Path(os.environ['TMP'])\nfor name in ['health','specs','block','check','control']:\n    body=(p/f'{name}.json').read_text()\n    print(f'{name}_body_bytes={len(body.encode())}')\n    try: data=json.loads(body)\n    except Exception: print(name,body[:1000]); continue\n    if name=='specs':\n        print('specs_summary', {'count':data.get('count'),'root':data.get('root'),'ids':[b.get('id') for b in data.get('blocks',[])]})\n    elif name=='block':\n        print('block_summary', {'count':data.get('count'),'blocks':data.get('blocks')})\n    elif name=='check':\n        print('check_summary', {k:data.get(k) for k in ['namespace','question','tier','verdict','verdict_decided_by','jev_used','jev_cost']}, 'hits=',len(data.get('hits',[])))\n    else:\n        print(f'{name}_summary',data)\nprint('artifacts',p)\nPY\nprintf '%s\\n' '--- server log ---'\ncat \"$TMP/server.log\"",
+          "exit_code": 0,
+          "output_sha": "1ddbfb95c2f59b739ddc1b94128c48a0cfdc9efba01a2a573d89c8ea3938c5ea"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 145, \"offset\": 520, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "d7be91dc764028df6b2356389870e78dc067c20c52288794d1022675725e6824"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 180, \"offset\": 2120, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "090a2d63b5efc7915e5bf8762f96e889c22d5b14bca64d75b3015edf452b2295"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"tests/gate.sh\"}",
+          "exit_code": 0,
+          "output_sha": "9cddacce6117f2740a2da8b90b55359c132e9d7c81665d856c9554eb8739c05d"
+        },
+        {
+          "tool": "run_command",
+          "command": "git status --porcelain=v1 --untracked-files=no && git diff --stat && git diff -- auger.py tests/test_api_service.py docs/qa/aug172-fix-proof.md && printf '\\n--- focused test collection ---\\n' && .venv/bin/python -m pytest --collect-only -q tests/test_api_service.py | tail -15",
+          "exit_code": 0,
+          "output_sha": "7c19b6801281707defd84b63b6ff322922fd0b9ac2b9c2d0719c0fd737477dda"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show --stat --oneline c8a416b && git show -s --format='%H %P %s' c8a416b && git merge-base --is-ancestor c8a416b HEAD; echo implementation_ancestor=$?; git log --oneline -S 'spec_http_payload' -- auger.py tests/test_api_service.py | head -10",
+          "exit_code": 0,
+          "output_sha": "9251c90083f1d39d7169f18a49912413d325a2a57d0e95f3fd03c3f2e0056052"
+        },
+        {
+          "tool": "run_command",
+          "command": ".venv/bin/python - <<'PY'\nimport json, threading, urllib.request\nimport auger\n\nserver = auger.APIServer(('127.0.0.1', 0), auger.APIHandler)\nthread = threading.Thread(target=server.serve_forever, daemon=True)\nthread.start()\nurl = f'http://127.0.0.1:{server.server_address[1]}/api/ns/auger/check'\norig = {name: getattr(auger, name) for name in ['_namespace','embedding_status','recall','jev']}\ntry:\n    auger._namespace = lambda ns: None\n    auger.embedding_status = lambda: {'tier':'semantic','healthy':True,'provider':'fixture','model':'fixture'}\n    seen = []\n    def recall_timeout(*args, **kwargs):\n        seen.append(('recall', kwargs.get('timeout')))\n        raise auger.SubstrateError('timed out')\n    def jev_must_not_run(*args, **kwargs):\n        raise AssertionError('JEV ran after retrieval failure')\n    auger.recall = recall_timeout\n    auger.jev = jev_must_not_run\n    req = urllib.request.Request(url, data=b'{\"question\":\"bounded?\"}', headers={'Content-Type':'application/json'}, method='POST')\n    with urllib.request.urlopen(req, timeout=3) as response:\n        payload = json.load(response)\n        print('retrieval_failure_http', response.status)\n    print('retrieval_failure_payload', {k:payload.get(k) for k in ['verdict','verdict_decided_by','jev_used','hits']})\n    print('retrieval_timeout_seen', seen)\n    assert payload['verdict'] == 'UNKNOWN'\n    assert payload['verdict_decided_by'] == 'fail-closed'\n    assert payload['jev_used'] is False\n    assert seen == [('recall', 3)]\n\n    seen = []\n    auger.recall = lambda *args, **kwargs: []\n    def jev_timeout(*args, **kwargs):\n        seen.append(('jev', kwargs.get('timeout')))\n        return None, 'timed out'\n    auger.jev = jev_timeout\n    req = urllib.request.Request(url, data=b'{\"question\":\"bounded?\"}', headers={'Content-Type':'application/json'}, method='POST')\n    with urllib.request.urlopen(req, timeout=3) as response:\n        payload = json.load(response)\n        print('jev_failure_http', response.status)\n    print('jev_failure_payload', {k:payload.get(k) for k in ['verdict','verdict_decided_by','jev_used','hits']})\n    print('jev_timeout_seen', seen)\n    assert payload['verdict'] == 'UNKNOWN'\n    assert payload['verdict_decided_by'] == 'fail-closed'\n    assert payload['jev_used'] is False\n    assert seen == [('jev', 10)]\n    print('BOUNDED_FAIL_CLOSED_PROBE_PASS')\nfinally:\n    for name, value in orig.items(): setattr(auger, name, value)\n    server.shutdown(); server.server_close(); thread.join(timeout=2)\nPY",
+          "exit_code": 0,
+          "output_sha": "27e4f98c38b221da4e616801cae826aa240c2271521f0eefb61a09dd3e385cf0"
+        },
+        {
+          "tool": "run_command",
+          "command": "DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh > /tmp/aug172-review-gate.log 2>&1; rc=$?; echo GATE_EXIT=$rc; tail -100 /tmp/aug172-review-gate.log; exit $rc",
+          "exit_code": -15,
+          "output_sha": "684f5dc3b7ba95c6a7ae0510f533bb58e99ca61e66bbd2bbad47c35dbbebb659"
+        },
+        {
+          "tool": "run_command",
+          "command": "printf '%s\\n' '--- gate process status ---'; ps -eo pid,ppid,pgid,etime,args | grep -E '[t]ests/gate.sh|[p]ytest|[s]etsid timeout|[t]ests/smoke.sh' | head -40; printf '%s\\n' '--- gate log tail ---'; tail -80 /tmp/aug172-review-gate.log 2>/dev/null || true; printf '%s\\n' '--- progress ---'; ls -l /tmp/auger-gate-pytest-progress.* 2>/dev/null | tail -5 || true",
+          "exit_code": 0,
+          "output_sha": "ae8c556d0ca376dcdcde08eac5b0812c408a530c5bdea52ac64965ff1153854b"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: live CLI probe from /tmp against `auger.py api` returned health 200 0.006757s, specs 200 0.024561s count=12, block 200 0.000861s with the full SPEC-GRAPH-CORPUS body, namespaced check 200 2.841965s with 3 hits/jev_used=true/verdict_decided_by=score, and bare POST /check 404 {'error':'no such route: /check'}. Entrypoint auger.py:14332-14335 -> cmd_api at 7855 -> serve/APIHandler at 7592.\", \"key\": \"verified_derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "be2c01c9e30f5bb50d0b1996c2775115e815540804c554c5500b624b231984e7"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: auger.py:7768-7770 passes recall timeout=3; auger.py:7790-7795 passes jev timeout=10; auger.py:7802-7820 maps undecided results to UNKNOWN/fail-closed/jev_used=false. Live in-process HTTP probe printed BOUNDED_FAIL_CLOSED_PROBE_PASS, observed retrieval timeout 3 and JEV timeout 10, and both failure arms returned HTTP 200 UNKNOWN with jev_used=false. Focused tests: `.venv/bin/python -m pytest -q tests/test_api_service.py` exit 0, 9 passed in 3.59s.\", \"key\": \"verified_derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "988f238f3bc3790a63e08206f72c327132a67f633652a5338e083c54c33fed9f"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: .coding-hermes/board/events.jsonl:668 records the exact HEAD 7a4b68d measurements (0.0052s, 0.105s count=12, 0.0092s, 2.846s decided_by=score, control 404); commit 01e744f repeats them and the route correction. docs/qa/aug172-fix-proof.md:17-28 supplies the /tmp launch recipe and earlier fail-closed measurements. Current live probe independently reproduced the same response shapes.\", \"key\": \"verified_derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "d5584d777778f1041b06df30f6d599470b46e3fb85bcd413e216f6916415834f"
+        },
+        {
+          "tool": "run_command",
+          "command": "printf '%s\\n' '--- active judge/gate processes ---'; ps -eo pid,ppid,pgid,etime,args | grep -E '[g]itreins|[j]udge-aug172|[t]ests/gate.sh|[p]ytest' | head -60; printf '%s\\n' '--- latest judge log ---'; tail -c 5000 /tmp/auger-foreman-20261126-judge-aug172.log 2>/dev/null || true; printf '\\n--- latest verdict dirs ---\\n'; ls -lt .gitreins/history/2026-11-26 2>/dev/null | head -10; printf '%s\\n' '--- my gate log metadata ---'; stat /tmp/aug172-review-gate.log 2>/dev/null || true",
+          "exit_code": 0,
+          "output_sha": "d4ec852911b0fcbf862c9a33be6b8b45cc03cb298805fa4a05a76f0438a9428f"
+        },
+        {
+          "tool": "read_lsp_diagnostics",
+          "command": "read_lsp_diagnostics {}",
+          "exit_code": 0,
+          "output_sha": "ef420cbeebd549fc8c5438d6ea41a3e521fa58e29563c4cae80f491b9bfe2143"
+        },
+        {
+          "tool": "run_command",
+          "command": "git status --porcelain=v1 --untracked-files=no && git diff --stat && printf '\\ntracked HEAD=%s\\n' \"$(git rev-parse HEAD)\"",
+          "exit_code": 0,
+          "output_sha": "4673041495cad761b373d19fc1f2c6231c2a7bdd611d01154d3eb36cfd2c33fd"
+        },
+        {
+          "tool": "run_command",
+          "command": "printf '%s\\n' '--- current gate log ---'; cat /tmp/aug172-review-gate.log; printf '%s\\n' '--- current pytest processes ---'; ps -eo pid,ppid,pgid,etime,args | grep -E '[p]ython.*pytest|[t]ests/gate.sh|[g]itreins judge AUG-172' | head -30; printf '%s\\n' '--- newest gate output files ---'; ls -lt /tmp/auger-gate-pytest-out.* 2>/dev/null | head -5; printf '%s\\n' '--- newest progress files ---'; ls -lt /tmp/auger-gate-pytest-progress.* 2>/dev/null | head -5",
+          "exit_code": 0,
+          "output_sha": "585c32bb8fe8f32169f0a22e9c188fc8a32b85201066e9712eabc5250eb0a3b1"
+        },
+        {
+          "tool": "run_command",
+          "command": "find .gitreins/history -maxdepth 3 -type f -name '*.json' -o -name 'verdict*' | tail -20",
+          "exit_code": 0,
+          "output_sha": "edb3725fd92527fa732a9fcce566d9f092226579b199c7f8b83a373d5f25f68e"
+        },
+        {
+          "tool": "run_command",
+          "command": ".venv/bin/python -m pytest -q tests/test_openapi_parity.py",
+          "exit_code": 0,
+          "output_sha": "dc2025f1774db5495485b735f9b319fdec1e2e447f30115346bd30b94e0e7a42"
+        },
+        {
+          "tool": "run_command",
+          "command": "python3 - <<'PY'\nimport json\nfrom pathlib import Path\nfor p in sorted(Path('.gitreins/history').glob('*/*/verdict.json')):\n    try: x=json.loads(p.read_text())\n    except Exception: continue\n    s=json.dumps(x)\n    if 'AUG-172' in s:\n        print(p)\n        print(json.dumps({k:x.get(k) for k in ['task_id','task','verdict','status','summary','commit','commit_hash','created_at']},indent=2))\nPY",
+          "exit_code": 0,
+          "output_sha": "9665db7a9aa49a4331143d26620c4ea745dab512e268267798ba18efdfdfe9db"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show c8a416b -- auger.py tests/test_api_service.py | sed -n '1,260p'",
+          "exit_code": 0,
+          "output_sha": "8ef680dc776cdba9d504f9602a8d8a931e276880fc945c2d9019e674b6c1a4a2"
+        },
+        {
+          "tool": "run_command",
+          "command": "printf '%s\\n' '--- running judge elapsed ---'; ps -p 1795895 -o pid,etime,args; printf '%s\\n' '--- running pytest elapsed ---'; ps -eo pid,ppid,pgid,etime,args | grep -E '[p]ython.*pytest' | head -10; printf '%s\\n' '--- current judge log ---'; tail -c 2000 /tmp/auger-foreman-20261126-judge-aug172.log 2>/dev/null || true; printf '\\n--- current verdict dirs ---\\n'; ls -lt .gitreins/history/2026-11-26 2>/dev/null | head -5",
+          "exit_code": 0,
+          "output_sha": "41557c8b36fcf74c988bf4fda6b21d655b6a3bfbc174ad3508f71d8accce0b33"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: tracked tree is clean (`git status --porcelain=v1 --untracked-files=no` empty; HEAD 3986b18). Live curl-only probe from /tmp through `auger.py api` returned /health 200 0.006757s; specs 200 0.024561s count=12; SPEC-GRAPH-CORPUS 200 0.000861s with full block text; POST /api/ns/auger/check 200 2.841965s with 3 hits, jev_used=true, verdict_decided_by=score; bare POST /check 404 no such route. Exact historical HEAD 7a4b68d measurements are committed at .coding-hermes/board/events.jsonl:668 and commit 01e744f; docs/qa/aug172-fix-proof.md:17-28 supplies the probe recipe. Retrieval/JEV caps and UNKNOWN fail-closed behavior verified by BOUNDED_FAIL_CLOSED_PROBE_PASS. Focused tests exit 0: 9 API + 11 OpenAPI parity passed. Full gate was attempted but tool timed out after 30s; no full-suite result claimed.\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "cf52583420ae1eab49fc6ae85d6f83030d61f2a9fc49d785a0156c2639aec636"
+        }
+      ]
+    },
+    "fix_verification": {
+      "id": "fix_verification",
+      "passed": true,
+      "any_failed": false,
+      "summary": "fix_verification: 0 finding(s) verified",
+      "steps": [
+        {
+          "id": "fix_verification",
+          "type": "fix_verification",
+          "passed": true,
+          "output": "fix_verification: 0 finding(s) verified",
+          "error": "",
+          "data": {
+            "dispositions": [],
+            "counts": {}
+          }
+        }
+      ]
+    }
+  },
+  "context_stats": {
+    "diff_source": "working-tree",
+    "diff_bytes": 0,
+    "prompt_bytes": 6299
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "The diff consistently records AUG-190\u2019s transition to in_progress/dispatched in both the task row and event log, with no evidenced defects.",
+    "review_state": {
+      "emitted": [],
+      "carried": []
+    }
+  },
+  "summary": "Stage tier1: FAIL\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2717 tests: scanners: nice=nice -n 10\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 A clean-tree judged run against row AUG-172: the auger API server exposes /health, GET /api/ns/auger/specs (count>=1), GET /api/ns/auger/specs/SPEC-GRAPH-CORPUS (block body), and POST /api/ns/auger/check (bounded verdict with explicit fail-closed behavior: retrieval capped 3s, JEV capped 10s, UNKNOWN when undecided). The four live arms were re-measured at HEAD 7a4b68d per docs/qa/aug172-fix-proof.md: /health 200 0.0052s; /api/ns/auger/specs 200 0.105s count=12; /api/ns/auger/specs/SPEC-GRAPH-CORPUS 200 0.0092s; POST /api/ns/auger/check 200 2.846s with verdict fields hits/jev_used/verdict decided_by=score; control POST /check 404 'no such route'. AC4 of the row names POST /api/ns/auger/check (registered route), not POST /check.: No tracked modifications (`git status --porcelain=v1 --untracked-files=no` empty; HEAD 3986b18). A live curl-only probe launched from /tmp through `auger.py api` returned: health 200 0.006757s; specs 200 0.024561s with count=12; SPEC-GRAPH-CORPUS 200 0.000861s with the full block body; namespaced check 200 2.841965s with 3 hits, jev_used=true, verdict=NOT YET ANSWERED, verdict_decided_by=score; and bare POST /check 404 with `{\"error\":\"no such route: /check\"}`. The exact historical HEAD 7a4b68d measurements (0.0052s, 0.105s/count=12, 0.0092s, 2.846s/score, control 404) are recorded at .coding-hermes/board/events.jsonl:668 and commit 01e744f; docs/qa/aug172-fix-proof.md:17-28 supplies the probe recipe. The row's AC4 at .coding-hermes/board/tasks.jsonl:272 names the registered namespaced route and explicitly rejects the bare /check alias. Retrieval/JEV timeout and UNKNOWN behavior were additionally exercised by an HTTP probe that printed BOUNDED_FAIL_CLOSED_PROBE_PASS. Focused verification: `.venv/bin/python -m pytest -q tests/test_api_service.py` exited 0 with 9 passed; `.venv/bin/python -m pytest -q tests/test_openapi_parity.py` exited 0 with 11 passed.\n  \u2713 The four required endpoints and the POST /check control must be reachable through the actual `auger.py api` CLI entrypoint on a live socket, with the documented response shapes and no project lookup for spec reads.: The CLI registration at auger.py:14332-14335 dispatches to cmd_api at auger.py:7855 and serve/APIHandler at auger.py:7592. The live /tmp probe reached all four endpoints and the control with the expected status/body shapes. The specs branch at auger.py:7661-7663 returns before `_namespace(ns)` at auger.py:7665, so spec reads do not perform project lookup; tests/test_api_service.py:157-168 covers this route contract.\n  \u2713 The HTTP check path must actually pass retrieval timeout=3 and JEV timeout=10, and retrieval/JEV failure must produce HTTP 200 UNKNOWN with jev_used=false and verdict_decided_by=fail-closed rather than an error or optimistic verdict.: auger.py:7768-7770 calls `recall(..., timeout=3)` and auger.py:7790-7795 calls `jev(..., timeout=10)`; auger.py:7802-7820 selects UNKNOWN/fail-closed when no usable score exists. An actual in-process HTTP probe observed retrieval timeout 3 and JEV timeout 10, and both failure arms returned HTTP 200 with `{'verdict':'UNKNOWN','verdict_decided_by':'fail-closed','jev_used':False}`, ending with BOUNDED_FAIL_CLOSED_PROBE_PASS. The focused API suite also passed 9 tests in 3.59s.\n  \u2713 The claimed HEAD 7a4b68d re-measurements and POST /check route correction must be substantiated by committed repository evidence, with docs/qa/aug172-fix-proof.md supplying the probe recipe.: .coding-hermes/board/events.jsonl:668 records the exact HEAD 7a4b68d measurements and the namespaced-check/control-404 result; commit 01e744f records the AC4 route correction and repeats the measurements. docs/qa/aug172-fix-proof.md:17-28 documents the /tmp server launch and probe procedure. The independent live probe reproduced the same count=12, block-body, score-decided check, and bare-/check 404 behavior.\nThe namespaced API surface is live and bounded, the HEAD 7a4b68d measurements and route correction are recorded, and focused API/OpenAPI verification passes.\n\nStage fix_verification: PASS\n  fix_verification: 0 finding(s) verified\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-11-26T12:58:09.184415",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-26T12:58:09.235909+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 36813,
+        "truncated": false,
+        "source": "git show 3986b187cb2d"
+      }
+    ],
+    "task_id": "AUG-172"
+  }
+}
