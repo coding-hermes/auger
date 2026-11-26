@@ -1,0 +1,255 @@
+commit 9dec20532025d5c2e9405c102183825bfd4b9c7c
+Author:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+AuthorDate: Thu Nov 26 10:34:01 2026 -0500
+Commit:     totalwindupflightsystems <totalwindupflightsystems@gmail.com>
+CommitDate: Thu Nov 26 10:34:01 2026 -0500
+
+    fix(auger): typed as-of-git-unavailable refusal when git is absent (AUG-170)
+    
+    `spec check` / `spec validate` on a corpus with obligations resolve the
+    repository root through `_spec_repository_root` -> `_git_toplevel`, whose bare
+    `subprocess.run(["git", ...])` raised a raw FileNotFoundError when the git
+    binary is missing: the user saw a multi-frame traceback and exit 1. Fix: route
+    `_git_toplevel` through the existing AUG-167 `_spec_git_run` seam, so every
+    spec verb's git read refuses as `spec error (as-of-git-unavailable)` on stderr
+    with exit 2. The now-dead `except FileNotFoundError: pass` around
+    `_git_toplevel` in `_spec_corpus_as_of` is removed (the refusal happens at the
+    seam); the `_spec_git_run` detail message is generalized to cover
+    repository-root discovery as well as `--as-of` history reads.
+    
+    Acceptance evidence (worktree /home/kara/worktrees/auger-AUG-170, branch
+    wt/AUG-170, interpreter /home/kara/auger/.venv/bin/python):
+    
+    AC1 PRE-FIX FALSIFIER, re-measured here before the change:
+      env -i PATH=/home/kara/auger/.venv/bin HOME=/home/kara \
+        /home/kara/auger/.venv/bin/python auger.py spec check \
+        tests/fixtures/xml/verification
+      => exit 1 with a traceback ending
+         "FileNotFoundError: [Errno 2] No such file or directory: 'git'"
+         raised from _git_toplevel (auger.py subprocess.run) via
+         _spec_repository_root (validate_xml_specs obligation resolution);
+         grep -c 'Traceback (most recent call last)' on the output = 1.
+      POST-FIX, the same invocation:
+      => exit 2, stdout empty, stderr exactly one line:
+         spec error (as-of-git-unavailable): the git executable is not
+         available; auger reads repository history and repository roots
+         through git
+      => grep -c 'Traceback (most recent call last)' = 0. (Pre-fix evidence on
+      the identical pre-fix tree for `spec validate` was measured in the main
+      checkout at c9c01a3: same FileNotFoundError traceback.)
+    
+    AC2 ERROR CODE IN THE DOCUMENTED VOCABULARY:
+      grep -c as-of-git-unavailable auger.py docs/VERBS.md
+      => auger.py: 9 hits; docs/VERBS.md: 3 hits. The code was already documented
+      for --as-of (VERBS.md "a host without git refuses as-of-git-unavailable");
+      this diff extends VERBS.md's --repo-root paragraph to document that
+      repository-root resolution refuses the same typed code from validate /
+      check / bundle.
+    
+    AC3 BOTH VERBS AGREE under the missing-git environment (same invocation, PATH
+    devoid of git):
+      spec check    tests/fixtures/xml/verification => rc 2,
+        "spec error (as-of-git-unavailable)" on stderr, 0 tracebacks
+      spec validate tests/fixtures/xml/verification => rc 2,
+        "spec error (as-of-git-unavailable)" on stderr, 0 tracebacks
+      Same rc, same code.
+    
+    AC4 GIT PRESENT, BEHAVIOUR UNCHANGED (worktree):
+      .venv/bin/python auger.py spec validate tests/fixtures/xml/verification
+      => exit 0, "spec: 1 document(s), 2 block(s), 1 reference(s) ok"
+      .venv/bin/python -m pytest tests/test_verification_graph.py
+      tests/test_spec_repository_root.py -q => 15 passed
+      (with tests/test_spec_as_of.py included: 26 passed).
+    
+    AC5 REGRESSION TEST PINNED AND GATE-LISTED:
+      tests/test_spec_missing_git.py (new; hides git by pointing PATH at an empty
+      directory and drives auger.py as a real subprocess):
+        test_spec_missing_git_check_refuses_typed PASSED
+        test_spec_missing_git_validate_refuses_typed PASSED
+        test_spec_missing_git_both_verbs_agree PASSED
+        => 3 passed in 0.83s
+      tests/gate.sh: grep -c test_spec_missing_git tests/gate.sh => 1 (file added
+      to the pytest arm's test list).
+    
+    Gates: ruff format --check auger.py => "1 file already formatted";
+    ruff check auger.py => "All checks passed!". Spec align pre-verify on the
+    diff: exit 0, one unscoped-change WARN (no corpus block scopes these paths),
+    no FAIL findings.
+    
+    Co-authored-by: Alexis Okuwa <wojonstech@gmail.com>
+---
+ auger.py                       | 31 ++++++++++---------
+ docs/VERBS.md                  |  6 +++-
+ tests/gate.sh                  |  2 +-
+ tests/test_spec_missing_git.py | 70 ++++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 93 insertions(+), 16 deletions(-)
+
+diff --git a/auger.py b/auger.py
+index ce55725..d424d0f 100755
+--- a/auger.py
++++ b/auger.py
+@@ -13471,13 +13471,15 @@ def _git_toplevel(directory):
+ 
+     Run with `-C`, never from the caller's cwd: the answer must be a function of the
+     directory handed in, not of wherever the process happens to be standing.
++
++    AUG-170: the subprocess goes through `_spec_git_run`, so a host without a `git`
++    binary reaches the user as the typed `as-of-git-unavailable` refusal (exit 2,
++    `spec error (as-of-git-unavailable)`) from EVERY spec verb that resolves a
++    repository root — not as a raw FileNotFoundError traceback out of
++    `_spec_repository_root`. "Not a work tree" (a non-zero rev-parse) stays the
++    `None` return the AUG-127 validators build their own refusals on.
+     """
+-    probe = subprocess.run(
+-        ["git", "-C", str(directory), "rev-parse", "--show-toplevel"],
+-        capture_output=True,
+-        text=True,
+-        check=False,
+-    )
++    probe = _spec_git_run(["git", "-C", str(directory), "rev-parse", "--show-toplevel"])
+     if probe.returncode != 0:
+         return None
+     shown = probe.stdout.strip()
+@@ -13490,15 +13492,17 @@ def _git_toplevel(directory):
+ def _spec_git_run(args: list) -> subprocess.CompletedProcess:
+     """A `git` subprocess that refuses as `as-of-git-unavailable` when git is absent.
+ 
+-    The refusal class belongs to the FEATURE (--as-of), not to repo discovery: the
+-    AUG-127 validators keep `_git_toplevel`'s raise-through behaviour untouched.
++    AUG-167 introduced this seam for `--as-of`; AUG-170 made it THE seam for every
++    spec verb's git read, `_git_toplevel` included: a missing binary is a typed
++    refusal (`spec error (as-of-git-unavailable)`, exit 2), never a raw traceback.
+     """
+     try:
+         return subprocess.run(args, capture_output=True, text=True, check=False)
+     except FileNotFoundError:
+         raise SpecError(
+             "as-of-git-unavailable",
+-            "the git executable is not available; --as-of reads corpus history through git",
++            "the git executable is not available; auger reads repository history and "
++            "repository roots through git",
+         ) from None
+ 
+ 
+@@ -13513,11 +13517,10 @@ def _spec_corpus_as_of(spec_root, ref: str):
+     (a silently-current answer on a valid ref is exactly the defect this forbids).
+     """
+     spec_root = Path(spec_root).resolve()
+-    top = None
+-    try:
+-        top = _git_toplevel(spec_root)
+-    except FileNotFoundError:
+-        pass
++    # AUG-170: a missing git binary raises the typed `as-of-git-unavailable` straight
++    # out of `_git_toplevel` (via `_spec_git_run`) — the old `except FileNotFoundError:
++    # pass` here is gone, because the refusal now happens at the seam, not at this caller.
++    top = _git_toplevel(spec_root)
+     if top is None:
+         if _spec_git_run(["git", "--version"]).returncode != 0:
+             raise SpecError(
+diff --git a/docs/VERBS.md b/docs/VERBS.md
+index 0c854f4..f86efb7 100644
+--- a/docs/VERBS.md
++++ b/docs/VERBS.md
+@@ -780,7 +780,11 @@ loop* works through it command by command.
+ to (AUG-127), and it must be a git work tree's top level. It defaults to
+ `git rev-parse --show-toplevel` resolved FROM THE SPEC ROOT; with neither, the verb refuses
+ `unresolvable-repo-root` rather than resolving obligations against auger's own checkout. See
+-docs/XML-SPEC-SCHEMA.md § The repository root.
++docs/XML-SPEC-SCHEMA.md § The repository root. That default resolution runs git too, so a host
++without a `git` binary refuses `as-of-git-unavailable` (AUG-170) — the same typed code the
++`--as-of` feature refuses with, `spec error (as-of-git-unavailable)` on stderr and exit 2,
++never a raw traceback — from every spec verb that resolves a repository root (`validate`,
++`check`, `bundle`).
+ 
+ Corpus: every `*.xml` under ROOT. Selection is AND across different flags and OR within one
+ flag's repeated values (the `--option`/`--on` shape). Assembly emits the matched blocks plus
+diff --git a/tests/gate.sh b/tests/gate.sh
+index 0f50d29..e48ba86 100755
+--- a/tests/gate.sh
++++ b/tests/gate.sh
+@@ -270,7 +270,7 @@ run_pytest_arm(){
+   # selection on the shipped corpus, and the four typed refusals (unknown-ref,
+   # not-a-repository, corpus-missing, git-unavailable) answer rc 2 on empty stdout.
+   # The run is read-only over specs/ and leaves no temp litter. Hermetic (~3s).
+-  setsid timeout --kill-after="$kill_after" "$budget" "$GATE_PYTHON" -m pytest tests/test_auger.py tests/test_openapi_parity.py tests/test_api_service.py tests/test_upgrade_path.py tests/test_xml_specs.py tests/test_spec_check_node_list.py tests/test_verification_graph.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_spec_obligation_gate.py tests/test_spec_decision_ref.py tests/test_spec_rollback.py tests/test_spec_render.py tests/test_spec_assembly_report.py tests/test_trace_artifact.py tests/test_smoke_teardown.py tests/test_xsd_conformance.py tests/test_spec_repository_root.py tests/test_spec_alignment_check.py tests/test_spec_semantic_findings.py tests/test_spec_corpus_view.py tests/test_xml_task_contract.py tests/test_spec_context.py tests/test_plan_approval.py tests/test_task_context.py tests/test_task_packet.py tests/test_brief_spec_context.py tests/test_prd_proofs.py tests/test_usage_skill.py tests/test_packaging.py tests/test_packaging_wheel.py tests/test_teardown_resilience.py tests/test_board_evidence_audit.py tests/test_verdict_hygiene.py tests/test_executable_path_robustness.py tests/test_spec_as_of.py tests/test_ci_boardctl_install.py tests/test_board_shrink_check.py tests/test_spec_ingest.py tests/test_chd_full_corpus.py tests/test_substrate_hygiene.py -rs "$@" 2>&1 | tee "$pytest_out" || rc=$? # python3 -m pytest: source-inventory marker
++  setsid timeout --kill-after="$kill_after" "$budget" "$GATE_PYTHON" -m pytest tests/test_auger.py tests/test_openapi_parity.py tests/test_api_service.py tests/test_upgrade_path.py tests/test_xml_specs.py tests/test_spec_check_node_list.py tests/test_verification_graph.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_spec_obligation_gate.py tests/test_spec_decision_ref.py tests/test_spec_rollback.py tests/test_spec_render.py tests/test_spec_assembly_report.py tests/test_trace_artifact.py tests/test_smoke_teardown.py tests/test_xsd_conformance.py tests/test_spec_repository_root.py tests/test_spec_alignment_check.py tests/test_spec_semantic_findings.py tests/test_spec_corpus_view.py tests/test_xml_task_contract.py tests/test_spec_context.py tests/test_plan_approval.py tests/test_task_context.py tests/test_task_packet.py tests/test_brief_spec_context.py tests/test_prd_proofs.py tests/test_usage_skill.py tests/test_packaging.py tests/test_packaging_wheel.py tests/test_teardown_resilience.py tests/test_board_evidence_audit.py tests/test_verdict_hygiene.py tests/test_executable_path_robustness.py tests/test_spec_as_of.py tests/test_spec_missing_git.py tests/test_ci_boardctl_install.py tests/test_board_shrink_check.py tests/test_spec_ingest.py tests/test_chd_full_corpus.py tests/test_substrate_hygiene.py -rs "$@" 2>&1 | tee "$pytest_out" || rc=$? # python3 -m pytest: source-inventory marker
+   if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+     echo "GATE TIMEOUT: the pytest arm exceeded ${budget} and was killed as a process group (setsid+timeout, AUG-081) — investigate hung tests; failing the gate" >&2
+     # AUG-197 (AC1): a bounded, ATTRIBUTED result. Name the test in flight at the
+diff --git a/tests/test_spec_missing_git.py b/tests/test_spec_missing_git.py
+new file mode 100644
+index 0000000..fc5a5b4
+--- /dev/null
++++ b/tests/test_spec_missing_git.py
+@@ -0,0 +1,70 @@
++"""AUG-170: a missing git binary is a typed spec refusal, never a traceback.
++
++`spec check` and `spec validate` resolve a corpus' repository root through
++`git rev-parse` (`_spec_repository_root` -> `_git_toplevel`). On a host without a
++`git` binary that used to surface as a raw
++`FileNotFoundError: [Errno 2] No such file or directory: 'git'` traceback (exit 1);
++both verbs now refuse through the AUG-167 `_spec_git_run` seam as
++`spec error (as-of-git-unavailable)` on stderr, exit 2, nothing on stdout — the
++SAME code the `--as-of` feature already refused with, so both verbs agree.
++
++Hermetic: no network, no live services. git is hidden by pointing PATH at an
++empty directory; the interpreter is invoked by absolute path (`sys.executable`)
++so the subprocess still runs.
++"""
++
++from __future__ import annotations
++
++import os
++import subprocess
++import sys
++import tempfile
++from pathlib import Path
++
++AUGER_PY = Path(__file__).resolve().parent.parent / "auger.py"
++REPO_ROOT = AUGER_PY.parent
++VERIFICATION_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "xml" / "verification"
++
++
++def _run_cli_without_git(*args: str) -> subprocess.CompletedProcess:
++    """Run `auger.py` with a PATH that contains no `git` binary."""
++    with tempfile.TemporaryDirectory(prefix="auger-no-git-bin-") as empty:
++        env = dict(os.environ)
++        env["PATH"] = empty
++        return subprocess.run(
++            [sys.executable, str(AUGER_PY), *args],
++            capture_output=True,
++            text=True,
++            check=False,
++            env=env,
++        )
++
++
++def test_spec_missing_git_check_refuses_typed():
++    probe = _run_cli_without_git("spec", "check", str(VERIFICATION_FIXTURE))
++    assert probe.returncode == 2, probe.stderr
++    assert probe.stdout == ""
++    assert "Traceback (most recent call last)" not in probe.stderr
++    assert "FileNotFoundError" not in probe.stderr
++    assert "spec error (as-of-git-unavailable)" in probe.stderr
++    assert "git executable is not available" in probe.stderr
++
++
++def test_spec_missing_git_validate_refuses_typed():
++    probe = _run_cli_without_git("spec", "validate", str(VERIFICATION_FIXTURE))
++    assert probe.returncode == 2, probe.stderr
++    assert probe.stdout == ""
++    assert "Traceback (most recent call last)" not in probe.stderr
++    assert "FileNotFoundError" not in probe.stderr
++    assert "spec error (as-of-git-unavailable)" in probe.stderr
++    assert "git executable is not available" in probe.stderr
++
++
++def test_spec_missing_git_both_verbs_agree():
++    """AUG-170 AC3: under the missing-git environment both verbs return the SAME
++    exit code and carry the SAME refusal code on stderr."""
++    check = _run_cli_without_git("spec", "check", str(VERIFICATION_FIXTURE))
++    validate = _run_cli_without_git("spec", "validate", str(VERIFICATION_FIXTURE))
++    assert check.returncode == validate.returncode == 2
++    assert "as-of-git-unavailable" in check.stderr
++    assert "as-of-git-unavailable" in validate.stderr

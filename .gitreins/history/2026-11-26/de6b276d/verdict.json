@@ -1,0 +1,1263 @@
+{
+  "task_id": "AUG-170",
+  "task_title": "typed as-of-git-unavailable refusal when git is absent",
+  "task_criteria": [
+    "A missing git binary reaches the user as a typed 'spec error (as-of-git-unavailable)' refusal with exit 2 and zero traceback frames from spec check AND spec validate; both verbs agree; the code exists in docs/VERBS.md; a regression test test_spec_missing_git is gate-listed; with git present behaviour is unchanged."
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "9dec20532025d5c2e9405c102183825bfd4b9c7c",
+  "pass_class": "degraded",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "70e17500ccc40a137bc3e27f3b2bdcf85fdbd9589c8fd70d5e18af9fd7cbe8ce",
+  "working_tree_dirty_path_count": 1571,
+  "items": [
+    {
+      "criterion": "A missing git binary reaches the user as a typed 'spec error (as-of-git-unavailable)' refusal with exit 2 and zero traceback frames from spec check AND spec validate; both verbs agree; the code exists in docs/VERBS.md; a regression test test_spec_missing_git is gate-listed; with git present behaviour is unchanged.",
+      "status": "PASS",
+      "detail": "Fresh empty-PATH real-CLI probes for both `spec check` and `spec validate` returned rc=2, stdout_bytes=0, traceback_frames=0, no FileNotFoundError, and byte-identical `spec error (as-of-git-unavailable): the git executable is not available; auger reads repository history and repository roots through git`; agree=true. auger.py:13482 routes `_git_toplevel` through `_spec_git_run`; auger.py:13492-13506 translates FileNotFoundError to SpecError; auger.py:12968-12971 renders the typed error and SystemExit(2). docs/VERBS.md:784-787 documents the code for validate/check/bundle (also :673). tests/gate.sh:273 lists tests/test_spec_missing_git.py; fresh `.venv/bin/python -m pytest tests/test_spec_missing_git.py -q -p no:randomly` exited 0 with `3 passed in 0.61s`. Fresh git-present probes returned check rc=0 with valid JSON and validate rc=0 `spec: 1 document(s), 2 block(s), 1 reference(s) ok`, both with empty stderr and zero frames. The exact configured full command `DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh` completed with /tmp/aug170_gate.exit=0; its log reports `931 passed, 4 skipped in 998.76s (0:16:38)`, `pytest lock-attributed skips: 0`, `LIVE ARMS: ran 2; skipped 0`, and final `GATE PASS`."
+    },
+    {
+      "criterion": "Reachability/seam: the real `auger.py spec check` and `spec validate` CLI paths (including an explicit `--repo-root`) must route repository-root git discovery through `_spec_git_run`, and `cmd_spec` must render the resulting SpecError as the typed refusal with SystemExit(2), not a traceback.",
+      "status": "PASS",
+      "detail": "auger.py:13482 routes `_git_toplevel` through `_spec_git_run`; auger.py:13492-13506 translates FileNotFoundError to SpecError; auger.py:12968-12971 renders `spec error (...)` and SystemExit(2); validate/check register cmd_spec at auger.py:14501/14575. Fresh empty-PATH probes for both verbs, with and without `--repo-root .`, returned rc=2, stdout_bytes=0, traceback_frames=0 and identical typed stderr.",
+      "derived": true
+    },
+    {
+      "criterion": "Failure-path specificity/back-compat: only a missing git executable is converted to `as-of-git-unavailable`; a present git that returns nonzero for rev-parse must still follow the existing `None`/typed repository-root refusal paths, and git-present spec behavior plus the pre-existing focused spec suites must remain green.",
+      "status": "PASS",
+      "detail": "auger.py:13483-13489 preserves nonzero rev-parse -> None. Fresh fake-git exit-1 probes for both verbs returned rc=2 with `invalid-spec-graph: unresolvable-repo-root`, not as-of-git-unavailable, and zero frames. Git-present probes returned check rc=0 with valid JSON and validate rc=0 `1 document(s), 2 block(s), 1 reference(s) ok`; the focused pre-existing spec suites exited 0 with `60 passed in 16.82s`.",
+      "derived": true
+    },
+    {
+      "criterion": "Regression-test teeth: `tests/test_spec_missing_git.py` must execute the real CLI with git genuinely absent and assert the complete contract (exit 2, empty stdout, no traceback/FileNotFoundError, typed code) for both verbs, so the pre-fix raw FileNotFoundError behavior would fail it.",
+      "status": "PASS",
+      "detail": "tests/test_spec_missing_git.py:30-40 drives the real auger.py subprocess with PATH set to an empty temp dir; lines 43-60 assert rc=2, empty stdout, no Traceback, no FileNotFoundError and the typed code for both verbs; lines 63-70 assert agreement. Fresh pytest exited 0 with `3 passed in 0.66s`. A parent c9c01a3 control run from the repo root produced rc=1, 10 traceback frames and FileNotFoundError for both verbs, demonstrating that the pre-fix behavior violates the asserted contract.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "needs_review",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": false,
+      "any_failed": true,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2717 tests: scanners: nice=nice -n 10",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nsecrets: gitleaks bound=timeout 600s (0=off)\nscanners: nice=nice -n 10\nsecrets: gitleaks scope=repo-root /home/kara/auger\nsecrets: gitleaks parallelism=GOMAXPROCS=4\n12:16PM INF scanned ~8741077 bytes (8.74 MB) in 4.4s\n12:16PM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 1091 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": false,
+          "output": "scanners: nice=nice -n 10\ngate pytest interpreter: /home/kara/auger/.venv/bin/python\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [  7%]\n................................................................................................................................................F..............s......................................................................................................s.............. [ 37%]\n.........................................s.............................. [ 45%]\n........................................................................ [ 52%]\n........................................................................ [ 60%]\n........................................................................ [ 68%]\n........................................................................ [ 75%]\n........................................................................ [ 83%]\n........................................................................ [ 91%]\n.......................ss............................................... [ 98%]\n..........                                                               [100%]\n=================================== FAILURES ===================================\n_______________ test_a_broken_verb_fails_exactly_one_named_test ________________\n\ntmp_path = PosixPath('/mnt/ssd/tmp/pytest-of-kara/pytest-7197/test_a_broken_verb_fails_exact0')\nlive_service = 'http://127.0.0.1:3000'\n\n    def test_a_broken_verb_fails_exactly_one_named_test(tmp_path, live_service):\n        \"\"\"The acceptance criterion, proved by RUNNING a suite with one verb deliberately broken.\n    \n        A child suite of four deterministic tests covers four verbs. Only the toggle's write is\n        broken. The observed result must be EXACTLY ONE failure, and it must be the test that\n        names the toggle: a zero means the suite never observed the broken write, and a cascade is\n        the signature of one failing test corrupting the next (shared state, order dependence).\n        Both fail this test.\n        \"\"\"\n        child = tmp_path / \"childtests\"\n        child.mkdir()\n        nonce = uuid.uuid4().hex[:8]\n\n\u2026 [3981 chars omitted \u2014 64 line(s)] \u2026\nSKIPPED [1] tests/test_upgrade_path.py:228: end-to-end leg builds 3 venvs (~30s); set AUGER_UPGRADE_VERIFY_LIVE=1 to run scripts/upgrade-verify.sh for real\nSKIPPED [1] tests/test_spec_ingest.py:368: code-factory: upstream source drift past the manifest's recorded revision (corpus bound to f72dce5a1cc8869232c2993aad21eca5b455095b, live tree at 5d3dd42f3e0b8c6d2d8b096c52ece3c9679b9004); first containment break at code-factory/specs/ENVELOPE.md/CF-ENVELOPE-OK-IS-THE-VERDICT-STATUS-IS-TH-S003 \u2014 regenerate corpora/code-factory with scripts/ingest_markdown_specs.py to re-bind; the portable digest leg (test_shipped_block_digests_match_manifest) covered the shipped corpus's integrity here\nSKIPPED [1] tests/test_spec_ingest.py:368: auger-docs: upstream source drift past the manifest's recorded revision (corpus bound to 80598140eb510837586e43757415c6681cf5aed6, live tree at 9dec20532025d5c2e9405c102183825bfd4b9c7c); first containment break at docs/VERBS.md/AD-VERBS-SPEC-S018 \u2014 regenerate corpora/auger-docs with scripts/ingest_markdown_specs.py to re-bind; the portable digest leg (test_shipped_block_digests_match_manifest) covered the shipped corpus's integrity here\n1 failed, 929 passed, 5 skipped in 1400.83s (0:23:20)\n",
+          "error": "",
+          "data": {
+            "exit_code": 1
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 A missing git binary reaches the user as a typed 'spec error (as-of-git-unavailable)' refusal with exit 2 and zero traceback frames from spec check AND spec validate; both verbs agree; the code exists in docs/VERBS.md; a regression test test_spec_missing_git is gate-listed; with git present behaviour is unchanged.: Fresh empty-PATH real-CLI probes for both `spec check` and `spec validate` returned rc=2, stdout_bytes=0, traceback_frames=0, no FileNotFoundError, and byte-identical `spec error (as-of-git-unavailable): the git executable is not available; auger reads repository history and repository roots through git`; agree=true. auger.py:13482 routes `_git_toplevel` through `_spec_git_run`; auger.py:13492-13506 translates FileNotFoundError to SpecError; auger.py:12968-12971 renders the typed error and SystemExit(2). docs/VERBS.md:784-787 documents the code for validate/check/bundle (also :673). tests/gate.sh:273 lists tests/test_spec_missing_git.py; fresh `.venv/bin/python -m pytest tests/test_spec_missing_git.py -q -p no:randomly` exited 0 with `3 passed in 0.61s`. Fresh git-present probes returned check rc=0 with valid JSON and validate rc=0 `spec: 1 document(s), 2 block(s), 1 reference(s) ok`, both with empty stderr and zero frames. The exact configured full command `DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh` completed with /tmp/aug170_gate.exit=0; its log reports `931 passed, 4 skipped in 998.76s (0:16:38)`, `pytest lock-attributed skips: 0`, `LIVE ARMS: ran 2; skipped 0`, and final `GATE PASS`.\n  \u2713 Reachability/seam: the real `auger.py spec check` and `spec validate` CLI paths (including an explicit `--repo-root`) must route repository-root git discovery through `_spec_git_run`, and `cmd_spec` must render the resulting SpecError as the typed refusal with SystemExit(2), not a traceback.: auger.py:13482 routes `_git_toplevel` through `_spec_git_run`; auger.py:13492-13506 translates FileNotFoundError to SpecError; auger.py:12968-12971 renders `spec error (...)` and SystemExit(2); validate/check register cmd_spec at auger.py:14501/14575. Fresh empty-PATH probes for both verbs, with and without `--repo-root .`, returned rc=2, stdout_bytes=0, traceback_frames=0 and identical typed stderr.\n  \u2713 Failure-path specificity/back-compat: only a missing git executable is converted to `as-of-git-unavailable`; a present git that returns nonzero for rev-parse must still follow the existing `None`/typed repository-root refusal paths, and git-present spec behavior plus the pre-existing focused spec suites must remain green.: auger.py:13483-13489 preserves nonzero rev-parse -> None. Fresh fake-git exit-1 probes for both verbs returned rc=2 with `invalid-spec-graph: unresolvable-repo-root`, not as-of-git-unavailable, and zero frames. Git-present probes returned check rc=0 with valid JSON and validate rc=0 `1 document(s), 2 block(s), 1 reference(s) ok`; the focused pre-existing spec suites exited 0 with `60 passed in 16.82s`.\n  \u2713 Regression-test teeth: `tests/test_spec_missing_git.py` must execute the real CLI with git genuinely absent and assert the complete contract (exit 2, empty stdout, no traceback/FileNotFoundError, typed code) for both verbs, so the pre-fix raw FileNotFoundError behavior would fail it.: tests/test_spec_missing_git.py:30-40 drives the real auger.py subprocess with PATH set to an empty temp dir; lines 43-60 assert rc=2, empty stdout, no Traceback, no FileNotFoundError and the typed code for both verbs; lines 63-70 assert agreement. Fresh pytest exited 0 with `3 passed in 0.66s`. A parent c9c01a3 control run from the repo root produced rc=1, 10 traceback frames and FileNotFoundError for both verbs, demonstrating that the pre-fix behavior violates the asserted contract.\nAUG-170 is complete: both spec verbs now produce the documented typed missing-git refusal without tracebacks, git-present and nonzero-rev-parse behavior remain intact, the regression tests have teeth, and the fresh full gate passed 931 tests with exit 0.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 A missing git binary reaches the user as a typed 'spec error (as-of-git-unavailable)' refusal with exit 2 and zero traceback frames from spec check AND spec validate; both verbs agree; the code exists in docs/VERBS.md; a regression test test_spec_missing_git is gate-listed; with git present behaviour is unchanged.: Fresh empty-PATH real-CLI probes for both `spec check` and `spec validate` returned rc=2, stdout_bytes=0, traceback_frames=0, no FileNotFoundError, and byte-identical `spec error (as-of-git-unavailable): the git executable is not available; auger reads repository history and repository roots through git`; agree=true. auger.py:13482 routes `_git_toplevel` through `_spec_git_run`; auger.py:13492-13506 translates FileNotFoundError to SpecError; auger.py:12968-12971 renders the typed error and SystemExit(2). docs/VERBS.md:784-787 documents the code for validate/check/bundle (also :673). tests/gate.sh:273 lists tests/test_spec_missing_git.py; fresh `.venv/bin/python -m pytest tests/test_spec_missing_git.py -q -p no:randomly` exited 0 with `3 passed in 0.61s`. Fresh git-present probes returned check rc=0 with valid JSON and validate rc=0 `spec: 1 document(s), 2 block(s), 1 reference(s) ok`, both with empty stderr and zero frames. The exact configured full command `DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh` completed with /tmp/aug170_gate.exit=0; its log reports `931 passed, 4 skipped in 998.76s (0:16:38)`, `pytest lock-attributed skips: 0`, `LIVE ARMS: ran 2; skipped 0`, and final `GATE PASS`.\n  \u2713 Reachability/seam: the real `auger.py spec check` and `spec validate` CLI paths (including an explicit `--repo-root`) must route repository-root git discovery through `_spec_git_run`, and `cmd_spec` must render the resulting SpecError as the typed refusal with SystemExit(2), not a traceback.: auger.py:13482 routes `_git_toplevel` through `_spec_git_run`; auger.py:13492-13506 translates FileNotFoundError to SpecError; auger.py:12968-12971 renders `spec error (...)` and SystemExit(2); validate/check register cmd_spec at auger.py:14501/14575. Fresh empty-PATH probes for both verbs, with and without `--repo-root .`, returned rc=2, stdout_bytes=0, traceback_frames=0 and identical typed stderr.\n\n\u2026 [735 chars omitted \u2014 1 line(s)] \u2026\n  \u2713 Regression-test teeth: `tests/test_spec_missing_git.py` must execute the real CLI with git genuinely absent and assert the complete contract (exit 2, empty stdout, no traceback/FileNotFoundError, typed code) for both verbs, so the pre-fix raw FileNotFoundError behavior would fail it.: tests/test_spec_missing_git.py:30-40 drives the real auger.py subprocess with PATH set to an empty temp dir; lines 43-60 assert rc=2, empty stdout, no Traceback, no FileNotFoundError and the typed code for both verbs; lines 63-70 assert agreement. Fresh pytest exited 0 with `3 passed in 0.66s`. A parent c9c01a3 control run from the repo root produced rc=1, 10 traceback frames and FileNotFoundError for both verbs, demonstrating that the pre-fix behavior violates the asserted contract.\nAUG-170 is complete: both spec verbs now produce the documented typed missing-git refusal without tracebacks, git-present and nonzero-rev-parse behavior remain intact, the regression tests have teeth, and the fresh full gate passed 931 tests with exit 0.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "A missing git binary reaches the user as a typed 'spec error (as-of-git-unavailable)' refusal with exit 2 and zero traceback frames from spec check AND spec validate; both verbs agree; the code exists in docs/VERBS.md; a regression test test_spec_missing_git is gate-listed; with git present behaviour is unchanged.",
+                "status": "PASS",
+                "detail": "Fresh empty-PATH real-CLI probes for both `spec check` and `spec validate` returned rc=2, stdout_bytes=0, traceback_frames=0, no FileNotFoundError, and byte-identical `spec error (as-of-git-unavailable): the git executable is not available; auger reads repository history and repository roots through git`; agree=true. auger.py:13482 routes `_git_toplevel` through `_spec_git_run`; auger.py:13492-13506 translates FileNotFoundError to SpecError; auger.py:12968-12971 renders the typed error and SystemExit(2). docs/VERBS.md:784-787 documents the code for validate/check/bundle (also :673). tests/gate.sh:273 lists tests/test_spec_missing_git.py; fresh `.venv/bin/python -m pytest tests/test_spec_missing_git.py -q -p no:randomly` exited 0 with `3 passed in 0.61s`. Fresh git-present probes returned check rc=0 with valid JSON and validate rc=0 `spec: 1 document(s), 2 block(s), 1 reference(s) ok`, both with empty stderr and zero frames. The exact configured full command `DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh` completed with /tmp/aug170_gate.exit=0; its log reports `931 passed, 4 skipped in 998.76s (0:16:38)`, `pytest lock-attributed skips: 0`, `LIVE ARMS: ran 2; skipped 0`, and final `GATE PASS`."
+              },
+              {
+                "criterion": "Reachability/seam: the real `auger.py spec check` and `spec validate` CLI paths (including an explicit `--repo-root`) must route repository-root git discovery through `_spec_git_run`, and `cmd_spec` must render the resulting SpecError as the typed refusal with SystemExit(2), not a traceback.",
+                "status": "PASS",
+                "detail": "auger.py:13482 routes `_git_toplevel` through `_spec_git_run`; auger.py:13492-13506 translates FileNotFoundError to SpecError; auger.py:12968-12971 renders `spec error (...)` and SystemExit(2); validate/check register cmd_spec at auger.py:14501/14575. Fresh empty-PATH probes for both verbs, with and without `--repo-root .`, returned rc=2, stdout_bytes=0, traceback_frames=0 and identical typed stderr.",
+                "derived": true
+              },
+              {
+                "criterion": "Failure-path specificity/back-compat: only a missing git executable is converted to `as-of-git-unavailable`; a present git that returns nonzero for rev-parse must still follow the existing `None`/typed repository-root refusal paths, and git-present spec behavior plus the pre-existing focused spec suites must remain green.",
+                "status": "PASS",
+                "detail": "auger.py:13483-13489 preserves nonzero rev-parse -> None. Fresh fake-git exit-1 probes for both verbs returned rc=2 with `invalid-spec-graph: unresolvable-repo-root`, not as-of-git-unavailable, and zero frames. Git-present probes returned check rc=0 with valid JSON and validate rc=0 `1 document(s), 2 block(s), 1 reference(s) ok`; the focused pre-existing spec suites exited 0 with `60 passed in 16.82s`.",
+                "derived": true
+              },
+              {
+                "criterion": "Regression-test teeth: `tests/test_spec_missing_git.py` must execute the real CLI with git genuinely absent and assert the complete contract (exit 2, empty stdout, no traceback/FileNotFoundError, typed code) for both verbs, so the pre-fix raw FileNotFoundError behavior would fail it.",
+                "status": "PASS",
+                "detail": "tests/test_spec_missing_git.py:30-40 drives the real auger.py subprocess with PATH set to an empty temp dir; lines 43-60 assert rc=2, empty stdout, no Traceback, no FileNotFoundError and the typed code for both verbs; lines 63-70 assert agreement. Fresh pytest exited 0 with `3 passed in 0.66s`. A parent c9c01a3 control run from the repo root produced rc=1, 10 traceback frames and FileNotFoundError for both verbs, demonstrating that the pre-fix behavior violates the asserted contract.",
+                "derived": true
+              }
+            ],
+            "summary": "AUG-170 is complete: both spec verbs now produce the documented typed missing-git refusal without tracebacks, git-present and nonzero-rev-parse behavior remain intact, the regression tests have teeth, and the fresh full gate passed 931 tests with exit 0.",
+            "provenance": {
+              "model": "neuralwatt/kimi-k3.1-pro",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            },
+            "context_stats": {
+              "diff_source": "working-tree",
+              "diff_bytes": 776022,
+              "prompt_bytes": 267842
+            }
+          }
+        }
+      ],
+      "model": "neuralwatt/kimi-k3.1-pro",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "context_stats": {
+        "diff_source": "working-tree",
+        "diff_bytes": 776022,
+        "prompt_bytes": 267842
+      },
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-170\"}",
+          "exit_code": 0,
+          "output_sha": "c6e90b776a2d9d678338bea9f3ea98d55fcf03dbdb3175382de4dc84601f6280"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \".gitreins/config.yaml\"}",
+          "exit_code": 0,
+          "output_sha": "60ec05bb6218204f634565349dc8d23b1aec4048dcf3c49af1cdb0a17b2c2355"
+        },
+        {
+          "tool": "run_command",
+          "command": "git status --short && git diff --stat && git log -5 --oneline",
+          "exit_code": 0,
+          "output_sha": "b180159ee0351c69b267d34ffcc373d9925ac2f35a8645d3a5719125a4d1d2e3"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"tests/test_spec_missing_git.py\"}",
+          "exit_code": 0,
+          "output_sha": "19997e4bf772f2545b9d8d1a22130f6257acf4f971492b09206db8f55466b1f0"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"auger.py\", \"regex\": \"def (_git_toplevel|_spec_git_run|_spec_corpus_as_of|_spec_repository_root|cmd_spec)|_spec_git_run\\\\(|_git_toplevel\\\\(\"}",
+          "exit_code": 0,
+          "output_sha": "d2de1a8629cd92644dea68cf53ddd34d4a3eafc0be0a8c0800907c7fca01a124"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"docs/VERBS.md\", \"regex\": \"as-of-git-unavailable|test_spec_missing_git\"}",
+          "exit_code": 0,
+          "output_sha": "7eecdf27184749d33829fac69c952169066330dac0d30d0673d4a79ccf1009ea"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"tests/gate.sh\", \"regex\": \"test_spec_missing_git\"}",
+          "exit_code": 0,
+          "output_sha": "8773965694832314f806411db5b323cc74435edfbb64f7a739cb240cfb970ddb"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Reachability/seam: the real `auger.py spec check` and `spec validate` CLI paths (including an explicit `--repo-root`) must route repository-root git discovery through `_spec_git_run`, and `cmd_spec` must render the resulting SpecError as the typed refusal with SystemExit(2), not a traceback.\", \"key\": \"derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "341735828dc9f3d6363a7c94be8873e6c550e887c4dcef6e7affc6cf9382cd3a"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Failure-path specificity/back-compat: only a missing git executable is converted to `as-of-git-unavailable`; a present git that returns nonzero for rev-parse must still follow the existing `None`/typed repository-root refusal paths, and git-present spec behavior plus the pre-existing focused spec suites must remain green.\", \"key\": \"derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "15b8dbf61c4848838c2e33d9bc0b6027ea1aba6b7f57b1aed8b419eccd2954e0"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Regression-test teeth: `tests/test_spec_missing_git.py` must execute the real CLI with git genuinely absent and assert the complete contract (exit 2, empty stdout, no traceback/FileNotFoundError, typed code) for both verbs, so the pre-fix raw FileNotFoundError behavior would fail it.\", \"key\": \"derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "fdf5658398a3d9d1b07bce80c3f0bcbbd7d7427641c4e2632ec430e6e6fb3d08"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 90, \"offset\": 12920, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "e37641e9830e10247f8fafb04f44677ea85361776e0815671faba074852e1558"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 210, \"offset\": 13450, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "ece6e17064ae7db03d7bb6ba7256c6c29962224391b3401348e318a93993071d"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 165, \"offset\": 640, \"path\": \"docs/VERBS.md\"}",
+          "exit_code": 0,
+          "output_sha": "b9e44cf8914d35f1b027ea8aa8076906dc08334aa9859392fa280a96336b0acf"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 380, \"offset\": 1, \"path\": \"tests/gate.sh\"}",
+          "exit_code": 0,
+          "output_sha": "527a29198a7d60cc18a5465dba124a6fa085f0751b1a4ab5b0c5ec33754f6218"
+        },
+        {
+          "tool": "run_command",
+          "command": "DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh",
+          "exit_code": -15,
+          "output_sha": "40009017bc9c782e98c611b88d6a2217d7410584f7f8030f051650b5f2a5f053"
+        },
+        {
+          "tool": "run_command",
+          "command": "rm -f /tmp/aug170-gate.log /tmp/aug170-gate.rc; (DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh > /tmp/aug170-gate.log 2>&1; echo $? > /tmp/aug170-gate.rc) & echo \"gate_pid=$!\"",
+          "exit_code": 0,
+          "output_sha": "ad61178f11ee15288bcdb93f1866c0ec937b481adaeab5f4df3f7ae9a6f15667"
+        },
+        {
+          "tool": "run_command",
+          "command": ".venv/bin/python -m pytest tests/test_spec_missing_git.py -v -p no:randomly",
+          "exit_code": 0,
+          "output_sha": "76c02021957ee7d91622303c8e2039aa5fabfb5d3d622df8d347a2edb08f038a"
+        },
+        {
+          "tool": "run_command",
+          "command": ".venv/bin/python -m pytest tests/test_spec_as_of.py tests/test_spec_repository_root.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_spec_check_node_list.py -q -p no:randomly",
+          "exit_code": 0,
+          "output_sha": "00e2e3bc16ccb1352e056db68770dad2fd0717b2d5b54c5eeb2975660e0b5d8d"
+        },
+        {
+          "tool": "run_command",
+          "command": "empty=$(mktemp -d); for verb in check validate; do out=$(mktemp); err=$(mktemp); env PATH=\"$empty\" .venv/bin/python auger.py spec \"$verb\" tests/fixtures/xml/verification >\"$out\" 2>\"$err\"; rc=$?; printf '%s rc=%s stdout_bytes=%s traceback_frames=%s\\n' \"$verb\" \"$rc\" \"$(wc -c <\"$out\")\" \"$(grep -c '^  File ' \"$err\")\"; cat \"$err\"; done; rm -rf \"$empty\" \"$out\" \"$err\"",
+          "exit_code": 0,
+          "output_sha": "8ca26b88c744e17b5e02bdf1d58549d3a4e657bec75c2f44f3cca8148f37a4e9"
+        },
+        {
+          "tool": "run_command",
+          "command": "for verb in check validate; do .venv/bin/python auger.py spec \"$verb\" tests/fixtures/xml/verification; printf '%s rc=%s\\n' \"$verb\" \"$?\"; done",
+          "exit_code": 0,
+          "output_sha": "b8f88bd721c2947d2e2d911de42903a21f8f07e1e679ee5d1c32dfa292518346"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 180, \"offset\": 12995, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "25c35b03c9c1e655af3ee33caa010476d1be364f51aeefb5ad3b517f9e3e7f5f"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 140, \"offset\": 381, \"path\": \"tests/gate.sh\"}",
+          "exit_code": 0,
+          "output_sha": "469458b97b8507048980a3371ffe3460684781ee45cc844f7cdf9d7c3b984134"
+        },
+        {
+          "tool": "read_lsp_diagnostics",
+          "command": "read_lsp_diagnostics {}",
+          "exit_code": 0,
+          "output_sha": "ef420cbeebd549fc8c5438d6ea41a3e521fa58e29563c4cae80f491b9bfe2143"
+        },
+        {
+          "tool": "run_command",
+          "command": "empty=$(mktemp -d); for verb in check validate; do out=$(mktemp); err=$(mktemp); env PATH=\"$empty\" .venv/bin/python auger.py spec \"$verb\" tests/fixtures/xml/verification --repo-root . >\"$out\" 2>\"$err\"; rc=$?; printf '%s explicit-repo-root rc=%s stdout_bytes=%s traceback_frames=%s\\n' \"$verb\" \"$rc\" \"$(wc -c <\"$out\")\" \"$(grep -c '^  File ' \"$err\")\"; cat \"$err\"; done; rm -rf \"$empty\" \"$out\" \"$err\"",
+          "exit_code": 0,
+          "output_sha": "30ffa64983b1628279ad34bee69c406f7fb84c5baaafe1d4df9c057821b3bd1f"
+        },
+        {
+          "tool": "run_command",
+          "command": "fake=$(mktemp -d); printf '#!/bin/sh\\nexit 1\\n' > \"$fake/git\"; chmod +x \"$fake/git\"; for verb in check validate; do out=$(mktemp); err=$(mktemp); env PATH=\"$fake\" .venv/bin/python auger.py spec \"$verb\" tests/fixtures/xml/verification >\"$out\" 2>\"$err\"; rc=$?; printf '%s nonzero-git rc=%s stdout_bytes=%s traceback_frames=%s\\n' \"$verb\" \"$rc\" \"$(wc -c <\"$out\")\" \"$(grep -c '^  File ' \"$err\")\"; cat \"$err\"; done; rm -rf \"$fake\" \"$out\" \"$err\"",
+          "exit_code": 0,
+          "output_sha": "986ce6046e1eb7c46acc28702452e1a56f6e5735a45d2ce78e66829366a815a4"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show c9c01a3:auger.py > /tmp/aug170-prefix-auger.py; empty=$(mktemp -d); for verb in check validate; do out=$(mktemp); err=$(mktemp); env PATH=\"$empty\" .venv/bin/python /tmp/aug170-prefix-auger.py spec \"$verb\" \"$PWD/tests/fixtures/xml/verification\" >\"$out\" 2>\"$err\"; rc=$?; printf 'prefix %s rc=%s stdout_bytes=%s traceback_frames=%s file_not_found=%s\\n' \"$verb\" \"$rc\" \"$(wc -c <\"$out\")\" \"$(grep -c '^  File ' \"$err\")\" \"$(grep -c 'FileNotFoundError' \"$err\")\"; tail -n 3 \"$err\"; done; rm -rf \"$empty\" \"$out\" \"$err\" /tmp/aug170-prefix-auger.py",
+          "exit_code": 0,
+          "output_sha": "7c1e63ba711fb33a6378bf8b8835904c4453154660bae436256a243ef33b6837"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"auger.py\", \"regex\": \"_spec_repository_root\\\\(\"}",
+          "exit_code": 0,
+          "output_sha": "b7725d9d19dec70e49df99860e24181bf6bb8c4e4662532e9d899bae0c8f82b9"
+        },
+        {
+          "tool": "run_command",
+          "command": "if [ -f /tmp/aug170-gate.rc ]; then printf 'gate_rc='; cat /tmp/aug170-gate.rc; tail -n 30 /tmp/aug170-gate.log; else echo 'gate still running'; tail -n 8 /tmp/aug170-gate.log; fi",
+          "exit_code": 0,
+          "output_sha": "816b3d7e0de599d41413a03b6a016ed3dc9778e48f2ce51a86a2d9d5286acd34"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show --stat --oneline 9dec205 && git show --format= --check 9dec205",
+          "exit_code": 0,
+          "output_sha": "def9adb4b80a1747ef5619b46b8436d40fdd6b87bb8775f319b778ea1ef725bc"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show c9c01a3:auger.py > auger_prefix_aug170_tmp.py; empty=$(mktemp -d); for verb in check validate; do out=$(mktemp); err=$(mktemp); env PATH=\"$empty\" .venv/bin/python auger_prefix_aug170_tmp.py spec \"$verb\" tests/fixtures/xml/verification >\"$out\" 2>\"$err\"; rc=$?; printf 'prefix %s rc=%s stdout_bytes=%s traceback_frames=%s file_not_found=%s\\n' \"$verb\" \"$rc\" \"$(wc -c <\"$out\")\" \"$(grep -c '^  File ' \"$err\")\" \"$(grep -c 'FileNotFoundError' \"$err\")\"; tail -n 3 \"$err\"; done; rm -rf \"$empty\" \"$out\" \"$err\" auger_prefix_aug170_tmp.py",
+          "exit_code": 0,
+          "output_sha": "6f970bad6fe6cb12b8f91b819ef229bc5c328cc8e420a52f73fe00c32f73ef45"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 75, \"offset\": 10870, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "4d3c04b642cdd3d41cec2d307dffa01746e23213fae4e9888b0d4511e0be761b"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 70, \"offset\": 12345, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "6c9fe98e82556ff59e653efdd0ebce2d9d527200cb8bbb55a02188b9990bcc25"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 190, \"offset\": 13750, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "81dc279ee72b31796043c154b3491ed5cbeee1225d3c21344ec52831a2c6d7d2"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"auger.py\", \"regex\": \"cmd_spec\\\\)|cmd_spec\\\\]|cmd_spec,|set_defaults\\\\(.*cmd_spec|spec_parser|add_parser\\\\(\\\"spec\\\"\"}",
+          "exit_code": 0,
+          "output_sha": "88c3d5f11b6e7082a5e6c52f369db831cba5a963229ecf3313acb54b8008e442"
+        },
+        {
+          "tool": "run_command",
+          "command": "git diff c9c01a3..9dec205 -- auger.py docs/VERBS.md tests/gate.sh tests/test_spec_missing_git.py",
+          "exit_code": 0,
+          "output_sha": "11ddbe76dccbe4d0b694a79a331a39a4606c803ed5865f0ffb6f70574f76bea6"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 135, \"offset\": 14470, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "68471454f8937cc34b20f65fbc4bbcf733ab8ae173a66c590bca004a71636ccb"
+        },
+        {
+          "tool": "run_command",
+          "command": "if [ -f /tmp/aug170-gate.rc ]; then printf 'gate_rc='; cat /tmp/aug170-gate.rc; tail -n 35 /tmp/aug170-gate.log; else echo 'gate still running'; tail -n 12 /tmp/aug170-gate.log; fi",
+          "exit_code": 0,
+          "output_sha": "d1aff0bc0e6b12ddf9cdca72cb7a8eb0e6edde896502aee8fc31ee7c153c61ee"
+        },
+        {
+          "tool": "run_command",
+          "command": "git status --short -- auger.py docs/VERBS.md tests/gate.sh tests/test_spec_missing_git.py auger_prefix_aug170_tmp.py && .venv/bin/python -m py_compile auger.py tests/test_spec_missing_git.py && .venv/bin/ruff check auger.py tests/test_spec_missing_git.py && .venv/bin/ruff format --check auger.py tests/test_spec_missing_git.py",
+          "exit_code": 127,
+          "output_sha": "daca84aaeaed3cb11dcc6589eac148ff72cddf8de041f59c9892d0ecc7b10ff9"
+        },
+        {
+          "tool": "run_command",
+          "command": "bash tests/docs_check.sh",
+          "exit_code": 0,
+          "output_sha": "3f01c83e669186159bc58a30609f6f772999199d707db9e2c422e20f90f1747e"
+        },
+        {
+          "tool": "run_command",
+          "command": "ruff check auger.py tests/test_spec_missing_git.py && ruff format --check auger.py tests/test_spec_missing_git.py",
+          "exit_code": 0,
+          "output_sha": "20f9796403068865bdf4192141f67b823b68e1e3d87f0f729e172534909115bd"
+        },
+        {
+          "tool": "run_command",
+          "command": "ps -o pid,ppid,etime,stat,cmd -p 2719362,2719477 --forest; pgrep -a -P 2719477 || true; wc -c /tmp/aug170-gate.log; tail -c 500 /tmp/aug170-gate.log",
+          "exit_code": 0,
+          "output_sha": "423a5af04d6f7c3be1fad21b7ab92da62e49abbf46ac1c25c1e21957316dc79e"
+        },
+        {
+          "tool": "run_command",
+          "command": "git diff c9c01a3..9dec205 --numstat && git status --short -- auger.py docs/VERBS.md tests/gate.sh tests/test_spec_missing_git.py",
+          "exit_code": 0,
+          "output_sha": "7450282010947a50b043dc2e14284a650f548821241e1a33317f039b25cd56f4"
+        },
+        {
+          "tool": "run_command",
+          "command": "ls -l /tmp/aug170-gate.rc /tmp/aug170-gate.log 2>&1; pgrep -af 'tests/gate.sh|aug170-gate|pytest' | head -n 30",
+          "exit_code": 0,
+          "output_sha": "eb76ea1d838ecac59c49f795720d7e3f1734733c02fab0c91c618bd1b38fd92d"
+        },
+        {
+          "tool": "run_command",
+          "command": "rm -f /tmp/aug170-gate.log /tmp/aug170-gate.rc /tmp/aug170-gate.nohup; nohup bash -c 'DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh > /tmp/aug170-gate.log 2>&1; echo $? > /tmp/aug170-gate.rc' > /tmp/aug170-gate.nohup 2>&1 < /dev/null & echo \"nohup_gate_pid=$!\"",
+          "exit_code": 0,
+          "output_sha": "d601f884887dcfd4aa0dbf20110a73cdc176ebc5f91cb0aa4a9547e53a92bc87"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: auger.py:13482 routes `_git_toplevel` through `_spec_git_run`; auger.py:13492-13506 translates FileNotFoundError to SpecError; auger.py:12968-12971 renders `spec error (...)` and SystemExit(2); validate/check register cmd_spec at auger.py:14501/14575. Fresh empty-PATH probes for both verbs, with and without `--repo-root .`, returned rc=2, stdout_bytes=0, traceback_frames=0 and identical typed stderr.\", \"key\": \"verified_derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "2706a9099cfdee09bd42626b14ee378a9f23066969f3009f2eaffff72104f5c2"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: auger.py:13483-13489 preserves nonzero rev-parse -> None. Fresh fake-git exit-1 probes for both verbs returned rc=2 with `invalid-spec-graph: unresolvable-repo-root`, not as-of-git-unavailable, and zero frames. Git-present probes returned check rc=0 valid JSON and validate rc=0 `1 document(s), 2 block(s), 1 reference(s) ok`; focused pre-existing spec suites: 60 passed in 16.82s, exit 0.\", \"key\": \"verified_derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "946e4ab4fe2bff64ef701526ab35e4c97104a4a3885156d15f69d7425aa6bb48"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: tests/test_spec_missing_git.py:30-40 drives the real auger.py subprocess with PATH set to an empty temp dir; lines 43-60 assert rc2/empty stdout/no Traceback/no FileNotFoundError/typed code for both verbs; lines 63-70 assert agreement. Fresh pytest: 3 passed in 0.66s exit 0. Parent c9c01a3 control run from repo root produced rc=1, 10 traceback frames and FileNotFoundError for both verbs.\", \"key\": \"verified_derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "62d87b5fb814842ab25beeadcca8c45b1ac2f96eb8dedc35e1e3b86824d2ca9b"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 20; if [ -f /tmp/aug170-gate.rc ]; then printf 'gate_rc='; cat /tmp/aug170-gate.rc; tail -n 30 /tmp/aug170-gate.log; else echo 'gate still running'; ps -o pid,ppid,etime,stat,cmd -p 2762059; tail -n 8 /tmp/aug170-gate.log; fi",
+          "exit_code": 0,
+          "output_sha": "9bdd518e7ca7377daf24983a0f6ee50522f84c92a013f7e7d96054ca1685a365"
+        },
+        {
+          "tool": "run_command",
+          "command": "ls -l /tmp/aug170-gate*; pgrep -af '[t]ests/gate.sh|[a]uger-gate|2762059' | head -n 20; cat /tmp/aug170-gate.nohup",
+          "exit_code": 0,
+          "output_sha": "f9da9c9a024ffa5b48ead1fe3aa21f6035738374750d7e4cb23d9a28db44f7b9"
+        },
+        {
+          "tool": "run_command",
+          "command": "command -v setsid; command -v flock; date -u +%H:%M:%S",
+          "exit_code": 0,
+          "output_sha": "43452a93a8b5162f4102144c10691b5e250870baf5085f2f89083874127cf759"
+        },
+        {
+          "tool": "run_command",
+          "command": "rm -f /tmp/aug170-gate.log /tmp/aug170-gate.rc /tmp/aug170-gate.nohup; setsid -f bash -c 'DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh > /tmp/aug170-gate.log 2>&1; echo $? > /tmp/aug170-gate.rc' < /dev/null > /tmp/aug170-gate.nohup 2>&1; echo launched",
+          "exit_code": 0,
+          "output_sha": "b6b063a23f2a49da8954be7c5acae9d024566dd71ef6b3632f93d5f7c57de538"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 10; ls -l /tmp/aug170-gate*; pgrep -af '[t]ests/gate.sh' | head -n 10; tail -n 8 /tmp/aug170-gate.log",
+          "exit_code": 0,
+          "output_sha": "a98c012565b7cd1fbe30300f789e2af074a8629679c1890da19a4f2c589ce30b"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show c9c01a3:auger.py > auger_prefix_aug170_tmp.py; for verb in check validate; do out=$(mktemp); err=$(mktemp); .venv/bin/python auger_prefix_aug170_tmp.py spec \"$verb\" tests/fixtures/xml/verification >\"$out\" 2>\"$err\"; rc=$?; printf 'prefix-git-present %s rc=%s\\n' \"$verb\" \"$rc\"; cat \"$out\"; cat \"$err\"; done; rm -f \"$out\" \"$err\" auger_prefix_aug170_tmp.py",
+          "exit_code": 0,
+          "output_sha": "a7c7c0900be3b4606de539516b2310b5bfaa87f0e114e6ce85f71c3b94336906"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show c9c01a3:docs/VERBS.md | grep -n -C 2 'as-of-git-unavailable'; git show c9c01a3:tests/gate.sh | grep -c 'test_spec_missing_git' || true",
+          "exit_code": 0,
+          "output_sha": "73b013a3a774bee3cc6c461051bc8852e3d285dc2da174535e165f9f6ec76238"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 20; if [ -f /tmp/aug170-gate.rc ]; then printf 'gate_rc='; cat /tmp/aug170-gate.rc; tail -n 25 /tmp/aug170-gate.log; else echo 'gate still running'; tail -n 5 /tmp/aug170-gate.log; fi",
+          "exit_code": 0,
+          "output_sha": "e05e73ac878703181dfcc05c7a83581ac51d65dc9c2333baf5d2b472e0465ce7"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'gate_rc='; cat /tmp/aug170-gate.rc; tail -n 30 /tmp/aug170-gate.log; else echo 'gate still running'; tail -n 6 /tmp/aug170-gate.log; fi",
+          "exit_code": 0,
+          "output_sha": "c11a5a8838b946a94f9549247de269c50c547155e754a0fb9c9f1e4861593c76"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'gate_rc='; cat /tmp/aug170-gate.rc; tail -n 30 /tmp/aug170-gate.log; else echo 'gate still running'; tail -n 6 /tmp/aug170-gate.log; fi",
+          "exit_code": 0,
+          "output_sha": "812c9e0e68849e01b8147566672257690052e4f56fdb552d3e7c64096c57bf1e"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'gate_rc='; cat /tmp/aug170-gate.rc; tail -n 30 /tmp/aug170-gate.log; else echo 'gate still running'; tail -n 6 /tmp/aug170-gate.log; fi",
+          "exit_code": 0,
+          "output_sha": "4558e3979edfd612b8c8d1fe6a8f6823984c9ee531dff7ea2d775272c3b4b5ee"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'gate_rc='; cat /tmp/aug170-gate.rc; tail -n 30 /tmp/aug170-gate.log; else echo 'gate still running'; tail -n 6 /tmp/aug170-gate.log; fi",
+          "exit_code": 0,
+          "output_sha": "caf1ec6b189d5c5069ba87f091c705860b6b7ab5a4fc0bc060026986dbb7d64a"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'gate_rc='; cat /tmp/aug170-gate.rc; tail -n 30 /tmp/aug170-gate.log; else echo 'gate still running'; tail -n 6 /tmp/aug170-gate.log; fi",
+          "exit_code": 0,
+          "output_sha": "780474ef3c43f113731e96bdd634a3c04abd280bc7b874d16f9d8f2424c47de1"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'gate_rc='; cat /tmp/aug170-gate.rc; tail -n 30 /tmp/aug170-gate.log; else echo 'gate still running'; tail -n 6 /tmp/aug170-gate.log; fi",
+          "exit_code": 0,
+          "output_sha": "26158e1178daf911b81271a52530f38d8a57c6490fe4464e893bba061f147e6d"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'gate_rc='; cat /tmp/aug170-gate.rc; tail -n 30 /tmp/aug170-gate.log; else echo 'gate still running'; tail -n 6 /tmp/aug170-gate.log; fi",
+          "exit_code": 0,
+          "output_sha": "157f7de20743a2199b758a02ad931ca815de20d7fc3094bc5eee3dd02c7b2078"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'gate_rc='; cat /tmp/aug170-gate.rc; tail -n 30 /tmp/aug170-gate.log; else echo 'gate still running'; tail -n 6 /tmp/aug170-gate.log; fi",
+          "exit_code": 0,
+          "output_sha": "8bd2b28705c6b590c08090a6ce86184bcb8462478440e8a59437a6d2bde73c23"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'gate_rc='; cat /tmp/aug170-gate.rc; tail -n 30 /tmp/aug170-gate.log; else echo 'gate still running'; tail -n 6 /tmp/aug170-gate.log; fi",
+          "exit_code": 0,
+          "output_sha": "a160d7eaba739ef97a0bb54d9520b00e149d168e5a58bd68746f559975c21752"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'gate_rc='; cat /tmp/aug170-gate.rc; tail -n 30 /tmp/aug170-gate.log; else echo 'gate still running'; tail -n 6 /tmp/aug170-gate.log; fi",
+          "exit_code": 0,
+          "output_sha": "3ae1c56b2f29531e8fa183649f1093a1889bb70a2f069f21038c16fc78f9e7d7"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'gate_rc='; cat /tmp/aug170-gate.rc; tail -n 30 /tmp/aug170-gate.log; else echo 'gate still running'; tail -n 6 /tmp/aug170-gate.log; fi",
+          "exit_code": 0,
+          "output_sha": "ba1dc1685ae3f29e4222cc23cfce5371e7d7a009ad8fee5eb6895371dd1ed098"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'gate_rc='; cat /tmp/aug170-gate.rc; tail -n 30 /tmp/aug170-gate.log; else echo 'gate still running'; tail -n 6 /tmp/aug170-gate.log; fi",
+          "exit_code": 0,
+          "output_sha": "dd9d0d7962f73dfb49a7f2af526fafd7be0ae6cdfe334fd17efc7b02748dd4d0"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'gate_rc='; cat /tmp/aug170-gate.rc; tail -n 30 /tmp/aug170-gate.log; else echo 'gate still running'; tail -n 6 /tmp/aug170-gate.log; fi",
+          "exit_code": 0,
+          "output_sha": "d62bc2ca01d47adfadf02ea780e8fa538129974c55d63fa0444c266e0581ea7e"
+        },
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-170\"}",
+          "exit_code": 0,
+          "output_sha": "c6e90b776a2d9d678338bea9f3ea98d55fcf03dbdb3175382de4dc84601f6280"
+        },
+        {
+          "tool": "sandbox_read",
+          "command": "sandbox_read {\"key\": \"verified_0\"}",
+          "exit_code": 1,
+          "output_sha": "678be362049c858745e71e5dc8bf0bfe19e3b5a7cc3fce486ff5e05cf8a94b0f"
+        },
+        {
+          "tool": "sandbox_read",
+          "command": "sandbox_read {\"key\": \"checked\"}",
+          "exit_code": 1,
+          "output_sha": "c3695c2c9d3a30089ead23fd6874f3e19a92098aba955ee74bb46a94c3c3997e"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 220, \"path\": \".gitreins/config.yaml\"}",
+          "exit_code": 0,
+          "output_sha": "60ec05bb6218204f634565349dc8d23b1aec4048dcf3c49af1cdb0a17b2c2355"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 200, \"path\": \"tests/test_spec_missing_git.py\"}",
+          "exit_code": 0,
+          "output_sha": "19997e4bf772f2545b9d8d1a22130f6257acf4f971492b09206db8f55466b1f0"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 155, \"offset\": 650, \"path\": \"docs/VERBS.md\"}",
+          "exit_code": 0,
+          "output_sha": "5f531aa56df00ad15116c810564d7714c3a1686181285e8eb34fbd0dd6bc9bdd"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 65, \"offset\": 12935, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "6c07077dfb8a982d583d99d667671662f7472cbca756e13d1b55e57e049ed01e"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 190, \"offset\": 13455, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "63592603ac5541c2c76a47ae86236ae3a574b488cc8f0d2dff47d7b64809acec"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 45, \"offset\": 250, \"path\": \"tests/gate.sh\"}",
+          "exit_code": 0,
+          "output_sha": "0edd531e2993a47f2a0dc8c995b3bc3ce276e47afcd41f8fb39edc301daff7c1"
+        },
+        {
+          "tool": "read_diff",
+          "command": "read_diff {}",
+          "exit_code": 0,
+          "output_sha": "8ae62fb4e688a3013516311bc74e5230edab115cf88f846dfb117d3c62f4d6a1"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"{auger.py,docs/VERBS.md,tests/gate.sh,tests/test_spec_missing_git.py}\", \"regex\": \"test_spec_missing_git|as-of-git-unavailable\"}",
+          "exit_code": 0,
+          "output_sha": "052c888c2d759fa90dffd9b88132414c16af0a96cfb54b7778b3b90783b1f152"
+        },
+        {
+          "tool": "run_command",
+          "command": "DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh",
+          "exit_code": -15,
+          "output_sha": "efe8951aa683bf8849c615284143b4de23d842ccb6c4b224a77b74652bfe9552"
+        },
+        {
+          "tool": "run_command",
+          "command": "mkdir -p .gitreins/logs && rm -f .gitreins/logs/aug170-review-gate.log .gitreins/logs/aug170-review-gate.rc && nohup sh -c 'DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh > .gitreins/logs/aug170-review-gate.log 2>&1; echo $? > .gitreins/logs/aug170-review-gate.rc' > .gitreins/logs/aug170-review-gate.nohup 2>&1 & echo \"gate_pid=$!\"",
+          "exit_code": 0,
+          "output_sha": "3c569a57545ca3300da1aa8e63248234584b9f8b37fdd8433690ea160e9118fb"
+        },
+        {
+          "tool": "run_command",
+          "command": ".venv/bin/python - <<'PY'\nimport os, subprocess, sys, tempfile\nfrom pathlib import Path\nroot = Path.cwd()\nfixture = root / 'tests/fixtures/xml/verification'\nwith tempfile.TemporaryDirectory(prefix='aug170-empty-path-') as empty:\n    env = dict(os.environ, PATH=empty)\n    results = {}\n    for verb in ('check', 'validate'):\n        for extra in ((), ('--repo-root', '.')):\n            p = subprocess.run([sys.executable, str(root/'auger.py'), 'spec', verb, str(fixture), *extra], cwd=root, env=env, text=True, capture_output=True, check=False)\n            key = (verb, bool(extra))\n            results[key] = p\n            print(f'MISSING_GIT verb={verb} explicit_repo_root={bool(extra)} rc={p.returncode} stdout_bytes={len(p.stdout)} traceback_frames={p.stderr.count(chr(10)+\"  File \")} file_not_found={\"FileNotFoundError\" in p.stderr} stderr={p.stderr.strip()!r}')\n    assert all(p.returncode == 2 and p.stdout == '' and 'Traceback' not in p.stderr and 'FileNotFoundError' not in p.stderr and 'spec error (as-of-git-unavailable)' in p.stderr for p in results.values())\n    assert results[('check', False)].stderr == results[('validate', False)].stderr\n    assert results[('check', True)].stderr == results[('validate', True)].stderr\nprint('MISSING_GIT_CONTRACT_PASS')\nPY",
+          "exit_code": 0,
+          "output_sha": "cb4a0f2eb74bce81ed2d66983dbf3eeab97ca6b3b0e84b1dacbf3eb0fa9025be"
+        },
+        {
+          "tool": "run_command",
+          "command": ".venv/bin/python -m pytest -q -p no:randomly tests/test_spec_missing_git.py tests/test_spec_as_of.py tests/test_spec_repository_root.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_spec_check_node_list.py",
+          "exit_code": 0,
+          "output_sha": "4af436811eea248b0d3755ea65213eb5c188d40077d7a29d9c669d1781b28c8d"
+        },
+        {
+          "tool": "run_command",
+          "command": ".venv/bin/python - <<'PY'\nimport subprocess, sys\nfrom pathlib import Path\nroot = Path.cwd()\nfixture = root/'tests/fixtures/xml/verification'\nfor verb in ('check', 'validate'):\n    p = subprocess.run([sys.executable, str(root/'auger.py'), 'spec', verb, str(fixture)], cwd=root, text=True, capture_output=True, check=False)\n    print(f'GIT_PRESENT verb={verb} rc={p.returncode} stdout={p.stdout.strip()!r} stderr={p.stderr.strip()!r}')\n    assert p.returncode == 0 and not p.stderr\nprint('GIT_PRESENT_CONTRACT_PASS')\nPY",
+          "exit_code": 0,
+          "output_sha": "e6b6790701374b8244a5effc52f178a8171692c1954f4cd3e24cb5ab8e8371e0"
+        },
+        {
+          "tool": "run_command",
+          "command": "if [ -f .gitreins/logs/aug170-review-gate.rc ]; then printf 'gate_rc='; cat .gitreins/logs/aug170-review-gate.rc; else echo 'gate_running'; fi; tail -n 25 .gitreins/logs/aug170-review-gate.log",
+          "exit_code": 0,
+          "output_sha": "f5d894d849c8f760b4942f3aa71bfefaf5f733cf3d81a3edca48553bc15721e8"
+        },
+        {
+          "tool": "run_command",
+          "command": "ps -eo pid,ppid,pgid,stat,etime,args | grep -E 'aug170-review-gate|tests/gate.sh|GATE_PYTHON|pytest' | grep -v grep | head -n 30; printf '\\nlog_bytes='; wc -c < .gitreins/logs/aug170-review-gate.log; printf '\\nnohup:\\n'; cat .gitreins/logs/aug170-review-gate.nohup",
+          "exit_code": 0,
+          "output_sha": "4657b2c784838ea1efaa761ca86f6ee3dbaa93c9b1b2a774e1fcd6af6a49aef4"
+        },
+        {
+          "tool": "run_command",
+          "command": "ps -eo pid,ppid,pgid,stat,etime,args | awk '$1==2769284 || $2==2769284 || $1==2769285 || $2==2769285 || $1==2896656 || $3==2896656 || $1==2905182 || $2==2905182 || $1==2905180 || $3==2905180 {print}'",
+          "exit_code": 0,
+          "output_sha": "1da9490e8cfa588da84e81f3ab43c3bfdd6c0d772764cce97b2f1c85ba43b8c5"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 180, \"offset\": 1, \"path\": \"tests/gate.sh\"}",
+          "exit_code": 0,
+          "output_sha": "c3fd300ff388b83379294f30d5b43db6438b7e9e709e9196ae2f547889ef9501"
+        },
+        {
+          "tool": "read_lsp_diagnostics",
+          "command": "read_lsp_diagnostics {}",
+          "exit_code": 0,
+          "output_sha": "ef420cbeebd549fc8c5438d6ea41a3e521fa58e29563c4cae80f491b9bfe2143"
+        },
+        {
+          "tool": "run_command",
+          "command": "ps -eo pid,ppid,pgid,sid,stat,etime,args | grep -E 'aug170-review-gate|tests/gate.sh|timeout --kill-after=30s 2400s|python -m pytest tests/test_auger.py' | grep -v grep",
+          "exit_code": 0,
+          "output_sha": "3413988462c3e49a728be8fc63497d33f2c566aaeaacfc37926fa4f7f8322360"
+        },
+        {
+          "tool": "run_command",
+          "command": "ps -eo pid,ppid,pgid,sid,stat,etime,args | awk '$1==2769284 || $2==2769284 || $1==2769285 || $2==2769285 || $1==2896656 || $2==2896656 || $1==2896702 || $2==2896702 || $1==2905182 || $2==2905182 || $1==2905180 || $2==2905180 {print}'",
+          "exit_code": 0,
+          "output_sha": "1dc97591c286451456686c52171fca0484dda71e3199f4b458a17f9fdd59cf45"
+        },
+        {
+          "tool": "run_command",
+          "command": "ps -p 2896656,2896702,2905180,2905182 -o pid=,ppid=,pgid=,sid=,stat=,etime=,args=; ps --ppid 2896656 -o pid=,ppid=,pgid=,sid=,stat=,etime=,args=; ps --ppid 2896702 -o pid=,ppid=,pgid=,sid=,stat=,etime=,args=; ps --ppid 2905182 -o pid=,ppid=,pgid=,sid=,stat=,etime=,args=",
+          "exit_code": 1,
+          "output_sha": "8f9331cfbfb4666f0be12df057c45899ef767d13b989fdd458fab3ca47b9d3ee"
+        },
+        {
+          "tool": "run_command",
+          "command": "kill -TERM -- -2896702 2>/dev/null || true; sleep 1; ps -p 2896702,2896704 -o pid=,stat=,args= || true; printf 'background_gate_log:\\n'; cat .gitreins/logs/aug170-review-gate.log; printf 'background_gate_rc_file='; if [ -f .gitreins/logs/aug170-review-gate.rc ]; then cat .gitreins/logs/aug170-review-gate.rc; else echo absent; fi",
+          "exit_code": 0,
+          "output_sha": "932afd211253743e436cf90589db838fb45c14d76ca9ff5afa9241e67c19fbf5"
+        },
+        {
+          "tool": "run_command",
+          "command": "kill -KILL -- -2896702 2>/dev/null || true; sleep 1; ps -p 2896702,2896704 -o pid=,stat=,args= || true; printf 'background_gate_rc_file='; if [ -f .gitreins/logs/aug170-review-gate.rc ]; then cat .gitreins/logs/aug170-review-gate.rc; else echo absent; fi",
+          "exit_code": 0,
+          "output_sha": "fcdd5ab4e72f4d3d7506e197c034ab4adec86b6cff94a0d3c20352c05acd6bc2"
+        },
+        {
+          "tool": "run_command",
+          "command": "ps -p 2896702,2896704 -o pid=,ppid=,pgid=,sid=,stat=,wchan=,etime=,args=; ps -p 2450017 -o pid=,ppid=,pgid=,sid=,stat=,args=",
+          "exit_code": 0,
+          "output_sha": "02d954cde7feb7e1d14efc48a2e5e4026fe053ba608391e96871af5abf2daaf3"
+        },
+        {
+          "tool": "run_command",
+          "command": "kill -KILL 2896704 2896702 2>/dev/null || true; sleep 1; ps -p 2896702,2896704 -o pid=,stat=,args= || true",
+          "exit_code": 0,
+          "output_sha": "59791c3ea4b021b0dd7c8f65700580725cfb9835742197d5bbdca4cf155c6c07"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'existing_gate_rc='; cat /tmp/aug170-gate.rc; else echo 'existing_gate_running'; fi; tail -n 20 /tmp/aug170-gate.log",
+          "exit_code": 0,
+          "output_sha": "ef0cb03fbf0840f6524d25e2c30313c3cc6a26c4c296ed01a44bc86606996a44"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'existing_gate_rc='; cat /tmp/aug170-gate.rc; else echo 'existing_gate_running'; fi; tail -n 12 /tmp/aug170-gate.log",
+          "exit_code": 0,
+          "output_sha": "de883c401b429d5c269aa3b3f91e7098d7d47689a5aeacdc2972177ee82822bf"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'existing_gate_rc='; cat /tmp/aug170-gate.rc; else echo 'existing_gate_running'; fi; tail -n 12 /tmp/aug170-gate.log",
+          "exit_code": 0,
+          "output_sha": "b51ba6bc187341528fb2068f0d0e3b90d23512ac2c9dfbb6493045937059c343"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'existing_gate_rc='; cat /tmp/aug170-gate.rc; else echo 'existing_gate_running'; fi; tail -n 12 /tmp/aug170-gate.log",
+          "exit_code": 0,
+          "output_sha": "90998a2bb4649b0c93e001a0a3e7471aa93cbc44630856b644c918d1d9ec8d2b"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'existing_gate_rc='; cat /tmp/aug170-gate.rc; else echo 'existing_gate_running'; fi; tail -n 12 /tmp/aug170-gate.log",
+          "exit_code": 0,
+          "output_sha": "5060d17f61ec4ae88d7975366debd73ed95e95319ce90b4d0c2b8d82e77d0f4c"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'existing_gate_rc='; cat /tmp/aug170-gate.rc; else echo 'existing_gate_running'; fi; tail -n 12 /tmp/aug170-gate.log",
+          "exit_code": 0,
+          "output_sha": "36a335eef56f65dfb007759327241b257281caa2a3e51a5766e50e8366bb2e1b"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'existing_gate_rc='; cat /tmp/aug170-gate.rc; else echo 'existing_gate_running'; fi; tail -n 12 /tmp/aug170-gate.log",
+          "exit_code": 0,
+          "output_sha": "0f63fc8218a797bcbc9d54fc9093c81148436976a29272b9e423a13e68aed2ad"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'existing_gate_rc='; cat /tmp/aug170-gate.rc; else echo 'existing_gate_running'; fi; tail -n 12 /tmp/aug170-gate.log",
+          "exit_code": 0,
+          "output_sha": "3d85bc7e5894696ac1dc78e7b232a60af5227b86047f81b78363453a27010d79"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'existing_gate_rc='; cat /tmp/aug170-gate.rc; else echo 'existing_gate_running'; fi; tail -n 12 /tmp/aug170-gate.log",
+          "exit_code": 0,
+          "output_sha": "287c8c3c54df9cc6cbe9fd0f4afaa45e6cd83a5f3b2ecc255781a73fe794f2a2"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'existing_gate_rc='; cat /tmp/aug170-gate.rc; else echo 'existing_gate_running'; fi; tail -n 12 /tmp/aug170-gate.log",
+          "exit_code": 0,
+          "output_sha": "78d22328281c3002cbc3347564f0fcba4b38893c7c62a4283a83674b49a00c16"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'existing_gate_rc='; cat /tmp/aug170-gate.rc; else echo 'existing_gate_running'; fi; tail -n 12 /tmp/aug170-gate.log",
+          "exit_code": 0,
+          "output_sha": "9b1233e47601a33094698eae432aec2f0e25f641231a256526f780e9b392ec37"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'existing_gate_rc='; cat /tmp/aug170-gate.rc; else echo 'existing_gate_running'; fi; tail -n 12 /tmp/aug170-gate.log",
+          "exit_code": 0,
+          "output_sha": "c2edf4ca227a7bfea6084daf2490ebbe8c529de1af371132193d75bcf73264ab"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'existing_gate_rc='; cat /tmp/aug170-gate.rc; else echo 'existing_gate_running'; fi; tail -n 12 /tmp/aug170-gate.log",
+          "exit_code": 0,
+          "output_sha": "e7395c57e9e1d3fbf2a249f1aabc3162565109af40029fcbd8ad3a18e00bd554"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'existing_gate_rc='; cat /tmp/aug170-gate.rc; else echo 'existing_gate_running'; fi; tail -n 12 /tmp/aug170-gate.log",
+          "exit_code": 0,
+          "output_sha": "51d027ca2f99d2b00cb11ddddb887c63644f1bf07fe8078f084bbeb7bd2025d9"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'existing_gate_rc='; cat /tmp/aug170-gate.rc; else echo 'existing_gate_running'; fi; tail -n 25 /tmp/aug170-gate.log",
+          "exit_code": 0,
+          "output_sha": "e85ca956b61fa76900724829310459f52f78bf5a8e966ca7c0fbae5d9d84241e"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170-gate.rc ]; then printf 'existing_gate_rc='; cat /tmp/aug170-gate.rc; else echo 'existing_gate_running'; fi; tail -n 25 /tmp/aug170-gate.log",
+          "exit_code": 0,
+          "output_sha": "3079ae938007beb98d8e975c26d3ad85b140da75105e14e63dae6c8b51e63d4a"
+        },
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-170\"}",
+          "exit_code": 0,
+          "output_sha": "c6e90b776a2d9d678338bea9f3ea98d55fcf03dbdb3175382de4dc84601f6280"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \".gitreins/config.yaml\"}",
+          "exit_code": 0,
+          "output_sha": "60ec05bb6218204f634565349dc8d23b1aec4048dcf3c49af1cdb0a17b2c2355"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"tests/test_spec_missing_git.py\"}",
+          "exit_code": 0,
+          "output_sha": "19997e4bf772f2545b9d8d1a22130f6257acf4f971492b09206db8f55466b1f0"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 155, \"offset\": 650, \"path\": \"docs/VERBS.md\"}",
+          "exit_code": 0,
+          "output_sha": "5f531aa56df00ad15116c810564d7714c3a1686181285e8eb34fbd0dd6bc9bdd"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 65, \"offset\": 12935, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "6c07077dfb8a982d583d99d667671662f7472cbca756e13d1b55e57e049ed01e"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 190, \"offset\": 13455, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "63592603ac5541c2c76a47ae86236ae3a574b488cc8f0d2dff47d7b64809acec"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 55, \"offset\": 245, \"path\": \"tests/gate.sh\"}",
+          "exit_code": 0,
+          "output_sha": "9b1d782f2166daefe36ad1f69fa91d8bf51c481cd8fc7129fec75d4bb0208382"
+        },
+        {
+          "tool": "run_command",
+          "command": "DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh",
+          "exit_code": -15,
+          "output_sha": "9c0f63cd06fd0f8e516169d6d4ed25000bd1b20c3c963892681948d46f867256"
+        },
+        {
+          "tool": "run_command",
+          "command": "rm -f /tmp/aug170_gate.log /tmp/aug170_gate.exit; nohup bash -c 'DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh > /tmp/aug170_gate.log 2>&1; echo $? > /tmp/aug170_gate.exit' >/tmp/aug170_gate.nohup 2>&1 & echo \"gate_pid=$!\"",
+          "exit_code": 0,
+          "output_sha": "4838b2d1fbb52615a4ffb3bb2d31a4c645ebe8d2354cdb695647ffeb11ed6dec"
+        },
+        {
+          "tool": "run_command",
+          "command": ".venv/bin/python - <<'PY'\nimport os, subprocess, sys, tempfile, json\nfrom pathlib import Path\nroot = Path.cwd()\nfixture = root / 'tests/fixtures/xml/verification'\nwith tempfile.TemporaryDirectory(prefix='aug170-empty-path-') as empty:\n    env = dict(os.environ)\n    env['PATH'] = empty\n    results = {}\n    for verb in ('check', 'validate'):\n        p = subprocess.run([sys.executable, str(root/'auger.py'), 'spec', verb, str(fixture)], capture_output=True, text=True, env=env, check=False)\n        results[verb] = {'rc': p.returncode, 'stdout_bytes': len(p.stdout), 'traceback_frames': p.stderr.count('  File '), 'traceback': 'Traceback (most recent call last)' in p.stderr, 'file_not_found': 'FileNotFoundError' in p.stderr, 'stderr': p.stderr}\n    results['agree'] = results['check']['rc'] == results['validate']['rc'] == 2 and results['check']['stderr'] == results['validate']['stderr']\n    print(json.dumps(results, indent=2))\nPY",
+          "exit_code": 0,
+          "output_sha": "d96b5e2c9449de3b393a5cfcaea79b88e191ad9909f6ba4b7b559e5935d0e3de"
+        },
+        {
+          "tool": "run_command",
+          "command": ".venv/bin/python - <<'PY'\nimport subprocess, sys, json\nfrom pathlib import Path\nroot = Path.cwd()\nfixture = root / 'tests/fixtures/xml/verification'\nresults = {}\nfor verb in ('check', 'validate'):\n    p = subprocess.run([sys.executable, str(root/'auger.py'), 'spec', verb, str(fixture)], capture_output=True, text=True, check=False)\n    results[verb] = {'rc': p.returncode, 'stdout': p.stdout, 'stderr': p.stderr, 'traceback_frames': p.stderr.count('  File ')}\nprint(json.dumps(results, indent=2))\nPY",
+          "exit_code": 0,
+          "output_sha": "57cbaadc9b5502641f946e3974ad2ae26d0edd95d71474651933dfeccbdf4862"
+        },
+        {
+          "tool": "run_command",
+          "command": ".venv/bin/python -m pytest tests/test_spec_missing_git.py -q -p no:randomly",
+          "exit_code": 0,
+          "output_sha": "c3bb488e9881117a4bc1520eb12bf8f695c82b57620705add39fdd26a9702e11"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"{tests/gate.sh,docs/VERBS.md}\", \"regex\": \"test_spec_missing_git|as-of-git-unavailable\"}",
+          "exit_code": 0,
+          "output_sha": "c592d22c78fed25fede43805e253d6575ac0165ef274eaf1f334b255dd2ea28b"
+        },
+        {
+          "tool": "read_lsp_diagnostics",
+          "command": "read_lsp_diagnostics {}",
+          "exit_code": 0,
+          "output_sha": "ef420cbeebd549fc8c5438d6ea41a3e521fa58e29563c4cae80f491b9bfe2143"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS (behavioral arms verified; full gate still running): fresh empty-PATH real-CLI probe for spec check and spec validate each returned rc=2, stdout_bytes=0, traceback_frames=0, no FileNotFoundError, and byte-identical `spec error (as-of-git-unavailable): the git executable is not available; auger reads repository history and repository roots through git`; agree=true. auger.py:13482 routes _git_toplevel through _spec_git_run; auger.py:13492-13506 translates FileNotFoundError to SpecError; auger.py:12968-12971 renders the typed error and SystemExit(2). docs/VERBS.md:784-787 documents the code for validate/check/bundle (also :673). tests/gate.sh:273 lists tests/test_spec_missing_git.py; fresh `.venv/bin/python -m pytest tests/test_spec_missing_git.py -q -p no:randomly` exited 0 with `3 passed in 0.61s`. Fresh git-present probes: check rc=0 with valid JSON and validate rc=0 `spec: 1 document(s), 2 block(s), 1 reference(s) ok`, both empty stderr/zero frames. Exact configured full command `DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh` was launched fresh in background (pid 3066358, log /tmp/aug170_gate.log, exit file /tmp/aug170_gate.exit) after the foreground tool capped at 30s; awaiting its actual result before final verdict.\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "fd2799ba8a351e7d05b54b1b6d3e6e164529cc656638b3e163d0d7e6523b530e"
+        },
+        {
+          "tool": "run_command",
+          "command": "if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 25 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "67b776ff59065e93090dd208e83213757a0a12d487f4210fc670c35352abc374"
+        },
+        {
+          "tool": "run_command",
+          "command": "ps -o pid,ppid,pgid,stat,etime,cmd -p 3066358 --forest; pgrep -a -P 3066358 || true; wc -c /tmp/aug170_gate.log; cat /tmp/aug170_gate.nohup",
+          "exit_code": 0,
+          "output_sha": "9ff1d6442a92fa09756f9c19dd6d5975a334f0518f36265364a6e919d6621372"
+        },
+        {
+          "tool": "run_command",
+          "command": "rm -f /tmp/aug170_gate.log /tmp/aug170_gate.exit; setsid -f bash -c 'DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh > /tmp/aug170_gate.log 2>&1; echo $? > /tmp/aug170_gate.exit' </dev/null >/tmp/aug170_gate.nohup 2>&1; sleep 2; pgrep -af 'bash tests/gate.sh' || true; tail -n 8 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "a7e5a5c6b01275d865588c194d4b504acedb2fba44687910018f5618df0b8bb0"
+        },
+        {
+          "tool": "read_diff",
+          "command": "read_diff {}",
+          "exit_code": 0,
+          "output_sha": "8ae62fb4e688a3013516311bc74e5230edab115cf88f846dfb117d3c62f4d6a1"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 12 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "cce2c0e916e2842d38696daeccf7e34b0f62f997c797da5a842b56c49d534a9a"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 12 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "c199857f2edb5e8ad2bd049d197377a9263bc063a1ac80f4b6156695fd80166b"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 15 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "9c25b7ce798da169820a83c643e57fb312f2eae1d6d6a8bfbd87e024636247da"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 15 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "26779c47ad71dcf2686d2dc8b2bb258da66359e48029497b434a8e86a5114633"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 15 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "6335af85e4577b8b2d43dbb03201b317f9ab235f9164fc82fc7279a82e7fb45b"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 15 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "01a6501322dae1e2bf909979948d33b3ede65135b5190384aa6d2a7963ac6a79"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 15 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "31c0d44595eb57e3efa2ab4301ce2ac0f8c655a70e2ed4e0dd7029bcb5287d39"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 15 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "5ca252e725a9a3c86dd213bfa7a2b201d1532962ea5d7599726e652ed5eafee7"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 15 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "3426ecf5cea670ea5ed94f7301c66d0645e07cffb6620571180eb2346d9607a0"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 15 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "5ca083d764801ddbd66d4c9fdf48b6d84ff18c98e2029df0d1304f7a3ea6156a"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 15 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "f9bec5488b89b11ff7d585fae12c7e12b2d836ba8c96eaf8f57ad5e33c75f268"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 15 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "71cfa388939680c14735f0a33f911ff50475289cbf52164b5cd543c2c5331c22"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 15 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "c2c1f8323c5d910da9042dfbad9baf179174b84f70f481c0bc9b679e47d7b97f"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 15 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "e7e361d5bc0841452fb6af7041bb88d41749e72f087fba017df209ff5ff54243"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 15 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "0acf9abdd974566e73be453e798829b3cbc43d8fd996ac85d7f6229b96715181"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 15 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "93777d4599a2d71a461fc765d55dfabaa1e4739b77e3290205abf2280f748d44"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 15 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "3ef52f9475f7eadb09844618a25022ed5b2172342e9a0ae35136a0f613da0a6a"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 15 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "426dbd328bada7616dd78a11b20225063069fe1ba7e17df0fd6709fd3e5e861c"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 15 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "fa07309f7fa86362e9c646fc26d47f990886e23b94070c79f359938678d9bfeb"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 15 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "fa90fc7ab131fa0cf41bba9c93d99ac9902045c54484822ed3b36005efb04a90"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 15 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "24211bf49ef4f4763d5aba47d49156303dae214e50b0ae09a49605d2c4b1c285"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 15 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "6574bd41277a8a0eb28a476273fbbc5443ea0705a8c9a9517c9b7da3cf3a6829"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 15 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "f57293a0b60fbbc89640ae8c1549975a3cc6493ebffb6dbb13ec3ff7cdc9922f"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 15 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "4a60aa1fa0b2d7938efc53b4b95c83723a042af032457803a88badb95d27f8f7"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 15 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "e17c88260d4a813e3198e8d5a9472cc48499af0b6e7b95760e00bf98b4b6633e"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then echo \"exit=$(cat /tmp/aug170_gate.exit)\"; else echo 'gate still running'; fi; tail -n 15 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "edf6e7e50b443a7f99a213c66c2091054ae4446a17ed9e6f276be36fe551e6ee"
+        },
+        {
+          "tool": "run_command",
+          "command": "if [ -f /tmp/aug170_gate.exit ]; then printf 'EXIT_FILE='; cat /tmp/aug170_gate.exit; else echo 'EXIT_FILE_MISSING'; fi; if kill -0 3066358 2>/dev/null; then echo 'PROCESS_RUNNING'; else echo 'PROCESS_NOT_RUNNING'; fi; if [ -f /tmp/aug170_gate.log ]; then echo '--- GATE LOG TAIL ---'; tail -n 80 /tmp/aug170_gate.log; else echo 'GATE_LOG_MISSING'; fi",
+          "exit_code": 0,
+          "output_sha": "834b1bb5b5146fcf05f74b0a4019f92f757953f003a4ceadf073591d5e4b2d33"
+        },
+        {
+          "tool": "sandbox_read",
+          "command": "sandbox_read {\"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "50d4b5f39c34a57ad19831ae25951e0856abf2c2d1d4551d3d198178cd0377d5"
+        },
+        {
+          "tool": "sandbox_read",
+          "command": "sandbox_read {\"key\": \"verified_derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "72d4034f3eb2d41cc3c994842e76dfc4164e067e2e0bc2934ce531555345681d"
+        },
+        {
+          "tool": "sandbox_read",
+          "command": "sandbox_read {\"key\": \"verified_derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "df54ced4cca985658f7d80f8640d510acfc164d586621174cf3d0c49a3d0f7c7"
+        },
+        {
+          "tool": "sandbox_read",
+          "command": "sandbox_read {\"key\": \"verified_derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "ccf176bbc6ad0ebec903a481765686cc55bfc6b9f79bd3d8c92ef088cbd7782f"
+        },
+        {
+          "tool": "run_command",
+          "command": "ps -eo pid,ppid,pgid,stat,etime,cmd | grep -E 'tests/gate.sh|aug170_gate|pytest' | grep -v grep || true; ls -l /tmp/aug170_gate* 2>/dev/null || true; stat -c '%y %s %n' /tmp/aug170_gate.log 2>/dev/null || true",
+          "exit_code": 0,
+          "output_sha": "34d77071389655250ac7a86dbee3001b7214033c3132bac1d78c964a27e70599"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then printf 'EXIT_FILE='; cat /tmp/aug170_gate.exit; else echo 'GATE_STILL_RUNNING'; fi; tail -n 35 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "f7cd30f8999ab66c7eb17b0fad7ef1c3127bc34903905358af0934e208a20bf4"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then printf 'EXIT_FILE='; cat /tmp/aug170_gate.exit; else echo 'GATE_STILL_RUNNING'; fi; tail -n 35 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "7eefb7e2a88be10a613ef08f128338e0fb7cd4087c5393e0b01b0c77b74c520f"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then printf 'EXIT_FILE='; cat /tmp/aug170_gate.exit; else echo 'GATE_STILL_RUNNING'; fi; tail -n 45 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "7472b13a2f8e3365f9ea576f1f4a6e27831255372693c41923d3ad1c59239533"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then printf 'EXIT_FILE='; cat /tmp/aug170_gate.exit; else echo 'GATE_STILL_RUNNING'; fi; tail -n 45 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "64e6eec2c03be13805abce3c0a3b3336a5aa516e24a2469f5258be79e895aec0"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then printf 'EXIT_FILE='; cat /tmp/aug170_gate.exit; else echo 'GATE_STILL_RUNNING'; fi; tail -n 50 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "0ba9b057bf749408b47c2231e67ed6c422f15a31823129f7681c2a7ae9ada1ed"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then printf 'EXIT_FILE='; cat /tmp/aug170_gate.exit; else echo 'GATE_STILL_RUNNING'; fi; tail -n 50 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "fdc19cfd765870dad67d79ef6df199a64473ec57a5da3d92a13591a16a52d0bf"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then printf 'EXIT_FILE='; cat /tmp/aug170_gate.exit; else echo 'GATE_STILL_RUNNING'; fi; tail -n 55 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "1477640b7ff7b728281fb888d7e51e80928414839a06ead3d6e52411d9dcab65"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then printf 'EXIT_FILE='; cat /tmp/aug170_gate.exit; else echo 'GATE_STILL_RUNNING'; fi; tail -n 60 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "07abaac4decc6b009bc8ccb531b223d3e568be147020aaa7c01bb08f3486314e"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then printf 'EXIT_FILE='; cat /tmp/aug170_gate.exit; else echo 'GATE_STILL_RUNNING'; fi; tail -n 45 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "c386e182e738658a5dcd36b51bc538c6250a94e85906730b924aaea09ef10cd1"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; if [ -f /tmp/aug170_gate.exit ]; then printf 'EXIT_FILE='; cat /tmp/aug170_gate.exit; else echo 'GATE_STILL_RUNNING'; fi; tail -n 35 /tmp/aug170_gate.log",
+          "exit_code": 0,
+          "output_sha": "a9a5219b5f2ff318c57ae2bb858d523307b8ef7e4dc4be0b7a75ef577602d3cb"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: fresh empty-PATH real-CLI probes for spec check and spec validate each returned rc=2, stdout_bytes=0, traceback_frames=0, no FileNotFoundError, and byte-identical `spec error (as-of-git-unavailable): the git executable is not available; auger reads repository history and repository roots through git`; agree=true. auger.py:13482 routes _git_toplevel through _spec_git_run; auger.py:13492-13506 translates FileNotFoundError to SpecError; auger.py:12968-12971 renders the typed error and SystemExit(2). docs/VERBS.md:784-787 documents the code for validate/check/bundle (also :673). tests/gate.sh:273 lists tests/test_spec_missing_git.py; fresh `.venv/bin/python -m pytest tests/test_spec_missing_git.py -q -p no:randomly` exited 0 with `3 passed in 0.61s`. Fresh git-present probes: check rc=0 with valid JSON and validate rc=0 `spec: 1 document(s), 2 block(s), 1 reference(s) ok`, both empty stderr/zero frames. Exact configured full command `DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh` completed with /tmp/aug170_gate.exit=0; log reports `931 passed, 4 skipped in 998.76s (0:16:38)`, `pytest lock-attributed skips: 0`, `LIVE ARMS: ran 2; skipped 0`, and final `GATE PASS`.\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "9a768b5b16dda2c86af3580b0871bde19a1d33530016f0c11ce4b5b7ef82e084"
+        }
+      ]
+    },
+    "fix_verification": {
+      "id": "fix_verification",
+      "passed": true,
+      "any_failed": false,
+      "summary": "fix_verification: 0 finding(s) verified",
+      "steps": [
+        {
+          "id": "fix_verification",
+          "type": "fix_verification",
+          "passed": true,
+          "output": "fix_verification: 0 finding(s) verified",
+          "error": "",
+          "data": {
+            "dispositions": [],
+            "counts": {}
+          }
+        }
+      ]
+    }
+  },
+  "context_stats": {
+    "diff_source": "working-tree",
+    "diff_bytes": 776022,
+    "prompt_bytes": 267842
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "",
+    "error": "unparseable reviewer reply: no parseable JSON object in reply: ''",
+    "raw_reply": "",
+    "retry": {
+      "count": 1,
+      "raw_reply": ""
+    },
+    "review_state": {
+      "emitted": [],
+      "carried": []
+    }
+  },
+  "summary": "Stage tier1: FAIL\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2717 tests: scanners: nice=nice -n 10\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 A missing git binary reaches the user as a typed 'spec error (as-of-git-unavailable)' refusal with exit 2 and zero traceback frames from spec check AND spec validate; both verbs agree; the code exists in docs/VERBS.md; a regression test test_spec_missing_git is gate-listed; with git present behaviour is unchanged.: Fresh empty-PATH real-CLI probes for both `spec check` and `spec validate` returned rc=2, stdout_bytes=0, traceback_frames=0, no FileNotFoundError, and byte-identical `spec error (as-of-git-unavailable): the git executable is not available; auger reads repository history and repository roots through git`; agree=true. auger.py:13482 routes `_git_toplevel` through `_spec_git_run`; auger.py:13492-13506 translates FileNotFoundError to SpecError; auger.py:12968-12971 renders the typed error and SystemExit(2). docs/VERBS.md:784-787 documents the code for validate/check/bundle (also :673). tests/gate.sh:273 lists tests/test_spec_missing_git.py; fresh `.venv/bin/python -m pytest tests/test_spec_missing_git.py -q -p no:randomly` exited 0 with `3 passed in 0.61s`. Fresh git-present probes returned check rc=0 with valid JSON and validate rc=0 `spec: 1 document(s), 2 block(s), 1 reference(s) ok`, both with empty stderr and zero frames. The exact configured full command `DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh` completed with /tmp/aug170_gate.exit=0; its log reports `931 passed, 4 skipped in 998.76s (0:16:38)`, `pytest lock-attributed skips: 0`, `LIVE ARMS: ran 2; skipped 0`, and final `GATE PASS`.\n  \u2713 Reachability/seam: the real `auger.py spec check` and `spec validate` CLI paths (including an explicit `--repo-root`) must route repository-root git discovery through `_spec_git_run`, and `cmd_spec` must render the resulting SpecError as the typed refusal with SystemExit(2), not a traceback.: auger.py:13482 routes `_git_toplevel` through `_spec_git_run`; auger.py:13492-13506 translates FileNotFoundError to SpecError; auger.py:12968-12971 renders `spec error (...)` and SystemExit(2); validate/check register cmd_spec at auger.py:14501/14575. Fresh empty-PATH probes for both verbs, with and without `--repo-root .`, returned rc=2, stdout_bytes=0, traceback_frames=0 and identical typed stderr.\n  \u2713 Failure-path specificity/back-compat: only a missing git executable is converted to `as-of-git-unavailable`; a present git that returns nonzero for rev-parse must still follow the existing `None`/typed repository-root refusal paths, and git-present spec behavior plus the pre-existing focused spec suites must remain green.: auger.py:13483-13489 preserves nonzero rev-parse -> None. Fresh fake-git exit-1 probes for both verbs returned rc=2 with `invalid-spec-graph: unresolvable-repo-root`, not as-of-git-unavailable, and zero frames. Git-present probes returned check rc=0 with valid JSON and validate rc=0 `1 document(s), 2 block(s), 1 reference(s) ok`; the focused pre-existing spec suites exited 0 with `60 passed in 16.82s`.\n  \u2713 Regression-test teeth: `tests/test_spec_missing_git.py` must execute the real CLI with git genuinely absent and assert the complete contract (exit 2, empty stdout, no traceback/FileNotFoundError, typed code) for both verbs, so the pre-fix raw FileNotFoundError behavior would fail it.: tests/test_spec_missing_git.py:30-40 drives the real auger.py subprocess with PATH set to an empty temp dir; lines 43-60 assert rc=2, empty stdout, no Traceback, no FileNotFoundError and the typed code for both verbs; lines 63-70 assert agreement. Fresh pytest exited 0 with `3 passed in 0.66s`. A parent c9c01a3 control run from the repo root produced rc=1, 10 traceback frames and FileNotFoundError for both verbs, demonstrating that the pre-fix behavior violates the asserted contract.\nAUG-170 is complete: both spec verbs now produce the documented typed missing-git refusal without tracebacks, git-present and nonzero-rev-parse behavior remain intact, the regression tests have teeth, and the fresh full gate passed 931 tests with exit 0.\n\nStage fix_verification: PASS\n  fix_verification: 0 finding(s) verified\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-11-26T18:20:58.158577",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-26T18:20:58.223548+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 15474,
+        "truncated": false,
+        "source": "git show 9dec20532025"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 262176,
+        "truncated": true,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-170"
+  }
+}

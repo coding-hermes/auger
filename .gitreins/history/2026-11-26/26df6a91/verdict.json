@@ -1,0 +1,687 @@
+{
+  "task_id": "AUG-170",
+  "task_title": "typed as-of-git-unavailable refusal when git is absent",
+  "task_criteria": [
+    "A missing git binary reaches the user as a typed 'spec error (as-of-git-unavailable)' refusal with exit 2 and zero traceback frames from spec check AND spec validate; both verbs agree; the code exists in docs/VERBS.md; a regression test test_spec_missing_git is gate-listed; with git present behaviour is unchanged."
+  ],
+  "passed": true,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "9dec20532025d5c2e9405c102183825bfd4b9c7c",
+  "pass_class": "degraded",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "80a539128bf7fb7e60c4896f6ff45564fb9af581d1e9593ae5f9a86ff95d1a0e",
+  "working_tree_dirty_path_count": 1567,
+  "items": [
+    {
+      "criterion": "A missing git binary reaches the user as a typed 'spec error (as-of-git-unavailable)' refusal with exit 2 and zero traceback frames from spec check AND spec validate; both verbs agree; the code exists in docs/VERBS.md; a regression test test_spec_missing_git is gate-listed; with git present behaviour is unchanged.",
+      "status": "PASS",
+      "detail": "Live probe with git hidden (`env PATH=<empty tmpdir> .venv/bin/python auger.py spec check tests/fixtures/xml/verification`): rc=2, stdout 0 bytes, stderr exactly `spec error (as-of-git-unavailable): the git executable is not available; auger reads repository history and repository roots through git`, `grep -c '^  File '` = 0; `spec validate` byte-identical, and both also rc=2/0 frames with `--repo-root .`. Code path: auger.py:13482 `_git_toplevel` routes through `_spec_git_run` (auger.py:13492-13506) which converts FileNotFoundError into SpecError(\"as-of-git-unavailable\"); cmd_spec (auger.py:12968-12971) prints `spec error (<code>)` and raises SystemExit(2). Both verbs agree per tests/test_spec_missing_git.py:63-70 and identical live stderr. docs/VERBS.md:784-787 documents the code for validate/check/bundle (also line 673). tests/gate.sh:273 pytest argv lists tests/test_spec_missing_git.py, which defines test_spec_missing_git_check_refuses_typed (line 43), _validate_refuses_typed (53), _both_verbs_agree (63); `.venv/bin/python -m pytest tests/test_spec_missing_git.py -v` => `3 passed in 0.79s` exit_code 0. Git-present behaviour unchanged: `spec validate tests/fixtures/xml/verification` rc=0 `spec: 1 document(s), 2 block(s), 1 reference(s) ok`; `spec check` rc=0 `{\"nodes\": [\"REQ-MIG-1\", \"TEST-MIG-1\"], \"rollback\": {}, \"status\": \"valid\"}`; `spec validate specs` rc=0. Full gate run by me: `DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh` => `931 passed, 4 skipped in 911.56s (0:15:11)`, `pytest lock-attributed skips: 0`, ending `== docs check ==` / `LIVE ARMS: ran 2; skipped 0` / `GATE PASS`, `grep -cE 'GATE FAIL|failed,'` = 0. Pre-fix falsifier: c9c01a3 auger.py under the same empty PATH yields rc=1 with 10 traceback frames ending `FileNotFoundError: [Errno 2] No such file or directory: 'git'` for both verbs, so the regression test genuinely discriminates."
+    },
+    {
+      "criterion": "Reachability/seam: the missing-git refusal must be raised at the single git-subprocess seam (_spec_git_run) and caught by the cmd_spec SpecError handler so BOTH spec check and spec validate render it, including when --repo-root is passed explicitly (which still calls _git_toplevel).",
+      "status": "PASS",
+      "detail": "auger.py:13482 calls `_spec_git_run([\"git\",\"-C\",...,\"rev-parse\",\"--show-toplevel\"])`; _spec_git_run (auger.py:13492-13506) is the only place FileNotFoundError is translated, and cmd_spec's `except SpecError` (auger.py:12968-12971) renders it with SystemExit(2). The explicit `--repo-root` branch of `_spec_repository_root` also calls `_git_toplevel` (auger.py:13609), and the now-dead `except FileNotFoundError: pass` in `_spec_corpus_as_of` was removed (auger.py:13520-13523). Verified live: `spec check|validate ... --repo-root .` with empty PATH both rc=2, 0 traceback frames, same typed line; additionally `spec bundle`, `spec list specs --as-of HEAD` and `spec check --diff-file /dev/null` (the align path) all refuse rc=2 with 0 frames.",
+      "derived": true
+    },
+    {
+      "criterion": "Back-compat: with git present, spec check/validate output and exit codes are unchanged, and the pre-existing spec suites (as-of, repository-root, validators-agree, obligations, node-list) stay green.",
+      "status": "PASS",
+      "detail": "`.venv/bin/python -m pytest tests/test_spec_as_of.py tests/test_spec_repository_root.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_spec_check_node_list.py -q` => `60 passed in 19.92s` exit_code 0; `tests/test_spec_as_of.py tests/test_spec_missing_git.py` together => `14 passed in 7.52s`. With git present the verbs print their pre-change payloads (`spec: 1 document(s), 2 block(s), 1 reference(s) ok`, rc=0; check JSON `status: valid`, rc=0). The only behavioural delta with git present is the generalized refusal detail string in `_spec_git_run`, which no git-present path reaches. Full gate: `931 passed, 4 skipped` / `GATE PASS`.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "needs_review",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nsecrets: gitleaks bound=timeout 600s (0=off)\nscanners: nice=nice -n 10\nsecrets: gitleaks scope=repo-root /home/kara/auger\nsecrets: gitleaks parallelism=GOMAXPROCS=4\n11:32AM INF scanned ~8739781 bytes (8.74 MB) in 5.74s\n11:32AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 1091 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\ngate pytest interpreter: /home/kara/auger/.venv/bin/python\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\n........................................................................ [  7%]\n........................................................................ [ 15%]\n........................................................................ [ 23%]\n........................................................................ [ 30%]\n..............................................s......................... [ 38%]\n..............................s......................................... [ 46%]\n........................................................................ [ 53%]\n........................................................................ [ 61%]\n........................................................................ [ 69%]\n........................................................................ [ 77%]\n........................................................................ [ 84%]\n........................................................................ [ 92%]\n............ss.........................................................  [100%]\n=========================== short test summary info ============================\nSKIPPED [1] tests/test_auger.py:9240: the 44-domain grid is not on this host: domain grid /mnt/ssd/tmp/pytest-of-kara/pytest-7146/test_answer_confirmation_names0 is not the canonical 44 domains (4.01-4.44): 0 file(s); missing ['4.01', '4.02', '4.03', '4.04', '4.05', '4.06', '4.07', '4.08', '4.09', '4.10', '4.11', '4.12', '4.13', '4.14', '4.15', '4.16', '4.17', '4.18', '4.19', '4.20', '4.21', '4.22', '4.23', '4.24', '4.25', '4.26', '4.27', '4.28', '4.29', '4.30', '4.31', '4.32', '4.33', '4.34', '4.35', '4.36', '4.37', '4.38', '4.39', '4.40', '4.41', '4.42', '4.43', '4.44']; unexpected none; duplicated none\nSKIPPED [1] tests/test_upgrade_path.py:228: end-to-end leg builds 3 venvs (~30s); set AUGER_UPGRADE_VERIFY_LIVE=1 to run scripts/upgrade-verify.sh for real\n\n\u2026 [3369 chars omitted \u2014 58 line(s)] \u2026\nspec: 522 document(s), 7314 block(s), 0 reference(s) ok\n== prd proofs (AUG-137) ==\nprd proofs: 8 total \u00b7 3 required \u00b7 5 deferred \u2192 PASS\n   P1  deferred not-run   not-run (deferred to AUG-119): auger.py carries no board surface (grep -c boardctl auger.py -> 0): resolving a\n   P2  required pass      corpus=9249B bundle=8131B latency=29.6ms  2 generated view(s) verified byte-identical to the generator's output for specs/; one block edit propagated to\n   P3  deferred not-run   not-run (deferred to AUG-153): the checker half is reachable (`auger spec check --diff-file` reports `trace-mi\n   P4  deferred not-run   not-run (deferred to AUG-119): writing and reading back a canonical boardctl row is boardctl's surface, not au\n   P5  required pass      corpus=1084B bundle=435B latency=1366.9ms  one query returned migration=tests/fixtures/xml/verification/migrations/001_add_marker.sql, fixture=tests/fixt\n   P6  deferred not-run   not-run (deferred to AUG-124): what counts as judge evidence \u2014 excluding the worker summary, refusing a PASS w\n   P7  required pass      corpus=9249B bundle=2944B latency=208.5ms  4/12 blocks selected by `applies-to auger.spec.select`; bundle is 31.8% of the corpus (2944 of 9249 bytes), fl\n   P8  deferred not-run   not-run (deferred to AUG-153): the flag and the process-liveness assertion live in the GitReins hook, which no\nprd-proofs: /home/kara/auger/docs/prd/evidence/AUG-137-prd-proofs.json agrees with this run\n== docs check ==\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": true,
+      "any_failed": false,
+      "summary": "COMPLETE\n  \u2713 A missing git binary reaches the user as a typed 'spec error (as-of-git-unavailable)' refusal with exit 2 and zero traceback frames from spec check AND spec validate; both verbs agree; the code exists in docs/VERBS.md; a regression test test_spec_missing_git is gate-listed; with git present behaviour is unchanged.: Live probe with git hidden (`env PATH=<empty tmpdir> .venv/bin/python auger.py spec check tests/fixtures/xml/verification`): rc=2, stdout 0 bytes, stderr exactly `spec error (as-of-git-unavailable): the git executable is not available; auger reads repository history and repository roots through git`, `grep -c '^  File '` = 0; `spec validate` byte-identical, and both also rc=2/0 frames with `--repo-root .`. Code path: auger.py:13482 `_git_toplevel` routes through `_spec_git_run` (auger.py:13492-13506) which converts FileNotFoundError into SpecError(\"as-of-git-unavailable\"); cmd_spec (auger.py:12968-12971) prints `spec error (<code>)` and raises SystemExit(2). Both verbs agree per tests/test_spec_missing_git.py:63-70 and identical live stderr. docs/VERBS.md:784-787 documents the code for validate/check/bundle (also line 673). tests/gate.sh:273 pytest argv lists tests/test_spec_missing_git.py, which defines test_spec_missing_git_check_refuses_typed (line 43), _validate_refuses_typed (53), _both_verbs_agree (63); `.venv/bin/python -m pytest tests/test_spec_missing_git.py -v` => `3 passed in 0.79s` exit_code 0. Git-present behaviour unchanged: `spec validate tests/fixtures/xml/verification` rc=0 `spec: 1 document(s), 2 block(s), 1 reference(s) ok`; `spec check` rc=0 `{\"nodes\": [\"REQ-MIG-1\", \"TEST-MIG-1\"], \"rollback\": {}, \"status\": \"valid\"}`; `spec validate specs` rc=0. Full gate run by me: `DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh` => `931 passed, 4 skipped in 911.56s (0:15:11)`, `pytest lock-attributed skips: 0`, ending `== docs check ==` / `LIVE ARMS: ran 2; skipped 0` / `GATE PASS`, `grep -cE 'GATE FAIL|failed,'` = 0. Pre-fix falsifier: c9c01a3 auger.py under the same empty PATH yields rc=1 with 10 traceback frames ending `FileNotFoundError: [Errno 2] No such file or directory: 'git'` for both verbs, so the regression test genuinely discriminates.\n  \u2713 Reachability/seam: the missing-git refusal must be raised at the single git-subprocess seam (_spec_git_run) and caught by the cmd_spec SpecError handler so BOTH spec check and spec validate render it, including when --repo-root is passed explicitly (which still calls _git_toplevel).: auger.py:13482 calls `_spec_git_run([\"git\",\"-C\",...,\"rev-parse\",\"--show-toplevel\"])`; _spec_git_run (auger.py:13492-13506) is the only place FileNotFoundError is translated, and cmd_spec's `except SpecError` (auger.py:12968-12971) renders it with SystemExit(2). The explicit `--repo-root` branch of `_spec_repository_root` also calls `_git_toplevel` (auger.py:13609), and the now-dead `except FileNotFoundError: pass` in `_spec_corpus_as_of` was removed (auger.py:13520-13523). Verified live: `spec check|validate ... --repo-root .` with empty PATH both rc=2, 0 traceback frames, same typed line; additionally `spec bundle`, `spec list specs --as-of HEAD` and `spec check --diff-file /dev/null` (the align path) all refuse rc=2 with 0 frames.\n  \u2713 Back-compat: with git present, spec check/validate output and exit codes are unchanged, and the pre-existing spec suites (as-of, repository-root, validators-agree, obligations, node-list) stay green.: `.venv/bin/python -m pytest tests/test_spec_as_of.py tests/test_spec_repository_root.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_spec_check_node_list.py -q` => `60 passed in 19.92s` exit_code 0; `tests/test_spec_as_of.py tests/test_spec_missing_git.py` together => `14 passed in 7.52s`. With git present the verbs print their pre-change payloads (`spec: 1 document(s), 2 block(s), 1 reference(s) ok`, rc=0; check JSON `status: valid`, rc=0). The only behavioural delta with git present is the generalized refusal detail string in `_spec_git_run`, which no git-present path reaches. Full gate: `931 passed, 4 skipped` / `GATE PASS`.\nAUG-170 is delivered: `_git_toplevel` now goes through the `_spec_git_run` seam so a missing git binary surfaces as `spec error (as-of-git-unavailable)` with exit 2 and zero traceback frames from both `spec check` and `spec validate` (verified live, including --repo-root, bundle, --as-of and align paths), the code is documented in docs/VERBS.md:784-787, tests/test_spec_missing_git.py is gate-listed at tests/gate.sh:273 and passes 3/3, git-present output is unchanged, and my own full `bash tests/gate.sh` run ended `931 passed, 4 skipped` / `GATE PASS`.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": true,
+          "output": "COMPLETE\n  \u2713 A missing git binary reaches the user as a typed 'spec error (as-of-git-unavailable)' refusal with exit 2 and zero traceback frames from spec check AND spec validate; both verbs agree; the code exists in docs/VERBS.md; a regression test test_spec_missing_git is gate-listed; with git present behaviour is unchanged.: Live probe with git hidden (`env PATH=<empty tmpdir> .venv/bin/python auger.py spec check tests/fixtures/xml/verification`): rc=2, stdout 0 bytes, stderr exactly `spec error (as-of-git-unavailable): the git executable is not available; auger reads repository history and repository roots through git`, `grep -c '^  File '` = 0; `spec validate` byte-identical, and both also rc=2/0 frames with `--repo-root .`. Code path: auger.py:13482 `_git_toplevel` routes through `_spec_git_run` (auger.py:13492-13506) which converts FileNotFoundError into SpecError(\"as-of-git-unavailable\"); cmd_spec (auger.py:12968-12971) prints `spec error (<code>)` and raises SystemExit(2). Both verbs agree per tests/test_spec_missing_git.py:63-70 and identical live stderr. docs/VERBS.md:784-787 documents the code for validate/check/bundle (also line 673). tests/gate.sh:273 pytest argv lists tests/test_spec_missing_git.py, which defines test_spec_missing_git_check_refuses_typed (line 43), _validate_refuses_typed (53), _both_verbs_agree (63); `.venv/bin/python -m pytest tests/test_spec_missing_git.py -v` => `3 passed in 0.79s` exit_code 0. Git-present behaviour unchanged: `spec validate tests/fixtures/xml/verification` rc=0 `spec: 1 document(s), 2 block(s), 1 reference(s) ok`; `spec check` rc=0 `{\"nodes\": [\"REQ-MIG-1\", \"TEST-MIG-1\"], \"rollback\": {}, \"status\": \"valid\"}`; `spec validate specs` rc=0. Full gate run by me: `DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh` => `931 passed, 4 skipped in 911.56s (0:15:11)`, `pytest lock-attributed skips: 0`, ending `== docs check ==` / `LIVE ARMS: ran 2; skipped 0` / `GATE PASS`, `grep -cE 'GATE FAIL|failed,'` = 0. Pre-fix falsifier: c9c01a3 auger.py under the same empty PATH yields rc=1 with 10 traceback frames ending `FileNotFoundError: [Errno 2] No such file or directory: 'git'` for both verbs, so the regression test genuinely discriminates.\n\n\u2026 [1032 chars omitted \u2014 1 line(s)] \u2026\n  \u2713 Back-compat: with git present, spec check/validate output and exit codes are unchanged, and the pre-existing spec suites (as-of, repository-root, validators-agree, obligations, node-list) stay green.: `.venv/bin/python -m pytest tests/test_spec_as_of.py tests/test_spec_repository_root.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_spec_check_node_list.py -q` => `60 passed in 19.92s` exit_code 0; `tests/test_spec_as_of.py tests/test_spec_missing_git.py` together => `14 passed in 7.52s`. With git present the verbs print their pre-change payloads (`spec: 1 document(s), 2 block(s), 1 reference(s) ok`, rc=0; check JSON `status: valid`, rc=0). The only behavioural delta with git present is the generalized refusal detail string in `_spec_git_run`, which no git-present path reaches. Full gate: `931 passed, 4 skipped` / `GATE PASS`.\nAUG-170 is delivered: `_git_toplevel` now goes through the `_spec_git_run` seam so a missing git binary surfaces as `spec error (as-of-git-unavailable)` with exit 2 and zero traceback frames from both `spec check` and `spec validate` (verified live, including --repo-root, bundle, --as-of and align paths), the code is documented in docs/VERBS.md:784-787, tests/test_spec_missing_git.py is gate-listed at tests/gate.sh:273 and passes 3/3, git-present output is unchanged, and my own full `bash tests/gate.sh` run ended `931 passed, 4 skipped` / `GATE PASS`.",
+          "error": "",
+          "data": {
+            "verdict": "COMPLETE",
+            "items": [
+              {
+                "criterion": "A missing git binary reaches the user as a typed 'spec error (as-of-git-unavailable)' refusal with exit 2 and zero traceback frames from spec check AND spec validate; both verbs agree; the code exists in docs/VERBS.md; a regression test test_spec_missing_git is gate-listed; with git present behaviour is unchanged.",
+                "status": "PASS",
+                "detail": "Live probe with git hidden (`env PATH=<empty tmpdir> .venv/bin/python auger.py spec check tests/fixtures/xml/verification`): rc=2, stdout 0 bytes, stderr exactly `spec error (as-of-git-unavailable): the git executable is not available; auger reads repository history and repository roots through git`, `grep -c '^  File '` = 0; `spec validate` byte-identical, and both also rc=2/0 frames with `--repo-root .`. Code path: auger.py:13482 `_git_toplevel` routes through `_spec_git_run` (auger.py:13492-13506) which converts FileNotFoundError into SpecError(\"as-of-git-unavailable\"); cmd_spec (auger.py:12968-12971) prints `spec error (<code>)` and raises SystemExit(2). Both verbs agree per tests/test_spec_missing_git.py:63-70 and identical live stderr. docs/VERBS.md:784-787 documents the code for validate/check/bundle (also line 673). tests/gate.sh:273 pytest argv lists tests/test_spec_missing_git.py, which defines test_spec_missing_git_check_refuses_typed (line 43), _validate_refuses_typed (53), _both_verbs_agree (63); `.venv/bin/python -m pytest tests/test_spec_missing_git.py -v` => `3 passed in 0.79s` exit_code 0. Git-present behaviour unchanged: `spec validate tests/fixtures/xml/verification` rc=0 `spec: 1 document(s), 2 block(s), 1 reference(s) ok`; `spec check` rc=0 `{\"nodes\": [\"REQ-MIG-1\", \"TEST-MIG-1\"], \"rollback\": {}, \"status\": \"valid\"}`; `spec validate specs` rc=0. Full gate run by me: `DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh` => `931 passed, 4 skipped in 911.56s (0:15:11)`, `pytest lock-attributed skips: 0`, ending `== docs check ==` / `LIVE ARMS: ran 2; skipped 0` / `GATE PASS`, `grep -cE 'GATE FAIL|failed,'` = 0. Pre-fix falsifier: c9c01a3 auger.py under the same empty PATH yields rc=1 with 10 traceback frames ending `FileNotFoundError: [Errno 2] No such file or directory: 'git'` for both verbs, so the regression test genuinely discriminates."
+              },
+              {
+                "criterion": "Reachability/seam: the missing-git refusal must be raised at the single git-subprocess seam (_spec_git_run) and caught by the cmd_spec SpecError handler so BOTH spec check and spec validate render it, including when --repo-root is passed explicitly (which still calls _git_toplevel).",
+                "status": "PASS",
+                "detail": "auger.py:13482 calls `_spec_git_run([\"git\",\"-C\",...,\"rev-parse\",\"--show-toplevel\"])`; _spec_git_run (auger.py:13492-13506) is the only place FileNotFoundError is translated, and cmd_spec's `except SpecError` (auger.py:12968-12971) renders it with SystemExit(2). The explicit `--repo-root` branch of `_spec_repository_root` also calls `_git_toplevel` (auger.py:13609), and the now-dead `except FileNotFoundError: pass` in `_spec_corpus_as_of` was removed (auger.py:13520-13523). Verified live: `spec check|validate ... --repo-root .` with empty PATH both rc=2, 0 traceback frames, same typed line; additionally `spec bundle`, `spec list specs --as-of HEAD` and `spec check --diff-file /dev/null` (the align path) all refuse rc=2 with 0 frames.",
+                "derived": true
+              },
+              {
+                "criterion": "Back-compat: with git present, spec check/validate output and exit codes are unchanged, and the pre-existing spec suites (as-of, repository-root, validators-agree, obligations, node-list) stay green.",
+                "status": "PASS",
+                "detail": "`.venv/bin/python -m pytest tests/test_spec_as_of.py tests/test_spec_repository_root.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_spec_check_node_list.py -q` => `60 passed in 19.92s` exit_code 0; `tests/test_spec_as_of.py tests/test_spec_missing_git.py` together => `14 passed in 7.52s`. With git present the verbs print their pre-change payloads (`spec: 1 document(s), 2 block(s), 1 reference(s) ok`, rc=0; check JSON `status: valid`, rc=0). The only behavioural delta with git present is the generalized refusal detail string in `_spec_git_run`, which no git-present path reaches. Full gate: `931 passed, 4 skipped` / `GATE PASS`.",
+                "derived": true
+              }
+            ],
+            "summary": "AUG-170 is delivered: `_git_toplevel` now goes through the `_spec_git_run` seam so a missing git binary surfaces as `spec error (as-of-git-unavailable)` with exit 2 and zero traceback frames from both `spec check` and `spec validate` (verified live, including --repo-root, bundle, --as-of and align paths), the code is documented in docs/VERBS.md:784-787, tests/test_spec_missing_git.py is gate-listed at tests/gate.sh:273 and passes 3/3, git-present output is unchanged, and my own full `bash tests/gate.sh` run ended `931 passed, 4 skipped` / `GATE PASS`.",
+            "provenance": {
+              "model": "neuralwatt/kimi-k3.1-pro",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            },
+            "context_stats": {
+              "diff_source": "working-tree",
+              "diff_bytes": 1952,
+              "prompt_bytes": 17635
+            }
+          }
+        }
+      ],
+      "model": "neuralwatt/kimi-k3.1-pro",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "context_stats": {
+        "diff_source": "working-tree",
+        "diff_bytes": 1952,
+        "prompt_bytes": 17635
+      },
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"AUG-170\"}",
+          "exit_code": 0,
+          "output_sha": "c65886303454853cb2432b2cd6cb0125ece4b4aab1c0fd76718e0668072eaf70"
+        },
+        {
+          "tool": "read_diff",
+          "command": "read_diff {}",
+          "exit_code": 0,
+          "output_sha": "cb5b02cf1df3e20e2f3cad119541b9b233ce4ec90580d80344d7815760cf7a14"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"regex\": \"as-of-git-unavailable\"}",
+          "exit_code": 0,
+          "output_sha": "daf0fa6b62ea30c5a2b2d386a906742e9e059c3eb1e3bf2cb703cdd940b3ad90"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 280, \"offset\": 13340, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "d00c1498765d80fa2965447b2450fa2705f5350b5934294c6ffea0e270afffeb"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"tests/test_spec_missing_git.py\"}",
+          "exit_code": 0,
+          "output_sha": "19997e4bf772f2545b9d8d1a22130f6257acf4f971492b09206db8f55466b1f0"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"regex\": \"test_spec_missing_git\"}",
+          "exit_code": 0,
+          "output_sha": "a26be21892655bf12fc3808e5e8cdbc7415657f9f3f375914ffe2ad5aaf082c7"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 170, \"offset\": 640, \"path\": \"docs/VERBS.md\"}",
+          "exit_code": 0,
+          "output_sha": "8a460c5b0a649cac291e6b9918539ef3abc282d3050d0579f79893081e1cf3e8"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"auger.py\", \"regex\": \"spec error \\\\(\"}",
+          "exit_code": 0,
+          "output_sha": "9d2c8e02cc6066c5270c1b01740a01ddfe38fe1127bed6e0e5a13e269b37aeb5"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"auger.py\", \"regex\": \"_git_toplevel|_spec_git_run\"}",
+          "exit_code": 0,
+          "output_sha": "07e6dffaf92207a0186fcfc473066927223a5e6757066e8d1f0e6c016ae97b2e"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 160, \"offset\": 12830, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "438d2bfc0d5e8b8b821183cc5d85e2b341ca09cd64268436f1f9896147e9e8ab"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 60, \"offset\": 13615, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "e9dbb200a2ede075060cf4fbc08609f99c9185fd60fb2704bb4cfacf38bb51ad"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"auger.py\", \"regex\": \"def _spec_dispatch|spec_cmd ==|def cmd_spec_check|SpecValidationError as exc\"}",
+          "exit_code": 0,
+          "output_sha": "9674834685b996e04ed1b1cd70ca9c424b22cb7f92ad11a5fe81d7b0fc3f1340"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \".gitreins/config.yaml\"}",
+          "exit_code": 0,
+          "output_sha": "60ec05bb6218204f634565349dc8d23b1aec4048dcf3c49af1cdb0a17b2c2355"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 160, \"offset\": 13008, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "209b8ed981499b197e2fd7ceb23d4d9fc543bd280cc9b04917b1d9fff53b267d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && .venv/bin/python -m pytest tests/test_spec_missing_git.py -v -p no:cacheprovider 2>&1 | tail -20",
+          "exit_code": 0,
+          "output_sha": "0791f849c57258b09ad0771e9c52165453110ff1da49ff33083cd03a64254a00"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && EMPTY=$(mktemp -d) && for v in check validate; do echo \"=== $v (no git) ===\"; env PATH=\"$EMPTY\" /home/kara/auger/.venv/bin/python auger.py spec $v tests/fixtures/xml/verification >/tmp/out.$v 2>/tmp/err.$v; echo \"rc=$?\"; echo \"stdout-bytes=$(wc -c </tmp/out.$v)\"; cat /tmp/err.$v; echo \"traceback-frames=$(grep -c '^  File ' /tmp/err.$v)\"; done; echo \"=== with git present ===\"; .venv/bin/python auger.py spec validate tests/fixtures/xml/verification; echo \"validate rc=$?\"; .venv/bin/python auger.py spec check tests/fixtures/xml/verification | head -c 300; echo; echo \"check rc=${PIPESTATUS[0]}\"",
+          "exit_code": 2,
+          "output_sha": "472fb9ef7eb2749232b4cc37d45655939833046ee1185c27bd70c76aad1400b2"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && .venv/bin/python auger.py spec check tests/fixtures/xml/verification >/tmp/chk.out 2>/tmp/chk.err; echo \"check rc=$?\"; cat /tmp/chk.out; cat /tmp/chk.err; .venv/bin/python auger.py spec validate specs; echo \"specs validate rc=$?\"",
+          "exit_code": 0,
+          "output_sha": "4d3106b8a3694587139edb3cb6c1c6ad35e3ca6ed787740aec31c0e91d4eb4f1"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 60, \"offset\": 240, \"path\": \"tests/gate.sh\"}",
+          "exit_code": 0,
+          "output_sha": "cca04332325da7d67760643c38661bbbda555e216f8804bce9a41563d9f27ac4"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git log --oneline -8 && echo \"--- files changed in AUG-170 commit(s) ---\" && git log --oneline --all --grep='AUG-170' -10",
+          "exit_code": 0,
+          "output_sha": "95408113c4ef920c6cfa4d36e36ba8b31b7445e9beb164a1239d97dd641f4b5d"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"auger.py\", \"regex\": \"subprocess\\\\.(run|Popen|check_output|call)\\\\(\\\\[?\\\\s*[\\\\(\\\\[]?\\\\s*[\\\\\\\"']git\"}",
+          "exit_code": 0,
+          "output_sha": "bb6cdc377f35371bfaf9396cf1f5dd9348d615cfa418e9a5e600e5925e4253d0"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show --stat 9dec205 && echo \"=== full diff of code change ===\" && git show 9dec205 -- auger.py",
+          "exit_code": 0,
+          "output_sha": "262aa6370bef0984cfa7e59dd9800c43cb15093085f0d098544f69215d0b3002"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show --stat --format='' 9dec205",
+          "exit_code": 0,
+          "output_sha": "75968c7c0f2f458bcadeab9a0a788dcc09dda244d55066454a515e95305fa5c7"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"auger.py\", \"regex\": \"[\\\"']git[\\\"']\"}",
+          "exit_code": 0,
+          "output_sha": "fdd4c0f36d044b15705231602c57ab9977d632fd5dcbfc569f8a6a5a5b9f0f8e"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 55, \"offset\": 10875, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "d2e482089ab8f35af89169f4e69b48be083ea550d1282553953298a073085656"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 55, \"offset\": 13900, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "8d8b2a4d5ec28a90aee2d665ed32d0594d9ff4c8aac301a78d0a447dd39eadb2"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && EMPTY=$(mktemp -d) && echo \"=== spec check --repo-root . (no git) ===\" && env PATH=\"$EMPTY\" /home/kara/auger/.venv/bin/python auger.py spec check tests/fixtures/xml/verification --repo-root . >/tmp/o1 2>/tmp/e1; echo \"rc=$?\"; echo \"stdout=$(wc -c </tmp/o1)\"; cat /tmp/e1; echo \"frames=$(grep -c '^  File ' /tmp/e1)\"; echo \"=== spec validate --repo-root . (no git) ===\" && env PATH=\"$EMPTY\" /home/kara/auger/.venv/bin/python auger.py spec validate tests/fixtures/xml/verification --repo-root . >/tmp/o2 2>/tmp/e2; echo \"rc=$?\"; echo \"stdout=$(wc -c </tmp/o2)\"; cat /tmp/e2; echo \"frames=$(grep -c '^  File ' /tmp/e2)\"",
+          "exit_code": 0,
+          "output_sha": "d57b878cbb4afd6ed9090c60eac2587c4b5842f3aefddea2161bc0cdaf43bb2f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && .venv/bin/python -m pytest tests/test_spec_as_of.py tests/test_spec_repository_root.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_spec_check_node_list.py -q -p no:cacheprovider 2>&1 | tail -8",
+          "exit_code": 0,
+          "output_sha": "b0227fe6833fe4fc83d449d579f5fa8ed6bbf95824e092b1ba82037b344f7ce3"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && DUCKBRAIN_URL=http://127.0.0.1:3000 timeout 3500 bash tests/gate.sh > /tmp/gate_aug170.log 2>&1; echo \"GATE_EXIT=$?\"; tail -25 /tmp/gate_aug170.log",
+          "exit_code": -15,
+          "output_sha": "f77ccb2bf805a039eeb87ade9719d2de65838b064b50cf1d7481a431f222e9db"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 120; tail -5 /tmp/gate_aug170.log; echo \"---\"; ps aux | grep -c '[g]ate.sh'",
+          "exit_code": -15,
+          "output_sha": "4325c0bf6ec821a7ffd7f0b02bfa079c6e260b0892ef9c51702d9cc9a87036f3"
+        },
+        {
+          "tool": "run_command",
+          "command": "tail -6 /tmp/gate_aug170.log; echo \"---procs---\"; ps aux | grep '[g]ate.sh' | head -3",
+          "exit_code": 0,
+          "output_sha": "4ccd8eb3a04ec00d1ffdd1fc0bf0d59eeeb2d1b72def3e4b4d171147add7d6e2"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Reachability/seam: the missing-git refusal must be raised at the single git-subprocess seam (_spec_git_run) and caught by the cmd_spec SpecError handler so BOTH spec check and spec validate render it, including when --repo-root is passed explicitly (which still calls _git_toplevel).\", \"key\": \"derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "27e2fd19646b98a40130c0aaefa89e95bc1bb0645947afd9348c38a2819a69bf"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Back-compat: with git present, spec check/validate output and exit codes are unchanged, and the pre-existing spec suites (as-of, repository-root, validators-agree, obligations, node-list) stay green.\", \"key\": \"derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "7bfdd26249a5e10ccf3ca5830b44ca274c498b9af5514574a27480d4cf700c94"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: auger.py:13482 `_git_toplevel` now calls `_spec_git_run` (auger.py:13492-13506) which converts FileNotFoundError into SpecError(\\\"as-of-git-unavailable\\\"); cmd_spec (auger.py:12968-12971) prints `spec error (<code>)` and raises SystemExit(2). Live probe with PATH=<empty tmpdir>: `spec check tests/fixtures/xml/verification` rc=2, stdout 0 bytes, stderr exactly `spec error (as-of-git-unavailable): the git executable is not available; auger reads repository history and repository roots through git`, `grep -c '^  File '` = 0; identical for `spec validate`. Same result with `--repo-root .` for both verbs (rc=2, 0 frames) because _spec_repository_root's explicit branch also calls _git_toplevel (auger.py:13609).\", \"key\": \"verified_derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "5e2a1242f93d7b274b2fb6c0288c4c609284c04b429f45aa89926a67b149f6aa"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: with git present, `spec validate tests/fixtures/xml/verification` -> `spec: 1 document(s), 2 block(s), 1 reference(s) ok` rc=0; `spec check ...` -> {\\\"nodes\\\": [\\\"REQ-MIG-1\\\", \\\"TEST-MIG-1\\\"], \\\"rollback\\\": {}, \\\"status\\\": \\\"valid\\\"} rc=0; `spec validate specs` -> `spec: 3 document(s), 12 block(s), 7 reference(s) ok` rc=0. Focused pre-existing suites: `.venv/bin/python -m pytest tests/test_spec_as_of.py tests/test_spec_repository_root.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_spec_check_node_list.py -q` -> `60 passed in 19.92s` exit_code 0.\", \"key\": \"verified_derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "60b236d2dbac97d4d583eb8a1359bfceda1523da8a293a8d15deb45ac4502cee"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 25; tail -c 600 /tmp/gate_aug170.log",
+          "exit_code": 0,
+          "output_sha": "4509ace0800d63c9d02f3315fadd3b890fc7c73e3745bb891c85b46763466ccc"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show 9dec205 -- docs/VERBS.md tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "5f5ebd87afb486cfdb0e1acecb66aa08e64c42be19ee408df2add8dcebcb3c0c"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show 9dec205 --format='' -- docs/VERBS.md tests/gate.sh | head -60",
+          "exit_code": 0,
+          "output_sha": "fa09eebfdb4af460a0498c564d7844e3be240a862ae0ff0cfbd65c1945f8f3dd"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 28; tail -c 400 /tmp/gate_aug170.log",
+          "exit_code": 0,
+          "output_sha": "75065f5d7c5d06f6120c1e791f74e29c44d330364b56eb342e7bea78dd841936"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && EMPTY=$(mktemp -d) && echo \"=== spec bundle (no git) ===\" && env PATH=\"$EMPTY\" .venv/bin/python auger.py spec bundle tests/fixtures/xml/verification REQ-MIG-1 >/tmp/ob 2>/tmp/eb; echo \"rc=$?\"; cat /tmp/eb; echo \"frames=$(grep -c '^  File ' /tmp/eb)\"; echo \"=== spec list --as-of HEAD (no git) ===\" && env PATH=\"$EMPTY\" .venv/bin/python auger.py spec list specs --as-of HEAD >/tmp/ol 2>/tmp/el; echo \"rc=$?\"; cat /tmp/el; echo \"frames=$(grep -c '^  File ' /tmp/el)\"",
+          "exit_code": 0,
+          "output_sha": "744f41b24c708089d2e803766dbabd2a229e834313ca8f9b5e4a7283134ebde4"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && EMPTY=$(mktemp -d) && env PATH=\"$EMPTY\" .venv/bin/python auger.py spec bundle tests/fixtures/xml/verification REQ-MIG-1 >/tmp/bundle_out.txt 2>/tmp/bundle_err.txt; echo \"rc=$?\"; cat /tmp/bundle_err.txt; echo \"frames=$(grep -c '^  File ' /tmp/bundle_err.txt)\"; echo \"stdout=$(wc -c </tmp/bundle_out.txt)\"",
+          "exit_code": 0,
+          "output_sha": "cbb1d40515627c3ee13186e49faf962445bf0c3741dc8aa613d83d00fce7e6a2"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 28; tail -c 300 /tmp/gate_aug170.log",
+          "exit_code": 0,
+          "output_sha": "e327b427695f65a0a94675b1a628398894f1e2e48adb8cb2d1e85d8d88d28a43"
+        },
+        {
+          "tool": "read_lsp_diagnostics",
+          "command": "read_lsp_diagnostics {}",
+          "exit_code": 0,
+          "output_sha": "ef420cbeebd549fc8c5438d6ea41a3e521fa58e29563c4cae80f491b9bfe2143"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 29; tail -c 250 /tmp/gate_aug170.log",
+          "exit_code": 0,
+          "output_sha": "57e0cf48cd6eb55ae4dfcb6ed4ee3ad5681bb78e144e49e2eb81fb1aa4f289c1"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && sed -n '705,725p' corpora/auger-docs/VERBS.xml && echo \"=== generated-view check in gate ===\" && grep -n 'VERBS\\|docs check\\|generated' tests/gate.sh | head -20",
+          "exit_code": 0,
+          "output_sha": "f78ea3617d62c70eb723ef4e350cda27cd71aab9d0e4f459c4311095ffc288dd"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -n 'as-of-git-unavailable' corpora/auger-docs/VERBS.xml; echo \"---\"; sed -n '440,470p' tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "8b8546c9bffaf6c479cec3da300d7fe2d1347f37b0f31d3f299760619e2063d6"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && grep -rn 'VERBS.xml' --include='*.py' --include='*.sh' --include='*.md' . 2>/dev/null | grep -v '^./.git/' | head -15",
+          "exit_code": 0,
+          "output_sha": "4a58b661519794c53b426ddbacaa6ec36d02401db66e431813d73746ea9e2256"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && sed -n '300,335p' tests/test_spec_ingest.py",
+          "exit_code": 0,
+          "output_sha": "86cf3960eb01ac536cb55a72d23d88c2aa33631ed739199fdc87e650e04edeb1"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && .venv/bin/python -m pytest tests/test_spec_ingest.py -q -p no:cacheprovider 2>&1 | tail -12",
+          "exit_code": 0,
+          "output_sha": "63d84fc624befd347860976a4d1572823b8d253f8e429b76e1ff27535809fa9b"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && .venv/bin/python -m pytest tests/test_spec_ingest.py -q -p no:cacheprovider -rs 2>&1 | grep -A4 'short test summary'",
+          "exit_code": 0,
+          "output_sha": "be8fac47826d7fbfcbd187fb0b546e742248603a1de0b96154d70db2c79ac250"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 29; tail -c 250 /tmp/gate_aug170.log",
+          "exit_code": 0,
+          "output_sha": "a2a87bb7e65f847714245722985154717fe7daf29823a6048b2485724947f648"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show 9dec205 --format='' --stat -- evidence 2>/dev/null | head; ls evidence/AUG-170 2>/dev/null || echo \"no evidence/AUG-170 dir\"; echo \"--- gate progress ---\"; grep -c '' /tmp/gate_aug170.log",
+          "exit_code": 0,
+          "output_sha": "fcd0d7c0ead69a548d61dca96c3540b272251c93a0e6d9231eee899640b68b69"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 29; tail -c 200 /tmp/gate_aug170.log; echo; ps aux | grep -c '[g]ate.sh'",
+          "exit_code": 0,
+          "output_sha": "2696b2d6d879d03e621d2ff475d3a52b2ba06565f65c32a07f4ba80112e3d9c9"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 29; tail -c 150 /tmp/gate_aug170.log",
+          "exit_code": 0,
+          "output_sha": "875f4f9c5425508736fc82ec9aaf30b33177af762fb4a89aa8304ac5261dff23"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && git show c9c01a3:auger.py > /tmp/auger_prefix.py && EMPTY=$(mktemp -d) && env PATH=\"$EMPTY\" .venv/bin/python /tmp/auger_prefix.py spec check tests/fixtures/xml/verification >/tmp/pre_out.txt 2>/tmp/pre_err.txt; echo \"prefix rc=$?\"; echo \"traceback-count=$(grep -c 'Traceback (most recent call last)' /tmp/pre_err.txt)\"; echo \"frames=$(grep -c '^  File ' /tmp/pre_err.txt)\"; tail -3 /tmp/pre_err.txt",
+          "exit_code": 0,
+          "output_sha": "d4ec62c72a82e9ceeb667e569929b26c78c35fe2b9ef2035658bdd4c8dc714e1"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && mkdir -p /tmp/prefix_tree && git show c9c01a3:auger.py > /tmp/prefix_tree/auger.py && ln -sfn /home/kara/auger/specs /tmp/prefix_tree/specs && EMPTY=$(mktemp -d) && for v in check validate; do env PATH=\"$EMPTY\" .venv/bin/python /tmp/prefix_tree/auger.py spec $v tests/fixtures/xml/verification >/tmp/pre_$v.out 2>/tmp/pre_$v.err; echo \"prefix $v rc=$? tracebacks=$(grep -c 'Traceback (most recent call last)' /tmp/pre_$v.err) frames=$(grep -c '^  File ' /tmp/pre_$v.err)\"; tail -2 /tmp/pre_$v.err; done",
+          "exit_code": 0,
+          "output_sha": "e92d2f2cc12f2711f44ab103958c38a3b6a69cc3e8cf9a7aa39a89b014233734"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 29; tail -c 150 /tmp/gate_aug170.log",
+          "exit_code": 0,
+          "output_sha": "ffc03014b8bcda75ea19e2efe724016a650cdaeb63f4f78e79c531b3ffa7b2d2"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Pre-fix tree (c9c01a3 auger.py at /tmp/prefix_tree/auger.py with specs symlinked) under PATH=<empty>: `spec check tests/fixtures/xml/verification` rc=1, tracebacks=1, frames=10, ends `FileNotFoundError: [Errno 2] No such file or directory: 'git'`; `spec validate` identical (rc=1, 10 frames). Post-fix HEAD 9dec205: both rc=2, 0 frames, `spec error (as-of-git-unavailable)`. Regression test genuinely discriminates.\", \"key\": \"evidence_prefix_falsifier\"}",
+          "exit_code": 0,
+          "output_sha": "078d65ce8f6a3f94345d8600e2c2f11ad4ab3131a37d3f0d646e99daf29409c5"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 29; tail -c 120 /tmp/gate_aug170.log",
+          "exit_code": 0,
+          "output_sha": "514679974bb58a5907484c28216c093f9711d0fe363cb243cddceccb1b40004c"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 29; tail -c 120 /tmp/gate_aug170.log; echo; uptime",
+          "exit_code": 0,
+          "output_sha": "442229e017e71ef853e911d721b0e36f0284a933c650c3822724674841093d1f"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && .venv/bin/python -m pytest tests/test_spec_missing_git.py tests/test_spec_as_of.py -q -p no:cacheprovider -rs 2>&1 | tail -6; echo \"=== ruff on changed files ===\"; .venv/bin/python -m ruff check auger.py tests/test_spec_missing_git.py 2>&1 | tail -3",
+          "exit_code": 0,
+          "output_sha": "2bdd81c6155aa1b1f70ca4241fc8dccd53fbe06eceb70a2e7342dec7f5d6d9a7"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 29; tail -c 120 /tmp/gate_aug170.log",
+          "exit_code": 0,
+          "output_sha": "40359a8c61bcc64eb48989c85f9a4a0a0735bbb1116ca1bc2ad96b8a701c06c8"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 29; tail -c 100 /tmp/gate_aug170.log; echo \" | $(date +%H:%M:%S)\"",
+          "exit_code": 0,
+          "output_sha": "14909e08d9ec65398bcdce1f8e69f0d623c03d2ffebe12883b0895ce8c9294fe"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 29; tail -c 100 /tmp/gate_aug170.log; echo \" | $(date +%H:%M:%S)\"",
+          "exit_code": 0,
+          "output_sha": "b03967cd9be46961b8b87fcc2cc3df585caa96e80cbb2dc80ffa9fad4526bd6a"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"All sub-clauses verified except full-gate run still in flight:\\n(1) typed refusal + exit 2 + zero traceback frames from BOTH verbs: LIVE PROBE `env PATH=<empty tmpdir> .venv/bin/python auger.py spec check tests/fixtures/xml/verification` -> rc=2, stdout 0 bytes, stderr `spec error (as-of-git-unavailable): the git executable is not available; auger reads repository history and repository roots through git`, `grep -c '^  File '` = 0; `spec validate` byte-identical behaviour. Also with `--repo-root .` both rc=2/0 frames. Code path: auger.py:13482 _git_toplevel -> _spec_git_run (13492-13506) raises SpecError; cmd_spec 12968-12971 prints + SystemExit(2).\\n(2) both verbs agree: tests/test_spec_missing_git.py:63 test_spec_missing_git_both_verbs_agree asserts equal rc and same code; live probe shows identical stderr line for both.\\n(3) code exists in docs/VERBS.md: docs/VERBS.md:784-787 names `as-of-git-unavailable` (AUG-170), `spec error (as-of-git-unavailable)` on stderr and exit 2, never a raw traceback, for validate/check/bundle; also line 673 in the --as-of paragraph.\\n(4) regression test gate-listed: tests/gate.sh:273 pytest arm includes tests/test_spec_missing_git.py; file defines test_spec_missing_git_check_refuses_typed / _validate_refuses_typed / _both_verbs_agree. `.venv/bin/python -m pytest tests/test_spec_missing_git.py -v` -> 3 passed in 0.79s exit_code 0.\\n(5) git-present unchanged: `spec validate tests/fixtures/xml/verification` rc=0 `spec: 1 document(s), 2 block(s), 1 reference(s) ok`; `spec check` rc=0 {\\\"nodes\\\": [\\\"REQ-MIG-1\\\",\\\"TEST-MIG-1\\\"],\\\"rollback\\\": {},\\\"status\\\":\\\"valid\\\"}; `spec validate specs` rc=0. Pre-existing spec suites 60 passed in 19.92s.\\nPre-fix falsifier: c9c01a3 auger.py under same empty PATH gives rc=1 with 10 traceback frames ending FileNotFoundError for both verbs.\", \"key\": \"verified_0_partial\"}",
+          "exit_code": 0,
+          "output_sha": "7e8512851413282961762cc336dd5330ec312c994c72cec3132d11445c525131"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 29; tail -c 80 /tmp/gate_aug170.log; echo \" | $(date +%H:%M:%S)\"",
+          "exit_code": 0,
+          "output_sha": "58ea837c6a89e80dcef1ae13afe6618bbf6e6861e50597424274801c61b8452f"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 29; tail -c 80 /tmp/gate_aug170.log; echo \" | $(date +%H:%M:%S)\"",
+          "exit_code": 0,
+          "output_sha": "022d0b2a6cb3405652d9123d187ba4bc8907c4c75a1fefc93b63011b796c8642"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 29; tail -c 60 /tmp/gate_aug170.log; echo \" | $(date +%H:%M:%S)\"; grep -c 'FAILED\\|ERROR' /tmp/gate_aug170.log",
+          "exit_code": 1,
+          "output_sha": "df980786c5034813f295afcee82a3d082b086fd58bce08120a3b7a5a56ed1c50"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 29; tail -c 60 /tmp/gate_aug170.log; echo \" | $(date +%H:%M:%S)\"",
+          "exit_code": 0,
+          "output_sha": "67e28e9836cad8f47c581a45fcaf54d5a3acfb15c939030afcd7c769a523cc67"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 29; tail -c 60 /tmp/gate_aug170.log; echo \" | $(date +%H:%M:%S)\"",
+          "exit_code": 0,
+          "output_sha": "b50c3c23ca276e902946b32bd507bf590178563c303db53c1d76eed73592c131"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 29; tail -c 60 /tmp/gate_aug170.log; echo \" | $(date +%H:%M:%S)\"",
+          "exit_code": 0,
+          "output_sha": "5b6a82c43cba946aa41e61f116f8ad238c9edf5d7d4b51662fff797d350b1aa2"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 29; tail -c 200 /tmp/gate_aug170.log; echo \" | $(date +%H:%M:%S)\"",
+          "exit_code": 0,
+          "output_sha": "1663e9f546b5c5f32fb8d37c0e99f98e5182fe46766c03f1f5b90bc2e4144c47"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 29; tail -20 /tmp/gate_aug170.log; echo \" | $(date +%H:%M:%S)\"",
+          "exit_code": 0,
+          "output_sha": "f9c6721f54953c18324215215a45557cb59b5102300e17ce429dbe842804a6d6"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 29; tail -12 /tmp/gate_aug170.log; echo \" | $(date +%H:%M:%S)\"",
+          "exit_code": 0,
+          "output_sha": "f6023751e4dce494b8e588e3ad0f189b92fbcde833b49041ec9acd975b3b49c6"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 29; tail -8 /tmp/gate_aug170.log; echo \" | $(date +%H:%M:%S)\"",
+          "exit_code": 0,
+          "output_sha": "b79e44ef686ffbfe945b736c95b14b9034af0b85e89a9f55c20535d847681c3c"
+        },
+        {
+          "tool": "run_command",
+          "command": "sleep 29; tail -6 /tmp/gate_aug170.log; echo \" | $(date +%H:%M:%S)\"",
+          "exit_code": 0,
+          "output_sha": "8c05835e105a8309667de4b09150fee3e1efa40ec6efd6c70e84deda5eb5c958"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && ps aux | grep -c '[g]ate.sh'; echo \"--- gate tail ---\"; tail -3 /tmp/gate_aug170.log; echo \"--- pytest count line ---\"; grep -E '^[0-9]+ passed' /tmp/gate_aug170.log; echo \"--- confirm new test file is in the gate's pytest argv ---\"; grep -o 'tests/test_spec_missing_git.py' tests/gate.sh",
+          "exit_code": 0,
+          "output_sha": "245f26ad2bb6d779084dfbdfc16752e172e2a6fcd66a02dea91c2e0ea87e7bd6"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && .venv/bin/python -m pytest tests/test_spec_missing_git.py --collect-only -q -p no:cacheprovider 2>&1 | tail -6; echo \"=== gate log: any failure? ===\"; grep -cE 'GATE FAIL|failed,' /tmp/gate_aug170.log",
+          "exit_code": 1,
+          "output_sha": "d7c0d482cbe80f5d2864a03a6224060a052434fd4caa6b9156a3833ebd762154"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS (all five sub-clauses, each with command output):\\n(1) typed refusal + exit 2 + zero traceback frames from BOTH verbs \\u2014 live probe `env PATH=<empty tmpdir> .venv/bin/python auger.py spec check tests/fixtures/xml/verification` => rc=2, stdout 0 bytes, stderr `spec error (as-of-git-unavailable): the git executable is not available; auger reads repository history and repository roots through git`, `grep -c '^  File '` = 0; `spec validate` identical. Also rc=2/0 frames with `--repo-root .` for both. Code: auger.py:13482 `_git_toplevel` -> `_spec_git_run` (auger.py:13492-13506) turns FileNotFoundError into SpecError(\\\"as-of-git-unavailable\\\"); cmd_spec auger.py:12968-12971 prints `spec error (<code>)` + SystemExit(2).\\n(2) both verbs agree \\u2014 tests/test_spec_missing_git.py:63-70 asserts equal rc and same code; live stderr line is byte-identical for check and validate.\\n(3) code exists in docs/VERBS.md \\u2014 docs/VERBS.md:784-787 (\\\"a host without a `git` binary refuses `as-of-git-unavailable` (AUG-170) ... `spec error (as-of-git-unavailable)` on stderr and exit 2, never a raw traceback ... (`validate`, `check`, `bundle`)\\\"); also line 673.\\n(4) regression test gate-listed \\u2014 tests/gate.sh:273 pytest argv contains tests/test_spec_missing_git.py; the file defines test_spec_missing_git_check_refuses_typed (line 43), _validate_refuses_typed (53), _both_verbs_agree (63). `.venv/bin/python -m pytest tests/test_spec_missing_git.py -v` => `3 passed in 0.79s` exit_code 0.\\n(5) git-present behaviour unchanged \\u2014 `spec validate tests/fixtures/xml/verification` rc=0 `spec: 1 document(s), 2 block(s), 1 reference(s) ok`; `spec check` rc=0 `{\\\"nodes\\\": [\\\"REQ-MIG-1\\\", \\\"TEST-MIG-1\\\"], \\\"rollback\\\": {}, \\\"status\\\": \\\"valid\\\"}`; `spec validate specs` rc=0 `spec: 3 document(s), 12 block(s), 7 reference(s) ok`.\\nFULL GATE RUN BY ME: `DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh` (log /tmp/gate_aug170.log) => `931 passed, 4 skipped in 911.56s (0:15:11)`, `pytest lock-attributed skips: 0`, final lines `== docs check ==` / `LIVE ARMS: ran 2; skipped 0` / `GATE PASS`; `grep -cE 'GATE FAIL|failed,'` = 0.\\nPre-fix falsifier: c9c01a3 auger.py under the same empty PATH gives rc=1 with 10 traceback frames ending `FileNotFoundError: [Errno 2] No such file or directory: 'git'` for both verbs, so the new test genuinely discriminates.\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "e4078ecc5d22932e3876fe0a93d45fbc0b83d1ed22d82fdfc724dcb4d703322d"
+        },
+        {
+          "tool": "run_command",
+          "command": "cd /home/kara/auger && EMPTY=$(mktemp -d) && env PATH=\"$EMPTY\" .venv/bin/python auger.py spec check tests/fixtures/xml/verification --diff-file /dev/null >/tmp/al_out.txt 2>/tmp/al_err.txt; echo \"align-via-check rc=$?\"; cat /tmp/al_err.txt | head -5; echo \"frames=$(grep -c '^  File ' /tmp/al_err.txt)\"",
+          "exit_code": 0,
+          "output_sha": "14f79b364c2796a01bd1d8a58506327e6e66d42e207f14e3edaec2fc0606fa7e"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Extra probes: `spec bundle` (no git) rc=2 typed refusal 0 frames; `spec list specs --as-of HEAD` (no git) rc=2 typed refusal 0 frames; `spec check --diff-file /dev/null` (align path, no git) rc=2 typed refusal 0 frames. LSP diagnostics: 0. Non-blocking observation: corpora/auger-docs/VERBS.xml was not regenerated after the docs/VERBS.md edit, so tests/test_spec_ingest.py:368 reports a TYPED SKIP \\\"auger-docs: upstream source drift past the manifest's recorded revision (corpus bound to 8059814, live tree at 9dec205)\\\" \\u2014 the repo's own designed drift classification, not a failure; gate still GATE PASS with 931 passed, 4 skipped. Not part of AUG-170's criteria.\", \"key\": \"final_note\"}",
+          "exit_code": 0,
+          "output_sha": "065b96e879da2efa02bb789e7b87cff62ad7eadd47684c35dde7a0b2c2035fb6"
+        }
+      ]
+    },
+    "fix_verification": {
+      "id": "fix_verification",
+      "passed": true,
+      "any_failed": false,
+      "summary": "fix_verification: 0 finding(s) verified",
+      "steps": [
+        {
+          "id": "fix_verification",
+          "type": "fix_verification",
+          "passed": true,
+          "output": "fix_verification: 0 finding(s) verified",
+          "error": "",
+          "data": {
+            "dispositions": [],
+            "counts": {}
+          }
+        }
+      ]
+    }
+  },
+  "context_stats": {
+    "diff_source": "working-tree",
+    "diff_bytes": 1952,
+    "prompt_bytes": 17635
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [],
+    "summary": "",
+    "error": "unparseable reviewer reply: no parseable JSON object in reply: ''",
+    "raw_reply": "",
+    "retry": {
+      "count": 1,
+      "raw_reply": ""
+    },
+    "review_state": {
+      "emitted": [],
+      "carried": []
+    }
+  },
+  "summary": "Stage tier1: PASS\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10\n\nStage tier2: PASS\n  COMPLETE\n  \u2713 A missing git binary reaches the user as a typed 'spec error (as-of-git-unavailable)' refusal with exit 2 and zero traceback frames from spec check AND spec validate; both verbs agree; the code exists in docs/VERBS.md; a regression test test_spec_missing_git is gate-listed; with git present behaviour is unchanged.: Live probe with git hidden (`env PATH=<empty tmpdir> .venv/bin/python auger.py spec check tests/fixtures/xml/verification`): rc=2, stdout 0 bytes, stderr exactly `spec error (as-of-git-unavailable): the git executable is not available; auger reads repository history and repository roots through git`, `grep -c '^  File '` = 0; `spec validate` byte-identical, and both also rc=2/0 frames with `--repo-root .`. Code path: auger.py:13482 `_git_toplevel` routes through `_spec_git_run` (auger.py:13492-13506) which converts FileNotFoundError into SpecError(\"as-of-git-unavailable\"); cmd_spec (auger.py:12968-12971) prints `spec error (<code>)` and raises SystemExit(2). Both verbs agree per tests/test_spec_missing_git.py:63-70 and identical live stderr. docs/VERBS.md:784-787 documents the code for validate/check/bundle (also line 673). tests/gate.sh:273 pytest argv lists tests/test_spec_missing_git.py, which defines test_spec_missing_git_check_refuses_typed (line 43), _validate_refuses_typed (53), _both_verbs_agree (63); `.venv/bin/python -m pytest tests/test_spec_missing_git.py -v` => `3 passed in 0.79s` exit_code 0. Git-present behaviour unchanged: `spec validate tests/fixtures/xml/verification` rc=0 `spec: 1 document(s), 2 block(s), 1 reference(s) ok`; `spec check` rc=0 `{\"nodes\": [\"REQ-MIG-1\", \"TEST-MIG-1\"], \"rollback\": {}, \"status\": \"valid\"}`; `spec validate specs` rc=0. Full gate run by me: `DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh` => `931 passed, 4 skipped in 911.56s (0:15:11)`, `pytest lock-attributed skips: 0`, ending `== docs check ==` / `LIVE ARMS: ran 2; skipped 0` / `GATE PASS`, `grep -cE 'GATE FAIL|failed,'` = 0. Pre-fix falsifier: c9c01a3 auger.py under the same empty PATH yields rc=1 with 10 traceback frames ending `FileNotFoundError: [Errno 2] No such file or directory: 'git'` for both verbs, so the regression test genuinely discriminates.\n  \u2713 Reachability/seam: the missing-git refusal must be raised at the single git-subprocess seam (_spec_git_run) and caught by the cmd_spec SpecError handler so BOTH spec check and spec validate render it, including when --repo-root is passed explicitly (which still calls _git_toplevel).: auger.py:13482 calls `_spec_git_run([\"git\",\"-C\",...,\"rev-parse\",\"--show-toplevel\"])`; _spec_git_run (auger.py:13492-13506) is the only place FileNotFoundError is translated, and cmd_spec's `except SpecError` (auger.py:12968-12971) renders it with SystemExit(2). The explicit `--repo-root` branch of `_spec_repository_root` also calls `_git_toplevel` (auger.py:13609), and the now-dead `except FileNotFoundError: pass` in `_spec_corpus_as_of` was removed (auger.py:13520-13523). Verified live: `spec check|validate ... --repo-root .` with empty PATH both rc=2, 0 traceback frames, same typed line; additionally `spec bundle`, `spec list specs --as-of HEAD` and `spec check --diff-file /dev/null` (the align path) all refuse rc=2 with 0 frames.\n  \u2713 Back-compat: with git present, spec check/validate output and exit codes are unchanged, and the pre-existing spec suites (as-of, repository-root, validators-agree, obligations, node-list) stay green.: `.venv/bin/python -m pytest tests/test_spec_as_of.py tests/test_spec_repository_root.py tests/test_spec_validators_agree.py tests/test_spec_validate_obligations.py tests/test_spec_check_node_list.py -q` => `60 passed in 19.92s` exit_code 0; `tests/test_spec_as_of.py tests/test_spec_missing_git.py` together => `14 passed in 7.52s`. With git present the verbs print their pre-change payloads (`spec: 1 document(s), 2 block(s), 1 reference(s) ok`, rc=0; check JSON `status: valid`, rc=0). The only behavioural delta with git present is the generalized refusal detail string in `_spec_git_run`, which no git-present path reaches. Full gate: `931 passed, 4 skipped` / `GATE PASS`.\nAUG-170 is delivered: `_git_toplevel` now goes through the `_spec_git_run` seam so a missing git binary surfaces as `spec error (as-of-git-unavailable)` with exit 2 and zero traceback frames from both `spec check` and `spec validate` (verified live, including --repo-root, bundle, --as-of and align paths), the code is documented in docs/VERBS.md:784-787, tests/test_spec_missing_git.py is gate-listed at tests/gate.sh:273 and passes 3/3, git-present output is unchanged, and my own full `bash tests/gate.sh` run ended `931 passed, 4 skipped` / `GATE PASS`.\n\nStage fix_verification: PASS\n  fix_verification: 0 finding(s) verified\n\nOverall: PASS \u2713",
+  "evaluated_at": "2026-11-26T17:15:09.386760",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-26T17:15:09.475654+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 15474,
+        "truncated": false,
+        "source": "git show 9dec20532025"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 81726,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "AUG-170"
+  }
+}

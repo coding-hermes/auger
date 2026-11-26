@@ -1,0 +1,532 @@
+{
+  "task_id": "REVIEW-AUGER-009",
+  "task_title": "Client hangup mid-response: no phantom 5xx or traceback in server log",
+  "task_criteria": [
+    "A client that hangs up mid-response never yields a phantom 5xx line or a traceback: handler catches the closed-socket write and returns silently; live probe log contains zero Traceback lines"
+  ],
+  "passed": false,
+  "worktree": "/home/kara/auger",
+  "branch": "main",
+  "commit": "c9c01a3fee79cd0320742d374eade46dd092c893",
+  "pass_class": "judged",
+  "tier2_skipped": false,
+  "working_tree_content_fingerprint": "8e60baae8c5ca2e440c87de0fcae9b920570d0d970c66cfa68fbcd834cdb0ed0",
+  "working_tree_dirty_path_count": 1563,
+  "items": [
+    {
+      "criterion": "A client that hangs up mid-response never yields a phantom 5xx line or a traceback: handler catches the closed-socket write and returns silently; live probe log contains zero Traceback lines",
+      "status": "FAIL",
+      "detail": "Fresh real-socket probes reproduced a phantom 5xx on BOTH HTTP surfaces. On APIServer, the client sent GET /api/ns/demo/status, aborted with SO_LINGER 0/TCP RST while namespace_status was blocked, and the route then raised RuntimeError; server stderr contained `127.0.0.1 \"GET /api/ns/demo/status HTTP/1.1\" 502 -`, with counts `Traceback=0`, `phantom_5xx=1`. On EmbeddingsHTTPServer, the equivalent embeddings/search probe raised SubstrateError after the RST and logged `127.0.0.1 [26/Nov/2026 11:21:06] \"GET /api/ns/demo/embeddings/search?q=x HTTP/1.1\" 502 -`, again `Traceback=0`, `phantom_5xx=1`. APIHandler catches hangups only around `_route()` (auger.py:7634-7642), then its generic fallback calls `_send(502, ...)` at auger.py:7648-7652; `_send` logs through send_response and writes at auger.py:7622-7632 outside that try. EmbeddingsHTTPHandler has the same gap: its SubstrateError fallback is outside the hangup-catching try at auger.py:1918-1922, and `_send_json` calls send_response before its OSError guard at auger.py:2005-2018. POST has the same fallback structure at auger.py:7852-7862. Fresh `python3 -m pytest -q tests/test_api_service.py` exited 0 with `11 passed in 4.55s`, but those tests do not cover this error-after-hangup path."
+    },
+    {
+      "criterion": "Reachability and complete hangup coverage: both public HTTP server entrypoints (`auger api` via APIServer/APIHandler and `auger serve` via EmbeddingsHTTPServer/EmbeddingsHTTPHandler) must use the closed-socket handling, including errors raised by the server's post-handler flush/keep-alive processing, while unrelated handler errors still use the normal loud error path.",
+      "status": "FAIL",
+      "detail": "The entrypoints are wired: `cmd_serve` constructs EmbeddingsHTTPServer at auger.py:7187-7197, `serve` constructs APIServer at auger.py:7869-7873, CLI registration is at auger.py:14345-14368, and both server classes mix in _QuietPeerHangupServer at auger.py:2041 and auger.py:7865. Complete hangup coverage nevertheless fails: fresh live RST probes followed by route errors produced one phantom 502 on each surface. The fallback sends are outside the hangup-catching try at auger.py:1918-1922 and auger.py:7648-7652, so the closed-socket handling is not applied to the response actually attempted after the disconnect.",
+      "derived": true
+    },
+    {
+      "criterion": "The regression coverage must exercise a real TCP client abort after the route has started responding (not merely unit-test a mocked write), assert both no phantom 5xx access-log line and no traceback, and pass when run fresh.",
+      "status": "PASS",
+      "detail": "tests/test_api_service.py:286-296 creates a real socket, sends the request, waits until the server enters the route, and closes with SO_LINGER 0 to force an RST; the two server-surface tests use it at lines 306-328 and 331-366. `_assert_no_phantom_5xx_no_traceback` checks both Traceback and 500/502/503 at lines 300-303. Fresh `python3 -m pytest -q tests/test_api_service.py` exited 0 with `11 passed in 4.55s`. The success-only route stubs leave the separately reproduced error-after-hangup defect uncovered, as recorded in the given criterion and failure_modes.",
+      "derived": true
+    },
+    {
+      "criterion": "No over-silencing: the server-level hangup filter must suppress only BrokenPipeError/ConnectionResetError and delegate unrelated exceptions to socketserver's normal error handling, so genuine server failures remain visible.",
+      "status": "PASS",
+      "detail": "_QuietPeerHangupServer.handle_error at auger.py:2035-2038 returns only when `sys.exc_info()[1]` is BrokenPipeError or ConnectionResetError; every other exception is delegated to `super().handle_error`, preserving socketserver's normal loud error path. The reproduced RuntimeError/SubstrateError cases were intentionally converted into fallback responses by the handlers rather than swallowed by this filter.",
+      "derived": true
+    }
+  ],
+  "merge_recommendation": "changes_required",
+  "stages": {
+    "tier1": {
+      "id": "tier1",
+      "passed": true,
+      "any_failed": false,
+      "summary": "  \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10",
+      "steps": [
+        {
+          "id": "lint",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        },
+        {
+          "id": "secrets",
+          "type": "script",
+          "passed": true,
+          "output": "secrets: scanners=gitleaks+builtin cross-check\nsecrets: gitleaks bound=timeout 600s (0=off)\nscanners: nice=nice -n 10\nsecrets: gitleaks scope=repo-root /home/kara/auger\nsecrets: gitleaks parallelism=GOMAXPROCS=4\n11:13AM INF scanned ~8732102 bytes (8.73 MB) in 2.9s\n11:13AM INF no leaks found\nsecrets: gitleaks: clean\nsecrets: builtin cross-check: Scanned 1090 files \u2014 clean (excluded harness state: .gitreins/**)\nsecrets: builtin cross-check status: clean\n",
+          "error": "",
+          "data": {
+            "exit_code": 0,
+            "secrets_scanners": [
+              "gitleaks",
+              "builtin"
+            ]
+          }
+        },
+        {
+          "id": "tests",
+          "type": "script",
+          "passed": true,
+          "output": "scanners: nice=nice -n 10\ngate pytest interpreter: /home/kara/auger/.venv/bin/python\n== gate mode: FULL gate ==\n== syntax ==\n== lint ==\nAll checks passed!\n== pytest ==\nAUGER_BLOCKED_BY: full-fleet sync push pid 4161498; live arms will be skipped\nsss........ssssss..sssssssssssssssssssssssssssssssssssssssssssssssssssss [  7%]\nsssssssssssss.sss.....................................ssssssss.......... [ 15%]\n......s....sss............ssssssssssssssssssssssssss.......sssssssss..ss [ 23%]\ns........s...ssss...............ss.s.s.ssssss.ssssssssssssssssss...sssss [ 30%]\nsssss......sssssssssssssss.ssssssssssssssssssssss...........ss....s..... [ 38%]\n..............................s......................................... [ 46%]\n........................................................................ [ 54%]\n................ss...................................................... [ 61%]\n........................................................................ [ 69%]\n........................................................................ [ 77%]\n........................................................................ [ 84%]\n........................................................................ [ 92%]\n.........s..........................................................     [100%]\n=========================== short test summary info ============================\nSKIPPED [197] tests/test_auger.py: AUGER_BLOCKED_BY: full-fleet sync push pid 4161498; live arm skipped\nSKIPPED [4] tests/test_auger.py:850: AUGER_BLOCKED_BY: full-fleet sync push pid 4161498; live arm skipped\nSKIPPED [2] tests/test_auger.py:890: AUGER_BLOCKED_BY: full-fleet sync push pid 4161498; live arm skipped\nSKIPPED [1] tests/test_auger.py:2247: AUGER_BLOCKED_BY: full-fleet sync push pid 4161498; live arm skipped\nSKIPPED [1] tests/test_auger.py:2269: AUGER_BLOCKED_BY: full-fleet sync push pid 4161498; live arm skipped\nSKIPPED [3] tests/test_auger.py:5830: AUGER_BLOCKED_BY: full-fleet sync push pid 4161498; live arm skipped\nSKIPPED [1] tests/test_auger.py:8695: AUGER_BLOCKED_BY: full-fleet sync push pid 4161498; live arm skipped\nSKIPPED [1] tests/test_auger.py:9177: AUGER_BLOCKED_BY: full-fleet sync push pid 4161498; live arm skipped\nSKIPPED [1] tests/conftest.py:955: AUGER_BLOCKED_BY: full-fleet sync push pid 4161498; live arm skipped\n\n\u2026 [3161 chars omitted \u2014 59 line(s)] \u2026\nspec: 522 document(s), 7314 block(s), 0 reference(s) ok\n== prd proofs (AUG-137) ==\nprd proofs: 8 total \u00b7 3 required \u00b7 5 deferred \u2192 PASS\n   P1  deferred not-run   not-run (deferred to AUG-119): auger.py carries no board surface (grep -c boardctl auger.py -> 0): resolving a\n   P2  required pass      corpus=9249B bundle=8131B latency=24.3ms  2 generated view(s) verified byte-identical to the generator's output for specs/; one block edit propagated to\n   P3  deferred not-run   not-run (deferred to AUG-153): the checker half is reachable (`auger spec check --diff-file` reports `trace-mi\n   P4  deferred not-run   not-run (deferred to AUG-119): writing and reading back a canonical boardctl row is boardctl's surface, not au\n   P5  required pass      corpus=1084B bundle=435B latency=1025.8ms  one query returned migration=tests/fixtures/xml/verification/migrations/001_add_marker.sql, fixture=tests/fixt\n   P6  deferred not-run   not-run (deferred to AUG-124): what counts as judge evidence \u2014 excluding the worker summary, refusing a PASS w\n   P7  required pass      corpus=9249B bundle=2944B latency=176.8ms  4/12 blocks selected by `applies-to auger.spec.select`; bundle is 31.8% of the corpus (2944 of 9249 bytes), fl\n   P8  deferred not-run   not-run (deferred to AUG-153): the flag and the process-liveness assertion live in the GitReins hook, which no\nprd-proofs: /home/kara/auger/docs/prd/evidence/AUG-137-prd-proofs.json agrees with this run\n== docs check ==\nLIVE ARMS: ran 2; skipped 0\nGATE PASS\n",
+          "error": "",
+          "data": {
+            "exit_code": 0
+          }
+        }
+      ],
+      "coverage": "secrets+lint+tests"
+    },
+    "tier2": {
+      "id": "tier2",
+      "passed": false,
+      "any_failed": true,
+      "summary": "INCOMPLETE\n  \u2717 A client that hangs up mid-response never yields a phantom 5xx line or a traceback: handler catches the closed-socket write and returns silently; live probe log contains zero Traceback lines: Fresh real-socket probes reproduced a phantom 5xx on BOTH HTTP surfaces. On APIServer, the client sent GET /api/ns/demo/status, aborted with SO_LINGER 0/TCP RST while namespace_status was blocked, and the route then raised RuntimeError; server stderr contained `127.0.0.1 \"GET /api/ns/demo/status HTTP/1.1\" 502 -`, with counts `Traceback=0`, `phantom_5xx=1`. On EmbeddingsHTTPServer, the equivalent embeddings/search probe raised SubstrateError after the RST and logged `127.0.0.1 [26/Nov/2026 11:21:06] \"GET /api/ns/demo/embeddings/search?q=x HTTP/1.1\" 502 -`, again `Traceback=0`, `phantom_5xx=1`. APIHandler catches hangups only around `_route()` (auger.py:7634-7642), then its generic fallback calls `_send(502, ...)` at auger.py:7648-7652; `_send` logs through send_response and writes at auger.py:7622-7632 outside that try. EmbeddingsHTTPHandler has the same gap: its SubstrateError fallback is outside the hangup-catching try at auger.py:1918-1922, and `_send_json` calls send_response before its OSError guard at auger.py:2005-2018. POST has the same fallback structure at auger.py:7852-7862. Fresh `python3 -m pytest -q tests/test_api_service.py` exited 0 with `11 passed in 4.55s`, but those tests do not cover this error-after-hangup path.\n  \u2717 Reachability and complete hangup coverage: both public HTTP server entrypoints (`auger api` via APIServer/APIHandler and `auger serve` via EmbeddingsHTTPServer/EmbeddingsHTTPHandler) must use the closed-socket handling, including errors raised by the server's post-handler flush/keep-alive processing, while unrelated handler errors still use the normal loud error path.: The entrypoints are wired: `cmd_serve` constructs EmbeddingsHTTPServer at auger.py:7187-7197, `serve` constructs APIServer at auger.py:7869-7873, CLI registration is at auger.py:14345-14368, and both server classes mix in _QuietPeerHangupServer at auger.py:2041 and auger.py:7865. Complete hangup coverage nevertheless fails: fresh live RST probes followed by route errors produced one phantom 502 on each surface. The fallback sends are outside the hangup-catching try at auger.py:1918-1922 and auger.py:7648-7652, so the closed-socket handling is not applied to the response actually attempted after the disconnect.\n  \u2713 The regression coverage must exercise a real TCP client abort after the route has started responding (not merely unit-test a mocked write), assert both no phantom 5xx access-log line and no traceback, and pass when run fresh.: tests/test_api_service.py:286-296 creates a real socket, sends the request, waits until the server enters the route, and closes with SO_LINGER 0 to force an RST; the two server-surface tests use it at lines 306-328 and 331-366. `_assert_no_phantom_5xx_no_traceback` checks both Traceback and 500/502/503 at lines 300-303. Fresh `python3 -m pytest -q tests/test_api_service.py` exited 0 with `11 passed in 4.55s`. The success-only route stubs leave the separately reproduced error-after-hangup defect uncovered, as recorded in the given criterion and failure_modes.\n  \u2713 No over-silencing: the server-level hangup filter must suppress only BrokenPipeError/ConnectionResetError and delegate unrelated exceptions to socketserver's normal error handling, so genuine server failures remain visible.: _QuietPeerHangupServer.handle_error at auger.py:2035-2038 returns only when `sys.exc_info()[1]` is BrokenPipeError or ConnectionResetError; every other exception is delegated to `super().handle_error`, preserving socketserver's normal loud error path. The reproduced RuntimeError/SubstrateError cases were intentionally converted into fallback responses by the handlers rather than swallowed by this filter.\n  \u2717 Coverage FAILED \u2014 not passing: A client that hangs up mid-response never yields a phantom 5xx line or a traceback: handler catches the closed-socket write and returns silently; live probe log contains zero Traceback lines\nThe normal-response hangup tests pass, but fresh live probes prove that an error after a client disconnect still emits a phantom 502 on both HTTP surfaces, so the task is incomplete.",
+      "steps": [
+        {
+          "id": "tier2",
+          "type": "ai_eval",
+          "passed": false,
+          "output": "INCOMPLETE\n  \u2717 A client that hangs up mid-response never yields a phantom 5xx line or a traceback: handler catches the closed-socket write and returns silently; live probe log contains zero Traceback lines: Fresh real-socket probes reproduced a phantom 5xx on BOTH HTTP surfaces. On APIServer, the client sent GET /api/ns/demo/status, aborted with SO_LINGER 0/TCP RST while namespace_status was blocked, and the route then raised RuntimeError; server stderr contained `127.0.0.1 \"GET /api/ns/demo/status HTTP/1.1\" 502 -`, with counts `Traceback=0`, `phantom_5xx=1`. On EmbeddingsHTTPServer, the equivalent embeddings/search probe raised SubstrateError after the RST and logged `127.0.0.1 [26/Nov/2026 11:21:06] \"GET /api/ns/demo/embeddings/search?q=x HTTP/1.1\" 502 -`, again `Traceback=0`, `phantom_5xx=1`. APIHandler catches hangups only around `_route()` (auger.py:7634-7642), then its generic fallback calls `_send(502, ...)` at auger.py:7648-7652; `_send` logs through send_response and writes at auger.py:7622-7632 outside that try. EmbeddingsHTTPHandler has the same gap: its SubstrateError fallback is outside the hangup-catching try at auger.py:1918-1922, and `_send_json` calls send_response before its OSError guard at auger.py:2005-2018. POST has the same fallback structure at auger.py:7852-7862. Fresh `python3 -m pytest -q tests/test_api_service.py` exited 0 with `11 passed in 4.55s`, but those tests do not cover this error-after-hangup path.\n\n\u2026 [1790 chars omitted \u2014 2 line(s)] \u2026\n  \u2713 No over-silencing: the server-level hangup filter must suppress only BrokenPipeError/ConnectionResetError and delegate unrelated exceptions to socketserver's normal error handling, so genuine server failures remain visible.: _QuietPeerHangupServer.handle_error at auger.py:2035-2038 returns only when `sys.exc_info()[1]` is BrokenPipeError or ConnectionResetError; every other exception is delegated to `super().handle_error`, preserving socketserver's normal loud error path. The reproduced RuntimeError/SubstrateError cases were intentionally converted into fallback responses by the handlers rather than swallowed by this filter.\n  \u2717 Coverage FAILED \u2014 not passing: A client that hangs up mid-response never yields a phantom 5xx line or a traceback: handler catches the closed-socket write and returns silently; live probe log contains zero Traceback lines\nThe normal-response hangup tests pass, but fresh live probes prove that an error after a client disconnect still emits a phantom 502 on both HTTP surfaces, so the task is incomplete.",
+          "error": "",
+          "data": {
+            "verdict": "INCOMPLETE",
+            "items": [
+              {
+                "criterion": "A client that hangs up mid-response never yields a phantom 5xx line or a traceback: handler catches the closed-socket write and returns silently; live probe log contains zero Traceback lines",
+                "status": "FAIL",
+                "detail": "Fresh real-socket probes reproduced a phantom 5xx on BOTH HTTP surfaces. On APIServer, the client sent GET /api/ns/demo/status, aborted with SO_LINGER 0/TCP RST while namespace_status was blocked, and the route then raised RuntimeError; server stderr contained `127.0.0.1 \"GET /api/ns/demo/status HTTP/1.1\" 502 -`, with counts `Traceback=0`, `phantom_5xx=1`. On EmbeddingsHTTPServer, the equivalent embeddings/search probe raised SubstrateError after the RST and logged `127.0.0.1 [26/Nov/2026 11:21:06] \"GET /api/ns/demo/embeddings/search?q=x HTTP/1.1\" 502 -`, again `Traceback=0`, `phantom_5xx=1`. APIHandler catches hangups only around `_route()` (auger.py:7634-7642), then its generic fallback calls `_send(502, ...)` at auger.py:7648-7652; `_send` logs through send_response and writes at auger.py:7622-7632 outside that try. EmbeddingsHTTPHandler has the same gap: its SubstrateError fallback is outside the hangup-catching try at auger.py:1918-1922, and `_send_json` calls send_response before its OSError guard at auger.py:2005-2018. POST has the same fallback structure at auger.py:7852-7862. Fresh `python3 -m pytest -q tests/test_api_service.py` exited 0 with `11 passed in 4.55s`, but those tests do not cover this error-after-hangup path."
+              },
+              {
+                "criterion": "Reachability and complete hangup coverage: both public HTTP server entrypoints (`auger api` via APIServer/APIHandler and `auger serve` via EmbeddingsHTTPServer/EmbeddingsHTTPHandler) must use the closed-socket handling, including errors raised by the server's post-handler flush/keep-alive processing, while unrelated handler errors still use the normal loud error path.",
+                "status": "FAIL",
+                "detail": "The entrypoints are wired: `cmd_serve` constructs EmbeddingsHTTPServer at auger.py:7187-7197, `serve` constructs APIServer at auger.py:7869-7873, CLI registration is at auger.py:14345-14368, and both server classes mix in _QuietPeerHangupServer at auger.py:2041 and auger.py:7865. Complete hangup coverage nevertheless fails: fresh live RST probes followed by route errors produced one phantom 502 on each surface. The fallback sends are outside the hangup-catching try at auger.py:1918-1922 and auger.py:7648-7652, so the closed-socket handling is not applied to the response actually attempted after the disconnect.",
+                "derived": true
+              },
+              {
+                "criterion": "The regression coverage must exercise a real TCP client abort after the route has started responding (not merely unit-test a mocked write), assert both no phantom 5xx access-log line and no traceback, and pass when run fresh.",
+                "status": "PASS",
+                "detail": "tests/test_api_service.py:286-296 creates a real socket, sends the request, waits until the server enters the route, and closes with SO_LINGER 0 to force an RST; the two server-surface tests use it at lines 306-328 and 331-366. `_assert_no_phantom_5xx_no_traceback` checks both Traceback and 500/502/503 at lines 300-303. Fresh `python3 -m pytest -q tests/test_api_service.py` exited 0 with `11 passed in 4.55s`. The success-only route stubs leave the separately reproduced error-after-hangup defect uncovered, as recorded in the given criterion and failure_modes.",
+                "derived": true
+              },
+              {
+                "criterion": "No over-silencing: the server-level hangup filter must suppress only BrokenPipeError/ConnectionResetError and delegate unrelated exceptions to socketserver's normal error handling, so genuine server failures remain visible.",
+                "status": "PASS",
+                "detail": "_QuietPeerHangupServer.handle_error at auger.py:2035-2038 returns only when `sys.exc_info()[1]` is BrokenPipeError or ConnectionResetError; every other exception is delegated to `super().handle_error`, preserving socketserver's normal loud error path. The reproduced RuntimeError/SubstrateError cases were intentionally converted into fallback responses by the handlers rather than swallowed by this filter.",
+                "derived": true
+              }
+            ],
+            "summary": "The normal-response hangup tests pass, but fresh live probes prove that an error after a client disconnect still emits a phantom 502 on both HTTP surfaces, so the task is incomplete.",
+            "provenance": {
+              "model": "neuralwatt/kimi-k3.1-pro",
+              "base_url_source": "GITREINS_LLM_BASE_URL",
+              "api_key_source": "GITREINS_LLM_API_KEY"
+            },
+            "context_stats": {
+              "diff_source": "working-tree",
+              "diff_bytes": 1450,
+              "prompt_bytes": 17312
+            }
+          }
+        }
+      ],
+      "model": "neuralwatt/kimi-k3.1-pro",
+      "base_url_source": "GITREINS_LLM_BASE_URL",
+      "api_key_source": "GITREINS_LLM_API_KEY",
+      "context_stats": {
+        "diff_source": "working-tree",
+        "diff_bytes": 1450,
+        "prompt_bytes": 17312
+      },
+      "tool_calls": [
+        {
+          "tool": "get_task_item",
+          "command": "get_task_item {\"id\": \"REVIEW-AUGER-009\"}",
+          "exit_code": 0,
+          "output_sha": "c5d71f9ae4487db2f28da4a5ef22089a2a5cce5c9ca4ba6f9e5a4cd0d54a1550"
+        },
+        {
+          "tool": "read_diff",
+          "command": "read_diff {}",
+          "exit_code": 0,
+          "output_sha": "3a738f946e22d3f17b68d35730ba9a6031d37799bca4451b6aac8fc73272d1b2"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \".gitreins/config.yaml\"}",
+          "exit_code": 0,
+          "output_sha": "60ec05bb6218204f634565349dc8d23b1aec4048dcf3c49af1cdb0a17b2c2355"
+        },
+        {
+          "tool": "run_command",
+          "command": "pwd && git status --short && git diff --stat && git diff --name-only",
+          "exit_code": 0,
+          "output_sha": "21aa649b822a5ada510afc3d997423aa02e520f659d6c80898ae076c66f87cf8"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"*.py\", \"regex\": \"Traceback|BrokenPipe|ConnectionReset|closed|hangup|phantom|probe\"}",
+          "exit_code": 0,
+          "output_sha": "eae7999e5b810545301b805d4007c8aabc56e0cda77e74b01e672979cbdbe495"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \"tests/test_api_service.py\"}",
+          "exit_code": 0,
+          "output_sha": "97a10770cf644e679ace675c37977f0680d92e196c3a8754f1deaa7fc176f937"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"*.py\", \"regex\": \"class .*Handler|BaseHTTPRequestHandler|wfile|send_response|send_error|log_message|serve_forever|ThreadingHTTPServer|HTTPServer|BrokenPipeError|ConnectionResetError|ConnectionAbortedError\"}",
+          "exit_code": 0,
+          "output_sha": "c54115ad137cea61e031ad489a61143acc3eb6eccaadbe46c28079c2975f1c09"
+        },
+        {
+          "tool": "run_command",
+          "command": "git log --oneline --decorate -20 && git log --all --oneline --grep='hangup\\|phantom\\|REVIEW-AUGER-009' -i",
+          "exit_code": 0,
+          "output_sha": "00ecc1b245d035096668ed8e7ba3e1b160d3b2a2452340608e2a0a87ea640244"
+        },
+        {
+          "tool": "run_command",
+          "command": "git diff -- .coding-hermes/board/events.jsonl .coding-hermes/board/tasks.jsonl .gitreins/tasks.yaml",
+          "exit_code": 0,
+          "output_sha": "ac33a981b5d2fde7816c4b90ea06971089ec1d69ca189add35f8bbcf5316d5e6"
+        },
+        {
+          "tool": "search_pattern",
+          "command": "search_pattern {\"file_glob\": \"*\", \"regex\": \"REVIEW-AUGER-009|hangup|phantom 5xx|zero Traceback\"}",
+          "exit_code": 0,
+          "output_sha": "81caeb458ab2dde1b5e33ad4c0e201c06c377a2423ea85abc66c1d6199937d2f"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 210, \"offset\": 1860, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "c9347974b40f4d5937810557a050754c2da4ba2d140a18bfa8268fb5953f753d"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 330, \"offset\": 7580, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "588a2c833d8a921d6ee080ee0e30ad86619cd38c039232b98a8db2df301c1918"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show --stat --oneline 5a83e38 && git show --stat --oneline 836c990 && git branch --contains 5a83e38 && git merge-base --is-ancestor 5a83e38 HEAD; echo ancestor_exit=$?",
+          "exit_code": 0,
+          "output_sha": "70141c1c73c85b9099959535594b4ad4912270ec48770b5c6100e919eefa5526"
+        },
+        {
+          "tool": "run_command",
+          "command": "git show --format=fuller --no-ext-diff 5a83e38 -- auger.py tests/test_api_service.py",
+          "exit_code": 0,
+          "output_sha": "271dc6bf58fcdcc6b0e3046fe722f263212b9925c1ade7d391fcdb258ff6bbac"
+        },
+        {
+          "tool": "run_command",
+          "command": "find .gitreins/history/2026-11-26 -maxdepth 3 -type f -print | sort | tail -80",
+          "exit_code": 0,
+          "output_sha": "d7c465cae640c75f44897badff236201e9ce666d1ee8a1f50cb519049b2e391f"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Reachability and complete hangup coverage: both public HTTP server entrypoints (`auger api` via APIServer/APIHandler and `auger serve` via EmbeddingsHTTPServer/EmbeddingsHTTPHandler) must use the closed-socket handling, including errors raised by the server's post-handler flush/keep-alive processing, while unrelated handler errors still use the normal loud error path.\", \"key\": \"derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "d12d311d340e88da3dc57fb9bac0253331f2e68771440b53a906f2408002142a"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"The regression coverage must exercise a real TCP client abort after the route has started responding (not merely unit-test a mocked write), assert both no phantom 5xx access-log line and no traceback, and pass when run fresh.\", \"key\": \"derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "7972d569375202dcaeba7385b57dabe7d4cc00c974a190cf5bcc38a8a1dda80b"
+        },
+        {
+          "tool": "run_command",
+          "command": "git log -1 --format=%B 5a83e38",
+          "exit_code": 0,
+          "output_sha": "3b52c460cbbada64aa3246b79fa07679e1379ada88894b5b5cda21d3a17bdff1"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"path\": \".gitreins/history/2026-11-26/a38f9e96/summary.md\"}",
+          "exit_code": 0,
+          "output_sha": "e8900d6da1ca8d20f74b698238a6ffe86dba1e14d6ac3fa6c44aa3fb96fa4637"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 120, \"path\": \".gitreins/history/2026-11-26/a38f9e96/verdict.json\"}",
+          "exit_code": 0,
+          "output_sha": "91553c1c87ba2c63f06696ff1e8c19abbbcd4069f6ff6f27b9d13a4a357b3ca0"
+        },
+        {
+          "tool": "run_command",
+          "command": "python3 -m pytest -q tests/test_api_service.py -k 'hangup'",
+          "exit_code": 0,
+          "output_sha": "a53aed98d9e390a5decafebd14c1f3235c3186f67b236e1805a818e51fb20d75"
+        },
+        {
+          "tool": "run_command",
+          "command": "grep -nE 'def (cmd_serve|cmd_api)|add_parser\\(\"(serve|api)\"|EmbeddingsHTTPServer|APIServer' auger.py | tail -40",
+          "exit_code": 0,
+          "output_sha": "13f509f0895be9f534b030e62f918583fd0be3693db3c570b2256131a1b33c04"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 70, \"offset\": 7160, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "ebf9731f732ec3ec6779350285f5e59f6af5cb4fff20d1d606b03f6debebd182"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 75, \"offset\": 14335, \"path\": \"auger.py\"}",
+          "exit_code": 0,
+          "output_sha": "048df0a2cf86329f9a514b1d399ae664c87e1ce06562cf6b129489fb7509f1c0"
+        },
+        {
+          "tool": "read_file",
+          "command": "read_file {\"limit\": 180, \"path\": \"tests/gate.sh\"}",
+          "exit_code": 0,
+          "output_sha": "e9b4f38dec227abd7ec0341808651ccff0164c284a024e59e4974aa08918e08f"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"No over-silencing: the server-level hangup filter must suppress only BrokenPipeError/ConnectionResetError and delegate unrelated exceptions to socketserver's normal error handling, so genuine server failures remain visible.\", \"key\": \"derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "8ee31ae1f8c1245ca2fa44fd1b16e46c370dc4aae764661a42c6408abebb9fa5"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS (focused portion): `python3 -m pytest -q tests/test_api_service.py -k 'hangup'` exited 0 with `2 passed, 9 deselected in 2.03s`; tests/test_api_service.py:286-296 uses a real socket with SO_LINGER 0/RST and lines 300-303 assert no Traceback or 500/502/503 log line. Live multi-surface probe and full gate still to run.\", \"key\": \"verified_derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "1226a5e313878bdb05c4289c520a95fb908ba2bda404d02ea3c59ebbb029741b"
+        },
+        {
+          "tool": "read_lsp_diagnostics",
+          "command": "read_lsp_diagnostics {}",
+          "exit_code": 0,
+          "output_sha": "ef420cbeebd549fc8c5438d6ea41a3e521fa58e29563c4cae80f491b9bfe2143"
+        },
+        {
+          "tool": "run_command",
+          "command": "log=.review-aug009-error-probe.log; python3 - > /dev/null 2>\"$log\" <<'PY'\nimport socket\nimport struct\nimport threading\nimport time\nimport auger\n\nentered = threading.Event()\nrelease = threading.Event()\nauger._namespace = lambda ns: None\n\ndef status_after_hangup(ns, pid=None):\n    entered.set()\n    release.wait(5)\n    raise RuntimeError(\"substrate failed after the peer disconnected\")\n\nauger.namespace_status = status_after_hangup\nserver = auger.APIServer((\"127.0.0.1\", 0), auger.APIHandler)\nthread = threading.Thread(target=server.serve_forever, daemon=True)\nthread.start()\ntry:\n    conn = socket.create_connection((\"127.0.0.1\", server.server_address[1]), timeout=5)\n    conn.sendall(b\"GET /api/ns/demo/status HTTP/1.1\\r\\nHost: x\\r\\n\\r\\n\")\n    assert entered.wait(5), \"route not entered\"\n    conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack(\"ii\", 1, 0))\n    conn.close()\n    release.set()\n    time.sleep(0.75)\nfinally:\n    release.set()\n    server.shutdown()\n    server.server_close()\n    thread.join(timeout=2)\nPY\nrc=$?; echo probe_exit=$rc; echo '--- server stderr ---'; cat \"$log\"; echo '--- counts ---'; printf 'Traceback='; grep -c 'Traceback' \"$log\" || true; printf 'phantom_5xx='; grep -cE '\" (500|502|503) ' \"$log\" || true; rm -f \"$log\"; exit $rc",
+          "exit_code": 0,
+          "output_sha": "92f883d4085300fa565c72b7887d7f77ba21c4893fae232e84c37df570f24228"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"FAIL: the normal-response RST tests pass, but a live error-fallback probe still emits a phantom 5xx. Fresh command `python3 - > /dev/null 2>.review-aug009-error-probe.log` started a real APIServer, blocked namespace_status, aborted the client with SO_LINGER 0/RST, then raised RuntimeError. Output: `127.0.0.1 \\\"GET /api/ns/demo/status HTTP/1.1\\\" 502 -`, `Traceback=0`, `phantom_5xx=1`. APIHandler.do_GET catches hangups only around `_route()` (auger.py:7634-7642); its generic `except Exception` calls unguarded `_send(502, ...)` at auger.py:7648-7652, and `_send` writes/logs at auger.py:7622-7632 outside that try. The same structure exists in `_route_post` at auger.py:7852-7862. The focused tests (`2 passed`) cover only successful responses, so they miss this path.\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "585116a5c461e3646ff5c4246951c2ce54a4528548cbe0990f4cd9aa00cb408d"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"FAIL: both entrypoints are wired (`cmd_serve` constructs EmbeddingsHTTPServer at auger.py:7187-7197; `serve` constructs APIServer at auger.py:7869-7873; CLI registration at auger.py:14345-14368), and both server classes include _QuietPeerHangupServer (auger.py:2041,7865). However complete hangup coverage is absent: the fresh real-socket error-fallback probe produced one phantom 502 after an RST because APIHandler's fallback `_send` is outside the hangup-catching try (auger.py:7648-7652).\", \"key\": \"verified_derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "30d9be0dcf5cce7226e041c76deb949e815b155958041cfaec4ccfa43f118b99"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"FAIL: the added tests do use real TCP RST aborts and assert no Traceback/5xx (tests/test_api_service.py:286-303), and fresh `python3 -m pytest -q tests/test_api_service.py -k 'hangup'` exited 0: `2 passed, 9 deselected in 2.03s`. But they exercise only successful route returns (blocking_status returns a dict at lines 309-313; blocking_search returns a dict at lines 341-345). A fresh live probe where the route raises after the same RST produced `phantom_5xx=1`, so the regression coverage does not establish the criterion's unconditional no-phantom-5xx behavior.\", \"key\": \"verified_derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "6845c24ba6205cfaf630434511fae1bf8defaacef37e489a19142796acea26be"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: _QuietPeerHangupServer.handle_error returns only when sys.exc_info()[1] is BrokenPipeError or ConnectionResetError and otherwise calls super().handle_error (auger.py:2035-2038), preserving socketserver's loud handling for unrelated exceptions. The observed RuntimeError fallback was intentionally converted to a response by APIHandler rather than swallowed by this server filter.\", \"key\": \"verified_derived_2\"}",
+          "exit_code": 0,
+          "output_sha": "4cc8611b623b8d56b70a2c8ed44ae7f1ad87baee7f868967cf9f1468609ba6e4"
+        },
+        {
+          "tool": "run_command",
+          "command": "DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh",
+          "exit_code": -15,
+          "output_sha": "da54e7f9b08eb754ceff5eeea5802277312c8edf2741a0840f050f9895028ad6"
+        },
+        {
+          "tool": "run_command",
+          "command": "python3 -m pytest -q tests/test_api_service.py",
+          "exit_code": 0,
+          "output_sha": "f3dc7f83565366505939cc1c3a31769219416cca811bd0c184bf27341432fd8c"
+        },
+        {
+          "tool": "run_command",
+          "command": "log=.review-aug009-embeddings-error-probe.log; python3 - > /dev/null 2>\"$log\" <<'PY'\nimport socket\nimport struct\nimport threading\nimport time\nimport auger\n\nentered = threading.Event()\nrelease = threading.Event()\nauger.embedding_status = lambda: {\"tier\": \"semantic\", \"healthy\": True, \"provider\": \"fixture\", \"model\": \"e\"}\n\ndef search_after_hangup(ns, q, limit, project_id=None):\n    entered.set()\n    release.wait(5)\n    raise auger.SubstrateError(\"substrate failed after the peer disconnected\")\n\nauger.embedding_search = search_after_hangup\nserver = auger.EmbeddingsHTTPServer((\"127.0.0.1\", 0), auger.EmbeddingsHTTPHandler, namespace=\"demo\")\nthread = threading.Thread(target=server.serve_forever, daemon=True)\nthread.start()\ntry:\n    conn = socket.create_connection((\"127.0.0.1\", server.server_address[1]), timeout=5)\n    conn.sendall(b\"GET /api/ns/demo/embeddings/search?q=x HTTP/1.1\\r\\nHost: x\\r\\n\\r\\n\")\n    assert entered.wait(5), \"route not entered\"\n    conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack(\"ii\", 1, 0))\n    conn.close()\n    release.set()\n    time.sleep(0.75)\nfinally:\n    release.set()\n    server.shutdown()\n    server.server_close()\n    thread.join(timeout=2)\nPY\nrc=$?; echo probe_exit=$rc; echo '--- server stderr ---'; cat \"$log\"; echo '--- counts ---'; printf 'Traceback='; grep -c 'Traceback' \"$log\" || true; printf 'phantom_5xx='; grep -cE '\" (500|502|503) ' \"$log\" || true; rm -f \"$log\"; exit $rc",
+          "exit_code": 0,
+          "output_sha": "84006597b863ecd9f6eb02f720cd3d5ce10c8e6a22137b8c7ff8bdb32dc93f7f"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"FAIL: fresh real-socket probes on BOTH HTTP surfaces reproduce a phantom 5xx after a client RST. API probe: client aborts while namespace_status is blocked, then the route raises RuntimeError; stderr was `127.0.0.1 \\\"GET /api/ns/demo/status HTTP/1.1\\\" 502 -`, counts `Traceback=0`, `phantom_5xx=1`. Embeddings probe: client aborts while embedding_search is blocked, then it raises SubstrateError; stderr was `127.0.0.1 [26/Nov/2026 11:21:06] \\\"GET /api/ns/demo/embeddings/search?q=x HTTP/1.1\\\" 502 -`, counts `Traceback=0`, `phantom_5xx=1`. APIHandler catches hangups only around `_route()` (auger.py:7634-7642), then its generic fallback calls `_send(502, ...)` at auger.py:7648-7652; `_send` logs via send_response and writes at auger.py:7622-7632 outside that try. EmbeddingsHTTPHandler likewise catches around `_route()` at auger.py:1909-1917 but calls `_send_json(502, ...)` at auger.py:1918-1922 outside it; `_send_json` calls send_response before its OSError guard can suppress the write (auger.py:2005-2018). POST has the same fallback structure at auger.py:7852-7862. Fresh `python3 -m pytest -q tests/test_api_service.py` exited 0 (`11 passed in 4.55s`), confirming the existing tests miss this error-after-hangup path.\", \"key\": \"verified_0\"}",
+          "exit_code": 0,
+          "output_sha": "71db401587e0146218f12a6c74e74c89b5af48e45b538b8d87f44cdf5726f99e"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"FAIL: entrypoint wiring exists (`cmd_serve` -> EmbeddingsHTTPServer at auger.py:7187-7197; `serve` -> APIServer at auger.py:7869-7873; CLI registration at auger.py:14345-14368; both server classes mix in _QuietPeerHangupServer at auger.py:2041,7865), but complete hangup coverage fails on both surfaces. Fresh live RST probes where the route subsequently raises produced one phantom 502 each: API `/api/ns/demo/status` and embeddings `/api/ns/demo/embeddings/search?q=x`; both had `Traceback=0`, `phantom_5xx=1`. The fallback sends are outside the hangup-catching try (auger.py:1918-1922 and 7648-7652).\", \"key\": \"verified_derived_0\"}",
+          "exit_code": 0,
+          "output_sha": "e339b1a153f4706366212481889c14f2ffe5c67058da04cb7c6f8444604e3a0b"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"FAIL: tests use real TCP RST aborts and assert no Traceback/5xx (tests/test_api_service.py:286-303), and fresh `python3 -m pytest -q tests/test_api_service.py` exited 0 with `11 passed in 4.55s`. But both hangup tests use successful route returns (lines 309-313 and 341-345). Fresh live probes with the same RST followed by a route error produced `phantom_5xx=1` on each surface, so the passing regression tests do not cover or establish the required behavior.\", \"key\": \"verified_derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "1cd93d71af59b4dc350a4c7ea12f0a2310f833737ee1045ec4234bca1986d405"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"Focused fresh tests: `python3 -m pytest -q tests/test_api_service.py -k 'hangup'` exit 0, `2 passed, 9 deselected in 2.03s`; full file `python3 -m pytest -q tests/test_api_service.py` exit 0, `11 passed in 4.55s`. Configured full gate `DUCKBRAIN_URL=http://127.0.0.1:3000 bash tests/gate.sh` was attempted fresh but the tool killed it at its 30s command cap: exit_code -15, timed_out=true, after syntax/lint (`All checks passed!`) and 22 pytest dots; no full-suite result. Prior stage recorded the same gate exit_code 0 / GATE PASS, but that is not a fresh run in this conversation.\", \"key\": \"test_verification\"}",
+          "exit_code": 0,
+          "output_sha": "bfc39a9abd68abc8cbaf3ab5bbb2243fda67b1a2041c2910773159087a2a3a4a"
+        },
+        {
+          "tool": "run_command",
+          "command": "git status --short -- .review-aug009-error-probe.log .review-aug009-embeddings-error-probe.log && git diff --check",
+          "exit_code": 0,
+          "output_sha": "65d5e0ae388b0e24ddae7490e806bc6044972cc73da0bc7499352486ab28263e"
+        },
+        {
+          "tool": "sandbox_write",
+          "command": "sandbox_write {\"content\": \"PASS: the regression tests use real TCP connections and SO_LINGER 0/RST aborts while the route handler is blocked (tests/test_api_service.py:286-296,306-328,331-366), not a mocked write; `_assert_no_phantom_5xx_no_traceback` checks both Traceback and 500/502/503 at lines 300-303. Fresh `python3 -m pytest -q tests/test_api_service.py` exited 0 with `11 passed in 4.55s`. Their success-only route stubs leave the separately reproduced error-after-hangup failure uncovered, recorded in verified_0 and failure_modes.\", \"key\": \"verified_derived_1\"}",
+          "exit_code": 0,
+          "output_sha": "a76d79b0a51b148fe575fc5217c73eb0dfa886dbfa949115c0e6e66f742d7173"
+        }
+      ]
+    },
+    "fix_verification": {
+      "id": "fix_verification",
+      "passed": true,
+      "any_failed": false,
+      "summary": "fix_verification: 2 finding(s) verified\n  \u2717 tier2:item_0 [unclassified] partially_fixed: flagged code still present at auger.py:1912 (was :7634) \u2014 the region changed but the flagged code survives\n  \u2717 tier2:item_1 [unclassified] partially_fixed: flagged code still present at auger.py:25 (was :7187) \u2014 the region changed but the flagged code survives\n  \u26a0 verdict capped at needs_review by 2 unhandled finding(s)",
+      "steps": [
+        {
+          "id": "fix_verification",
+          "type": "fix_verification",
+          "passed": true,
+          "output": "fix_verification: 2 finding(s) verified\n  \u2717 tier2:item_0 [unclassified] partially_fixed: flagged code still present at auger.py:1912 (was :7634) \u2014 the region changed but the flagged code survives\n  \u2717 tier2:item_1 [unclassified] partially_fixed: flagged code still present at auger.py:25 (was :7187) \u2014 the region changed but the flagged code survives\n  \u26a0 verdict capped at needs_review by 2 unhandled finding(s)",
+          "error": "",
+          "data": {
+            "dispositions": [
+              {
+                "finding_id": "tier2:item_0",
+                "severity": "",
+                "disposition": "partially_fixed",
+                "evidence": "flagged code still present at auger.py:1912 (was :7634) \u2014 the region changed but the flagged code survives",
+                "path": "auger.py",
+                "line": 7634
+              },
+              {
+                "finding_id": "tier2:item_1",
+                "severity": "",
+                "disposition": "partially_fixed",
+                "evidence": "flagged code still present at auger.py:25 (was :7187) \u2014 the region changed but the flagged code survives",
+                "path": "auger.py",
+                "line": 7187
+              }
+            ],
+            "counts": {
+              "partially_fixed": 2
+            },
+            "verdict_cap": "needs_review",
+            "capped_findings": [
+              "tier2:item_0",
+              "tier2:item_1"
+            ]
+          }
+        }
+      ],
+      "dispositions": [
+        {
+          "finding_id": "tier2:item_0",
+          "severity": "",
+          "disposition": "partially_fixed",
+          "evidence": "flagged code still present at auger.py:1912 (was :7634) \u2014 the region changed but the flagged code survives",
+          "path": "auger.py",
+          "line": 7634
+        },
+        {
+          "finding_id": "tier2:item_1",
+          "severity": "",
+          "disposition": "partially_fixed",
+          "evidence": "flagged code still present at auger.py:25 (was :7187) \u2014 the region changed but the flagged code survives",
+          "path": "auger.py",
+          "line": 7187
+        }
+      ],
+      "verdict_cap": "needs_review"
+    }
+  },
+  "context_stats": {
+    "diff_source": "working-tree",
+    "diff_bytes": 1450,
+    "prompt_bytes": 17312
+  },
+  "review": {
+    "reviewer_email": "totalwindupflightsystems@gmail.com",
+    "reviewer_name": "totalwindupflightsystems",
+    "commit_author_email": "totalwindupflightsystems@gmail.com",
+    "commit_author_name": "totalwindupflightsystems",
+    "self_review": true,
+    "findings": [
+      {
+        "severity": "high",
+        "file": ".gitreins/tasks.yaml",
+        "line": 2966,
+        "detection": "a task recorded as completed is deleted from the registry instead of being retained with a terminal state",
+        "detail": "The diff removes the entire `in_progress` `AUG-190` entry while `.coding-hermes/board/events.jsonl` event 751 records `task_completed` for `AUG-190`; other completed tasks, including the newly added `REVIEW-AUGER-009`, remain in this file with `status: complete` and `completed_at`.",
+        "category": "unknown",
+        "fingerprint": "272bfff87a9aa121f911d0523e1e76bb47aae72c4236d61fc42c597eba81d32f",
+        "state": "ACTIVE",
+        "echo": "[high][unknown] .gitreins/tasks.yaml:2966 \u2014 a task recorded as completed is deleted from the registry instead of being retained with a terminal state\nThe diff removes the entire `in_progress` `AUG-190` entry while `.coding-hermes/board/events.jsonl` event 751 records `task_completed` for `AUG-190`; other completed tasks, including the newly added `REVIEW-AUGER-009`, remain in this file with `status: complete` and `completed_at`."
+      }
+    ],
+    "summary": "The REVIEW-AUGER-009 closeout is accompanied by an inconsistent deletion of AUG-190's GitReins task record.",
+    "review_state": {
+      "emitted": [
+        {
+          "severity": "high",
+          "file": ".gitreins/tasks.yaml",
+          "line": 2966,
+          "detection": "a task recorded as completed is deleted from the registry instead of being retained with a terminal state",
+          "detail": "The diff removes the entire `in_progress` `AUG-190` entry while `.coding-hermes/board/events.jsonl` event 751 records `task_completed` for `AUG-190`; other completed tasks, including the newly added `REVIEW-AUGER-009`, remain in this file with `status: complete` and `completed_at`.",
+          "category": "unknown",
+          "fingerprint": "272bfff87a9aa121f911d0523e1e76bb47aae72c4236d61fc42c597eba81d32f",
+          "state": "ACTIVE",
+          "echo": "[high][unknown] .gitreins/tasks.yaml:2966 \u2014 a task recorded as completed is deleted from the registry instead of being retained with a terminal state\nThe diff removes the entire `in_progress` `AUG-190` entry while `.coding-hermes/board/events.jsonl` event 751 records `task_completed` for `AUG-190`; other completed tasks, including the newly added `REVIEW-AUGER-009`, remain in this file with `status: complete` and `completed_at`."
+        }
+      ],
+      "carried": []
+    }
+  },
+  "summary": "Stage tier1: PASS\n    \u2713 lint: scanners: nice=nice -n 10\n  \u2713 secrets: secrets: scanners=gitleaks+builtin cross-check\n  \u2713 tests: scanners: nice=nice -n 10\n\nStage tier2: FAIL\n  INCOMPLETE\n  \u2717 A client that hangs up mid-response never yields a phantom 5xx line or a traceback: handler catches the closed-socket write and returns silently; live probe log contains zero Traceback lines: Fresh real-socket probes reproduced a phantom 5xx on BOTH HTTP surfaces. On APIServer, the client sent GET /api/ns/demo/status, aborted with SO_LINGER 0/TCP RST while namespace_status was blocked, and the route then raised RuntimeError; server stderr contained `127.0.0.1 \"GET /api/ns/demo/status HTTP/1.1\" 502 -`, with counts `Traceback=0`, `phantom_5xx=1`. On EmbeddingsHTTPServer, the equivalent embeddings/search probe raised SubstrateError after the RST and logged `127.0.0.1 [26/Nov/2026 11:21:06] \"GET /api/ns/demo/embeddings/search?q=x HTTP/1.1\" 502 -`, again `Traceback=0`, `phantom_5xx=1`. APIHandler catches hangups only around `_route()` (auger.py:7634-7642), then its generic fallback calls `_send(502, ...)` at auger.py:7648-7652; `_send` logs through send_response and writes at auger.py:7622-7632 outside that try. EmbeddingsHTTPHandler has the same gap: its SubstrateError fallback is outside the hangup-catching try at auger.py:1918-1922, and `_send_json` calls send_response before its OSError guard at auger.py:2005-2018. POST has the same fallback structure at auger.py:7852-7862. Fresh `python3 -m pytest -q tests/test_api_service.py` exited 0 with `11 passed in 4.55s`, but those tests do not cover this error-after-hangup path.\n  \u2717 Reachability and complete hangup coverage: both public HTTP server entrypoints (`auger api` via APIServer/APIHandler and `auger serve` via EmbeddingsHTTPServer/EmbeddingsHTTPHandler) must use the closed-socket handling, including errors raised by the server's post-handler flush/keep-alive processing, while unrelated handler errors still use the normal loud error path.: The entrypoints are wired: `cmd_serve` constructs EmbeddingsHTTPServer at auger.py:7187-7197, `serve` constructs APIServer at auger.py:7869-7873, CLI registration is at auger.py:14345-14368, and both server classes mix in _QuietPeerHangupServer at auger.py:2041 and auger.py:7865. Complete hangup coverage nevertheless fails: fresh live RST probes followed by route errors produced one phantom 502 on each surface. The fallback sends are outside the hangup-catching try at auger.py:1918-1922 and auger.py:7648-7652, so the closed-socket handling is not applied to the response actually attempted after the disconnect.\n  \u2713 The regression coverage must exercise a real TCP client abort after the route has started responding (not merely unit-test a mocked write), assert both no phantom 5xx access-log line and no traceback, and pass when run fresh.: tests/test_api_service.py:286-296 creates a real socket, sends the request, waits until the server enters the route, and closes with SO_LINGER 0 to force an RST; the two server-surface tests use it at lines 306-328 and 331-366. `_assert_no_phantom_5xx_no_traceback` checks both Traceback and 500/502/503 at lines 300-303. Fresh `python3 -m pytest -q tests/test_api_service.py` exited 0 with `11 passed in 4.55s`. The success-only route stubs leave the separately reproduced error-after-hangup defect uncovered, as recorded in the given criterion and failure_modes.\n  \u2713 No over-silencing: the server-level hangup filter must suppress only BrokenPipeError/ConnectionResetError and delegate unrelated exceptions to socketserver's normal error handling, so genuine server failures remain visible.: _QuietPeerHangupServer.handle_error at auger.py:2035-2038 returns only when `sys.exc_info()[1]` is BrokenPipeError or ConnectionResetError; every other exception is delegated to `super().handle_error`, preserving socketserver's normal loud error path. The reproduced RuntimeError/SubstrateError cases were intentionally converted into fallback responses by the handlers rather than swallowed by this filter.\n  \u2717 Coverage FAILED \u2014 not passing: A client that hangs up mid-response never yields a phantom 5xx line or a traceback: handler catches the closed-socket write and returns silently; live probe log contains zero Traceback lines\nThe normal-response hangup tests pass, but fresh live probes prove that an error after a client disconnect still emits a phantom 502 on both HTTP surfaces, so the task is incomplete.\n\nStage fix_verification: PASS\n  fix_verification: 2 finding(s) verified\n  \u2717 tier2:item_0 [unclassified] partially_fixed: flagged code still present at auger.py:1912 (was :7634) \u2014 the region changed but the flagged code survives\n  \u2717 tier2:item_1 [unclassified] partially_fixed: flagged code still present at auger.py:25 (was :7187) \u2014 the region changed but the flagged code survives\n  \u26a0 verdict capped at needs_review by 2 unhandled finding(s)\n\nOverall: FAIL \u2717",
+  "evaluated_at": "2026-11-26T16:22:15.569937",
+  "supersedes": null,
+  "superseded_by": null,
+  "evidence": {
+    "collected_at": "2026-11-26T16:22:15.625368+00:00",
+    "items": [
+      {
+        "name": "patch",
+        "label": "Landed commit patch",
+        "file": "commit.patch",
+        "bytes": 262176,
+        "truncated": true,
+        "source": "git show c9c01a3fee79"
+      },
+      {
+        "name": "worktree",
+        "label": "Working-tree diff (graded)",
+        "file": "worktree.patch",
+        "bytes": 65687,
+        "truncated": false,
+        "source": "git diff HEAD (working tree)"
+      }
+    ],
+    "task_id": "REVIEW-AUGER-009"
+  }
+}
