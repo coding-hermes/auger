@@ -1910,6 +1910,11 @@ class EmbeddingsHTTPHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             self._route()
+        except (BrokenPipeError, ConnectionResetError):
+            # AUG-212: the client hung up mid-response. A fallback status written to the
+            # socket the peer already closed is a phantom line in the log plus a chained
+            # traceback, never an answer — so return silently, before any status line.
+            return
         except (
             SubstrateError
         ) as exc:  # precise: the store refused, in the substrate's own words
@@ -2015,7 +2020,25 @@ class EmbeddingsHTTPHandler(BaseHTTPRequestHandler):
             pass
 
 
-class EmbeddingsHTTPServer(ThreadingHTTPServer):
+class _QuietPeerHangupServer:
+    """AUG-212: a client that hangs up mid-response must not print a traceback.
+
+    `BaseHTTPRequestHandler.handle_one_request` flushes `wfile` after the handler
+    returns; on a keep-alive connection it may also read from a socket the peer has
+    reset. Either can raise BrokenPipeError/ConnectionResetError AFTER a handler that
+    already swallowed its own write failure, and socketserver then prints "Exception
+    occurred during processing of request" plus a full traceback to stderr. A peer who
+    is already gone cannot be told anything, so those are noise, not failures: swallow
+    exactly the hang-up exceptions and delegate everything else to socketserver.
+    """
+
+    def handle_error(self, request, client_address):
+        if isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError)):
+            return
+        super().handle_error(request, client_address)
+
+
+class EmbeddingsHTTPServer(_QuietPeerHangupServer, ThreadingHTTPServer):
     """The embedding route's server: one thread per request, and the alias route's namespace.
 
     `daemon_threads` matters — a client that opens a connection and never finishes it must not pin
@@ -7611,6 +7634,12 @@ class APIHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         try:
             self._route()
+        except (BrokenPipeError, ConnectionResetError):
+            # AUG-212: the client hung up mid-response. Every fallback below writes to
+            # the SAME socket the peer already closed, so a hang-up caught there becomes
+            # a phantom 5xx the client never saw plus a chained traceback. Return
+            # silently instead — there is nothing left to say.
+            return
         except APIError as exc:
             self._send(exc.status, {"error": str(exc)})
         except SystemExit as exc:
@@ -7820,6 +7849,9 @@ class APIHandler(BaseHTTPRequestHandler):
                     "jev_cost": str(cost) if cost is not None else None,
                 },
             )
+        except (BrokenPipeError, ConnectionResetError):
+            # AUG-212: the client hung up mid-response — return silently, same as do_GET.
+            return
         except APIError as exc:
             self._send(exc.status, {"error": str(exc)})
         except SystemExit as exc:
@@ -7830,7 +7862,7 @@ class APIHandler(BaseHTTPRequestHandler):
             )
 
 
-class APIServer(ThreadingHTTPServer):
+class APIServer(_QuietPeerHangupServer, ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
